@@ -4,11 +4,11 @@
 	<!--Name of the mod to display to players-->
 	<DisplayName Value="CS2 Multiplayer Mod" />
 	<!--Short description of the mod-->
-	<ShortDescription Value="Cooperative multiplayer — build one shared city with a friend" />
+	<ShortDescription Value="Multiplayer mod, build one shared city with a friend" />
 	<!--Long description of the mod. Single line or multi line. Supports minimal markdown subset-->
 	<LongDescription>
 Play Cities: Skylines II together. CS2 Multiplayer Mod lets you and your friends build one shared city at the same time.
-The mod is experimental — back up your saves and expect rough edges while it grows.
+The mod is experimental, back up your saves and expect rough edges while it grows!
 Host-authoritative and friend-focused: set a password, share your IP-address, and build together. Not affiliated with Colossal Order, Paradox Interactive or Iceflake Studio.
 	</LongDescription>
 	<!--Thumbnail-->
@@ -22,18 +22,13 @@ Host-authoritative and friend-focused: set a password, share your IP-address, an
 	<!--Version of the mod-->
 	<ModVersion Value="0.1.0" />
 	<!--Recommended version of the base game to use the mod-->
-	<GameVersion Value="1.5.*" />
+	<GameVersion Value="1.6.*" />
 	<!--Dependency for the mod, can be set multiple times-->
 	<Dependency Id="" />
 	<!--Required DLC, can be set multiple times. Supported values are "Landmark Buildings", "San Fransisco Set", "Beach Properties", "Urban Promenades", "Modern Architecture"-->
 	<RequiredDLC Value="" />
 	<!--Change log for new version. Single line or multi line. Supports minimal markdown subset-->
 	<ChangeLog>
-- Join now loads the host world reliably.
-- Sessions no longer drop during heavy building/zoning.
-- Pause and simulation speed sync; service budgets sync.
-- Development-tree purchases sync (unlocks and points); no more infinite points.
-- More reliable bulldozing and zoning; player markers now show camera height.
 	</ChangeLog>
 	<!--External link, can be set multiple times. supported types are "discord", "github", "youtube", "twitch", "x", "paypal", "patreon", "buymeacoffee", "kofi", "crowdin", "gitlab", "gofundme"-->
 	<ExternalLink Type="discord" Url="https://discord.gg/NHKShnB5G9" />
