@@ -1,11 +1,9 @@
 namespace CS2MultiplayerMod.Core.Protocol.Messages
 {
     /// <summary>
-    /// A client's edit of a player-editable state channel (taxes, policies, fees, …).
-    /// The body uses the exact same encoding as the channel's snapshot, so the host can
-    /// apply it with the channel's regular <c>Apply</c> and the next
-    /// <see cref="StateSnapshotMessage"/> broadcast confirms it to everyone — the host
-    /// stays the single arbiter while every player gets to edit.
+    /// Client's edit of player-editable state channel (taxes, policies, fees, ...).
+    /// Body uses channel's snapshot encoding. Next <see cref="StateSnapshotMessage"/>
+    /// confirms to everyone - host is single arbiter while every player can edit.
     /// </summary>
     public sealed class StateEditMessage : INetMessage
     {

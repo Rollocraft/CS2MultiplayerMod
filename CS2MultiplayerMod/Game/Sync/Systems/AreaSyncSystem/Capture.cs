@@ -36,7 +36,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         }
 
         /// <summary>
-        /// 1 Hz ring comparison — redraws don't reliably surface as Created/Deleted, so
+        /// 1 Hz ring comparison - redraws don't reliably surface as Created/Deleted, so
         /// they are detected by content, not lifecycle tags. First sighting of an entity
         /// only records (creation travels via <see cref="AreaCreateCommand"/>).
         /// </summary>

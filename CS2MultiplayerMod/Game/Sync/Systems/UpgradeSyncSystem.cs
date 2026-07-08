@@ -16,19 +16,10 @@ using CS2MultiplayerMod.Game.Sync.Commands;
 namespace CS2MultiplayerMod.Game.Sync.Systems
 {
     /// <summary>
-    /// Replicates service-building upgrades/extensions (school wings, hospital annexes,
-    /// power plant boosters, …). These are sub-objects with an <see cref="Owner"/> — which
-    /// <see cref="BuildSyncSystem"/> deliberately excludes — so they need their own path
-    /// that also carries WHICH building they attach to (owner prefab + owner position,
-    /// since entity ids differ per machine).
-    ///
-    ///   detect: a freshly Created object that is a <see cref="ServiceUpgrade"/> or
-    ///           <see cref="Extension"/> → broadcast an <see cref="UpgradePlacementCommand"/>.
-    ///   realize: resolve both prefabs, find the local owner building by prefab+position,
-    ///            then spawn a <see cref="CreationDefinition"/> with <c>m_Owner</c> set and
-    ///            the Permanent|Attach|Upgrade flags so the game attaches it properly.
-    ///
-    /// The host charges the shared treasury for remote upgrades (<see cref="ConstructionCharger"/>).
+    /// Replicates service-building upgrades (<see cref="ServiceUpgrade"/>, <see cref="Extension"/>):
+    /// detect Created + broadcast <see cref="UpgradePlacementCommand"/> with owner prefab+position.
+    /// Realize by finding owner building, spawn <see cref="CreationDefinition"/> with <c>m_Owner</c>
+    /// and Permanent|Attach|Upgrade flags. Host charges via <see cref="ConstructionCharger"/>.
     /// </summary>
     public partial class UpgradeSyncSystem : GameSystemBase
     {

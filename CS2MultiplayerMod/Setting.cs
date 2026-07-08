@@ -88,15 +88,6 @@ namespace CS2MultiplayerMod
         public bool VerboseLogging { get; set; } = false;
 
         /// <summary>
-        /// Dev diagnostic for the net (road/path/power/pipe) sync pipeline: traces each placement,
-        /// what is sent/received, and every realize + commit step. High-volume, and its own toggle
-        /// (separate from <see cref="VerboseLogging"/>) — OFF by default; turn it on only to capture
-        /// a net-sync log to share. See <see cref="Mod.NetTrace"/>.
-        /// </summary>
-        [SettingsUISection(GeneralTab, GeneralGroup)]
-        public bool NetTraceLogging { get; set; } = false;
-
-        /// <summary>
         /// Set once the player accepts the in-game disclaimer gate (shown before the
         /// first host/join). Persisted so it only appears once; intentionally hidden
         /// from the options screen and left out of <see cref="SetDefaults"/> so that
@@ -190,7 +181,7 @@ namespace CS2MultiplayerMod
         }
 
         /// <summary>
-        /// Push the host's world to all clients now — the manual drift safety-net, same as the
+        /// Push the host's world to all clients now - the manual drift safety-net, same as the
         /// in-game hub's "Sync World". Duplicated here so it stays reachable if the hub's UI
         /// module fails to load. Host-only.
         /// </summary>
@@ -255,7 +246,6 @@ namespace CS2MultiplayerMod
         {
             EnableMod = true;
             VerboseLogging = false;
-            NetTraceLogging = false;
             PlayerName = "Player";
             ServerAddress = "127.0.0.1";
             HostPort = "25001";

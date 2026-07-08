@@ -15,8 +15,8 @@ namespace CS2MultiplayerMod.Core.Session
         public void SendBlob(string channel, byte[] data) => ChunkAndSend(channel, data, ConnectionId.None);
 
         /// <summary>
-        /// Send a blob to a single peer — used to auto-ship the map to a just-joined
-        /// client without re-sending it to everyone already in the session.
+        /// Send a blob to a single peer - auto-ships map to just-joined client
+        /// without re-sending to everyone already in the session.
         /// </summary>
         public void SendBlobTo(ConnectionId target, string channel, byte[] data) => ChunkAndSend(channel, data, target);
 

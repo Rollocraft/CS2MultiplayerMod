@@ -3,11 +3,10 @@ using System.Text;
 namespace CS2MultiplayerMod.Core.Protocol
 {
     /// <summary>
-    /// Validation helpers for values that arrive off the wire. Everything a remote
-    /// peer controls — counts, lengths, floats, names — must pass through here before
-    /// it is allocated against or applied to the simulation. All failures throw
-    /// <see cref="ProtocolException"/>, which every receive path treats as "drop the
-    /// message / disconnect the sender", never as a crash.
+    /// Validation helpers for wire values. Everything a remote peer controls - counts,
+    /// lengths, floats, names - must pass through here. All failures throw
+    /// <see cref="ProtocolException"/>, which every receive path treats as drop message
+    /// / disconnect sender, never crash.
     /// </summary>
     public static class WireGuard
     {
@@ -24,10 +23,9 @@ namespace CS2MultiplayerMod.Core.Protocol
         public const int MaxItemCount = 4096;
 
         /// <summary>
-        /// Read a repeat count written as a 16-bit value and prove it is plausible:
-        /// non-negative, under <paramref name="maxItems"/>, and small enough that
-        /// <paramref name="bytesPerItem"/> × count actually fits in the bytes that are
-        /// left — so a forged count can never cause a huge allocation.
+        /// Read repeat count as 16-bit value, prove it's plausible: non-negative,
+        /// under <paramref name="maxItems"/>, and bytesPerItem x count fits remaining
+        /// bytes - so forged count can never cause huge allocation.
         /// </summary>
         public static int ReadCount(NetworkReader reader, int bytesPerItem, int maxItems = MaxItemCount)
         {

@@ -38,14 +38,14 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                 {
                     if (n > 0) sb.Append(", ");
                     sb.Append(pair.Key).Append(" x").Append(pair.Value);
-                    if (++n >= 12) { sb.Append(", …"); break; }
+                    if (++n >= 12) { sb.Append(", ..."); break; }
                 }
-                Mod.NetTrace(sb.ToString());
+                Mod.Verbose(sb.ToString());
             }
 
             if (_peakUpdated > 0 || _peakDeleted > 0 || _diagTotal > 0 || _capFilteredHalves > 0)
             {
-                Mod.NetTrace("[MP] NetSync edge tags/5s peak: Created=" + _peakCreated +
+                Mod.Verbose("[MP] NetSync edge tags/5s peak: Created=" + _peakCreated +
                              " Updated=" + _peakUpdated + " Deleted=" + _peakDeleted +
                              "; dropped " + _capFilteredHalves + " split-half edge(s) (side-effects of a " +
                              "mid-span tap; only the drawn edge is sent so the receiver splits locally).");
@@ -53,7 +53,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
 
             if (_rzSegments > 0)
             {
-                Mod.NetTrace("[MP] NetSync realized " + _rzSegments + " remote segment(s)/5s; endpoints: " +
+                Mod.Verbose("[MP] NetSync realized " + _rzSegments + " remote segment(s)/5s; endpoints: " +
                              _rzSnapEnds + " reused a node, " + _rzMergeEnds +
                              " merged a shared new node, " + _rzMidEnds +
                              " split an existing edge (T-junction), " +
@@ -69,7 +69,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
         }
 
         /// <summary>
-        /// Send the pieces of a span rebuilt at another height that were captured LAST frame — one
+        /// Send the pieces of a span rebuilt at another height that were captured LAST frame - one
         /// frame behind DeleteSyncSystem's delete of the old span, so the receiver always bulldozes
         /// before it rebuilds (commands are delivered in send order).
         /// </summary>
@@ -80,8 +80,6 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
             {
                 NetPlacementCommand command = _deferredRebuiltPieces[i];
                 session.SendCommand(0, NetPlacementCommand.Id, command.Encode());
-                Mod.NetTrace("  REBUILT piece → SENT '" + command.PrefabName + "' (deferred one frame " +
-                             "behind its span's delete).");
             }
             _deferredRebuiltPieces.Clear();
         }
@@ -97,7 +95,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
             // Snapshot this frame's Deleted edges. When the player taps a road mid-span, CS2 makes the
             // T-junction by DELETING the existing edge and CREATING its two halves plus the drawn road
             // (our logs: Created=3 Updated=1 Deleted=1). The halves are Created too, but they are a
-            // SIDE EFFECT of the split — not something the player drew. Replicating them makes the
+            // SIDE EFFECT of the split - not something the player drew. Replicating them makes the
             // receiver re-split its own still-whole geometry destructively (roads vanish, the new road
             // ends up disconnected). So below we drop any Created edge that is a true 3D sub-curve of a
             // same-prefab Deleted edge (one of its halves) and send only the edge the player drew; the
@@ -123,7 +121,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
 
             // Which deleted edges are being REBUILT at another height rather than split in place: some
             // same-prefab created piece follows their XZ centreline but deviates in Y. Computed once so
-            // every piece of such a span — including height-matching remainder pieces — is sent; the
+            // every piece of such a span - including height-matching remainder pieces - is sent; the
             // receiver bulldozes the whole span and needs all of them back. DeleteSyncSystem runs the
             // same test on the same frame's data, so the delete and the pieces always travel together.
             var delRebuilt = new bool[delEnts.Length];
@@ -140,8 +138,6 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                 }
             }
 
-            Mod.NetTrace("capture pass: " + entities.Length + " new edge(s), " + delEnts.Length +
-                         " deleted this frame (localPlayer=" + session.LocalPlayerId + ").");
             try
             {
                 for (int i = 0; i < entities.Length; i++)
@@ -155,7 +151,6 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                     // they are recreated locally when the visible road is rebuilt.
                     if (name.StartsWith("Invisible"))
                     {
-                        Mod.NetTrace("  capture skip hidden net '" + name + "'.");
                         continue;
                     }
 
@@ -175,15 +170,11 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                     if (onDeletedSpan && !onRebuiltSpan)
                     {
                         _capFilteredHalves++;
-                        Mod.NetTrace("  capture DROP split-half '" + name + "' (" + XZ(b.a) + "→" + XZ(b.d) +
-                                     ") — side-effect of a mid-span split, not sent.");
                         continue;
                     }
 
                     if (_guard.Consume(ReplicationGuard.Key(name, b.a), now))
                     {
-                        Mod.NetTrace("  capture skip ECHO '" + name + "' at " + XZ(b.a) +
-                                     " (we realized this from a remote command).");
                         continue;
                     }
 
@@ -201,14 +192,10 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                     {
                         _deferredRebuiltPieces.Add(command);
                         RecordDiagnostic(name);
-                        Mod.NetTrace("  LOCAL RE-ELEVATED → HOLD '" + name + "' (" + XZ(b.a) + "→" + XZ(b.d) +
-                                     ") one frame; its span's delete goes first.");
                         continue;
                     }
                     session.SendCommand(0, NetPlacementCommand.Id, command.Encode());
                     RecordDiagnostic(name);
-                    Mod.NetTrace("  LOCAL PLACED → SENT '" + name + "' (" + XZ(b.a) + "→" + XZ(b.d) +
-                                 ") len " + curve.m_Length.ToString("F1") + ", origin=" + session.LocalPlayerId + ".");
                 }
             }
             finally

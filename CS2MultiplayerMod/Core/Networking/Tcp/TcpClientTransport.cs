@@ -153,7 +153,7 @@ namespace CS2MultiplayerMod.Core.Networking.Tcp
 
         /// <summary>
         /// Queue an event for the game thread, dropping the connection if the queue is
-        /// not being drained — bounded memory beats a silent balloon when the game
+        /// not being drained - bounded memory beats a silent balloon when the game
         /// thread stalls or a hostile host floods.
         /// </summary>
         private void Enqueue(TransportEvent evt)

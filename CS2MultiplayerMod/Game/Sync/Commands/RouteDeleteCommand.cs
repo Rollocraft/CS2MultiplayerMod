@@ -3,7 +3,7 @@ using CS2MultiplayerMod.Core.Sync;
 
 namespace CS2MultiplayerMod.Game.Sync.Commands
 {
-    /// <summary>"A player deleted this transport line" — matched by prefab + first waypoint.</summary>
+    /// <summary>"A player deleted this transport line" - matched by prefab + first waypoint.</summary>
     public sealed class RouteDeleteCommand : ISimulationCommand
     {
         public const ushort Id = 13;

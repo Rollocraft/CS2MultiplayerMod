@@ -5,18 +5,16 @@ using System.Security.Cryptography.X509Certificates;
 namespace CS2MultiplayerMod.Core.Networking.Tcp
 {
     /// <summary>
-    /// Creates the ephemeral self-signed certificate a hosting session uses for TLS.
-    /// The certificate exists only for the lifetime of the session and is never
-    /// persisted; clients do not validate it against a CA (there is none) — instead
-    /// its hash is folded into the password proof as a channel binding, which is what
-    /// actually defeats an active man-in-the-middle when a password is set.
+    /// Creates ephemeral self-signed certificate for TLS. Lifetime-scoped, never
+    /// persisted. Clients skip CA validation - hash folded into password proof as
+    /// channel binding, which defeats active man-in-the-middle when password is set.
     /// </summary>
     public static class TlsCertificate
     {
         /// <summary>
-        /// Try to create a fresh self-signed certificate. Returns null (with the error
-        /// in <paramref name="error"/>) when the runtime cannot do it — the caller
-        /// decides whether plaintext is an acceptable fallback (LAN) or fatal (public).
+        /// Try to create a self-signed certificate. Returns null with error in
+        /// <paramref name="error"/> if runtime cannot create it - caller decides
+        /// if plaintext fallback (LAN) is acceptable or fatal (public).
         /// </summary>
         public static X509Certificate2 TryCreateEphemeral(out string error)
         {

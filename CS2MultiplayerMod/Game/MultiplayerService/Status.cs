@@ -98,7 +98,7 @@ namespace CS2MultiplayerMod.Game
         }
 
         /// <summary>
-        /// Host-side world-send progress (0–100), or -1 when no world is streaming out.
+        /// Host-side world-send progress (0-100), or -1 when no world is streaming out.
         /// Lets the host show "Sending world X%" while the save drains to clients, instead
         /// of the window appearing frozen.
         /// </summary>

@@ -6,8 +6,8 @@ namespace CS2MultiplayerMod.Game.Sync.Commands
     /// <summary>
     /// "A player bulldozed this object." Like <see cref="ObjectPlacementCommand"/> the
     /// target is identified by prefab name + world position (entity ids differ per
-    /// machine); the receiver finds the matching local entity and marks it Deleted —
-    /// see <see cref="DeleteSyncSystem"/>.
+    /// machine); the receiver finds the matching local entity and marks it Deleted - see
+    /// <see cref="DeleteSyncSystem"/>.
     /// </summary>
     public sealed class ObjectDeleteCommand : ISimulationCommand
     {
@@ -51,10 +51,9 @@ namespace CS2MultiplayerMod.Game.Sync.Commands
 
     /// <summary>
     /// "A player bulldozed this road segment." Identified by prefab name + the segment's full
-    /// cubic Bézier (a → b → c → d). The receiver deletes every local edge of that prefab whose
-    /// endpoints lie on this curve, so a road the two machines subdivided differently still
-    /// deletes completely — see <see cref="DeleteSyncSystem"/>. (Endpoints alone were not enough:
-    /// a host edge that maps to two receiver edges matched neither.)
+    /// cubic Bézier. The receiver deletes every local edge of that prefab whose endpoints lie on
+    /// this curve, so a road the two machines subdivided differently still deletes completely - see
+    /// <see cref="DeleteSyncSystem"/>.
     /// </summary>
     public sealed class NetDeleteCommand : ISimulationCommand
     {

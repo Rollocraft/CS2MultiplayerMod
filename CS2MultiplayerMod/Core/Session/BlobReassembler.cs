@@ -25,7 +25,7 @@ namespace CS2MultiplayerMod.Core.Session
         public int ReceivedBytes { get { return (int)_buffer.Length; } }
         public int ChunkCount { get; private set; }
 
-        /// <summary>When the most recent chunk arrived — lets the owner expire stalled transfers.</summary>
+        /// <summary>When most recent chunk arrived - lets owner expire stalled transfers.</summary>
         public long LastChunkAtMs { get; private set; }
 
         /// <summary>Maximum chunks this blob may consist of, derived from its announced size.</summary>
@@ -42,7 +42,7 @@ namespace CS2MultiplayerMod.Core.Session
         {
             if (announcedTotal != ExpectedBytes)
                 throw new ProtocolException("Blob total changed mid-transfer: " +
-                                            ExpectedBytes + " → " + announcedTotal + ".");
+                                            ExpectedBytes + " -> " + announcedTotal + ".");
 
             int length = data != null ? data.Length : 0;
             if (length > ProtocolConstants.BlobChunkBytes)

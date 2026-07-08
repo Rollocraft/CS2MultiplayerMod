@@ -127,7 +127,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         }
 
         /// <summary>
-        /// 1 Hz comparison of every line's waypoint ring + color against the last scan —
+        /// 1 Hz comparison of every line's waypoint ring + color against the last scan -
         /// edits don't reliably surface as Created/Deleted, so they are detected by
         /// content. First sighting only records (creation has its own command).
         /// </summary>

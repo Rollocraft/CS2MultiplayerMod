@@ -8,8 +8,8 @@ namespace CS2MultiplayerMod.Game.Sync.Channels
 {
     /// <summary>
     /// Replicates the tourism aggregates (<see cref="Tourism"/> singleton on the city
-    /// entity) host → clients, so the tourism dashboard matches. Like population, this is
-    /// a sim *output* — the host's numbers are authoritative, clients display them.
+    /// entity) host -> clients, so the tourism dashboard matches. Like population, this is
+    /// a sim *output* - the host's numbers are authoritative, clients display them.
     /// </summary>
     public sealed class TourismStateChannel : IStateChannel
     {

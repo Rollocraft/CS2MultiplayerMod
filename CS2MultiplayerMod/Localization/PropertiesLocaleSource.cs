@@ -70,7 +70,7 @@ namespace CS2MultiplayerMod.Localization
         }
 
         /// <summary>
-        /// Parse a language file into its raw <c>key → value</c> pairs (no '@' resolution).
+        /// Parse a language file into its raw <c>key -> value</c> pairs (no '@' resolution).
         /// Used by <see cref="ReadEntries"/> and by <see cref="L10n"/> for the English
         /// fallback. Order is preserved; the caller decides how to handle duplicates.
         /// </summary>

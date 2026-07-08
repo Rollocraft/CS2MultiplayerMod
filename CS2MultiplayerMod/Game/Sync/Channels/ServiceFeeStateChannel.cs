@@ -9,7 +9,7 @@ namespace CS2MultiplayerMod.Game.Sync.Channels
     /// Replicates the service-fee sliders (electricity/water price etc.): the
     /// <see cref="ServiceFee"/> buffer on the city entity, keyed by
     /// <see cref="PlayerResource"/> which is a stable enum (same on every machine).
-    /// Player-editable — every player may move the sliders; the host arbitrates.
+    /// Player-editable - every player may move the sliders; the host arbitrates.
     /// </summary>
     public sealed class ServiceFeeStateChannel : IStateChannel
     {

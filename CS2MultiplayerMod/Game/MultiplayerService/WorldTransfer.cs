@@ -8,15 +8,13 @@ namespace CS2MultiplayerMod.Game
 {
     public sealed partial class MultiplayerService
     {
-        /// <summary>Stream the newest existing save — explicit fallback when a fresh save failed.</summary>
+        /// <summary>Stream the newest existing save - explicit fallback when a fresh save failed.</summary>
         public void StreamWorld(ConnectionId target) => StreamWorld(target, DateTime.MinValue);
 
         /// <summary>
-        /// Host: stream a savegame to one peer (<paramref name="target"/>) or to
-        /// everyone (<see cref="ConnectionId.None"/>). When <paramref name="writtenAfterUtc"/>
-        /// is given, only a save produced by the just-completed save task qualifies —
-        /// never an older file that happens to sit in the folder (finding: exact save
-        /// selection). Called by <see cref="WorldResyncSystem"/> after it saved the live world.
+        /// Host: stream a savegame to one peer (<paramref name="target"/>) or all
+        /// (<see cref="ConnectionId.None"/>). When <paramref name="writtenAfterUtc"/> is given, only a
+        /// save from the just-completed save task qualifies. Called by <see cref="WorldResyncSystem"/>.
         /// </summary>
         public void StreamWorld(ConnectionId target, DateTime writtenAfterUtc)
         {
@@ -74,7 +72,7 @@ namespace CS2MultiplayerMod.Game
             {
                 // Defined, recoverable state instead of a half-connected limbo.
                 SetPhase(ClientWorldPhase.WaitingForMap);
-                _log.Warn("[MP] Could not auto-load the host world. Still connected — use /sync to " +
+                _log.Warn("[MP] Could not auto-load the host world. Still connected - use /sync to " +
                           "request it again, or load '" + JoinMapLoader.TransientName + "' from Load Game.");
             }
         }

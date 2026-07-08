@@ -1,11 +1,10 @@
 namespace CS2MultiplayerMod.Core.Protocol.Messages
 {
     /// <summary>
-    /// Periodic keep-alive and latency probe. A ping carries the sender's monotonic
-    /// clock in <see cref="SentAtMs"/>; the receiver answers with a heartbeat whose
-    /// <see cref="EchoOfMs"/> returns that value, and the original sender measures
-    /// round-trip as now − echo — both ends of the subtraction on ITS OWN clock, so
-    /// the two machines' clocks never need to agree. An echo is never echoed back.
+    /// Periodic keep-alive and latency probe. A ping carries sender's monotonic clock
+    /// in <see cref="SentAtMs"/>; receiver answers with heartbeat whose <see cref="EchoOfMs"/>
+    /// returns that value. Original sender measures round-trip as now - echo, both
+    /// subtractions on sender's own clock so clocks need not agree. Echo never echoed back.
     /// </summary>
     public sealed class Heartbeat : INetMessage
     {

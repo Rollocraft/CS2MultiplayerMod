@@ -7,7 +7,7 @@ namespace CS2MultiplayerMod.Game.Sync.Commands
     /// "A player placed this object here." Identifies the prefab by its stable name
     /// (entity indices differ per machine, names do not) plus a world transform. The
     /// receiver resolves the name back to a local prefab and lets the game's own
-    /// object-creation systems realize it — see <see cref="BuildSyncSystem"/>.
+    /// object-creation systems realize it - see <see cref="BuildSyncSystem"/>.
     /// </summary>
     public sealed class ObjectPlacementCommand : ISimulationCommand
     {

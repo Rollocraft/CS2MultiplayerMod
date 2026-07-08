@@ -60,10 +60,6 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 for (int i = 0; i < _retry.Count; i++)
                 {
                     if (_retry[i].deadline > now) work.Add((_retry[i].command, _retry[i].deadline));
-                    else Mod.NetTrace("replace retry EXPIRED for '" + _retry[i].command.PrefabName + "' (" +
-                                      _retry[i].command.OldAx.ToString("F1") + "," + _retry[i].command.OldAz.ToString("F1") + "→" +
-                                      _retry[i].command.OldDx.ToString("F1") + "," + _retry[i].command.OldDz.ToString("F1") +
-                                      ") — its segment never appeared locally; dropping.");
                 }
                 _retry.Clear();
             }
@@ -185,10 +181,6 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     defCreated[t] = true;
                     bool moved = math.distance(liveCurve.a.xz, course.a.xz) > 0.5f ||
                                  math.distance(liveCurve.d.xz, course.d.xz) > 0.5f;
-                    Mod.NetTrace("  REPLACE remote edge → '" + targets[t].cmd.PrefabName + "'" +
-                                 (invert ? " (inverted)" : "") + " (" +
-                                 XZ(liveCurve.a) + "→" + XZ(liveCurve.d) + ")" +
-                                 (moved ? " moved to (" + XZ(course.a) + "→" + XZ(course.d) + ")" : "") + ".");
                 }
             }
 
@@ -205,7 +197,6 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 _netSync.ArmNetCommit(delegate
                 {
                     _replayCommands.AddRange(armed);
-                    Mod.NetTrace("commit lost: re-queued " + armed.Count + " replacement(s) for a re-match.");
                 });
             }
 
@@ -224,16 +215,16 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         /// Build one replacement definition for <paramref name="edge"/>: a NON-Permanent
         /// <see cref="CreationDefinition"/> (<c>m_Original</c> = the edge, <c>m_Prefab</c> = the new
         /// prefab, <see cref="CreationFlags.Align"/> | <see cref="CreationFlags.SubElevation"/>) plus a
-        /// <see cref="NetCourse"/> on <paramref name="curve"/> — exactly what the net tool's
+        /// <see cref="NetCourse"/> on <paramref name="curve"/> - exactly what the net tool's
         /// <c>CreateReplacement</c> emits. The curve is the sender's committed geometry (its sub-span
         /// for this edge), oriented in the final direction, so the in-place update also MOVES the edge
-        /// when the replacement shifted the centerline — the course keeps the edge's own node entities,
+        /// when the replacement shifted the centerline - the course keeps the edge's own node entities,
         /// which the commit drags to the new positions like the tool does. With
         /// <paramref name="invert"/> the tool's flip recipe is mirrored too:
         /// <see cref="CreationFlags.Invert"/> set and the course's node references swapped (the curve
         /// already runs the final way), which also flips asymmetric upgrades and compositions natively.
         /// GenerateEdgesSystem turns it into a Temp edge (TempFlags.Modify) and ApplyNetSystem (driven
-        /// by NetSync's commit) rewrites the edge in place — new lanes/composition/direction/geometry,
+        /// by NetSync's commit) rewrites the edge in place - new lanes/composition/direction/geometry,
         /// existing upgrades preserved. Returns false (skipping) if the edge vanished or lacks its
         /// geometry.
         /// </summary>
@@ -344,7 +335,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         /// <summary>
         /// True when both ends of <paramref name="edge"/> lie within <see cref="EdgeMatchCurveTol"/>
         /// (XZ) of <paramref name="replaced"/>'s curve at a matching height (<see
-        /// cref="EdgeMatchCurveTolY"/>) — i.e. the edge is a sub-segment of the replaced span, not a
+        /// cref="EdgeMatchCurveTolY"/>) - i.e. the edge is a sub-segment of the replaced span, not a
         /// bridge/tunnel stacked above or below it on the same line. Ranked in XZ so ordinary
         /// terrain-height drift between the two cities never breaks a match.
         /// </summary>
@@ -356,7 +347,5 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             return math.abs(MathUtils.Position(replaced, t1).y - edge.a.y) <= EdgeMatchCurveTolY
                 && math.abs(MathUtils.Position(replaced, t2).y - edge.d.y) <= EdgeMatchCurveTolY;
         }
-
-        private static string XZ(float3 p) => p.x.ToString("F1") + "," + p.z.ToString("F1");
     }
 }

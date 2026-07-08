@@ -6,7 +6,7 @@ namespace CS2MultiplayerMod.Game.Sync.Commands
     /// <summary>
     /// "A player edited this transport line" (added/removed stops, recolored). The anchor
     /// is the OLD first waypoint (still matching the receiver's line); the payload is the
-    /// complete new state — see <see cref="RouteSyncSystem"/>.
+    /// complete new state - see <see cref="RouteSyncSystem"/>.
     /// </summary>
     public sealed class RouteUpdateCommand : ISimulationCommand
     {

@@ -18,22 +18,10 @@ using CS2MultiplayerMod.Game.Sync.Commands;
 namespace CS2MultiplayerMod.Game.Sync.Systems
 {
     /// <summary>
-    /// Replicates per-entity policies — district policies, transit line policies and
-    /// building policies — in both directions. (City-wide policies travel via the
-    /// editable CityPolicy state channel; this system covers everything with its own
-    /// <see cref="Policy"/> buffer.)
-    ///
-    ///   detect: a 1 Hz scan compares each district/route/building's policy buffer with
-    ///           what we last saw; a difference becomes an <see cref="EntityPolicyCommand"/>
-    ///           per changed policy. Targets travel by prefab name + anchor (district
-    ///           polygon centroid / line's first waypoint / building position).
-    ///   realize: resolve the target locally and call the game's own
-    ///            <c>PoliciesUISystem.SetPolicy</c>, so modifiers, option masks and
-    ///            triggers refresh exactly like a local click.
-    ///
-    /// Echo loop: applying marks a per-(target, policy) guard key that the scanner
-    /// consumes when the buffer change surfaces; and since SetPolicy with identical
-    /// values is a no-op, even a missed guard dies after one round trip.
+    /// Replicates per-entity policies (district, transit, building) via 1 Hz scan:
+    /// detect <see cref="Policy"/> buffer changes, broadcast <see cref="EntityPolicyCommand"/>.
+    /// Realize by resolving target (prefab + anchor) and calling <c>PoliciesUISystem.SetPolicy</c>.
+    /// Echo guarded per-(target, policy).
     /// </summary>
     public partial class PolicySyncSystem : GameSystemBase
     {

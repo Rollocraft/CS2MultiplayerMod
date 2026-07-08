@@ -115,7 +115,6 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     targets.Add((prefab, CurveOf(commands[i]), commands[i].PrefabName, commands[i]));
             }
             if (targets.Count == 0) return;
-            Mod.NetTrace("realize edge-deletes: " + targets.Count + " remote delete(s) to match against live edges.");
 
             // Match phase first (no structural changes), then build the delete-definitions in one go.
             // Coverage is against the UNION of the batch's same-prefab curves: one bulldoze can map to
@@ -136,8 +135,6 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     string name;
                     if (!CoveredByBatch(live, candidatePrefab, targets, matched, out name)) continue;
                     matchedEdges.Add((entities[i], name, live));
-                    Mod.NetTrace("  BULLDOZE remote edge '" + name + "' (" +
-                                 XZ(live.a) + "→" + XZ(live.d) + ").");
                 }
             }
             finally
@@ -175,7 +172,6 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 _netSync.ArmNetCommit(delegate
                 {
                     _replayEdgeDeletes.AddRange(armed);
-                    Mod.NetTrace("commit lost: re-queued " + armed.Count + " edge delete(s) for a re-match.");
                 });
             }
 
@@ -185,18 +181,13 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             {
                 Mod.Verbose("[MP] DeleteSync: bulldozing " + deleted + " road segment(s); " + unmatched +
                              " bulldoze(s) matched no local edge (already gone, or geometry diverged).");
-                Mod.NetTrace("realize edge-deletes DONE: queued " + deleted + " edge(s) for bulldoze; " +
-                             unmatched + " target(s) unmatched.");
             }
         }
 
         /// <summary>
-        /// Build one bulldoze delete-definition for <paramref name="edge"/>: a NON-Permanent
-        /// <see cref="CreationDefinition"/> (<see cref="CreationFlags.Delete"/>, <c>m_Original</c> = the
-        /// edge) plus the edge's own <see cref="NetCourse"/>. GenerateEdgesSystem turns it into a
-        /// Temp edge flagged for deletion; ApplyNetSystem (driven by NetSync's commit) then removes the
-        /// edge the game's way — sub-objects, lanes, terrain and node recombination all handled.
-        /// Returns false (skipping) if the edge vanished or lacks the geometry this frame.
+        /// Build bulldoze delete-definition for <paramref name="edge"/>: non-Permanent
+        /// <see cref="CreationDefinition"/> with <see cref="CreationFlags.Delete"/> and <see cref="NetCourse"/>.
+        /// Returns false if edge missing or lacks geometry.
         /// </summary>
         private bool CreateEdgeDeleteDef(Entity edge)
         {
@@ -256,13 +247,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         };
 
         /// <summary>
-        /// True when <paramref name="live"/> lies on the bulldozed span: its endpoints AND midpoint
-        /// each sit within <see cref="EdgeMatchCurveTol"/> (XZ) of SOME same-prefab curve of the batch
-        /// at a matching height (<see cref="EdgeMatchCurveTolY"/>). Every covering target is flagged
-        /// in <paramref name="matched"/>; <paramref name="name"/> returns one of their prefab names
-        /// (they all share the edge's prefab). Ranked in XZ so ordinary terrain-height drift between
-        /// the two cities never breaks a match, with the height gate keeping a bridge/tunnel stacked
-        /// on the same line from ever matching.
+        /// True when <paramref name="live"/> endpoints and midpoint lie within <see cref="EdgeMatchCurveTol"/>
+        /// (XZ) and <see cref="EdgeMatchCurveTolY"/> (Y) of same-prefab batch curves. Flags matches in
+        /// <paramref name="matched"/>, returns prefab name in <paramref name="name"/>.
         /// </summary>
         private static bool CoveredByBatch(Bezier4x3 live, Entity livePrefab,
             List<(Entity prefab, Bezier4x3 curve, string name, NetDeleteCommand cmd)> targets,
@@ -295,7 +282,5 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             }
             return -1;
         }
-
-        private static string XZ(float3 p) => p.x.ToString("F1") + "," + p.z.ToString("F1");
     }
 }

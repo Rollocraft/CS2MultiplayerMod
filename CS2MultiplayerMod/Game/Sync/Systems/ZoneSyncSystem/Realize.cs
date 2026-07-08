@@ -109,10 +109,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         }
 
         /// <summary>
-        /// Find the local block for a position, tolerating sub-metre drift between machines
-        /// (a road rebuilt by net sync can sit a fraction of a metre off) by also checking
-        /// the 26 neighbouring 0.5 m buckets — still far inside block spacing, so it never
-        /// matches a different block.
+        /// Find local block tolerating sub-metre drift (road rebuilt by net sync) by checking
+        /// 26 neighbouring 0.5 m buckets, never matching different blocks.
         /// </summary>
         private bool TryFindBlock(Dictionary<long, Entity> lookup, float3 pos, out Entity block)
         {

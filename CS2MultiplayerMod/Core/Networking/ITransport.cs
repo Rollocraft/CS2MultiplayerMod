@@ -39,9 +39,9 @@ namespace CS2MultiplayerMod.Core.Networking
         void Disconnect(ConnectionId connection);
 
         /// <summary>
-        /// Close a connection once everything already queued to it has been sent — used to
-        /// deliver a final message (e.g. a handshake rejection reason) before hanging up,
-        /// since an immediate <see cref="Disconnect"/> would race the asynchronous send.
+        /// Close connection after sending queued payloads - delivers final message
+        /// (e.g. handshake rejection reason) before hanging up without racing
+        /// asynchronous send. See <see cref="Disconnect"/>.
         /// </summary>
         void DisconnectAfterFlush(ConnectionId connection);
 
@@ -52,9 +52,8 @@ namespace CS2MultiplayerMod.Core.Networking
         int Poll(IList<TransportEvent> sink);
 
         /// <summary>
-        /// The remote IP address of a connection (no port), or null when unknown.
-        /// Used for ban tracking and structured logging — never for trust decisions
-        /// beyond "this address keeps failing authentication".
+        /// Remote IP address of a connection (no port), or null if unknown.
+        /// Used for ban tracking and logging - never for trust decisions.
         /// </summary>
         string GetRemoteAddress(ConnectionId connection);
 

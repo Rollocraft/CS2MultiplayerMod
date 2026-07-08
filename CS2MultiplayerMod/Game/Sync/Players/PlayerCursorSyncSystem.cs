@@ -7,14 +7,11 @@ using CS2MultiplayerMod.Core.Session;
 namespace CS2MultiplayerMod.Game.Sync.Players
 {
     /// <summary>
-    /// Publishes the local player's map focus (the camera pivot — the point on the
+    /// Publishes the local player's map focus (the camera pivot - the point on the
     /// ground the player is looking at) a few times a second, and lets the service
     /// collect the other players' positions for drawing their cursors. Unlike the
     /// city-state channels this is per-player and lossy: only the newest position
-    /// matters, so the host simply relays each update to everyone else.
-    ///
-    /// Rendering the remote cursors as on-map markers is a follow-up; the data is
-    /// already flowing and stored in <see cref="MultiplayerService.RemotePlayers"/>.
+    /// matters. Rendering the remote cursors is handled separately.
     /// </summary>
     public partial class PlayerCursorSyncSystem : GameSystemBase
     {
@@ -52,7 +49,7 @@ namespace CS2MultiplayerMod.Game.Sync.Players
             }
 
             // The ground focus (pivot) is where the player is looking; the eye is where
-            // their camera actually is, up in the air — both travel so markers can show
+            // their camera actually is, up in the air - both travel so markers can show
             // height. Fall back to the raw camera position when no gameplay camera is
             // active (menus, cinematic mode), which collapses the marker to a ground point.
             float3 eye = _camera.position;

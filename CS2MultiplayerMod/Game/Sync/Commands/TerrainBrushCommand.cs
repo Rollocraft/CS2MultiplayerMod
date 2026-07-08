@@ -6,7 +6,7 @@ namespace CS2MultiplayerMod.Game.Sync.Commands
     /// <summary>
     /// "A player applied this terraform brush stroke." Terraforming is replicated as the
     /// stream of brush applications (prefab name + position/size/angle/strength), replayed
-    /// through the game's own brush pipeline on the receiver — see
+    /// through the game's own brush pipeline on the receiver - see
     /// <see cref="TerrainSyncSystem"/>. Replaying strokes keeps the payload tiny compared
     /// to shipping heightmap regions; exact height equality is restored by the periodic
     /// world resync.

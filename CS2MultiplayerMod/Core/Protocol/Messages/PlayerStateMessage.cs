@@ -1,11 +1,9 @@
 namespace CS2MultiplayerMod.Core.Protocol.Messages
 {
     /// <summary>
-    /// Where a player is on the map: their camera focus point (on the ground) AND their
-    /// camera eye position (up in the air), so the others can draw not just where a player
-    /// is looking but how high they are "flying". Sent frequently and relayed by the host.
-    /// Cheap and lossy by design — only the latest value matters, so a dropped update is
-    /// harmless.
+    /// Player's camera focus (ground) and eye position (air) so others draw where they're
+    /// looking and flying height. Sent frequently, relayed by host. Lossy by design -
+    /// only latest value matters, dropped updates harmless.
     /// </summary>
     public sealed class PlayerStateMessage : INetMessage
     {

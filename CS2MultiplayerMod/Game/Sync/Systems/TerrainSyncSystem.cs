@@ -14,21 +14,10 @@ using CS2MultiplayerMod.Game.Sync.Commands;
 namespace CS2MultiplayerMod.Game.Sync.Systems
 {
     /// <summary>
-    /// Replicates terraforming as brush strokes. While the terrain tool is dragged it
-    /// emits one-frame <see cref="Brush"/> entities that <c>GenerateBrushesSystem</c>
-    /// (Modification1) turns into actual heightmap edits:
-    ///
-    ///   detect (ModificationEnd): live Brush entities (not Temp) → broadcast prefab name
-    ///           + position/size/angle/strength.
-    ///   realize (ToolUpdate via <see cref="SyncRealizeSystem"/>): recreate the same brush
-    ///            entity and let the game's brush pipeline apply it this frame; Deleted
-    ///            makes Cleanup destroy it afterwards, exactly like our object definitions.
-    ///
-    /// Stroke replay is rate-identical but float-fuzzy: tiny height differences can
-    /// accumulate, and the periodic world resync (15 min) trues everything up.
-    /// NEEDS IN-GAME VERIFICATION: whether terraform brushes appear in this query (and
-    /// realize through it) is unconfirmed — the 5 s diagnostic line shows captured stroke
-    /// counts.
+    /// Replicates terraforming as brush strokes: detect live <see cref="Brush"/> entities
+    /// at ModificationEnd, broadcast prefab + position/size/angle/strength. Realize at
+    /// ToolUpdate via <see cref="SyncRealizeSystem"/>, recreating the brush entity for
+    /// the game pipeline. Strokes are rate-identical but float-fuzzy; periodic resync trues.
     /// </summary>
     public partial class TerrainSyncSystem : GameSystemBase
     {

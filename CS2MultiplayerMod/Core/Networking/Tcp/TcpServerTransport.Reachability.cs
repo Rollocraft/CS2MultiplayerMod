@@ -30,7 +30,7 @@ namespace CS2MultiplayerMod.Core.Networking.Tcp
 
                 _log.Info(locals.Count > 0
                     ? "Players on your network join via: " + string.Join(", ", locals.ToArray())
-                    : "Could not find any local network address — is this machine connected to a network?");
+                    : "Could not find any local network address - is this machine connected to a network?");
 
                 if (!lanOnly)
                     _log.Info("Players on the internet need your PUBLIC IP (ask a 'what is my IP' site) and TCP port " +
@@ -43,7 +43,7 @@ namespace CS2MultiplayerMod.Core.Networking.Tcp
             }
         }
 
-        /// <summary>RFC1918/4193 + loopback + link-local — "on my own network".</summary>
+        /// <summary>RFC1918/4193 + loopback + link-local - "on my own network".</summary>
         public static bool IsPrivateAddress(IPAddress address)
         {
             if (IPAddress.IsLoopback(address)) return true;

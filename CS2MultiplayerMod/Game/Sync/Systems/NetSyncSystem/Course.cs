@@ -18,18 +18,18 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
         /// <summary>
         /// Nearest standalone node within <see cref="NodeSnapDistance"/> of <paramref name="position"/>
         /// (ranked in XZ, so terrain-height noise never changes which node wins; candidates further
-        /// than <see cref="VerticalSnapTol"/> above/below are rejected — a bridge endpoint passing over
+        /// than <see cref="VerticalSnapTol"/> above/below are rejected - a bridge endpoint passing over
         /// a ground junction crosses it, it doesn't connect to it), or <see cref="Entity.Null"/> in
         /// open ground. Reusing that node joins the new segment to the junction instead of stacking a
         /// second, disconnected node on top of it.
         ///
         /// CRASH GUARD: skips a node that is being torn down by a bulldoze this frame (all its connected
-        /// edges Deleted). Deleting an edge does NOT immediately tag its end nodes Deleted — they linger,
+        /// edges Deleted). Deleting an edge does NOT immediately tag its end nodes Deleted - they linger,
         /// still query-able, for a frame or two until the net cleanup runs. If a course REUSES such a
         /// dying node and we then commit it, ApplyNetSystem dereferences the stale node/edge and the
-        /// process NATIVE-crashes (seen live when the client spammed build→bulldoze→build at one spot:
-        /// "DELETED edge … → REUSE node #… → commit … → [log ends]"). Treating a dying node as absent
-        /// lands the endpoint on fresh ground instead — disconnected at worst, never a crash.
+        /// process NATIVE-crashes (seen live when the client spammed build->bulldoze->build at one spot:
+        /// "DELETED edge ... -> REUSE node #... -> commit ... -> [log ends]"). Treating a dying node as absent
+        /// lands the endpoint on fresh ground instead - disconnected at worst, never a crash.
         /// </summary>
         private Entity FindNodeAt(float3 position, NativeArray<Entity> nodeEntities, NativeArray<Node> nodeData)
         {
@@ -101,13 +101,13 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
         /// <summary>
         /// The elevation (height above/below the local surface, the game's
         /// <see cref="global::Game.Net.Elevation"/> convention) a course endpoint must carry. A reused
-        /// node's committed elevation is exact — a pylon or building connector keeps its height.
+        /// node's committed elevation is exact - a pylon or building connector keeps its height.
         /// Otherwise it is derived from the transmitted Y against the LOCAL terrain (which is
         /// synced, so it equals the sender's): negative = underground (pipes, ground cables);
         /// positive is re-measured against the water surface where there is water, exactly like
         /// the net tool (a bridge over a lake is "+5", not "lakebed + 40"). Road-like nets (their
         /// allowed elevation range spans 0) get a dead zone: a committed ground road's Y deviates
-        /// from pre-build terrain by the game's own slope grading, which must stay elevation 0 —
+        /// from pre-build terrain by the game's own slope grading, which must stay elevation 0 -
         /// fixed-elevation nets (power lines, pipes) skip it, their offset IS the placement.
         /// </summary>
         private float2 EndElevation(Entity prefab, Entity snap, int kind, float3 p,
@@ -130,7 +130,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
 
         /// <summary>
         /// True when <paramref name="node"/> has no live (existing, non-<see cref="Deleted"/>) connected
-        /// edge — i.e. a bulldoze this frame is tearing it down. See the crash guard on
+        /// edge - i.e. a bulldoze this frame is tearing it down. See the crash guard on
         /// <see cref="FindNodeAt"/>. A node with no <see cref="ConnectedEdge"/> buffer at all is left
         /// reusable (it isn't attached to a being-deleted edge, so it can't trigger that crash).
         /// </summary>
@@ -143,14 +143,14 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                 Entity e = edges[i].m_Edge;
                 if (EntityManager.Exists(e) && !EntityManager.HasComponent<Deleted>(e)) return false;
             }
-            return true; // empty buffer or every connected edge gone/Deleted → being torn down
+            return true; // empty buffer or every connected edge gone/Deleted -> being torn down
         }
 
         /// <summary>
-        /// Build a NON-Permanent net-course definition (→ a Temp edge the game's ApplyNetSystem will
+        /// Build a NON-Permanent net-course definition (-> a Temp edge the game's ApplyNetSystem will
         /// finalize), with each endpoint resolved to an existing node (reuse) or an existing edge
         /// (split at <paramref name="endT"/>) or Entity.Null (fresh node). This mirrors what the net
-        /// tool's CreateDefinitionsJob produces — the difference from the shipped recipe is purely the
+        /// tool's CreateDefinitionsJob produces - the difference from the shipped recipe is purely the
         /// missing Permanent flag, which routes the edge through Temp + the ApplyTool split path.
         /// </summary>
         private void CreateTempCourse(Entity prefab, Bezier4x3 bez, float length,
@@ -170,7 +170,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
             {
                 m_Prefab = prefab,
                 // Seed from the (shared) geometry so procedural detail (wear/props) looks identical on
-                // every machine. NOT Permanent → GenerateEdgesSystem makes a Temp edge → ApplyNetSystem.
+                // every machine. NOT Permanent -> GenerateEdgesSystem makes a Temp edge -> ApplyNetSystem.
                 m_RandomSeed = math.asint(bez.a.x) ^ math.asint(bez.a.z) ^ math.asint(bez.d.x) ^ math.asint(bez.d.z),
                 // Matches the net tool's straight-line recipe (CreateStraightLine); without it the
                 // generated edge's sub-elevation isn't set up the way the game expects.
@@ -219,9 +219,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
 
         /// <summary>
         /// Nearest standalone edge whose centreline passes within <see cref="EdgeSnapDistance"/> (XZ)
-        /// of <paramref name="point"/> at a matching height (within <see cref="VerticalSnapTol"/> — a
+        /// of <paramref name="point"/> at a matching height (within <see cref="VerticalSnapTol"/> - a
         /// bridge endpoint above a ground road crosses it, it does not T-junction into it), away from
-        /// its end nodes — i.e. a mid-span tap that should SPLIT that edge. Returns the edge and the
+        /// its end nodes - i.e. a mid-span tap that should SPLIT that edge. Returns the edge and the
         /// split parameter t, or Entity.Null in open ground.
         /// </summary>
         private void FindEdgeAt(float3 point, NativeArray<Entity> edgeEntities, NativeArray<Curve> edgeCurves,

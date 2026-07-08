@@ -18,7 +18,7 @@ using CS2MultiplayerMod.Game.Sync.Commands;
 namespace CS2MultiplayerMod.Game.Sync.Systems
 {
     /// <summary>
-    /// Replicates in-place road composition changes — the whole "street tools" family:
+    /// Replicates in-place road composition changes - the whole "street tools" family:
     /// edge upgrades (trees, grass, wide sidewalks, sound barriers, street lights,
     /// crosswalks, tree-row styles) and node upgrades (traffic lights, all-way stops,
     /// roundabouts). The upgraded entity survives the change, so neither placement nor
@@ -27,19 +27,19 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
     /// Observed runtime behaviour this must mirror:
     ///   - an upgrade lands as an <see cref="Upgraded"/> component (plus, for edges, a
     ///     <see cref="SubReplacement"/> buffer) on the ORIGINAL edge or node, tagged
-    ///     Updated — the entity is otherwise untouched;
+    ///     Updated - the entity is otherwise untouched;
     ///   - node upgrades only ever carry the node-mask flags; committing one also strips
     ///     the node's <see cref="TrafficLights"/> runtime component (re-initialized from
     ///     the new composition) and re-updates the connected edges;
     ///   - REMOVING the last upgrade removes the Upgraded component entirely (zero flags
-    ///     are never stored) — so capture must also watch Updated entities WITHOUT
+    ///     are never stored) - so capture must also watch Updated entities WITHOUT
     ///     Upgraded and ship a clear when we knew the entity as upgraded.
     ///
     ///   capture: Updated edge/node whose flags+sub-replacements differ from what we last
-    ///            saw/sent for it → broadcast a <see cref="NetUpgradeCommand"/> with the
+    ///            saw/sent for it -> broadcast a <see cref="NetUpgradeCommand"/> with the
     ///            full resulting state (all-zero = cleared).
-    ///   realize: find the matching local edge (prefab + Bézier endpoints, either
-    ///            orientation — a backward match swaps left/right flags and sub-
+    ///   realize: find the matching local edge (prefab + Bezier endpoints, either
+    ///            orientation - a backward match swaps left/right flags and sub-
     ///            replacement sides, the game's own invert recipe) or node (position),
     ///            write/remove Upgraded + SubReplacement, tag Updated so the game
     ///            rebuilds the composition. Compare-before-write plus the last-seen
@@ -98,7 +98,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             _prefabIndex = new PrefabIndex(_prefabSystem, GetEntityQuery(ComponentType.ReadOnly<PrefabData>()));
 
             // Created is intentionally NOT excluded: a road built with an upgrade already
-            // applied (e.g. "road with trees" from the start) must ship its flags too —
+            // applied (e.g. "road with trees" from the start) must ship its flags too -
             // the placement command alone rebuilds a plain edge on the other side.
             _upgradedEdges = GetEntityQuery(new EntityQueryDesc
             {
@@ -362,7 +362,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                         SubRepSig = SubRepSig(subs),
                     };
 
-                    // Roads get Updated for many reasons (neighbour edits, traffic) — only
+                    // Roads get Updated for many reasons (neighbour edits, traffic) - only
                     // an actual composition change for this segment is worth broadcasting.
                     // The cache is also written on apply, which suppresses the echo.
                     string key = EdgeKey(b.a, b.d);
@@ -510,7 +510,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         private void Apply(List<NetUpgradeCommand> commands, long now)
         {
             // Each command carries the FULL resulting state, so within one drain the last
-            // command per target wins — applying an older retry after a newer arrival
+            // command per target wins - applying an older retry after a newer arrival
             // would land the wrong final state.
             var lastIndex = new Dictionary<string, int>();
             for (int i = 0; i < commands.Count; i++)
@@ -538,7 +538,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
             int applied = ApplyEdges(edgeTargets) + ApplyNodes(nodeTargets);
 
-            // Whatever found no entity yet probably races its own placement — retry briefly.
+            // Whatever found no entity yet probably races its own placement - retry briefly.
             for (int t = 0; t < edgeTargets.Count; t++)
                 _retry.Add((edgeTargets[t].cmd, now + RetryWindowMs));
             for (int t = 0; t < nodeTargets.Count; t++)
@@ -581,7 +581,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                         };
                         NetUpgradeCommand.SubRep[] subs = cmd.SubReps ?? new NetUpgradeCommand.SubRep[0];
 
-                        // Our edge runs the other way: mirror the game's own invert recipe —
+                        // Our edge runs the other way: mirror the game's own invert recipe -
                         // swap left/right flags and negate sub-replacement sides.
                         if (backward)
                         {
@@ -616,13 +616,13 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
                         if (currentFlags == flags && SubRepSig(ReadSubReplacements(entity)) == SubRepSig(subs))
                         {
-                            targets.RemoveAt(t); // already in this state — echo or replay
+                            targets.RemoveAt(t); // already in this state - echo or replay
                             break;
                         }
 
                         if (cleared)
                         {
-                            // The game never stores zero flags — removing the last upgrade
+                            // The game never stores zero flags - removing the last upgrade
                             // strips the components, so mirror that exactly.
                             if (hasUpgraded) EntityManager.RemoveComponent<Upgraded>(entity);
                             if (EntityManager.HasBuffer<SubReplacement>(entity)) EntityManager.RemoveComponent<SubReplacement>(entity);
@@ -636,7 +636,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
                         EntityManager.AddComponent<Updated>(entity);
                         // The composition at each end (crosswalks, transitions) is selected
-                        // per node — re-update them like the game's own commit does.
+                        // per node - re-update them like the game's own commit does.
                         Edge ends = EntityManager.GetComponentData<Edge>(entity);
                         TagUpdated(ends.m_Start);
                         TagUpdated(ends.m_End);
@@ -678,7 +678,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
                         // Prefer a node of the announced prefab, but a junction's node prefab
                         // can legitimately differ per machine (it inherits one of the touching
-                        // roads) — position decides when no exact-prefab node is nearby.
+                        // roads) - position decides when no exact-prefab node is nearby.
                         bool exact = EntityManager.GetComponentData<PrefabRef>(entities[i]).m_Prefab == targets[t].prefab;
                         if ((exact && !bestExact) || (exact == bestExact && distSq < bestDistSq))
                         {
@@ -688,7 +688,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                         }
                     }
 
-                    if (best == Entity.Null) continue; // stays in targets → retried
+                    if (best == Entity.Null) continue; // stays in targets -> retried
 
                     NetUpgradeCommand cmd = targets[t].cmd;
                     var flags = new CompositionFlags
@@ -714,7 +714,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
                     if (currentFlags == flags)
                     {
-                        targets.RemoveAt(t); // already in this state — echo or replay
+                        targets.RemoveAt(t); // already in this state - echo or replay
                         continue;
                     }
 
@@ -729,7 +729,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     }
 
                     // The game's commit strips the runtime traffic-light state so it is
-                    // re-initialized from the new composition — mirror that.
+                    // re-initialized from the new composition - mirror that.
                     if (EntityManager.HasComponent<TrafficLights>(best))
                         EntityManager.RemoveComponent<TrafficLights>(best);
 

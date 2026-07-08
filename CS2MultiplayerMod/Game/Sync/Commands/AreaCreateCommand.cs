@@ -5,7 +5,7 @@ namespace CS2MultiplayerMod.Game.Sync.Commands
 {
     /// <summary>
     /// "A player drew this district/surface polygon." Carries the area prefab name and
-    /// the full node ring — see <see cref="AreaSyncSystem"/>.
+    /// the full node ring - see <see cref="AreaSyncSystem"/>.
     /// </summary>
     public sealed class AreaCreateCommand : ISimulationCommand
     {

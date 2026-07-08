@@ -7,7 +7,7 @@ namespace CS2MultiplayerMod.Game.Sync.Channels
 {
     /// <summary>
     /// Replicates <see cref="Game.City.Population"/> (population, move-ins, average
-    /// happiness and health) — a singleton on the City entity. Population is an output
+    /// happiness and health) - a singleton on the City entity. Population is an output
     /// of the host's simulation, so clients simply mirror it for a consistent HUD.
     /// </summary>
     public sealed class PopulationStateChannel : IStateChannel

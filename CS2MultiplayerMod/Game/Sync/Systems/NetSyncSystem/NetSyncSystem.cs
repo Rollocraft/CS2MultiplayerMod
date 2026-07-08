@@ -14,14 +14,14 @@ using CS2MultiplayerMod.Game.Sync.Commands;
 namespace CS2MultiplayerMod.Game.Sync.Systems.Net
 {
     /// <summary>
-    /// Replicates roads (net segments) in both directions — the road counterpart to
+    /// Replicates roads (net segments) in both directions - the road counterpart to
     /// <see cref="BuildSyncSystem"/>. A built segment is an <see cref="Edge"/> with a
-    /// <see cref="Curve"/> (its Bézier) and a net <see cref="PrefabRef"/>; the receiver
+    /// <see cref="Curve"/> (its Bezier) and a net <see cref="PrefabRef"/>; the receiver
     /// rebuilds it via a <see cref="CreationDefinition"/>/<see cref="NetCourse"/> definition
     /// so the game's net systems lay the actual nodes and edges.
     ///
     /// The same origin-skip + <see cref="ReplicationGuard"/> logic as objects prevents
-    /// echo loops. Realized geometry may snap/merge differently than the source — exact
+    /// echo loops. Realized geometry may snap/merge differently than the source - exact
     /// fidelity is an in-game tuning item.
     ///
     /// This class is split across files by responsibility: this file holds state + lifecycle +
@@ -49,7 +49,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
         private EntityQuery _deletedEdges;
         private Observer _observer;
 
-        // Terrain/water samplers for deriving a course endpoint's elevation (Y − surface) — the
+        // Terrain/water samplers for deriving a course endpoint's elevation (Y - surface) - the
         // course must carry it explicitly or the game commits an elevated net (power line, pipe,
         // bridge) as a GROUND net at that Y and terraforms the ground up/down to meet it.
         private global::Game.Simulation.TerrainSystem _terrainSystem;
@@ -70,17 +70,17 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
         // endpoints ARE the source node positions, and the same map produces the same node
         // coordinates on every machine, so the matching node sits at ~0 m away.
         //
-        // INVARIANT: NodeSnapDistance MUST be >= EdgeSnapDistance — this is the Y-junction / 2nd-edge
+        // INVARIANT: NodeSnapDistance MUST be >= EdgeSnapDistance - this is the Y-junction / 2nd-edge
         // split fix. When we split an edge at a tap point, the game places the new junction node on
         // that edge's CENTRELINE, up to EdgeSnapDistance away from the (off-centre) tap. A later course
-        // that must connect there (the 2nd, 3rd… road of the junction, serialised one split per commit)
+        // that must connect there (the 2nd, 3rd... road of the junction, serialised one split per commit)
         // then looks for a node to reuse at its own endpoint. With the old 1 m tolerance there was a
         // DEAD ZONE: the new node was too far to reuse (> 1 m) yet too close to the fresh edge ends to
         // re-split (< MinSplitOffset 2 m), so the endpoint fell through to FREE ground and the road
-        // landed disconnected (verified in a live 2p host log: a 2nd-split endpoint went SPLIT→FREE
+        // landed disconnected (verified in a live 2p host log: a 2nd-split endpoint went SPLIT->FREE
         // between commit cycles). A split only ever happens within EdgeSnapDistance of a centreline, so
         // the resulting node is always within EdgeSnapDistance of the tap; matching that here guarantees
-        // the reuse and provably closes the dead zone. (This is a client-side realize tweak only — it
+        // the reuse and provably closes the dead zone. (This is a client-side realize tweak only - it
         // does not change the wire, the capture side, or building placement.)
         private const float NodeSnapDistance = 2.0f;
 
@@ -106,7 +106,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
         private const Layer UtilityConnectLayers = Layer.PowerlineLow | Layer.PowerlineHigh |
             Layer.WaterPipe | Layer.SewagePipe | Layer.StormwaterPipe | Layer.ResourceLine;
 
-        // Below this |curve Y − local terrain| a road-like net (one whose allowed elevation range
+        // Below this |curve Y - local terrain| a road-like net (one whose allowed elevation range
         // spans 0) counts as GROUND (course elevation 0): a committed ground road's Y deviates from
         // the pre-build terrain by the game's own grading (cut/fill on slopes), which must not be
         // mistaken for a raised/lowered placement. Real raised segments start at a full elevation
@@ -168,7 +168,6 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
         // "net Temps == 0" never happens — the committed geometry is query-able one frame after the
         // ApplyTool pass, and the frame counter releases the drain then (Apply.cs).
         private int _drainFrames;
-        private int _lastCommitBlockTraceTick;
         private long _suppressCaptureUntilMs;
         // One preview wipe per realize frame (see PrepareDefinitionFrame); reset by BeginRealizeFrame.
         private bool _prepDoneThisFrame;
@@ -361,9 +360,6 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                 SyncInbox.Push(_sink, command);
                 // Network thread: log on RECEIPT so a missing realize can be told apart from a missing
                 // send. The body is the encoded Bézier; we don't decode here (cheap + thread-safe).
-                Mod.NetTrace("RX NetPlacementCommand: origin=" + command.OriginPlayerId + ", " +
-                             (command.Body != null ? command.Body.Length : 0) + " bytes, queued (depth=" +
-                             _sink.Count + ").");
             }
         }
     }

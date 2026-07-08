@@ -15,18 +15,10 @@ using CS2MultiplayerMod.Game.Sync.Commands;
 namespace CS2MultiplayerMod.Game.Sync.Systems
 {
     /// <summary>
-    /// Replicates building relocation (the move tool). A relocated object keeps its
-    /// entity but gains <see cref="MovedLocation"/> (old position) and an Updated tag —
-    /// neither Created nor Deleted, so <see cref="BuildSyncSystem"/>/<see cref="DeleteSyncSystem"/>
-    /// never see it.
-    ///
-    ///   detect: Updated + <see cref="MovedLocation"/> → broadcast an
-    ///           <see cref="ObjectMoveCommand"/> (old position identifies the entity,
-    ///           new transform is the destination).
-    ///   realize: find the local entity by prefab + old position, then spawn a
-    ///            <see cref="CreationDefinition"/> with <c>m_Original</c> set and the
-    ///            Permanent|Relocate flags — the same definition the game's own move tool
-    ///            commits, so wiring (road connections, serviced citizens) updates properly.
+    /// Replicates building relocation: detect Updated + <see cref="MovedLocation"/> and
+    /// broadcast <see cref="ObjectMoveCommand"/> (old position identifies entity). Realize
+    /// by spawning <see cref="CreationDefinition"/> with <c>m_Original</c> and
+    /// Permanent|Relocate flags, same as game's move tool.
     /// </summary>
     public partial class MoveSyncSystem : GameSystemBase
     {

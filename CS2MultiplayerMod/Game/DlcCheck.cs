@@ -13,7 +13,7 @@ namespace CS2MultiplayerMod.Game
     /// every placement of a DLC asset desyncs the other side.
     ///
     /// Radio-station DLCs are purely client-side (music only, no prefabs), so they are
-    /// excluded — owning different radio packs is fine.
+    /// excluded - owning different radio packs is fine.
     /// </summary>
     internal static class DlcCheck
     {
@@ -24,7 +24,7 @@ namespace CS2MultiplayerMod.Game
         /// <summary>
         /// The owned, sync-relevant DLC names: canonical (prefix stripped), sorted
         /// ordinally so host and client produce byte-identical lists for equal content.
-        /// Returns an empty array when enumeration fails — the handshake treats that
+        /// Returns an empty array when enumeration fails - the handshake treats that
         /// as "unknown" and skips the check rather than blocking the player.
         /// </summary>
         public static string[] OwnedSyncRelevantDlcs(IModLogger log)

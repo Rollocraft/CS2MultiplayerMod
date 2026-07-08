@@ -9,10 +9,10 @@ using CS2MultiplayerMod.Game.Sync.Infrastructure;
 namespace CS2MultiplayerMod.Game.Sync.Channels
 {
     /// <summary>
-    /// Replicates the per-service budget sliders (police/fire/health/education/… funding %).
+    /// Replicates the per-service budget sliders (police/fire/health/education/... funding %).
     /// They live in the <see cref="ServiceBudgetData"/> buffer on a singleton and are set
     /// through <see cref="CityServiceBudgetSystem.SetServiceBudget"/>. Keyed by service
-    /// prefab name (the prefab entity differs per machine). Player-editable — any player may
+    /// prefab name (the prefab entity differs per machine). Player-editable - any player may
     /// move a slider; the host arbitrates. Entries are sorted by name so the editable-state
     /// diff in <see cref="CityStateSyncSystem"/> compares a stable, order-independent payload.
     /// </summary>

@@ -221,10 +221,9 @@ namespace CS2MultiplayerMod.Core.Session
         }
 
         /// <summary>
-        /// Client → host: submit an edit of a player-editable state channel (taxes,
-        /// policies, …). The body uses the channel's snapshot encoding; the host applies
-        /// it and the next snapshot broadcast carries it to every player. Host-side
-        /// edits need no message — the host's own capture already picks them up.
+        /// Client -> host: submit an edit of a player-editable state channel (taxes, policies, ...).
+        /// Body uses channel's snapshot encoding; host applies it in next broadcast. Host-side edits
+        /// need no message - host's capture already picks them up.
         /// </summary>
         public void SendStateEdit(byte channelId, byte[] data)
         {

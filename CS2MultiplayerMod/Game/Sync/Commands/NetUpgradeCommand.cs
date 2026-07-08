@@ -4,22 +4,17 @@ using CS2MultiplayerMod.Core.Sync;
 namespace CS2MultiplayerMod.Game.Sync.Commands
 {
     /// <summary>
-    /// "A player changed a piece of road in place" — carries the RESULTING composition,
-    /// not a delta, for either
-    ///   an edge (trees, grass, wide sidewalks, sound barriers, street lights,
-    ///   crosswalks, roadside tree-row styles), identified like a delete by prefab +
-    ///   Bézier endpoints, or
-    ///   a node (traffic lights, all-way stop, roundabout — <see cref="IsNode"/>),
-    ///   identified by the node's position (Ax/Ay/Az; Dx/Dy/Dz repeat it).
-    /// All-zero flags with no sub-replacements mean "the upgrade was removed": the game
-    /// strips the Upgraded component entirely in that case rather than storing zeros,
-    /// so removal is a distinct state worth shipping. See <see cref="NetUpgradeSyncSystem"/>.
+    /// "A player changed a piece of road in place" - carries the RESULTING composition,
+    /// not a delta, for either an edge (trees, grass, wide sidewalks, sound barriers, street
+    /// lights, crosswalks, roadside tree-row styles) or a node (traffic lights, all-way stop,
+    /// roundabout - <see cref="IsNode"/>). All-zero flags mean "the upgrade was removed".
+    /// See <see cref="NetUpgradeSyncSystem"/>.
     /// </summary>
     public sealed class NetUpgradeCommand : ISimulationCommand
     {
         public const ushort Id = 9;
 
-        /// <summary>A segment has at most a few side/median replacement rows (2 sides × styles).</summary>
+        /// <summary>A segment has at most a few side/median replacement rows (2 sides x styles).</summary>
         public const int MaxSubReplacements = 8;
 
         /// <summary>One roadside sub-replacement row (e.g. a specific tree style on one side).</summary>

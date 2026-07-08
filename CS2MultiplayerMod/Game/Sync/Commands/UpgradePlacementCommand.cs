@@ -6,7 +6,7 @@ namespace CS2MultiplayerMod.Game.Sync.Commands
     /// <summary>
     /// "A player attached an upgrade/extension to a service building." The upgrade and
     /// its owner both travel as prefab name + position so the receiver can find its own
-    /// owner entity — see <see cref="UpgradeSyncSystem"/>.
+    /// owner entity - see <see cref="UpgradeSyncSystem"/>.
     /// </summary>
     public sealed class UpgradePlacementCommand : ISimulationCommand
     {

@@ -18,25 +18,10 @@ using CS2MultiplayerMod.Game.Sync.Systems.Net;
 namespace CS2MultiplayerMod.Game.Sync.Systems
 {
     /// <summary>
-    /// Replicates objects players place (buildings, props, …) in both directions, so
-    /// either player building adds to the shared city. Each machine both detects local
-    /// placements and realizes remote ones:
-    ///
-    ///   detect: a freshly <see cref="Created"/> object that is not a known replica →
-    ///           broadcast an <see cref="ObjectPlacementCommand"/>.
-    ///   realize: a received command from someone else → spawn a
-    ///            <see cref="CreationDefinition"/>/<see cref="ObjectDefinition"/> entity and let
-    ///            the game's creation systems build it.
-    ///
-    /// Two guards keep it from looping: a command tagged with our own player id is never
-    /// re-realized (we already placed it), and every realized object is recorded in a
-    /// <see cref="ReplicationGuard"/> so our detector skips it instead of echoing it back.
-    /// The host additionally relays each command to the other clients automatically
-    /// (see <see cref="MultiplayerSession"/>), so N-player fan-out needs no extra work.
-    ///
-    /// Known limitation needing in-game tuning: the Created query also catches
-    /// simulation-spawned objects (zoning growth), so capture should later be narrowed
-    /// to genuine tool placements. Roads are handled by <see cref="NetSyncSystem"/>.
+    /// Replicates object placements (buildings, props) bidirectionally: detect <see cref="Created"/>
+    /// non-replicas, broadcast <see cref="ObjectPlacementCommand"/>; realize by spawning
+    /// <see cref="CreationDefinition"/>. Guards via player id and <see cref="ReplicationGuard"/>;
+    /// host relays to other clients. Known: Created query includes zoning growth.
     /// </summary>
     public partial class BuildSyncSystem : GameSystemBase
     {
@@ -141,10 +126,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         }
 
         /// <summary>
-        /// Called by <see cref="SyncRealizeSystem"/> during the ToolUpdate phase. Definition
-        /// entities only realize when created BEFORE Modification1 in the frame (see
-        /// <see cref="SyncRealizeSystem"/> for the verified frame order) — capture stays at
-        /// ModificationEnd where the one-frame <see cref="Created"/> tags are still alive.
+        /// Called by <see cref="SyncRealizeSystem"/> during ToolUpdate. Definitions realize
+        /// when created before Modification1 (see frame order in <see cref="SyncRealizeSystem"/>).
+        /// Capture stays at ModificationEnd where one-frame <see cref="Created"/> tags live.
         /// </summary>
         public void RealizePending()
         {
@@ -188,7 +172,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     {
                         if (n > 0) sb.Append(", ");
                         sb.Append(pair.Key).Append(" x").Append(pair.Value);
-                        if (++n >= 10) { sb.Append(", …"); break; }
+                        if (++n >= 10) { sb.Append(", ..."); break; }
                     }
                     sb.Append(']');
                 }

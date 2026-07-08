@@ -6,7 +6,7 @@ namespace CS2MultiplayerMod.Game.Sync.Commands
     /// <summary>
     /// "A player created this transport line." The route prefab travels by name, the
     /// line itself as the ordered waypoint positions; the receiver rebuilds it via the
-    /// game's route-definition pipeline — see <see cref="RouteSyncSystem"/>.
+    /// game's route-definition pipeline - see <see cref="RouteSyncSystem"/>.
     /// </summary>
     public sealed class RouteCreateCommand : ISimulationCommand
     {

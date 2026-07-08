@@ -26,7 +26,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
             // One batch in flight at a time (a course built before the previous batch's nodes/edges
             // are query-able could not connect to them), and never on the frame the player's own
             // gesture applies. Any other tool state realizes LIVE: the def-frame hijack below wipes
-            // the player's preview for one frame and the commit overrides the tool's applyMode — see
+            // the player's preview for one frame and the commit overrides the tool's applyMode - see
             // CanBuildDefinitions / PrepareDefinitionFrame in the .Apply partial.
             if (!CanBuildDefinitions) return;
 
@@ -41,8 +41,6 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
             SimulationCommandMessage msg;
             while (work.Count < MaxBatch && _incoming.TryDequeue(out msg)) work.Add(msg);
             if (work.Count == 0) return;
-            Mod.NetTrace("realize batch START: " + work.Count + " command(s) drained (" + _incoming.Count +
-                         " still queued).");
 
             NativeArray<Entity> nodeEntities = default, edgeEntities = default, ownedNodeEntities = default;
             NativeArray<Node> nodeData = default, ownedNodeData = default;
@@ -72,7 +70,6 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                     SimulationCommandMessage message = work[i];
                     if (message.OriginPlayerId == session.LocalPlayerId)
                     {
-                        Mod.NetTrace("  realize skip own echo (origin=" + message.OriginPlayerId + ").");
                         continue;
                     }
 
@@ -121,8 +118,6 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                     // span rebuilt at another elevation fails the height match — never wrongly skipped.
                     if (SpanAlreadyBuilt(prefab, bezier, edgeEntities, edgeCurves))
                     {
-                        Mod.NetTrace("  realize skip DUPLICATE '" + command.PrefabName + "' (" + XZ(a) +
-                                     "→" + XZ(d) + ") — span already covered by live same-prefab edges.");
                         continue;
                     }
 
@@ -141,13 +136,6 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                     float2 startElevation = EndElevation(prefab, startSnap, startKind, a, ref heightData, ref waterData);
                     float2 endElevation = EndElevation(prefab, endSnap, endKind, d, ref heightData, ref waterData);
 
-                    Mod.NetTrace("  realize '" + command.PrefabName + "' origin=" + message.OriginPlayerId +
-                                 " (" + XZ(a) + "→" + XZ(d) + ") len " + command.Length.ToString("F1") +
-                                 ": start=" + KindName(startKind, startSnap, startT) +
-                                 " end=" + KindName(endKind, endSnap, endT) +
-                                 (math.any(startElevation != 0f) || math.any(endElevation != 0f)
-                                     ? " elev " + startElevation.x.ToString("F1") + "→" + endElevation.x.ToString("F1")
-                                     : "") + ".");
 
                     bool defer = startKind == KindDeferBatchEdge || endKind == KindDeferBatchEdge;
                     bool splittingCourse = startKind == KindSplit || endKind == KindSplit;
@@ -162,9 +150,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                         string why = (startKind == KindDeferBatchEdge || endKind == KindDeferBatchEdge)
                             ? "taps a not-yet-real batch edge"
                             : "2nd existing-edge split this batch (serialised to avoid a stale-edge crash)";
-                        Mod.NetTrace("  realize DEFER '" + command.PrefabName + "' — " + why + "; re-queueing " +
-                                     (work.Count - i) + " command(s) for the next post-commit cycle.");
-                        // Re-queue this and every remaining item, in order, for the next cycle — after
+                        // Re-queue this and every remaining item, in order, for the next cycle - after
                         // this batch has committed and its edges/nodes have become real.
                         for (int j = i; j < work.Count; j++) _incoming.Enqueue(work[j]);
                         break;
@@ -189,8 +175,6 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                         if (startKind == KindFree) batchNewNodes.Add(a);
                         if (endKind == KindFree) batchNewNodes.Add(d);
                         batchEdges.Add(bezier);
-                        Mod.NetTrace("  realize BUILT '" + command.PrefabName + "' into batch (course #" + built +
-                                     ", splitUsed=" + splitUsed + ").");
                     }
                     catch (System.Exception ex)
                     {
@@ -219,21 +203,16 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                 _onCommitLost = delegate
                 {
                     for (int j = 0; j < batchSources.Count; j++) _incoming.Enqueue(batchSources[j]);
-                    Mod.NetTrace("commit lost: re-enqueued " + batchSources.Count +
-                                 " net placement command(s) for a rebuild.");
                 };
-                Mod.NetTrace("realize batch END: armed commit for " + built +
-                             " course(s); awaiting Temp materialisation then ApplyTool.");
             }
             else
             {
-                Mod.NetTrace("realize batch END: built 0 courses (all echoes/malformed/deferred).");
             }
         }
 
         /// <summary>
         /// True when every point of <paramref name="span"/> already lies on live same-prefab geometry
-        /// — five samples along the curve, each of which must sit on SOME existing edge of that prefab
+        /// - five samples along the curve, each of which must sit on SOME existing edge of that prefab
         /// (the span may map to several local sub-edges). Uses the tight SplitMatch tolerances so a
         /// parallel road or a span rebuilt at another elevation is never wrongly treated as a
         /// duplicate.
@@ -263,7 +242,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
 
         /// <summary>
         /// Resolve where one course endpoint connects, in priority order: an existing real node (reuse),
-        /// a building's utility sub-net node (utility nets only — a power/pipe connector stub), a
+        /// a building's utility sub-net node (utility nets only - a power/pipe connector stub), a
         /// pending new node another course in this batch creates (merge), a pending batch edge it taps
         /// mid-span (defer until real), an existing real edge it taps mid-span (split), else free ground.
         /// Returns the snap entity (node to reuse, or edge to split, or Entity.Null) and, via out params,
@@ -286,10 +265,10 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                 node = FindUtilityNodeAt(p, ownedNodeEntities, ownedNodeData, placedConnect);
                 if (node != Entity.Null) { kind = KindReuseConnector; return node; }
             }
-            // Coincides with a new node another course in this batch creates → leave it as a fresh node
+            // Coincides with a new node another course in this batch creates -> leave it as a fresh node
             // (Entity.Null) and let GenerateNodesSystem merge the two by exact position.
             if (NearAny(p, batchNewNodes, NodeSnapDistance)) { kind = KindMergeBatch; return Entity.Null; }
-            // Taps the middle of an edge this batch is still building → can't split a not-yet-real edge;
+            // Taps the middle of an edge this batch is still building -> can't split a not-yet-real edge;
             // defer the whole course to the next cycle, where that edge is real and this becomes a split.
             if (MidSpanOfAnyBatch(p, batchEdges)) { kind = KindDeferBatchEdge; return Entity.Null; }
             Entity edge;
@@ -303,8 +282,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
         /// Mark the echo-suppression guard for a course being realized. The capture side
         /// consumes the key of the committed edge's START (its <c>a</c> endpoint), but the
         /// committed geometry can differ from the command: an endpoint that reuses a node
-        /// lands exactly ON that node — up to <see cref="NodeSnapDistance"/> from the
-        /// commanded point, past the guard's 0.5 m buckets — a split lands on the split
+        /// lands exactly ON that node - up to <see cref="NodeSnapDistance"/> from the
+        /// commanded point, past the guard's 0.5 m buckets - a split lands on the split
         /// point, and the game may commit the edge with its endpoints swapped. So mark
         /// every position the committed start can be: both raw endpoints plus each end's
         /// resolved snap target. Stale extras simply age out (15 s TTL).
@@ -344,25 +323,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
             }
         }
 
-        // --- NetTrace formatting helpers ----------------------------------------------------------
-        private static string XZ(float3 p) => p.x.ToString("F1") + "," + p.z.ToString("F1");
-
-        private static string KindName(int kind, Entity snap, float t)
-        {
-            switch (kind)
-            {
-                case KindReuseNode: return "REUSE node #" + snap.Index;
-                case KindReuseConnector: return "REUSE connector #" + snap.Index;
-                case KindMergeBatch: return "MERGE-with-batch-node";
-                case KindSplit: return "SPLIT edge #" + snap.Index + "@t=" + t.ToString("F2");
-                case KindDeferBatchEdge: return "DEFER(taps batch edge)";
-                default: return "FREE-ground";
-            }
-        }
-
         /// <summary>
         /// True when <paramref name="p"/> lies within <paramref name="tol"/> (XZ) of any point at a
-        /// matching height. The height gate mirrors the game's node merge, which is by position — a
+        /// matching height. The height gate mirrors the game's node merge, which is by position - a
         /// batch containing both a ground road and a bridge above it must not classify the bridge's
         /// endpoint as merging with the ground node.
         /// </summary>
@@ -378,7 +341,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
 
         /// <summary>
         /// True when <paramref name="point"/> taps the MIDDLE (away from both ends) of any curve this
-        /// batch is creating — the same mid-span test as <see cref="FindEdgeAt"/>, against pending
+        /// batch is creating - the same mid-span test as <see cref="FindEdgeAt"/>, against pending
         /// batch edges rather than real ones, with the same height gate (a crossing on another level
         /// is not a tap).
         /// </summary>

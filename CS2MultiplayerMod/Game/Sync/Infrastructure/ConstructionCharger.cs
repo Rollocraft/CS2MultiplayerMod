@@ -9,7 +9,7 @@ namespace CS2MultiplayerMod.Game.Sync.Infrastructure
     /// <summary>
     /// Host-side treasury charging for constructions that arrive over the wire. The game
     /// only charges the machine whose tool placed the object, so a remote player's build
-    /// would otherwise be free city-wide. The host — the money authority — charges the
+    /// would otherwise be free city-wide. The host - the money authority - charges the
     /// shared treasury when realizing a remote command; the building client's own local
     /// charge is overwritten by the next money snapshot, so everyone converges on exactly
     /// one charge. All methods are no-ops unless this machine is the connected host.
@@ -33,16 +33,16 @@ namespace CS2MultiplayerMod.Game.Sync.Infrastructure
         }
 
         /// <summary>
-        /// Road segment: per-cell cost × cell count. The game prices nets per 8 m cell;
+        /// Road segment: per-cell cost x cell count. The game prices nets per 8 m cell;
         /// length/8 reproduces that closely but not exactly (elevation multipliers are
-        /// not applied) — flagged in the log line for in-game tuning.
+        /// not applied) - flagged in the log line for in-game tuning.
         /// </summary>
         public static void ChargeNet(EntityManager em, Entity prefab, float length, string name)
         {
             if (!em.HasComponent<PlaceableNetData>(prefab)) return;
             uint perCell = em.GetComponentData<PlaceableNetData>(prefab).m_DefaultConstructionCost;
             int cells = math.max(1, (int)math.round(length / 8f));
-            Charge(em, (long)perCell * cells, name + " ×" + cells + " cells (8m approximation)");
+            Charge(em, (long)perCell * cells, name + " x" + cells + " cells (8m approximation)");
         }
 
         /// <summary>A price already known in money terms (e.g. a remote map tile purchase).</summary>

@@ -12,7 +12,7 @@ namespace CS2MultiplayerMod.Game.Sync.Channels
     /// <summary>
     /// Replicates the city-wide policy list (the <see cref="Policy"/> buffer on the city
     /// entity). Policies are identified by prefab name; flags + slider adjustment travel
-    /// along. Player-editable — any player may toggle policies; the host arbitrates.
+    /// along. Player-editable - any player may toggle policies; the host arbitrates.
     /// District and transport-line policies are a follow-up (needs a cross-machine
     /// district identity first).
     /// </summary>
@@ -77,7 +77,7 @@ namespace CS2MultiplayerMod.Game.Sync.Channels
             if (_cityQuery.CalculateEntityCount() == 0) return;
             Entity city = _cityQuery.GetSingletonEntity();
 
-            // Resolve names → local prefab entities; skip unknown (mod mismatch).
+            // Resolve names -> local prefab entities; skip unknown (mod mismatch).
             var resolved = new List<Policy>(wanted.Count);
             foreach (var entry in wanted)
             {

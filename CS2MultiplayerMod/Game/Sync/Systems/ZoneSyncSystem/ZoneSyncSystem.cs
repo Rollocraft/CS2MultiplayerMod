@@ -16,20 +16,10 @@ using CS2MultiplayerMod.Game.Sync.Commands;
 namespace CS2MultiplayerMod.Game.Sync.Systems
 {
     /// <summary>
-    /// Replicates zone painting in both directions. Zoning lives in Block entities (one
-    /// per road-edge side, deterministic from the — already synced — road layout), each
-    /// holding a Cell buffer whose <c>m_Zone</c> is the painted zone type.
-    ///
-    ///   detect (ModificationEnd): a Block whose cells were just <see cref="Updated"/> →
-    ///           broadcast the block's full cell zoning, zone types as prefab names
-    ///           (ZoneType.m_Index is per-machine).
-    ///   realize (ToolUpdate via <see cref="SyncRealizeSystem"/>): find the local block at
-    ///            the same position, write the cell zones and tag it Updated so the zone
-    ///            and spawn systems react exactly as after a local paint.
-    ///
-    /// Echo damping is two-layered: applying marks a content-hash guard key the capture
-    /// consumes, and an apply that would change nothing writes nothing (no Updated → no
-    /// re-broadcast), so loops die even when guards expire.
+    /// Replicates zone painting in Block entities (one per road-edge side from synced
+    /// road layout): detect Updated cells at ModificationEnd, broadcast full zoning.
+    /// Realize at ToolUpdate via <see cref="SyncRealizeSystem"/>, find local block, write
+    /// zones, tag Updated. Echo-damped via content-hash guard and no-op writes.
     /// </summary>
     public partial class ZoneSyncSystem : GameSystemBase
     {

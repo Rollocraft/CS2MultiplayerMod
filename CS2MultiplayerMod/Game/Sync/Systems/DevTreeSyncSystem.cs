@@ -15,35 +15,11 @@ using CS2MultiplayerMod.Game.Sync.Channels;
 namespace CS2MultiplayerMod.Game.Sync.Systems
 {
     /// <summary>
-    /// Replicates development-tree node purchases. The points *count* was already
-    /// replicated (authoritative, host → client) by <see cref="DevTreePointsStateChannel"/>,
-    /// but the unlock itself was not — so a partner's tree never updated. Worse, because a
-    /// client's local spend was overwritten by the host's points snapshot (the host never
-    /// learned of the purchase, so it never deducted), the client's points were refilled
-    /// every second: effectively infinite unlocks.
-    ///
-    ///   detect: a <see cref="DevTreeNodeData"/> node whose enabled <see cref="Locked"/>
-    ///           tag just cleared, and that we did not unlock from a remote command, was
-    ///           purchased locally → broadcast a <see cref="DevTreePurchaseCommand"/>
-    ///           (node by prefab name).
-    ///   apply: resolve the node by name; if still locked, raise the same unlock event the
-    ///          game uses — but via the <see cref="EndFrameBarrier"/>, exactly as
-    ///          <c>DevTreeSystem.Purchase</c> does. This timing is load-bearing: the game's
-    ///          <c>UnlockSystem</c> consumes <c>Unlock</c> events at <c>MainLoop</c> (the
-    ///          first phase of the frame) and <c>CleanUpSystem</c> destroys every event
-    ///          entity at <c>Cleanup</c> (the last). This system runs at <c>UIUpdate</c>, so
-    ///          an event created directly here would be reaped that same frame before
-    ///          <c>UnlockSystem</c> ever saw it — the points dropped but the unlock never
-    ///          landed on the partner. Deferring to the barrier makes the event appear at the
-    ///          next <c>MainLoop</c>, where <c>UnlockSystem</c> picks it up and cascades the
-    ///          dependent content unlocks. The host additionally subtracts the node's cost
-    ///          from the shared <see cref="DevTreePoints"/> — that is what stops the snapshot
-    ///          from refilling a client that paid. Clients take their points from the host's
-    ///          snapshot.
-    ///
-    /// The session relays a client's command to the other clients automatically, so the
-    /// host need not re-broadcast what it applies; an echo guard suppresses re-detecting an
-    /// unlock we just applied.
+    /// Replicates dev-tree node purchases by detecting <see cref="DevTreeNodeData"/> unlocks
+    /// and broadcasting <see cref="DevTreePurchaseCommand"/>. Applies remotely via
+    /// <see cref="EndFrameBarrier"/> (load-bearing: must reach MainLoop, not UIUpdate),
+    /// charges the host's <see cref="DevTreePoints"/> to stop refill-on-snapshot. Echo guard
+    /// suppresses re-detecting applied unlocks.
     /// </summary>
     public partial class DevTreeSyncSystem : GameSystemBase
     {

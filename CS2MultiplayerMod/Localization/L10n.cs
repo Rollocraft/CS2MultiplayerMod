@@ -10,13 +10,8 @@ namespace CS2MultiplayerMod.Localization
     /// are resolved by the game itself from the registered locale sources
     /// (<see cref="PropertiesLocaleSource"/>, one per language); this helper covers
     /// values that are produced per frame and therefore must be translated at read time.
-    ///
-    /// There is deliberately no mod-specific language setting: lookups go through the
-    /// game's <em>active</em> locale dictionary, so the mod always follows the language
-    /// the player chose in the game options — exactly like vanilla UI text — and
-    /// switches live, because every consumer re-reads these strings each UI frame.
-    ///
-    /// Lookup order: active game dictionary → built-in English table → the key itself.
+    /// The mod always follows the game language and switches live.
+    /// Lookup order: active game dictionary -> built-in English table -> the key itself.
     /// </summary>
     public static class L10n
     {
@@ -156,8 +151,8 @@ namespace CS2MultiplayerMod.Localization
 
         /// <summary>
         /// Translate and <see cref="string.Format(string,object[])"/> a runtime key.
-        /// A malformed placeholder in a translation falls back to the English format —
-        /// a bad locale entry must never throw out of a status getter polled by the UI.
+        /// A malformed placeholder in a translation falls back to the English format - a bad
+        /// locale entry must never throw out of a status getter polled by the UI.
         /// </summary>
         public static string F(string key, params object[] args)
         {

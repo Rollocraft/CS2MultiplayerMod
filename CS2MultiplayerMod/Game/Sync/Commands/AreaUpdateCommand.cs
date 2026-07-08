@@ -6,7 +6,7 @@ namespace CS2MultiplayerMod.Game.Sync.Commands
     /// <summary>
     /// "A player redrew this district/surface polygon." The anchor is the OLD centroid
     /// (which still matches the receiver's not-yet-edited polygon); the payload is the
-    /// complete new node ring — see <see cref="AreaSyncSystem"/>.
+    /// complete new node ring - see <see cref="AreaSyncSystem"/>.
     /// </summary>
     public sealed class AreaUpdateCommand : ISimulationCommand
     {

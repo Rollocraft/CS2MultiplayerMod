@@ -17,25 +17,13 @@ namespace CS2MultiplayerMod
         public static Setting Setting;
 
         /// <summary>
-        /// Log a chatty, troubleshooting-only line — the per-action sync notices and the
+        /// Log a chatty, troubleshooting-only line - the per-action sync notices and the
         /// periodic diagnostics. Silent unless "Verbose Logging" is enabled in settings, so
         /// the default log stays quiet and only the important lifecycle/fault lines remain.
         /// </summary>
         public static void Verbose(string message)
         {
             if (Setting != null && Setting.VerboseLogging) log.Info(message);
-        }
-
-        /// <summary>
-        /// Dense, per-event tracing for the net (road/path/power/pipe) sync pipeline — host placement,
-        /// what is sent, what the peer receives, every realize classification + commit/drain transition.
-        /// Deliberately high-volume and its own opt-in (<see cref="Setting.NetTraceLogging"/>), separate
-        /// from general <see cref="Setting.VerboseLogging"/> so that turning on verbose logging does not
-        /// also unleash this firehose. Enable it only when diagnosing a net-sync problem.
-        /// </summary>
-        public static void NetTrace(string message)
-        {
-            if (Setting != null && Setting.NetTraceLogging) log.Info("[NetTrace] " + message);
         }
 
         /// <summary>
@@ -71,10 +59,10 @@ namespace CS2MultiplayerMod
             Service = new MultiplayerService(new ColossalModLogger(log));
             log.Info("Multiplayer core initialised. Protocol v" +
                      CS2MultiplayerMod.Core.Protocol.ProtocolConstants.ProtocolVersion +
-                     ". Registering sync systems…");
+                     ". Registering sync systems...");
 
             // UIUpdate, not GameSimulation: the session pump must also run in the main
-            // menu (joining from there) and while the game is paused — the options
+            // menu (joining from there) and while the game is paused - the options
             // screen pauses the simulation, which previously froze all connection
             // handling exactly while the player was looking at the connect buttons.
             updateSystem.UpdateAt<MultiplayerSystem>(SystemUpdatePhase.UIUpdate);
@@ -82,7 +70,7 @@ namespace CS2MultiplayerMod
             updateSystem.UpdateAt<MultiplayerUISystem>(SystemUpdatePhase.UIUpdate);
             // UIUpdate, not GameSimulation: the GameSimulation phase stops ticking the
             // moment the game is paused (selectedSpeed 0), so a system there can never
-            // observe a pause to replicate it, nor apply a remote pause once stopped —
+            // observe a pause to replicate it, nor apply a remote pause once stopped -
             // pause/play and speed changes never synced. UIUpdate runs every frame in
             // every state, so the simulation-speed channel (and the rest of the city
             // state) now stays in sync even while a player is paused. Channel capture is
@@ -90,7 +78,7 @@ namespace CS2MultiplayerMod
             updateSystem.UpdateAt<Game.Sync.Systems.CityStateSyncSystem>(SystemUpdatePhase.UIUpdate);
             // Also UIUpdate: publishing the local camera focus must keep going while a
             // player is paused (so partners still see where they are), and GameSimulation
-            // barely ticked it — the live log showed ~1 position sent per 30 s.
+            // barely ticked it - the live log showed ~1 position sent per 30 s.
             updateSystem.UpdateAt<Game.Sync.Players.PlayerCursorSyncSystem>(SystemUpdatePhase.UIUpdate);
             // Renders the other players' camera positions as ground rings. Rendering phase
             // so the markers draw every frame, in every state (including paused).
@@ -104,7 +92,7 @@ namespace CS2MultiplayerMod
             updateSystem.UpdateAt<Game.Sync.Systems.Net.NetSyncSystem>(SystemUpdatePhase.ModificationEnd);
             updateSystem.UpdateAt<Game.Sync.Systems.DeleteSyncSystem>(SystemUpdatePhase.ModificationEnd);
             // In-place road-type replacement (a different net prefab drawn over an existing edge):
-            // detected as an Updated-not-Created edge whose PrefabRef changed — see NetReplaceSyncSystem.
+            // detected as an Updated-not-Created edge whose PrefabRef changed - see NetReplaceSyncSystem.
             updateSystem.UpdateAt<Game.Sync.Systems.NetReplaceSyncSystem>(SystemUpdatePhase.ModificationEnd);
             updateSystem.UpdateAt<Game.Sync.Systems.ZoneSyncSystem>(SystemUpdatePhase.ModificationEnd);
             updateSystem.UpdateAt<Game.Sync.Systems.TerrainSyncSystem>(SystemUpdatePhase.ModificationEnd);
@@ -118,7 +106,7 @@ namespace CS2MultiplayerMod
             // is paused (the progression panel works paused, and a node's Locked clears
             // outside the simulation loop), but GameSimulation freezes at selectedSpeed 0.
             // A detector there never saw a purchase made while paused and never applied an
-            // incoming one — yet the authoritative DevTreePoints snapshot keeps flowing from
+            // incoming one - yet the authoritative DevTreePoints snapshot keeps flowing from
             // CityStateSyncSystem (also UIUpdate) the whole time, refilling the buyer's spent
             // points every second. The result was a client with effectively infinite points
             // and a host that never learned which node was bought. Running here, alongside
@@ -130,7 +118,7 @@ namespace CS2MultiplayerMod
             // spawned at ModificationEnd is never realized (see SyncRealizeSystem).
             updateSystem.UpdateAt<Game.Sync.Systems.SyncRealizeSystem>(SystemUpdatePhase.ToolUpdate);
             // UIUpdate, not GameSimulation, for the same reason as the session pump:
-            // hosting starts from the options screen, which pauses the simulation —
+            // hosting starts from the options screen, which pauses the simulation -
             // at GameSimulation the queued initial world stream for a joining client
             // was never processed while the host sat in the (paused) menu, leaving
             // the client stuck in WaitingForMap forever.

@@ -11,9 +11,8 @@ namespace CS2MultiplayerMod.Core.Session
         public readonly string Password;
 
         /// <summary>
-        /// Host only. When true (the default), connections from non-private addresses
-        /// are refused — the session is reachable from the local network only. Turning
-        /// this off (internet play) requires a password.
+        /// Host only: when true (default), non-private address connections refused.
+        /// Session LAN-only. Internet play requires password.
         /// </summary>
         public readonly bool LanOnly;
 
@@ -30,11 +29,9 @@ namespace CS2MultiplayerMod.Core.Session
         public readonly string GameVersion;
 
         /// <summary>
-        /// Canonical (sorted) names of the sync-relevant DLCs this machine owns.
-        /// Compared as a set during the handshake — differing DLCs mean differing
-        /// prefab catalogues, which desync. Empty means "unknown / don't check"
-        /// (e.g. when DLC enumeration is unavailable), so the check never blocks
-        /// a build that cannot produce the list.
+        /// Canonical (sorted) DLC names this machine owns. Compared as set during
+        /// handshake - differing DLCs mean differing prefab catalogues, desync. Empty
+        /// means "unknown/don't check", skipping validation for unknown DLC enumerations.
         /// </summary>
         public readonly string[] DlcList;
 

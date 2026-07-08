@@ -44,7 +44,7 @@ namespace CS2MultiplayerMod.Game
             {
                 if (_uiModuleReady) return;
                 _uiModuleReady = true;
-                Mod.log.Info("UI module loaded and registered — the main-menu Join Game button is available.");
+                Mod.log.Info("UI module loaded and registered - the main-menu Join Game button is available.");
             }));
 
             // Field values: polled from Setting every UI frame, pushed on change.
@@ -171,7 +171,7 @@ namespace CS2MultiplayerMod.Game
 
             _uiModuleWarned = true;
             Mod.log.Warn(
-                "The Join Game UI module never reported in — the main-menu button is most likely missing. " +
+                "The Join Game UI module never reported in - the main-menu button is most likely missing. " +
                 "Either CS2MultiplayerMod.mjs is not in the mod folder, or another mod's broken UI module " +
                 "(known offender: Gooee) crashed the game's UI-module load chain before it reached this mod. " +
                 "Check the game's UI log for JS errors from other mods and remove the broken mod. " +

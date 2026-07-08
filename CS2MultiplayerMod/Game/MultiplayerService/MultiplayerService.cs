@@ -27,12 +27,9 @@ namespace CS2MultiplayerMod.Game
     /// Process-wide bridge between the mod lifecycle / UI and the portable
     /// <see cref="MultiplayerSession"/>. Created once in <see cref="Mod.OnLoad"/> and
     /// pumped every simulation tick by <see cref="MultiplayerSystem"/>.
-    ///
-    /// It owns the monotonic clock the session needs (a <see cref="Stopwatch"/>, so the
-    /// core never reaches for <c>DateTime.Now</c>) and translates the settings screen's
+    /// It owns the monotonic clock the session needs and translates the settings screen's
     /// strings into a <see cref="MultiplayerConfig"/>. It also registers the security
-    /// allow-lists: which blob channels a client accepts and which command ids peers
-    /// may send — anything outside these is dropped or disconnected by the core.
+    /// allow-lists: which blob channels a client accepts and which command ids peers may send.
     /// </summary>
     public sealed partial class MultiplayerService
     {
@@ -95,7 +92,7 @@ namespace CS2MultiplayerMod.Game
 
         /// <summary>
         /// The one gate every sync system checks before capturing or applying gameplay:
-        /// mod enabled, session connected, and — on a client — the host's world fully
+        /// mod enabled, session connected, and - on a client - the host's world fully
         /// loaded. The host is always "in session" with its own world.
         /// </summary>
         public bool GameplaySyncReady =>
@@ -116,7 +113,7 @@ namespace CS2MultiplayerMod.Game
 
         // ---- Chat log (in-game hub panel) --------------------------------------
 
-        /// <summary>Bounded — old lines fall off so an all-night session cannot grow the UI payload.</summary>
+        /// <summary>Bounded - old lines fall off so an all-night session cannot grow the UI payload.</summary>
         private const int MaxChatEntries = 120;
 
         private readonly object _chatLock = new object();
@@ -126,7 +123,7 @@ namespace CS2MultiplayerMod.Game
 
         /// <summary>
         /// The chat/event feed as a JSON array for the hub panel binding:
-        /// <c>[{"id":1,"sender":"Name"|null,"text":"…","time":"HH:mm"}, …]</c>.
+        /// <c>[{"id":1,"sender":"Name"|null,"text":"...","time":"HH:mm"}, ...]</c>.
         /// Cached and rebuilt only on append, so the per-frame UI binding compares
         /// the same string instance instead of re-serializing the whole log.
         /// </summary>

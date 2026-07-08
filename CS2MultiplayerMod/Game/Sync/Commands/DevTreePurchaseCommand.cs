@@ -6,10 +6,7 @@ namespace CS2MultiplayerMod.Game.Sync.Commands
     /// <summary>
     /// "A player purchased this development-tree node." The node travels by prefab name
     /// (its entity differs per machine); the receiver unlocks the same node and the host
-    /// deducts the node's cost from the shared points — see <see cref="DevTreeSyncSystem"/>.
-    /// Without this the unlock never reached the partner and the host never charged the
-    /// points, so the authoritative points snapshot refilled a client that had spent them
-    /// (infinite points).
+    /// deducts the node's cost from the shared points - see <see cref="DevTreeSyncSystem"/>.
     /// </summary>
     public sealed class DevTreePurchaseCommand : ISimulationCommand
     {

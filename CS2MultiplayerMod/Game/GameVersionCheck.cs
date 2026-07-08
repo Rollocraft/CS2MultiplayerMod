@@ -7,7 +7,7 @@ namespace CS2MultiplayerMod.Game
     /// Tracks which Cities: Skylines II builds this mod has actually been tested
     /// against. The game's runtime behaviour (and therefore what the sync layer
     /// observes) can change between patches, so a build outside this list is flagged
-    /// to the player as untested — a non-blocking warning banner in the Join dialog
+    /// to the player as untested - a non-blocking warning banner in the Join dialog
     /// and the in-game hub. Multiplayer still works; the player is just told that
     /// things may break and to keep backups.
     /// </summary>

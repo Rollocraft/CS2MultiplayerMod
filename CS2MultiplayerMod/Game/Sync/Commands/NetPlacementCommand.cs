@@ -6,7 +6,7 @@ namespace CS2MultiplayerMod.Game.Sync.Commands
     /// <summary>
     /// "A player drew this road (net segment) here." A road segment is a cubic Bézier
     /// (four control points) of a named net prefab. The receiver rebuilds it through the
-    /// game's net-course definition pipeline — see <see cref="NetSyncSystem"/>.
+    /// game's net-course definition pipeline - see <see cref="NetSyncSystem"/>.
     /// </summary>
     public sealed class NetPlacementCommand : ISimulationCommand
     {

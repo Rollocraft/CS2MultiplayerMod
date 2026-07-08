@@ -20,7 +20,7 @@ namespace CS2MultiplayerMod.Core.Session
         /// <summary>Local monotonic timestamp (Unix ms) of the last byte received from this peer.</summary>
         public long LastSeenUnixMs;
 
-        /// <summary>When the underlying connection appeared — pending peers expire on this.</summary>
+        /// <summary>When the underlying connection appeared - pending peers expire on this.</summary>
         public long ConnectedAtUnixMs;
 
         /// <summary>Most recent round-trip estimate in milliseconds, or -1 if unknown.</summary>

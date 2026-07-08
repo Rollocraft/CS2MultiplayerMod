@@ -8,21 +8,12 @@ using CS2MultiplayerMod.Game.Sync.Infrastructure;
 namespace CS2MultiplayerMod.Game.Sync.Channels
 {
     /// <summary>
-    /// Replicates the cumulative life-event counters — deaths, births, move-ins,
-    /// move-aways, crime, mail — host → clients, so both players' statistics panels show
+    /// Replicates the cumulative life-event counters - deaths, births, move-ins,
+    /// move-aways, crime, mail - host -> clients, so both players' statistics panels show
     /// the same numbers between full-world resyncs.
-    ///
-    /// Mechanism: the host snapshots each counter's lifetime value
-    /// (<see cref="CityStatisticsSystem.GetStatisticValueLong(StatisticType,int)"/>); the
-    /// client computes the difference to its own counter and feeds it through the game's
-    /// own event pipeline (<see cref="CityStatisticsSystem.GetSafeStatisticsQueue"/> +
-    /// <see cref="StatisticsEvent"/>) — the same path the deathcare/crime systems use —
+    /// Mechanism: the host snapshots each counter's lifetime value and the client feeds it
+    /// through the game's own event pipeline, the same path the deathcare/crime systems use,
     /// so the statistics buffers stay internally consistent and serializable.
-    ///
-    /// Only cumulative counters are synced. Gauges (population, unemployed, homeless,
-    /// tourists …) are recomputed from each machine's own agents every sample and are
-    /// covered by their own channels (population, tourism) or by the world resync;
-    /// delta-injecting a gauge would just fight the local sampler.
     /// </summary>
     public sealed class StatisticsStateChannel : IStateChannel
     {

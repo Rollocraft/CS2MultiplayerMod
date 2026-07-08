@@ -6,7 +6,7 @@ using CS2MultiplayerMod.Game.Sync.Infrastructure;
 namespace CS2MultiplayerMod.Game.Sync.Channels
 {
     /// <summary>
-    /// Replicates city XP (<see cref="Game.City.XP"/>) — progression toward the next
+    /// Replicates city XP (<see cref="Game.City.XP"/>) - progression toward the next
     /// milestone, with its recorded peak population/income.
     /// </summary>
     public sealed class XpStateChannel : IStateChannel
@@ -88,7 +88,7 @@ namespace CS2MultiplayerMod.Game.Sync.Channels
         }
     }
 
-    /// <summary>Replicates development-tree points (<see cref="Game.City.DevTreePoints"/>) — the "tuning" points.</summary>
+    /// <summary>Replicates development-tree points (<see cref="Game.City.DevTreePoints"/>) - the "tuning" points.</summary>
     public sealed class DevTreePointsStateChannel : IStateChannel
     {
         public const byte Id = 5;

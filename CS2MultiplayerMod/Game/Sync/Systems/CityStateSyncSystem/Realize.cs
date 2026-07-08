@@ -71,10 +71,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         }
 
         /// <summary>
-        /// Editable channels track what the host last sent and honor in-flight edits:
-        /// a snapshot matching our pending edit confirms it (nothing to apply); a
-        /// different snapshot is held off while the edit is in flight so the local
-        /// change doesn't flicker back, then wins once the pending window expires.
+        /// Editable channels honor in-flight edits: matching snapshot confirms it;
+        /// different snapshot held off until edit window expires, then wins.
         /// </summary>
         private bool ShouldApplyEditable(StateSnapshotMessage snapshot)
         {

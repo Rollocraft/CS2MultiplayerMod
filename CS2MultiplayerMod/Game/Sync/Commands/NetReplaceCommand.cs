@@ -4,24 +4,13 @@ using CS2MultiplayerMod.Core.Sync;
 namespace CS2MultiplayerMod.Game.Sync.Commands
 {
     /// <summary>
-    /// "A player replaced this road segment's TYPE in place" — drew a different net prefab over an
+    /// "A player replaced this road segment's TYPE in place" - drew a different net prefab over an
     /// existing edge (e.g. a two-lane road over a one-lane one). Unlike a composition
     /// <see cref="NetUpgradeCommand"/> (trees/sidewalks, same prefab) this changes the edge's
     /// <c>PrefabRef</c>; unlike a placement/delete the edge keeps its identity, so it surfaces only
-    /// as an <c>Updated</c> tag — see <see cref="Systems.NetReplaceSyncSystem"/>.
-    ///
-    /// The command carries TWO full cubic Béziers. <see cref="OldAx"/>… is the segment's curve
-    /// BEFORE the replacement — the last state both machines agreed on, so the receiver matches its
-    /// local edges against it (like a <see cref="NetDeleteCommand"/>; a road the two machines
-    /// subdivided differently still converges). <see cref="Ax"/>… is the sender's COMMITTED curve
-    /// AFTER the replacement: a width-changing replacement can shift the committed centerline
-    /// sideways by half the width difference (the game commits the tool's snapped course, not the
-    /// old line), so the receiver must re-commit the matched edges ON this curve or the two cities'
-    /// geometry drifts apart and every later replace/delete of the street stops matching. The new
-    /// curve's a→d order also carries the segment's direction — a receiver edge running the other
-    /// way is re-committed inverted (one-way roads, in-place direction flips, which use the same
-    /// command with an unchanged prefab). <see cref="PrefabName"/> is the NEW prefab; the receiver's
-    /// edge still carries the pre-replacement type, so matching never looks at prefabs.
+    /// as an <c>Updated</c> tag - see <see cref="Systems.NetReplaceSyncSystem"/>.
+    /// The command carries TWO full cubic Béziers: <c>OldAx</c>... is the segment's curve BEFORE
+    /// the replacement; <c>Ax</c>... is the COMMITTED curve AFTER the replacement.
     /// </summary>
     public sealed class NetReplaceCommand : ISimulationCommand
     {

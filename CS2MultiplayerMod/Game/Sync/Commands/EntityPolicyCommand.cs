@@ -6,7 +6,7 @@ namespace CS2MultiplayerMod.Game.Sync.Commands
     /// <summary>
     /// "A player set a policy on this district/route/building." Applied on the receiver
     /// through the game's own <c>PoliciesUISystem.SetPolicy</c>, so modifiers and triggers
-    /// refresh exactly like a local click — see <see cref="PolicySyncSystem"/>. City-wide
+    /// refresh exactly like a local click - see <see cref="PolicySyncSystem"/>. City-wide
     /// policies travel separately (the editable CityPolicy state channel).
     /// </summary>
     public sealed class EntityPolicyCommand : ISimulationCommand

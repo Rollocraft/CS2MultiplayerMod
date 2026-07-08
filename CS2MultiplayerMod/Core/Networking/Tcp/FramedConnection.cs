@@ -158,7 +158,7 @@ namespace CS2MultiplayerMod.Core.Networking.Tcp
         }
 
         /// <summary>
-        /// Stop accepting new sends and close once everything already queued has gone out —
+        /// Stop accepting new sends and close once everything already queued has gone out -
         /// used to deliver a final message (e.g. a handshake rejection reason) before
         /// hanging up. Non-blocking: the send thread performs the close after it drains, so
         /// an immediate close cannot race the (asynchronous) send.
@@ -243,7 +243,7 @@ namespace CS2MultiplayerMod.Core.Networking.Tcp
         /// Runs on the read thread so a slow/hostile TLS handshake never blocks the
         /// accept loop or the game thread. The server presents its ephemeral
         /// certificate; the client accepts any certificate but records its hash as the
-        /// channel binding — authentication comes from the password proof, not a CA.
+        /// channel binding - authentication comes from the password proof, not a CA.
         /// </summary>
         private bool Upgrade()
         {

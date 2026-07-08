@@ -3,7 +3,7 @@ using CS2MultiplayerMod.Core.Sync;
 
 namespace CS2MultiplayerMod.Game.Sync.Commands
 {
-    /// <summary>"A player deleted this district/surface" — matched by prefab + first node.</summary>
+    /// <summary>"A player deleted this district/surface" - matched by prefab + first node.</summary>
     public sealed class AreaDeleteCommand : ISimulationCommand
     {
         public const ushort Id = 11;

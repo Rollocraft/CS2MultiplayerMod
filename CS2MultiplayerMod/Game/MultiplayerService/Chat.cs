@@ -9,7 +9,7 @@ namespace CS2MultiplayerMod.Game
         /// <summary>
         /// Chat send from the hub panel. The session never echoes our own line back
         /// (the host only relays, a client only uploads), so the local copy is added
-        /// here — sanitized exactly like the wire copy the other players will see.
+        /// here - sanitized exactly like the wire copy the other players will see.
         /// "/sync" stays a command and gets its feedback from the host's broadcast notice.
         /// </summary>
         public void SendChatFromUi(string text)

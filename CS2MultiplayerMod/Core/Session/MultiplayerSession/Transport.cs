@@ -122,9 +122,9 @@ namespace CS2MultiplayerMod.Core.Session
         }
 
         /// <summary>
-        /// End a live client session because the host went away — a normal, expected event, NOT a
-        /// fault. Logs at Info and stops cleanly; <see cref="Stop"/> sets the Offline status, which the
-        /// UI reports as a plain disconnect (the hub posts "Session closed.") rather than an error.
+        /// End client session because host went away - normal, expected event, not a fault.
+        /// Logs at Info, stops cleanly, and <see cref="Stop"/> sets Offline status.
+        /// UI reports plain disconnect rather than error.
         /// </summary>
         private void EndByRemote(string reason)
         {

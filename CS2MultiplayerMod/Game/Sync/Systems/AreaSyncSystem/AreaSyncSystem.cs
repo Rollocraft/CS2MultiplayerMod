@@ -15,20 +15,9 @@ using CS2MultiplayerMod.Game.Sync.Commands;
 namespace CS2MultiplayerMod.Game.Sync.Systems
 {
     /// <summary>
-    /// Replicates player-drawn areas — districts and surfaces (gravel, concrete, …) —
-    /// in both directions. An area is an entity with a <see cref="Node"/> ring buffer;
-    /// the whole polygon travels in one <see cref="AreaCreateCommand"/> and the receiver
-    /// rebuilds it via the <see cref="CreationDefinition"/> + Node-buffer definition that
-    /// <c>GenerateAreasSystem.CreateAreasJob</c> consumes (verified by dump).
-    ///
-    /// Map tiles are also areas but are excluded: tile unlocks travel via
-    /// <see cref="TilePurchaseSyncSystem"/>.
-    ///
-    /// Redraws are live too: a 1 Hz scan compares each polygon's node ring against what we
-    /// last saw; a change becomes an <see cref="AreaUpdateCommand"/> anchored at the OLD
-    /// centroid (which still matches the receiver's polygon). The receiver rewrites the
-    /// matched entity's Node buffer in place + Updated, so districts keep their identity
-    /// (policies, citizens) across edits.
+    /// Replicates player-drawn areas: <see cref="AreaCreateCommand"/> with polygon ring and
+    /// <see cref="CreationDefinition"/>, excluded map tiles. 1 Hz scan sends redraws as
+    /// <see cref="AreaUpdateCommand"/> at old centroid, rewrites Node buffer in place.
     /// </summary>
     public partial class AreaSyncSystem : GameSystemBase
     {

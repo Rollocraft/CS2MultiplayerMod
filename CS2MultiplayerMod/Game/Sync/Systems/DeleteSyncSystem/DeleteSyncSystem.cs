@@ -17,21 +17,10 @@ using CS2MultiplayerMod.Game.Sync.Systems.Net;
 namespace CS2MultiplayerMod.Game.Sync.Systems
 {
     /// <summary>
-    /// Replicates deletions (bulldozing) in both directions — the destructive counterpart
-    /// to <see cref="BuildSyncSystem"/>/<see cref="NetSyncSystem"/>.
-    ///
-    ///   detect (ModificationEnd, while the one-frame <see cref="Deleted"/> tag is alive
-    ///   and the entity's components still readable): broadcast a delete command keyed by
-    ///   prefab name + position.
-    ///   realize (ToolUpdate, via <see cref="SyncRealizeSystem"/>): find the matching
-    ///   local entity and add <see cref="Deleted"/> — the game's modification systems then
-    ///   tear down references/sub-objects and Cleanup destroys it, exactly like a local
-    ///   bulldoze.
-    ///
-    /// The usual origin-skip + <see cref="ReplicationGuard"/> logic prevents echo loops.
-    /// Sim-triggered demolitions (abandoned buildings, growable turnover) are also
-    /// broadcast; the remote apply is a no-op when the entity is already gone, so the two
-    /// simulations converge instead of fighting.
+    /// Replicates deletions (bulldozing) bidirectionally: detect <see cref="Deleted"/> at
+    /// ModificationEnd, broadcast delete command (prefab + position). Realize at ToolUpdate
+    /// via <see cref="SyncRealizeSystem"/>, add <see cref="Deleted"/> tag. Echo-guarded,
+    /// includes sim-triggered demolitions.
     /// </summary>
     public partial class DeleteSyncSystem : GameSystemBase
     {

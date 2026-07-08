@@ -4,16 +4,11 @@ using Unity.Mathematics;
 namespace CS2MultiplayerMod.Game.Sync.Infrastructure
 {
     /// <summary>
-    /// Geometry tests shared by the net capture guards (<c>NetSyncSystem</c> / <c>DeleteSyncSystem</c>)
-    /// to tell a mid-span SPLIT from the same span REBUILT at a different height.
-    ///
-    /// When the player taps a road mid-span, the game deletes the edge and creates its halves — exact
-    /// 3D sub-curves of the original. When the player redraws a road over an existing one at a
-    /// DIFFERENT elevation (the raise/lower gesture), the game also commits delete + create — but the
-    /// new pieces follow the old centreline only in XZ; their height differs. The first case must NOT
-    /// be replicated (each machine splits its own copy locally); the second MUST be (it is a real
-    /// geometry change the other machine cannot reproduce on its own). Telling them apart therefore
-    /// needs the Y axis, which is what these helpers add over a plain XZ colinearity test.
+    /// Geometry tests shared by the net capture guards to tell a mid-span SPLIT from the same span
+    /// REBUILT at a different height. When the player taps a road mid-span, the game deletes the
+    /// edge and creates its halves - exact 3D sub-curves of the original. When the player redraws a
+    /// road over an existing one at a DIFFERENT elevation, the game also commits delete + create - but
+    /// the new pieces follow the old centreline only in XZ; their height differs.
     /// </summary>
     internal static class SplitMatch
     {
@@ -31,7 +26,7 @@ namespace CS2MultiplayerMod.Game.Sync.Infrastructure
         /// <summary>
         /// True when <paramref name="piece"/> follows <paramref name="whole"/>'s centreline in XZ:
         /// its endpoints AND midpoint all lie within <see cref="TolXZ"/> of the curve. The midpoint
-        /// sample keeps a road that merely starts and ends ON the curve (a loop, a U) from matching.
+        /// sample keeps a road that merely starts and ends ON the curve from matching.
         /// </summary>
         public static bool FollowsXZ(Bezier4x3 piece, Bezier4x3 whole)
         {
@@ -43,7 +38,7 @@ namespace CS2MultiplayerMod.Game.Sync.Infrastructure
 
         /// <summary>
         /// True when a <see cref="FollowsXZ"/> piece also matches <paramref name="whole"/>'s HEIGHT at
-        /// its endpoints and midpoint — i.e. it is a true 3D sub-curve (a split half), not the same
+        /// its endpoints and midpoint - i.e. it is a true 3D sub-curve (a split half), not the same
         /// span rebuilt at another elevation.
         /// </summary>
         public static bool HeightMatches(Bezier4x3 piece, Bezier4x3 whole)
@@ -54,10 +49,10 @@ namespace CS2MultiplayerMod.Game.Sync.Infrastructure
         }
 
         /// <summary>
-        /// True when <paramref name="piece"/> is a true 3D sub-curve of <paramref name="whole"/> —
+        /// True when <paramref name="piece"/> is a true 3D sub-curve of <paramref name="whole"/> -
         /// follows its centreline in XZ AND matches its height. The one-call form of
         /// <see cref="FollowsXZ"/> + <see cref="HeightMatches"/> used wherever a curve must be
-        /// recognised as "already part of" another (node-reduction side-effects, span dedup).
+        /// recognised as "already part of" another.
         /// </summary>
         public static bool IsSubCurve3D(Bezier4x3 piece, Bezier4x3 whole)
         {

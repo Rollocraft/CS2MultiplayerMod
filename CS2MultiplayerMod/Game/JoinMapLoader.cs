@@ -18,7 +18,7 @@ namespace CS2MultiplayerMod.Game
     /// so no permanent copy is kept.
     ///
     /// Safety invariants (security findings 4/34): the staging path is a compile-time
-    /// constant — nothing from the network ever influences a file name or path, so a
+    /// constant - nothing from the network ever influences a file name or path, so a
     /// streamed blob can only ever overwrite <c>_MP_JoinSession.cok</c> and never a real
     /// save; the blob itself was already verified against the announced transfer size
     /// by the session layer before it gets here; and it is only accepted at all from an
@@ -32,7 +32,7 @@ namespace CS2MultiplayerMod.Game
         /// <summary>
         /// Write the received world to the fixed transient path and kick off loading it.
         /// Returns true when a load was actually started; false means "staged but not
-        /// loading" (or not even staged) — the caller surfaces a recoverable state.
+        /// loading" (or not even staged) - the caller surfaces a recoverable state.
         /// </summary>
         public static bool StageAndLoad(byte[] saveBytes, IModLogger log)
         {
@@ -56,7 +56,7 @@ namespace CS2MultiplayerMod.Game
                 string path = Path.Combine(dir, TransientName + SaveExtension);
                 File.WriteAllBytes(path, saveBytes);
                 log.Info("[MP] Host world staged at '" + path + "' (" + (saveBytes.Length / 1024) + " KB).");
-                log.Info("[MP] Host world received (" + (saveBytes.Length / 1024) + " KB); loading into game…");
+                log.Info("[MP] Host world received (" + (saveBytes.Length / 1024) + " KB); loading into game...");
                 return TryLoad(log);
             }
             catch (Exception ex)
@@ -83,7 +83,7 @@ namespace CS2MultiplayerMod.Game
                 if (metadata != null)
                 {
                     GameManager.instance.Load(GameMode.Game, Purpose.LoadGame, metadata);
-                    log.Info("[MP] Loading host world — joining the session.");
+                    log.Info("[MP] Loading host world - joining the session.");
                     return true;
                 }
 
@@ -93,21 +93,21 @@ namespace CS2MultiplayerMod.Game
             }
             catch (Exception ex)
             {
-                log.Error("[MP] Auto-load failed: " + ex.Message + " — the world is staged as '" + TransientName + "' to load manually.");
+                log.Error("[MP] Auto-load failed: " + ex.Message + " - the world is staged as '" + TransientName + "' to load manually.");
                 return false;
             }
         }
 
         /// <summary>
         /// Make <see cref="AssetDatabase.user"/> aware of the transient .cok we just wrote
-        /// by adding it to the user data source as a package asset — the exact call the
+        /// by adding it to the user data source as a package asset - the exact call the
         /// engine's own file watcher makes when it notices a new save
-        /// (<c>FileSystemDataSource.OnFileSystemEvent → AddEntry</c>). Adding a
+        /// (<c>FileSystemDataSource.OnFileSystemEvent -> AddEntry</c>). Adding a
         /// <see cref="PackageAsset"/> opens the package and registers the
         /// <see cref="SaveGameMetadata"/> it contains, so the save becomes loadable
         /// immediately instead of only after the next window-focus poll.
         ///
-        /// The path is the same compile-time constant the bytes were written to — nothing
+        /// The path is the same compile-time constant the bytes were written to - nothing
         /// from the network influences it, so this can only ever register
         /// <c>_MP_JoinSession.cok</c>.
         /// </summary>
@@ -137,7 +137,7 @@ namespace CS2MultiplayerMod.Game
         /// <summary>
         /// Find the <see cref="SaveGameMetadata"/> for the staged world. The streamed
         /// package keeps the *host's* internal asset names, so the only thing that
-        /// identifies our copy is its file path — match on the asset's URI containing the
+        /// identifies our copy is its file path - match on the asset's URI containing the
         /// transient name rather than on its display name.
         /// </summary>
         private static SaveGameMetadata FindStagedSave()

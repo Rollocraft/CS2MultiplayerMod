@@ -1,13 +1,10 @@
 namespace CS2MultiplayerMod.Core.Protocol.Messages
 {
     /// <summary>
-    /// The client's answer to a <see cref="HandshakeChallenge"/>. The host validates
-    /// <see cref="ProtocolVersion"/>, mod/game build compatibility, the DLC list and
-    /// the password proof before anything else, so incompatible or unauthorized
-    /// clients fail fast and clearly. <see cref="PasswordProof"/> is
-    /// HMAC-SHA256(password, nonce ‖ channel-binding) — never the password itself.
-    /// <see cref="DlcList"/> carries the sync-relevant DLC names the client owns
-    /// (sorted, canonical): differing DLCs mean differing prefabs, which desync.
+    /// Client's answer to <see cref="HandshakeChallenge"/>. Host validates protocol,
+    /// builds, DLC list, and password proof first. <see cref="PasswordProof"/> is
+    /// HMAC-SHA256(password, nonce | channel-binding). <see cref="DlcList"/> (sorted)
+    /// carries sync-relevant DLC names; differing DLCs cause desync.
     /// </summary>
     public sealed class HandshakeRequest : INetMessage
     {

@@ -5,7 +5,7 @@ namespace CS2MultiplayerMod.Game.Sync.Commands
 {
     /// <summary>
     /// "A player relocated this building." The old position identifies the local entity,
-    /// the new transform is where it goes — see <see cref="MoveSyncSystem"/>.
+    /// the new transform is where it goes - see <see cref="MoveSyncSystem"/>.
     /// </summary>
     public sealed class ObjectMoveCommand : ISimulationCommand
     {

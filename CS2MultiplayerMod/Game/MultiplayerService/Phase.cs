@@ -33,7 +33,7 @@ namespace CS2MultiplayerMod.Game
         }
 
         /// <summary>
-        /// Drive the LoadingMap → InSession transition by watching the game's own
+        /// Drive the LoadingMap -> InSession transition by watching the game's own
         /// loading flag (there is no reliable public load-completed callback): once the
         /// load we kicked off has been observed running and then stops, the world is in.
         /// </summary>
@@ -51,7 +51,7 @@ namespace CS2MultiplayerMod.Game
             if (_sawLoading)
             {
                 SetPhase(ClientWorldPhase.InSession);
-                _log.Info("[MP] Host world loaded — gameplay sync active.");
+                _log.Info("[MP] Host world loaded - gameplay sync active.");
                 return;
             }
 
@@ -60,7 +60,7 @@ namespace CS2MultiplayerMod.Game
                 // The load never started (failed staging, asset index miss, …). Recover
                 // to a defined state instead of idling half-connected forever.
                 SetPhase(ClientWorldPhase.WaitingForMap);
-                _log.Warn("[MP] Host world never started loading. Still connected — use /sync to " +
+                _log.Warn("[MP] Host world never started loading. Still connected - use /sync to " +
                           "request it again, or load '" + JoinMapLoader.TransientName + "' manually.");
             }
         }
@@ -110,7 +110,7 @@ namespace CS2MultiplayerMod.Game
             }
             catch (Exception ex)
             {
-                _log.Warn("[MP] Could not restore autosave — re-enable it in the game options: " + ex.Message);
+                _log.Warn("[MP] Could not restore autosave - re-enable it in the game options: " + ex.Message);
             }
         }
 
@@ -169,7 +169,7 @@ namespace CS2MultiplayerMod.Game
                 // Never fall back silently: hosting on a different port than the user
                 // thinks they configured is exactly the kind of failure nobody can debug.
                 _log.Warn("[MP] Invalid " + (hosting ? "host" : "join") + " port '" + portText +
-                          "' — using default " + DefaultPort + " instead. Enter a number from 1 to 65535.");
+                          "' - using default " + DefaultPort + " instead. Enter a number from 1 to 65535.");
                 port = DefaultPort;
             }
 
@@ -178,7 +178,7 @@ namespace CS2MultiplayerMod.Game
             {
                 if (hosting)
                     _log.Warn("[MP] Invalid max players '" + settings.MaxPlayers +
-                              "' — using default " + DefaultMaxPlayers + " instead (allowed: 2-32).");
+                              "' - using default " + DefaultMaxPlayers + " instead (allowed: 2-32).");
                 maxPlayers = DefaultMaxPlayers;
             }
 
@@ -189,7 +189,7 @@ namespace CS2MultiplayerMod.Game
 
             // Encryption is permanently off in-game: the game's Mono runtime cannot
             // create the TLS certificate (CertificateRequest is missing and the attempt
-            // crashed the host silently). Authentication is unaffected — the password
+            // crashed the host silently). Authentication is unaffected - the password
             // challenge-response never sends the password itself.
             return new MultiplayerConfig(
                 settings.PlayerName, (settings.ServerAddress ?? "").Trim(), port,

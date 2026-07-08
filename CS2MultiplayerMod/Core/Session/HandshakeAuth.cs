@@ -7,14 +7,11 @@ using CS2MultiplayerMod.Core.Protocol;
 namespace CS2MultiplayerMod.Core.Session
 {
     /// <summary>
-    /// Password authentication primitives: random challenge nonces, HMAC-SHA256
-    /// proofs, fixed-time comparison, and a temporary-ban book for repeated failures.
-    /// Standard constructions only — nothing here invents cryptography.
-    ///
-    /// The proof is HMAC-SHA256(key = UTF-8 password, message = nonce ‖ channel
-    /// binding). The channel binding is the SHA-256 hash of the host's TLS certificate
-    /// as each side saw it, so a man-in-the-middle terminating TLS with its own
-    /// certificate produces a proof the host rejects.
+    /// Password authentication: random nonces, HMAC-SHA256 proofs, fixed-time
+    /// comparison, temporary-ban book for failures. Standard constructions only -
+    /// nothing here invents cryptography. Proof is HMAC-SHA256(UTF-8 password,
+    /// nonce | channel binding). Channel binding is TLS cert SHA-256 hash as each
+    /// side saw it, so man-in-the-middle with own cert produces rejected proof.
     /// </summary>
     public static class HandshakeAuth
     {

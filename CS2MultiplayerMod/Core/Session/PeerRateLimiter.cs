@@ -1,10 +1,9 @@
 namespace CS2MultiplayerMod.Core.Session
 {
     /// <summary>
-    /// Per-connection traffic budget, enforced by the host on everything a client
-    /// sends. Uses one-second buckets (plus a one-minute bucket for resyncs): cheap,
-    /// allocation-free, and good enough to stop floods — precision is not the goal,
-    /// survival is. Exceeding any budget is grounds for disconnecting the peer.
+    /// Per-connection traffic budget enforced by host on client sends. One-second buckets
+    /// (plus one-minute for resyncs). Cheap, allocation-free, stops floods. Exceeding
+    /// any budget disconnects the peer.
     /// </summary>
     public sealed class PeerRateLimiter
     {

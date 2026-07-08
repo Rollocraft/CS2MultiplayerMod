@@ -8,7 +8,7 @@ namespace CS2MultiplayerMod.Game.Sync.Infrastructure
     /// <summary>
     /// Resolves a prefab's stable name back to its local prefab <see cref="Entity"/>.
     /// Prefab entity indices differ between machines, so placements travel by name and
-    /// each receiver maps the name to its own prefab here. The name→entity table is
+    /// each receiver maps the name to its own prefab here. The name -> entity table is
     /// built lazily and rebuilt once on a miss (prefabs can load late).
     /// </summary>
     public sealed class PrefabIndex

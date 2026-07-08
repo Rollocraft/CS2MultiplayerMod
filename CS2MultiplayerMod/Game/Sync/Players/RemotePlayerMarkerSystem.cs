@@ -8,15 +8,11 @@ using UnityEngine;
 namespace CS2MultiplayerMod.Game.Sync.Players
 {
     /// <summary>
-    /// Draws a coloured ground ring at every other player's camera focus — the point on
-    /// the map they are looking at — so partners can see where each other is working.
-    ///
+    /// Draws a coloured ground ring at every other player's camera focus - the point on
+    /// the map they are looking at - so partners can see where each other is working.
     /// The positions themselves are published by <see cref="PlayerCursorSyncSystem"/>
     /// (the gameplay camera pivot) and kept fresh in
-    /// <see cref="MultiplayerService.RemotePlayers"/>; this system only renders them,
-    /// each frame, through the game's <see cref="OverlayRenderSystem"/>. It runs in the
-    /// <see cref="global::Game.SystemUpdatePhase.Rendering"/> phase so the markers appear
-    /// in every state, including while the simulation is paused.
+    /// <see cref="MultiplayerService.RemotePlayers"/>; this system only renders them.
     /// </summary>
     public partial class RemotePlayerMarkerSystem : GameSystemBase
     {

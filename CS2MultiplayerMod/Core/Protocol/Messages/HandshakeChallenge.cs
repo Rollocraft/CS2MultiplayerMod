@@ -1,12 +1,9 @@
 namespace CS2MultiplayerMod.Core.Protocol.Messages
 {
     /// <summary>
-    /// First thing the host says to a fresh connection. Carries a one-time random
-    /// nonce; the client answers with a <see cref="HandshakeRequest"/> whose password
-    /// proof is HMAC-SHA256 keyed by the password over this nonce (plus the TLS
-    /// certificate hash when encryption is on — see <c>HandshakeAuth</c>). The raw
-    /// password therefore never crosses the wire and a recorded handshake cannot be
-    /// replayed against a different session.
+    /// Host's first message to new connection: one-time random nonce. Client answers
+    /// with <see cref="HandshakeRequest"/> whose proof is HMAC-SHA256(password, nonce +
+    /// TLS cert hash). Raw password never crosses wire; replayed handshakes are invalid.
     /// </summary>
     public sealed class HandshakeChallenge : INetMessage
     {

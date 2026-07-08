@@ -1,10 +1,9 @@
 namespace CS2MultiplayerMod.Core.Protocol.Messages
 {
     /// <summary>
-    /// Client → host: "stream me the current world now." Sent when a player runs the
-    /// <c>/sync</c> command (chat or settings button) because they suspect their city has
-    /// drifted. The host saves the live world and streams it to the requester — exactly
-    /// the periodic drift-correcting resync, but on demand.
+    /// Client -> host: "stream current world now." Sent when player runs <c>/sync</c>
+    /// due to suspected city drift. Host saves and streams live world - periodic
+    /// resync but on demand.
     /// </summary>
     public sealed class ResyncRequestMessage : INetMessage
     {

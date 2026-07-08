@@ -4,10 +4,8 @@ using CS2MultiplayerMod.Game.Sync.Systems.Net;
 namespace CS2MultiplayerMod.Game.Sync.Systems
 {
     /// <summary>
-    /// Runs remote-command realization during the ToolUpdate phase — the only point in the
-    /// frame where spawning a definition entity actually results in a built entity. A
-    /// definition created any later (e.g. at ModificationEnd, where capture lives) is dropped
-    /// at Cleanup before the next frame can consume it — the old "no error, no building" bug.
+    /// Runs remote-command realization during ToolUpdate - the only phase where definitions
+    /// spawn into built entities. Later creation (e.g. at ModificationEnd) drops at Cleanup.
     /// </summary>
     public partial class SyncRealizeSystem : GameSystemBase
     {

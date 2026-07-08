@@ -15,22 +15,10 @@ using CS2MultiplayerMod.Game.Sync.Commands;
 namespace CS2MultiplayerMod.Game.Sync.Systems
 {
     /// <summary>
-    /// Replicates map tile purchases live (until now they only arrived via the periodic
-    /// full-world resync). All tiles exist on every machine from map load; an UNOWNED
-    /// tile carries <see cref="Native"/>, and purchasing removes it — so:
-    ///
-    ///   detect: a <see cref="MapTile"/> that got Updated and has no <see cref="Native"/>
-    ///           → it just flipped to owned → broadcast a <see cref="TilePurchaseCommand"/>
-    ///           with the tile centroids and the price the buyer's game charged (polled
-    ///           from <see cref="MapTilePurchaseSystem.cost"/> while the player selects).
-    ///   realize: find the local tile by centroid among the still-Native tiles, remove
-    ///            <see cref="Native"/> + add Updated. The host charges the carried price
-    ///            to the shared treasury (the buyer's own local charge is corrected by
-    ///            the money snapshot), pro-rated if some tiles were already owned.
-    ///
-    /// Tile geometry is generated identically from the same map everywhere, so centroids
-    /// match across machines. Echo loop is broken by the usual guard: realized tiles are
-    /// marked and the detector skips them.
+    /// Replicates map tile purchases live: detect Updated <see cref="MapTile"/> with no
+    /// <see cref="Native"/>, broadcast <see cref="TilePurchaseCommand"/> (centroids + price).
+    /// Realize by finding tile by centroid, remove Native, host charges shared treasury
+    /// pro-rated. Echo guard marks realized tiles.
     /// </summary>
     public partial class TilePurchaseSyncSystem : GameSystemBase
     {
@@ -226,7 +214,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 if (unlocked > 0 && command.TotalCost > 0)
                     ConstructionCharger.ChargeAmount(EntityManager,
                         (long)command.TotalCost * unlocked / command.CenterX.Length,
-                        "map tiles ×" + unlocked + " (player " + message.OriginPlayerId + ")");
+                        "map tiles x" + unlocked + " (player " + message.OriginPlayerId + ")");
 
                 Mod.Verbose("[MP] TilePurchaseSync realize: unlocked " + unlocked + "/" +
                              command.CenterX.Length + " tile(s) from player " + message.OriginPlayerId + ".");

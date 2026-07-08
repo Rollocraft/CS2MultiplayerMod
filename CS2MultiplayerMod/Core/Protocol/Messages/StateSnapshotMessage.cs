@@ -1,10 +1,9 @@
 namespace CS2MultiplayerMod.Core.Protocol.Messages
 {
     /// <summary>
-    /// A host-authoritative slice of replicated state. The core treats the body as
-    /// opaque: a <c>channelId</c> selects which game-side synchronizer produced it
-    /// (money, population, …) and decodes the bytes. This keeps the protocol stable
-    /// while new state channels are added purely in the game layer.
+    /// Host-authoritative replicated state slice. ChannelId selects game-side synchronizer
+    /// (money, population, ...). Core treats body as opaque to keep protocol stable
+    /// as state channels are added in game layer.
     /// </summary>
     public sealed class StateSnapshotMessage : INetMessage
     {

@@ -15,23 +15,9 @@ using CS2MultiplayerMod.Game.Sync.Commands;
 namespace CS2MultiplayerMod.Game.Sync.Systems
 {
     /// <summary>
-    /// Replicates transit lines (bus/tram/metro/train routes) in both directions. A line
-    /// is a <see cref="Route"/> entity owning a ring of waypoint entities; the line
-    /// travels as the route prefab name + the ordered waypoint positions, and the
-    /// receiver rebuilds it via the <see cref="CreationDefinition"/> +
-    /// <see cref="WaypointDefinition"/> buffer that <c>GenerateRoutesSystem.CreateRoutesJob</c>
-    /// consumes (verified by dump).
-    ///
-    /// Cross-machine identity: route NUMBERS diverge per machine (each game's
-    /// InitializeSystem hands them out locally), so lines are matched by their first
-    /// waypoint's position, never by number.
-    ///
-    /// Post-creation edits are live too: a 1 Hz scan compares each line's waypoint ring
-    /// and color against what we last saw; a change becomes a <see cref="RouteUpdateCommand"/>
-    /// anchored at the OLD first waypoint. A pure recolor is applied directly to the
-    /// matched route's <see cref="Color"/> component; a stop change rebuilds the line
-    /// through the game's definition pipeline with <c>m_Original</c> set, the same way
-    /// the transport line tool commits an edit.
+    /// Replicates transit lines: <see cref="Route"/> entity with waypoint ring, matched by
+    /// first waypoint position. 1 Hz scan sends edits via <see cref="RouteUpdateCommand"/>;
+    /// recolor sets <see cref="Color"/>, stop changes rebuild via definition pipeline.
     /// </summary>
     public partial class RouteSyncSystem : GameSystemBase
     {

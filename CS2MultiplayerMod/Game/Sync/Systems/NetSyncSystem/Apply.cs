@@ -11,7 +11,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
 {
     // Commit orchestration for NetSyncSystem: the once-per-frame ToolUpdate entry point that commits a
     // queued realize batch (by flipping the active tool's applyMode), waits for it to drain, then
-    // drains the next batch — plus the preview hijack that makes commits possible while the local
+    // drains the next batch - plus the preview hijack that makes commits possible while the local
     // player has a build tool out, and the reflection that drives the ApplyTool phase.
     public partial class NetSyncSystem
     {
@@ -28,28 +28,28 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
         /// <summary>
         /// Called by <see cref="SyncRealizeSystem"/> during the ToolUpdate phase, where the
         /// NetCourse definition is consumed by <c>GenerateNodesSystem</c>/<c>GenerateEdgesSystem</c>
-        /// in the same frame's Modification1/2 — created any later it would be silently
+        /// in the same frame's Modification1/2 - created any later it would be silently
         /// discarded (see <see cref="SyncRealizeSystem"/>).
         /// </summary>
         public void RealizePending()
         {
-            // Runs at ToolUpdate — AFTER the tools (which set their applyMode each frame) and BEFORE
+            // Runs at ToolUpdate - AFTER the tools (which set their applyMode each frame) and BEFORE
             // ToolOutputSystem (UpdateAfter in ToolUpdate). That ordering is the whole trick: it's the
             // one window where flipping applyMode sticks long enough for ToolOutputSystem to read it
             // and run the ApplyTool phase (in its own valid context).
 
             // (A) Commit a previously-queued batch. Its definitions (created in an earlier ToolUpdate)
             // were consumed at the following Modification into Temp edges that persist uncommitted.
-            // Flip applyMode=Apply now so this frame's ToolOutputSystem commits them — splits,
+            // Flip applyMode=Apply now so this frame's ToolOutputSystem commits them - splits,
             // connections and zoning handled natively. We must NOT drive ApplyTool ourselves: from a
             // Modification-nested system its barriers crash ("EntityCommandBuffer not allowed").
             //
             // This works with ANY active tool, not just the idle default: the def-frame's preview
             // hijack (PrepareDefinitionFrame) wiped the tool's own preview Temps and its pending
-            // definitions, so the world's Temps here are OURS ALONE — overriding the tool's Clear/None
+            // definitions, so the world's Temps here are OURS ALONE - overriding the tool's Clear/None
             // with Apply commits exactly our batch and nothing the player is previewing. The tool's
             // fresh definitions (made this frame, before us) only materialise at this frame's
-            // Modification, AFTER the ApplyTool pass — its preview returns untouched right behind our
+            // Modification, AFTER the ApplyTool pass - its preview returns untouched right behind our
             // commit.
             if (_pendingApply)
             {
@@ -64,7 +64,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                     // The player's click drives the ApplyTool pass this frame and our armed batch
                     // rides along. Track it as a normal commit. NO capture-suppress window here: the
                     // player's own work is Created this same frame and a blanket skip would swallow
-                    // its broadcast — the per-edge ReplicationGuard marks set at realize still catch
+                    // its broadcast - the per-edge ReplicationGuard marks set at realize still catch
                     // our batch's echoes individually.
                     _pendingApply = false;
                     _onCommitLost = null;
@@ -72,8 +72,6 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                     _awaitingDrain = true;
                     _drainArmTick = System.Environment.TickCount;
                     _drainFrames = 0;
-                    Mod.NetTrace("[MP] NetApply: player's tool apply commits " + count +
-                                 " net Temp(s) (armed batch rides along).");
                 }
                 else if (count > 0 && TrySetApplyModeApply())
                 {
@@ -86,14 +84,10 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                     _drainArmTick = System.Environment.TickCount;
                     _drainFrames = 0;
                     _suppressCaptureUntilMs = (Mod.Service != null ? Mod.Service.NowMs : 0) + 250;
-                    Mod.NetTrace("[MP] NetApply: set applyMode=Apply for " + count +
-                                 " net Temp(s); ToolOutputSystem commits this frame" +
-                                 (toolIdle ? "." : " (overriding the active tool's " + toolMode + ")."));
-                    Mod.NetTrace("commit: drove applyMode=Apply on " + count + " net Temp(s); awaiting drain.");
                 }
                 else if (count == 0 && System.Environment.TickCount - _armTick > 3000)
                 {
-                    // Temps never materialised (definition rejected?). Replay a few times, then stop —
+                    // Temps never materialised (definition rejected?). Replay a few times, then stop -
                     // a batch the game always rejects must not rebuild forever.
                     _pendingApply = false;
                     System.Action replay = _onCommitLost;
@@ -101,13 +95,13 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                     if (replay != null && _expiryReplays < 3)
                     {
                         _expiryReplays++;
-                        Mod.log.Warn("[MP] NetApply: apply window expired with no Temp entities — re-queueing batch (attempt " +
+                        Mod.log.Warn("[MP] NetApply: apply window expired with no Temp entities - re-queueing batch (attempt " +
                                      _expiryReplays + "/3).");
                         replay();
                     }
                     else
                     {
-                        Mod.log.Warn("[MP] NetApply: apply window expired with no Temp entities — batch dropped" +
+                        Mod.log.Warn("[MP] NetApply: apply window expired with no Temp entities - batch dropped" +
                                      (replay != null ? " after " + _expiryReplays + " replays." : "."));
                     }
                 }
@@ -118,18 +112,11 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                     // tool's fresh definitions can't materialise into the pending window and pollute
                     // the eventual commit.
                     if (count == 0 && !toolIdle) PrepareDefinitionFrame();
-                    int tick = System.Environment.TickCount;
-                    if (tick - _lastCommitBlockTraceTick > 1000)
-                    {
-                        _lastCommitBlockTraceTick = tick;
-                        Mod.NetTrace("commit waiting: net Temps=" + count + ", toolIdle=" + toolIdle +
-                                     ", toolMode=" + toolMode + ".");
-                    }
                 }
             }
             // (A2) Wait for a committed batch's Temp entities to drain (become real) before building the
             // next one. Idle: the count hits 0 within a frame. With a build tool out its preview Temps
-            // regenerate immediately, so the count never reaches 0 — but the committed geometry is
+            // regenerate immediately, so the count never reaches 0 - but the committed geometry is
             // query-able one frame after the ApplyTool pass, which the frame counter covers. The
             // timeout is a safety valve so a stuck commit can't wedge the realize pipeline forever.
             else if (_awaitingDrain)
@@ -141,21 +128,15 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                 if (temps == 0)
                 {
                     _awaitingDrain = false;
-                    Mod.NetTrace("commit drained: net Temps now 0 after " +
-                                 (System.Environment.TickCount - _drainArmTick) + "ms; ready for next batch.");
                 }
                 else if (!toolIdle && _drainFrames >= 2)
                 {
                     // The remaining Temps are the tool's regenerated preview, not our batch.
                     _awaitingDrain = false;
-                    Mod.NetTrace("commit drained: " + _drainFrames + " frame(s) after apply with a build " +
-                                 "tool out (" + temps + " preview Temp(s) remain); ready for next batch.");
                 }
                 else if (System.Environment.TickCount - _drainArmTick > 3000)
                 {
                     _awaitingDrain = false;
-                    Mod.NetTrace("commit drain TIMEOUT after 3000ms with " + temps +
-                                 " net Temp(s) still present; proceeding to next batch anyway.");
                 }
             }
 
@@ -171,14 +152,14 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
 
         /// <summary>
         /// True while a net-Temp commit is armed or draining. Only one batch (build OR delete OR
-        /// replace) enters any one ApplyTool pass — a split course and a delete of the same edge in
+        /// replace) enters any one ApplyTool pass - a split course and a delete of the same edge in
         /// the same commit can make ApplyNetSystem dereference a stale edge and native-crash.
         /// </summary>
         public bool IsCommitBusy => _pendingApply || _awaitingDrain;
 
         /// <summary>
         /// True when a feeder (build/delete/replace) may create net definitions this frame. False
-        /// while a commit is in flight, and on the frame the player's own gesture applies — their
+        /// while a commit is in flight, and on the frame the player's own gesture applies - their
         /// preview must survive to be committed by their click, so we never hijack that frame.
         /// With any other tool state the pipeline runs LIVE: the def-frame wipes the tool's preview
         /// (<see cref="PrepareDefinitionFrame"/>) and the commit overrides its applyMode next frame.
@@ -198,7 +179,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
         /// Make this frame safe for creating our net definitions while the local player has a build
         /// tool out. Observed runtime behaviour this mirrors: the game's clear pass (the only ClearTool
         /// system) deletes EVERY Temp entity in the world and restores originals it was hiding, and
-        /// each tool destroys its own definitions before regenerating them. We do both here — destroy
+        /// each tool destroys its own definitions before regenerating them. We do both here - destroy
         /// the tool's fresh definitions (created before us this ToolUpdate, or they'd materialise as
         /// preview Temps inside our commit), clear all live preview Temps the same way the clear pass
         /// does, then set the tool's force-update flag so it rebuilds its preview from its own retained
@@ -206,7 +187,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
         /// no-op while the idle default tool is active (nothing to hijack).
         ///
         /// Callers: every feeder, immediately before creating its first definition of the frame.
-        /// Feeders gate on <see cref="CanBuildDefinitions"/>, so no armed batch of ours exists here —
+        /// Feeders gate on <see cref="CanBuildDefinitions"/>, so no armed batch of ours exists here -
         /// the Temps cleared are only ever the local player's preview.
         /// </summary>
         public void PrepareDefinitionFrame()
@@ -237,7 +218,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
 
                         Temp temp = EntityManager.GetComponentData<Temp>(e);
                         // A preview that was hiding its original (modify/move ghosts) must restore it,
-                        // exactly like the game's clear pass — or the road/building stays invisible.
+                        // exactly like the game's clear pass - or the road/building stays invisible.
                         if (temp.m_Original != Entity.Null && EntityManager.Exists(temp.m_Original)
                             && EntityManager.HasComponent<Hidden>(temp.m_Original))
                         {
@@ -277,8 +258,6 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
             }
 
             TryForceToolUpdate(tool);
-            Mod.NetTrace("def-frame hijack: destroyed " + defs + " fresh definition(s), cleared " + temps +
-                         " preview Temp(s) of active tool '" + tool.toolID + "'; tool force-update set.");
         }
 
         /// <summary>
@@ -287,7 +266,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
         /// of <see cref="RealizePending"/>) flips applyMode next frame and ApplyNetSystem commits
         /// them natively. Only call when <see cref="CanBuildDefinitions"/> is true (and after
         /// <see cref="PrepareDefinitionFrame"/>). <paramref name="onCommitLost"/> is invoked if the
-        /// armed batch never materialises (the apply window expiring) — it must re-queue the batch's
+        /// armed batch never materialises (the apply window expiring) - it must re-queue the batch's
         /// source commands so the work is rebuilt, not lost.
         /// </summary>
         public void ArmNetCommit(System.Action onCommitLost)
@@ -296,13 +275,12 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
             _pendingApply = true;
             _armTick = System.Environment.TickCount;
             _onCommitLost = onCommitLost;
-            Mod.NetTrace("commit armed by a sibling system (net definitions await ApplyTool).");
         }
 
         /// <summary>
         /// Record a span this machine just realized from a remote command, so capture-side heuristics
         /// (NetReplaceSync's extension detection) can recognise follow-on local edits of that geometry
-        /// — e.g. the game's node reduction merging it into a neighbour — as remote work, not
+        /// - e.g. the game's node reduction merging it into a neighbour - as remote work, not
         /// something to broadcast back.
         /// </summary>
         public void RecordRealizedSpan(Bezier4x3 curve)
@@ -356,7 +334,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
 
         /// <summary>
         /// Set the tool's protected <c>m_ForceUpdate</c> flag so it regenerates its preview
-        /// definitions on its next update even with a motionless cursor — the def-frame hijack wiped
+        /// definitions on its next update even with a motionless cursor - the def-frame hijack wiped
         /// the preview, and without this a parked cursor would show none until moved. Runtime access
         /// to the loaded game assembly's own member; a rename in a future patch degrades gracefully
         /// (the preview simply returns on the next cursor move).

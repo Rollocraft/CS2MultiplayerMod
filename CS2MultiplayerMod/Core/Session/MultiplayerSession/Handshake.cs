@@ -77,7 +77,7 @@ namespace CS2MultiplayerMod.Core.Session
                 {
                     bool nowBanned = _failedAuth.RecordFailure(peer.RemoteAddress, nowUnixMs);
                     _log.Warn("[security] Auth failure from " + connection + " (" +
-                              (peer.RemoteAddress ?? "?") + ")" + (nowBanned ? " — address temporarily banned." : "."));
+                              (peer.RemoteAddress ?? "?") + ")" + (nowBanned ? " - address temporarily banned." : "."));
                     Reject(connection, "Incorrect password.");
                     return;
                 }
@@ -147,7 +147,7 @@ namespace CS2MultiplayerMod.Core.Session
         /// <summary>
         /// Compare host and client DLC sets. Returns null when compatible (or when
         /// either side could not produce a list), otherwise a human-readable summary
-        /// naming exactly what differs — so the rejected player knows what to change
+        /// naming exactly what differs - so the rejected player knows what to change
         /// instead of staring at a generic "incompatible" error.
         /// </summary>
         internal static string DescribeDlcMismatch(string[] hostDlcs, string[] clientDlcs)
@@ -181,7 +181,7 @@ namespace CS2MultiplayerMod.Core.Session
 
         /// <summary>
         /// Make a joining player's name unique among the host and current peers by
-        /// suffixing " (2)", " (3)", … when taken.
+        /// suffixing " (2)", " (3)", ... when taken.
         /// </summary>
         private string UniquePlayerName(string name)
         {

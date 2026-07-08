@@ -7,7 +7,7 @@ namespace CS2MultiplayerMod.Game.Sync.Commands
     /// "A player purchased these map tiles." Tiles are matched by their polygon centroid
     /// (the tile grid is generated identically from the same map on every machine).
     /// Carries the price the buyer's game charged so the host can charge the shared
-    /// treasury the exact same amount — see <see cref="TilePurchaseSyncSystem"/>.
+    /// treasury the exact same amount - see <see cref="TilePurchaseSyncSystem"/>.
     /// </summary>
     public sealed class TilePurchaseCommand : ISimulationCommand
     {

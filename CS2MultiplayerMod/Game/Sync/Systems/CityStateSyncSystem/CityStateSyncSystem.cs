@@ -12,26 +12,10 @@ using CS2MultiplayerMod.Game.Sync.Channels;
 namespace CS2MultiplayerMod.Game.Sync.Systems
 {
     /// <summary>
-    /// Drives city-state replication each simulation tick. On the host it periodically
-    /// captures every <see cref="IStateChannel"/> and broadcasts a snapshot; on a client
-    /// it applies snapshots the session hands it. Channels are routed by id, so adding a
-    /// new synced value is a one-line registration in <see cref="OnCreate"/>.
-    ///
-    /// Channels come in two flavors:
-    ///   authoritative — values the simulation owns (money, population, XP, tourism,
-    ///       statistics): one source of truth, host → clients only.
-    ///   editable — settings any player may change (taxes, policies, service fees,
-    ///       simulation speed): a client detects its local edit (current capture differs
-    ///       from what the host last sent), ships it to the host as a
-    ///       <see cref="StateEditMessage"/> (same encoding as a snapshot), the host
-    ///       applies it, and the next snapshot broadcast carries it to everyone. While
-    ///       an edit is in flight the client skips applying stale snapshots for that
-    ///       channel so its change doesn't flicker back; the host stays the arbiter
-    ///       (last writer wins) so players can never diverge for more than a snapshot.
-    ///
-    /// Incoming snapshots/edits are delivered (on the simulation thread) by an inner
-    /// observer and queued, then applied here in <see cref="OnUpdate"/> where this
-    /// system's <see cref="EntityManager"/> is valid.
+    /// Replicates city state via <see cref="IStateChannel"/> snapshots: host periodically
+    /// captures and broadcasts; clients apply snapshots and detect edits via <see cref="StateEditMessage"/>.
+    /// Two channel types: authoritative (money, population, etc., host to clients);
+    /// editable (taxes, policies, etc., client edit -> host -> broadcast). Host is arbiter.
     /// </summary>
     public partial class CityStateSyncSystem : GameSystemBase
     {

@@ -7,29 +7,11 @@ using CS2MultiplayerMod.Core.Protocol;
 namespace CS2MultiplayerMod.Core.Session
 {
     /// <summary>
-    /// The heart of the multiplayer core. Owns a transport, drives the authenticated
-    /// handshake, keeps the peer list, runs keep-alives, and routes messages — all
-    /// without any reference to the game. The game layer drives it by calling
-    /// <see cref="Update"/> once per simulation tick and feeds/consumes commands
-    /// through the public API.
-    ///
-    /// Topology is host-authoritative: clients talk only to the host, and the host
-    /// relays chat and simulation commands to every other client. The order in which
-    /// the host receives commands is the canonical order — every client gets the same
-    /// relay stream, and editable state channels are last-writer-wins at the host, so
-    /// concurrent edits resolve identically everywhere (periodic/on-demand world
-    /// resyncs reconcile anything per-action sync misses).
-    ///
-    /// Security model: nothing but the handshake is accepted from a connection until
-    /// it has authenticated (challenge-response, see <see cref="HandshakeAuth"/>);
-    /// every identity field (origin player id, sender name) is stamped from the
-    /// host's own peer table, never trusted from the wire; all incoming traffic is
-    /// rate-budgeted; and any protocol violation disconnects the sender instead of
-    /// merely being logged.
-    ///
-    /// Threading: every public method here is expected to run on the game thread. The
-    /// transport does the actual socket I/O on its own threads and hands work back
-    /// through <see cref="ITransport.Poll"/>, so observers never see a background thread.
+    /// The multiplayer core session manager. Owns transport, handshake, peer list,
+    /// keep-alives, and message routing. Host-authoritative: clients talk only to host,
+    /// which relays commands in canonical order. Challenge-response auth, rate budgeting,
+    /// and protocol violations trigger disconnects. All public methods run on game thread.
+    /// See <see cref="Update"/>, <see cref="HandshakeAuth"/>, <see cref="ITransport.Poll"/>.
     /// </summary>
     public sealed partial class MultiplayerSession
     {
@@ -44,8 +26,7 @@ namespace CS2MultiplayerMod.Core.Session
         /// <summary>A blob that receives no chunk for this long is abandoned.</summary>
         private const int BlobStallTimeoutMs = 60000;
 
-        /// <summary>Minimum gap between accepted /sync requests — a save+stream is expensive.
-        /// Kept short so a sync requested soon after joining isn't silently ignored.</summary>
+        /// <summary>Minimum gap between accepted /sync requests - save+stream is expensive, kept short so post-join syncs aren't silently ignored.</summary>
         private const long ResyncRequestCooldownMs = 5000;
 
         private readonly IModLogger _log;
@@ -115,8 +96,7 @@ namespace CS2MultiplayerMod.Core.Session
         // ---- Authorization registries (filled by the game layer at startup) -----
 
         /// <summary>
-        /// Declare a blob channel clients may receive, with its size ceiling. Blobs on
-        /// unregistered channels are dropped — secure by default.
+        /// Declare a blob channel clients may receive with size ceiling. Unregistered blobs are dropped - secure by default.
         /// </summary>
         public void AllowBlobChannel(string channel, int maxBytes)
         {

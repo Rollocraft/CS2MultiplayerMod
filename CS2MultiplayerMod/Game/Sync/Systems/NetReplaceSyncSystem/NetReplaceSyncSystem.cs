@@ -18,28 +18,28 @@ using CS2MultiplayerMod.Game.Sync.Systems.Net;
 namespace CS2MultiplayerMod.Game.Sync.Systems
 {
     /// <summary>
-    /// Replicates in-place road REPLACEMENTS — drawing a different net prefab over an existing edge
-    /// (a one-lane road becomes two-lane, an asphalt road becomes a highway of the same footprint …)
+    /// Replicates in-place road REPLACEMENTS - drawing a different net prefab over an existing edge
+    /// (a one-lane road becomes two-lane, an asphalt road becomes a highway of the same footprint ...)
     /// and in-place DIRECTION FLIPS (replacing a one-way against its direction commits the same edge
     /// with an inverted curve and swapped ends). The game commits both as a <c>TempFlags.Modify</c>:
     /// the edge KEEPS its identity and only its <see cref="PrefabRef"/> and/or orientation change,
-    /// surfacing as a bare <see cref="Updated"/> tag — so placement sync (needs <see cref="Created"/>),
+    /// surfacing as a bare <see cref="Updated"/> tag - so placement sync (needs <see cref="Created"/>),
     /// delete sync (needs <see cref="Deleted"/>) and composition-upgrade sync (only reads
-    /// <c>CompositionFlags</c>) all miss it. (The other, rarer outcome — a replacement whose
-    /// zoning/electricity capability differs — the game does as delete+create, which the placement and
+    /// <c>CompositionFlags</c>) all miss it. (The other, rarer outcome - a replacement whose
+    /// zoning/electricity capability differs - the game does as delete+create, which the placement and
     /// delete systems already replicate.)
     ///
     ///   detect (ModificationEnd): an <see cref="Updated"/>, non-<see cref="Created"/> edge whose
-    ///           prefab OR curve direction differs from a per-Entity baseline → broadcast a
+    ///           prefab OR curve direction differs from a per-Entity baseline -> broadcast a
     ///           <see cref="NetReplaceCommand"/> carrying the (new) prefab + the edge's BASELINE
     ///           Bézier (where the receiver's copy still lies) + its COMMITTED Bézier (where it must
-    ///           end up — a width-changing replacement shifts the committed centerline sideways by
+    ///           end up - a width-changing replacement shifts the committed centerline sideways by
     ///           half the width difference, and its orientation encodes the direction).
     ///   realize (ToolUpdate, via <see cref="SyncRealizeSystem"/>): find every local edge lying on the
     ///           OLD curve and rebuild it on (its sub-span of) the NEW curve through the game's own
-    ///           replacement definition — inverted when the local edge runs against the command's
-    ///           direction — committed on <see cref="NetSyncSystem"/>'s ApplyTool pipeline (same path
-    ///           as a bulldoze) so lanes, composition and connections rebuild natively — see
+    ///           replacement definition - inverted when the local edge runs against the command's
+    ///           direction - committed on <see cref="NetSyncSystem"/>'s ApplyTool pipeline (same path
+    ///           as a bulldoze) so lanes, composition and connections rebuild natively - see
     ///           <c>Realize</c>.
     ///
     /// The per-Entity baseline is exact (an in-place replace keeps the edge entity), which both detects
@@ -283,7 +283,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         }
 
         /// <summary>
-        /// True when the committed curve's endpoints are the baseline's SWAPPED — an in-place direction
+        /// True when the committed curve's endpoints are the baseline's SWAPPED - an in-place direction
         /// flip. Requires both cross-matches and no straight match, so a node nudged by neighbouring
         /// work (same orientation, one end moved) is a geometry update, not a flip; stubs too short to
         /// tell apart are skipped.
@@ -319,7 +319,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     EdgeBaseline previous;
                     if (!_edgeBaseline.TryGetValue(e, out previous))
                     {
-                        // First sight (edge predates the created-edge seeding) → baseline, not a change.
+                        // First sight (edge predates the created-edge seeding) -> baseline, not a change.
                         _edgeBaseline[e] = BaselineOf(e);
                         continue;
                     }
@@ -370,10 +370,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 };
                 session.SendCommand(0, NetReplaceCommand.Id, command.Encode());
                 Mod.Verbose("[MP] NetReplaceSync captured " +
-                            (prefabChanged ? "replacement → '" + name + "'" : "direction flip of '" + name + "'") + ".");
-                Mod.NetTrace("LOCAL REPLACE edge → SENT '" + name + "'" + (reversed ? " (reversed)" : "") + " (" +
-                             b.a.x.ToString("F1") + "," + b.a.z.ToString("F1") + "→" +
-                             b.d.x.ToString("F1") + "," + b.d.z.ToString("F1") + ").");
+                            (prefabChanged ? "replacement -> '" + name + "'" : "direction flip of '" + name + "'") + ".");
             }
 
             // Advance every touched baseline to the committed state — whether we sent or not — so a
@@ -392,7 +389,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         /// previous span. The game's node reduction merges a collinear same-prefab neighbour into
         /// this edge in place; when that neighbour was a real edge (a bulldoze freed the node) or the
         /// node merely moved, the receiver reproduces the change locally and the grown span is
-        /// covered by some baseline — nothing is sent. When it was only ever a Temp (the player drew
+        /// covered by some baseline - nothing is sent. When it was only ever a Temp (the player drew
         /// a straight continuation and the game merged it before a Created edge could surface), the
         /// extension is new work that would otherwise never reach the wire; it goes out as an
         /// ordinary placement and the receiver's own reduction merges it back.
@@ -443,9 +440,6 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             session.SendCommand(0, NetPlacementCommand.Id, command.Encode());
             Mod.Verbose("[MP] NetReplaceSync: captured merged continuation of '" + name + "' (" +
                         length.ToString("F1") + " m).");
-            Mod.NetTrace("LOCAL EXTENDED edge → SENT continuation piece '" + name + "' (" +
-                         piece.a.x.ToString("F1") + "," + piece.a.z.ToString("F1") + "→" +
-                         piece.d.x.ToString("F1") + "," + piece.d.z.ToString("F1") + ").");
         }
     }
 }

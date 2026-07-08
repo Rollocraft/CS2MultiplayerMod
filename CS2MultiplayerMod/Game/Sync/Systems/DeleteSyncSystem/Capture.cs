@@ -84,30 +84,23 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     if (string.IsNullOrEmpty(name) || name.StartsWith("Invisible")) continue;
 
                     Bezier4x3 b = EntityManager.GetComponentData<Curve>(entities[i]).m_Bezier;
-                    string xzA = b.a.x.ToString("F1") + "," + b.a.z.ToString("F1");
-                    string xzD = b.d.x.ToString("F1") + "," + b.d.z.ToString("F1");
 
                     // A node-reduction victim, not a bulldoze — a same-prefab neighbour was extended
                     // over this edge's span this same frame. The receiver's own commit reproduces the
                     // merge, so this delete stays local.
                     if (IsReductionVictim(b, prefab, updatedPrefabs, updatedCurves))
                     {
-                        Mod.NetTrace("delete SKIP reduction-victim '" + name + "' (" + xzA + "→" + xzD +
-                                     ") — merged into an extended neighbour, receiver reduces locally.");
                         continue;
                     }
 
                     // A split, not a bulldoze — let the receiver split its own copy locally.
                     if (IsBeingSplit(b, prefab, createdPrefabs, createdCurves))
                     {
-                        Mod.NetTrace("delete SKIP split '" + name + "' (" + xzA + "→" + xzD +
-                                     ") — mid-span split, receiver splits locally (NOT a bulldoze).");
                         continue;
                     }
 
                     if (_guard.Consume(DeleteKey(name, b.a), now))
                     {
-                        Mod.NetTrace("delete skip ECHO '" + name + "' at " + xzA + ".");
                         continue;
                     }
 
@@ -120,7 +113,6 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                         Dx = b.d.x, Dy = b.d.y, Dz = b.d.z,
                     };
                     session.SendCommand(0, NetDeleteCommand.Id, command.Encode());
-                    Mod.NetTrace("LOCAL BULLDOZE edge → SENT delete '" + name + "' (" + xzA + "→" + xzD + ").");
                 }
             }
             finally
@@ -136,10 +128,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         }
 
         /// <summary>
-        /// True when <paramref name="deleted"/> died to a node reduction rather than a bulldoze: a
-        /// same-prefab edge whose geometry changed this same frame (Updated, not Created) now covers
-        /// its span in 3D — the game joined the two edges and this one is the leftover. The joined
-        /// curve tracks each merged half within ~0.1 m, far inside the SplitMatch tolerances.
+        /// True when <paramref name="deleted"/> died to node reduction: same-prefab Updated edge
+        /// now covers its 3D span (game joined two edges, this is leftover).
         /// </summary>
         private static bool IsReductionVictim(Bezier4x3 deleted, Entity prefab,
             NativeArray<Entity> updatedPrefabs, NativeArray<Curve> updatedCurves)
@@ -153,13 +143,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         }
 
         /// <summary>
-        /// True when <paramref name="deleted"/> is being SPLIT rather than bulldozed or rebuilt: every
-        /// same-prefab edge Created this frame along its centreline matches its height too (a true 3D
-        /// sub-curve — one of the split halves). The receiver reproduces a split locally, so that
-        /// delete is not replicated. If any piece follows the path at a DIFFERENT height, the span is
-        /// being rebuilt at a new elevation (the raise/lower gesture) — that delete IS replicated,
-        /// with the rebuilt pieces following one frame later (see <c>NetSyncSystem</c>, which runs the
-        /// same test on the same frame's data).
+        /// True when <paramref name="deleted"/> is being split (not bulldozed/rebuilt): same-prefab
+        /// Created edges match XZ and height (3D split halves). Different height means rebuild at new
+        /// elevation, delete replicated.
         /// </summary>
         private static bool IsBeingSplit(Bezier4x3 deleted, Entity prefab,
             NativeArray<Entity> createdPrefabs, NativeArray<Curve> createdCurves)

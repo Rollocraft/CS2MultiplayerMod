@@ -10,16 +10,10 @@ using CS2MultiplayerMod.Core.Session;
 namespace CS2MultiplayerMod.Game.Sync.Systems
 {
     /// <summary>
-    /// The drift-correcting backbone: on the host it saves the *live* world and streams
-    /// it to clients (1) the moment a client joins, (2) on a fixed interval (default
-    /// 15 min) and (3) on demand when a player runs <c>/sync</c> (chat or settings
-    /// button). Clients reload it transiently (see <see cref="JoinMapLoader"/>), so no
-    /// matter what the live per-action sync misses, everyone snaps back to an identical
-    /// city periodically.
-    ///
-    /// Saving is asynchronous (<see cref="AutoSaveSystem.PerformAutoSave"/> returns a
-    /// Task); this system kicks it off, polls for completion on the main thread, then
-    /// streams the freshly written save.
+    /// Drift-correcting backbone: host saves live world and streams to clients on join,
+    /// fixed interval (default 15 min), or on-demand (/sync). Clients reload via
+    /// <see cref="JoinMapLoader"/>. Saving via <see cref="AutoSaveSystem.PerformAutoSave"/>
+    /// is async; system polls and streams the result.
     /// </summary>
     public partial class WorldResyncSystem : GameSystemBase
     {
@@ -117,7 +111,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 _saveTask = _autoSave.PerformAutoSave(GameManager.instance.settings.general);
                 _saving = true;
                 _saveStartMs = service.NowMs;
-                Mod.log.Info("[MP] World re-sync: saving the live world before streaming to " + _targets.Count + " target(s)…");
+                Mod.log.Info("[MP] World re-sync: saving the live world before streaming to " + _targets.Count + " target(s)...");
             }
             catch (Exception ex)
             {

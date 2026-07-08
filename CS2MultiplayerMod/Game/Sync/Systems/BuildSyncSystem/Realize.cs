@@ -55,25 +55,10 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         }
 
         /// <summary>
-        /// Reproduce the way the game itself places a building, so the realized object is a fully
-        /// integrated building — not a "looks placed but isn't" ghost. A placement emits THREE
-        /// kinds of definition entity in one batch, all linked back to the building by an
-        /// <see cref="OwnerDefinition"/> (its prefab + world transform):
-        ///   1. the object definition (the building),
-        ///   2. one lot/area definition per <see cref="SubArea"/> the prefab declares (the yard /
-        ///      surface polygons), and
-        ///   3. one connection-net definition per <see cref="SubNet"/> the prefab declares (the
-        ///      driveway that links it to the road).
-        /// <see cref="CreationFlags.Permanent"/> makes the game's GenerateObjects / GenerateAreas /
-        /// GenerateNets systems build each one directly (no Temp preview, no tool apply), exactly as
-        /// a grown zoned building is spawned. Must run in the ToolUpdate phase (see
-        /// <see cref="SyncRealizeSystem"/>); definitions created later are dropped before consumption.
-        ///
-        /// The earlier recipe emitted only the bare object definition with <c>m_ParentMesh = 0</c>.
-        /// That left the building ungrounded (a stray Elevation, no OnGround) with no lot and no
-        /// driveway — terrain never conformed and it mis-linked to roads. The fixes here are the
-        /// <c>m_ParentMesh = -1</c> ground marker, the local transform, and the two sub-definition
-        /// passes below.
+        /// Emit three definition entities (object + lot per SubArea + net per SubNet) linked by
+        /// <see cref="OwnerDefinition"/>, with <see cref="CreationFlags.Permanent"/> for direct build.
+        /// Must run in ToolUpdate (see <see cref="SyncRealizeSystem"/>). Fixes prior recipe: m_ParentMesh=-1
+        /// ground marker, local transform, sub-definitions.
         /// </summary>
         private void RealizeObject(Entity prefab, float3 position, quaternion rotation)
         {
@@ -120,11 +105,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         }
 
         /// <summary>
-        /// Emit a lot/area definition for every <see cref="SubArea"/> the building prefab declares
-        /// (its yard, surface, etc.), each a terrain-following polygon owned by the building. Mirrors
-        /// the game's placement: the polygon comes from the prefab's <see cref="SubAreaNode"/> buffer
-        /// (local → world), walked from <c>GetFirstNodeIndex</c> and closed back to the first node.
-        /// A placeholder area prefab is resolved to a concrete one the game's way (SelectAreaPrefab).
+        /// Emit lot/area definitions per <see cref="SubArea"/>, terrain-following polygons from
+        /// <see cref="SubAreaNode"/> buffer (local to world). Resolve placeholder prefabs via
+        /// SelectAreaPrefab, guarded against missing <see cref="SpawnableObjectData"/>.
         /// </summary>
         private void RealizeSubAreas(Entity prefab, OwnerDefinition owner, ref Unity.Mathematics.Random random)
         {
@@ -225,11 +208,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         }
 
         /// <summary>
-        /// Emit a connection-net definition (the driveway) for every <see cref="SubNet"/> the building
-        /// prefab declares, owned by the building. Curves are taken from the prefab, averaged at shared
-        /// node indices, mirrored for left-hand traffic, transformed local → world, and marked
-        /// <see cref="CoursePosFlags.DisableMerge"/> so the driveway's own end nodes never fuse with
-        /// unrelated nearby nodes — the same shape the game produces for a spawned building.
+        /// Emit connection-net definitions per <see cref="SubNet"/>, curves averaged at shared
+        /// node indices, mirrored for left-hand traffic, transformed local to world, marked
+        /// <see cref="CoursePosFlags.DisableMerge"/> to prevent node fusion.
         /// </summary>
         private void RealizeSubNets(Entity prefab, OwnerDefinition owner, ref Unity.Mathematics.Random random)
         {
