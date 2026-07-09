@@ -53,6 +53,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         private EntityQuery _createdObjects;
         private EntityQuery _liveNodes;
         private EntityQuery _liveEdges;
+        private EntityQuery _liveStaticObjects;
         private CommandObserver _observer;
 
         // Used by the realize path to reproduce the game's own building placement (a building
@@ -115,6 +116,24 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 None = new[]
                 {
                     ComponentType.ReadOnly<Temp>(),
+                    ComponentType.ReadOnly<Deleted>(),
+                },
+            });
+
+            // Standing placed objects (buildings, props), for the duplicate-placement guard in
+            // Realize.cs. Static excludes vehicles/cims; Owner excludes sub-objects.
+            _liveStaticObjects = GetEntityQuery(new EntityQueryDesc
+            {
+                All = new[]
+                {
+                    ComponentType.ReadOnly<PrefabRef>(),
+                    ComponentType.ReadOnly<Transform>(),
+                    ComponentType.ReadOnly<global::Game.Objects.Static>(),
+                },
+                None = new[]
+                {
+                    ComponentType.ReadOnly<Temp>(),
+                    ComponentType.ReadOnly<Owner>(),
                     ComponentType.ReadOnly<Deleted>(),
                 },
             });

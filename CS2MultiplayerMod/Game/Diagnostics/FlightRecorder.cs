@@ -13,6 +13,13 @@ namespace CS2MultiplayerMod.Game.Diagnostics
     /// </summary>
     internal static class FlightRecorder
     {
+        /// <summary>
+        /// Flip to false to ship a build that writes no flight log: <see cref="Start"/>
+        /// then opens no file and installs no exception hooks, and every <see cref="Note"/>
+        /// returns before touching the lock.
+        /// </summary>
+        public static bool Enabled = false;
+
         private const long RotateBytes = 4L * 1024 * 1024;
         private const int MaxMirroredExceptions = 40;
 
@@ -26,6 +33,8 @@ namespace CS2MultiplayerMod.Game.Diagnostics
 
         public static void Start(string modVersion)
         {
+            if (!Enabled) return;
+
             lock (Gate)
             {
                 if (_writer != null) return;
@@ -81,6 +90,8 @@ namespace CS2MultiplayerMod.Game.Diagnostics
         /// <summary>Append one timestamped line. Safe from any thread; never throws.</summary>
         public static void Note(string line)
         {
+            if (!Enabled) return;
+
             lock (Gate)
             {
                 if (_writer == null) return;

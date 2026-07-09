@@ -1,3 +1,4 @@
+using System.Text;
 using Colossal.Mathematics;
 using Game.Common;
 using Game.Prefabs;
@@ -23,12 +24,64 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         /// <summary>How far (metres, 3D) an anchor may sit off an edge's centreline to match it.</summary>
         private const float AttachEdgeTol = 2f;
 
+        /// <summary>
+        /// Ceiling on object spawns per frame. A human's placement rate is a few per second; a
+        /// burst beyond this (a flood, or a backlog draining after a stall) would materialise many
+        /// buildings plus their lot/net sub-definitions in ONE Modification pass — a load shape the
+        /// game's own tools never produce. The rest stay queued for the following frames.
+        /// </summary>
+        private const int MaxRealizePerFrame = 8;
+
+        /// <summary>A same-prefab object standing this close is the same placement arriving twice —
+        /// the sender's own overlap validation keeps distinct placements further apart.</summary>
+        private const float DuplicateRadiusSq = 1.5f * 1.5f;
+        private const float DuplicateMaxDy = 3f;
+
+        private int _rzFrameSpawned;
+        private int _rzFrameDuplicates;
+        private readonly System.Collections.Generic.List<(Entity prefab, float3 position)> _rzRealizedThisFrame =
+            new System.Collections.Generic.List<(Entity, float3)>();
+        private NativeArray<global::Game.Objects.Transform> _dupTransforms;
+        private NativeArray<PrefabRef> _dupPrefabs;
+        private bool _dupSnapshotTaken;
+
         private void RealizeIncoming(MultiplayerSession session, long now)
         {
-            RetryPendingAttachments(now);
+            if (_incoming.IsEmpty && _attachRetry.Count == 0) return;
 
+            _rzFrameSpawned = 0;
+            _rzFrameDuplicates = 0;
+            _rzRealizedThisFrame.Clear();
+            try
+            {
+                RetryPendingAttachments(now);
+                DrainIncoming(session, now);
+
+                if (_rzFrameSpawned > 0 || _rzFrameDuplicates > 0)
+                {
+                    var note = new StringBuilder("build realize n=").Append(_rzFrameSpawned);
+                    if (_rzFrameDuplicates > 0) note.Append(" dup=").Append(_rzFrameDuplicates);
+                    int held = _incoming.Count;
+                    if (held > 0) note.Append(" held=").Append(held);
+                    AppendRealizedNames(note);
+                    Diagnostics.FlightRecorder.Note(note.ToString());
+                }
+            }
+            finally
+            {
+                if (_dupSnapshotTaken)
+                {
+                    _dupTransforms.Dispose();
+                    _dupPrefabs.Dispose();
+                    _dupSnapshotTaken = false;
+                }
+            }
+        }
+
+        private void DrainIncoming(MultiplayerSession session, long now)
+        {
             SimulationCommandMessage message;
-            while (_incoming.TryDequeue(out message))
+            while (_rzFrameSpawned < MaxRealizePerFrame && _incoming.TryDequeue(out message))
             {
                 // Our own placement coming back to us — already built locally.
                 if (message.OriginPlayerId == session.LocalPlayerId) continue;
@@ -70,6 +123,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         {
             for (int i = _attachRetry.Count - 1; i >= 0; i--)
             {
+                if (_rzFrameSpawned >= MaxRealizePerFrame) return; // budget spent; retry next frame
                 var pending = _attachRetry[i];
 
                 if (FindAttachTarget(pending.command) != Entity.Null)
@@ -92,6 +146,16 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         {
             var position = new float3(command.PosX, command.PosY, command.PosZ);
             var rotation = new quaternion(command.RotX, command.RotY, command.RotZ, command.RotW);
+
+            // The same placement arriving twice (a replayed message, a lagged echo) would stack a
+            // second building exactly inside the first — geometry the sender's own validation can
+            // never produce, and native systems don't tolerate what the tools forbid.
+            if (AlreadyStandsAt(prefab, position))
+            {
+                _rzFrameDuplicates++;
+                return;
+            }
+
             Entity attachParent = FindAttachTarget(command);
 
             // Remember it so our own detector treats the soon-to-appear object as a replica.
@@ -100,6 +164,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             {
                 RealizeObject(prefab, position, rotation, attachParent);
                 ConstructionCharger.ChargeObject(EntityManager, prefab, command.PrefabName);
+                _rzFrameSpawned++;
+                _rzRealizedThisFrame.Add((prefab, position));
                 Mod.Verbose("[MP] BuildSync realize: spawned '" + command.PrefabName + "' from player " +
                             originPlayerId + " at (" + position.x.ToString("F1") + "," +
                             position.z.ToString("F1") + ").");
@@ -107,7 +173,66 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             catch (System.Exception ex)
             {
                 Mod.log.Error("[MP] BuildSync realize FAILED for '" + command.PrefabName + "': " + ex);
+                Diagnostics.FlightRecorder.Note("build realize FAILED '" + command.PrefabName + "': "
+                    + ex.GetType().Name);
             }
+        }
+
+        /// <summary>
+        /// True when a live same-prefab object (or one spawned earlier this frame) stands within
+        /// <see cref="DuplicateRadiusSq"/> of <paramref name="position"/>. The world snapshot is
+        /// taken once per frame, only on frames that realize something.
+        /// </summary>
+        private bool AlreadyStandsAt(Entity prefab, float3 position)
+        {
+            for (int i = 0; i < _rzRealizedThisFrame.Count; i++)
+            {
+                if (_rzRealizedThisFrame[i].prefab != prefab) continue;
+                float3 p = _rzRealizedThisFrame[i].position;
+                if (math.distancesq(p.xz, position.xz) < DuplicateRadiusSq
+                    && math.abs(p.y - position.y) <= DuplicateMaxDy) return true;
+            }
+
+            if (!_dupSnapshotTaken)
+            {
+                _dupTransforms = _liveStaticObjects.ToComponentDataArray<global::Game.Objects.Transform>(Allocator.Temp);
+                _dupPrefabs = _liveStaticObjects.ToComponentDataArray<PrefabRef>(Allocator.Temp);
+                _dupSnapshotTaken = true;
+            }
+            for (int i = 0; i < _dupTransforms.Length; i++)
+            {
+                if (_dupPrefabs[i].m_Prefab != prefab) continue;
+                float3 p = _dupTransforms[i].m_Position;
+                if (math.distancesq(p.xz, position.xz) < DuplicateRadiusSq
+                    && math.abs(p.y - position.y) <= DuplicateMaxDy) return true;
+            }
+            return false;
+        }
+
+        // Prefab-name digest for the per-frame flight note, e.g. " [WaterPumpingStation x3]".
+        private void AppendRealizedNames(StringBuilder note)
+        {
+            if (_rzRealizedThisFrame.Count == 0) return;
+            note.Append(" [");
+            int written = 0;
+            for (int i = 0; i < _rzRealizedThisFrame.Count; i++)
+            {
+                Entity prefab = _rzRealizedThisFrame[i].prefab;
+                bool seen = false;
+                int count = 0;
+                for (int j = 0; j < _rzRealizedThisFrame.Count; j++)
+                {
+                    if (_rzRealizedThisFrame[j].prefab != prefab) continue;
+                    if (j < i) { seen = true; break; }
+                    count++;
+                }
+                if (seen) continue;
+                if (written > 0) note.Append(", ");
+                note.Append(_prefabSystem.GetPrefabName(prefab));
+                if (count > 1) note.Append(" x").Append(count);
+                written++;
+            }
+            note.Append(']');
         }
 
         /// <summary>The local net entity this command's object hangs off, or Null (also when unattached).</summary>
