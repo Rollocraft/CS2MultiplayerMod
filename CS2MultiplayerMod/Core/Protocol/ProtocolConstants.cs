@@ -4,10 +4,11 @@ namespace CS2MultiplayerMod.Core.Protocol
     {
         /// <summary>
         /// Wire-format version. Bump when message layout changes to refuse handshake on mismatch.
-        /// Current v12 carries NetUpgradeCommand (node targets, sub-replacements, explicit removal).
+        /// Current v13 adds the attach kind + parent node position to ObjectPlacementCommand,
+        /// so net objects (roundabout islands) reattach on the receiver.
         /// See <see cref="Messages.HandshakeRequest"/> and version notes in doc/internals.
         /// </summary>
-        public const int ProtocolVersion = 12;
+        public const int ProtocolVersion = 13;
 
         /// <summary>
         /// Hard cap on a single payload, guarding against corrupt length prefixes.

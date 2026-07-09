@@ -15,6 +15,12 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
     // player has a build tool out, and the reflection that drives the ApplyTool phase.
     public partial class NetSyncSystem
     {
+        /// <summary>How long an armed batch may wait for its commit before it is discarded and replayed.</summary>
+        private const int ApplyWindowMs = 3000;
+
+        /// <summary>How long a committed batch's Temps may linger before they are force-cleared.</summary>
+        private const int DrainWindowMs = 3000;
+
         /// <summary>
         /// Called by <see cref="SyncRealizeSystem"/> once per frame BEFORE any net-pipeline feeder
         /// (delete/replace/build) runs, so per-frame state is reset exactly once regardless of which
@@ -62,7 +68,33 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                 global::Game.Tools.ApplyMode toolMode =
                     tool != null ? tool.applyMode : global::Game.Tools.ApplyMode.None;
 
-                if (count > 0 && !toolIdle && toolMode == global::Game.Tools.ApplyMode.Apply)
+                if (count > 0 && ArmedBatchReferencesVanishedOriginal())
+                {
+                    // The world changed under the armed batch: the game's own aftermath work (node
+                    // reduction merging freshly committed spans) can delete an edge this batch
+                    // resolved as a split target or reuse node one frame ago. Committing would make
+                    // ApplyNetSystem dereference the corpse — the native CTD. Discard the Temps and
+                    // rebuild from the source commands against the changed world instead.
+                    _pendingApply = false;
+                    _awaitingDrain = false;
+                    DiscardStaleNetTemps("a referenced original vanished between arm and commit");
+                    System.Action rebuild = _onCommitLost;
+                    _onCommitLost = null;
+                    if (rebuild != null && _expiryReplays < 3)
+                    {
+                        _expiryReplays++;
+                        Diagnostics.FlightRecorder.Note("net batch invalidated pre-commit; replay "
+                            + _expiryReplays + "/3");
+                        rebuild();
+                    }
+                    else
+                    {
+                        Mod.log.Warn("[MP] NetApply: armed batch referenced a vanished original and " +
+                                     "had no replay budget left - batch dropped.");
+                        Diagnostics.FlightRecorder.Note("net batch invalidated pre-commit; dropped");
+                    }
+                }
+                else if (count > 0 && !toolIdle && toolMode == global::Game.Tools.ApplyMode.Apply)
                 {
                     // The player's click drives the ApplyTool pass this frame and our armed batch
                     // rides along. Track it as a normal commit. NO capture-suppress window here: the
@@ -75,6 +107,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                     _awaitingDrain = true;
                     _drainArmTick = System.Environment.TickCount;
                     _drainFrames = 0;
+                    Diagnostics.FlightRecorder.Note("net commit ride-along (temps=" + count + ")");
                 }
                 else if (count > 0 && TrySetApplyModeApply())
                 {
@@ -91,25 +124,36 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                     // self-flip frame). Echoes surfacing on later frames (node-reduction merges)
                     // are caught per-edge by the realize guard marks, like the ride-along path.
                     _suppressCaptureThisFrame = true;
+                    Diagnostics.FlightRecorder.Note("net commit flip (temps=" + count + ")");
                 }
-                else if (count == 0 && System.Environment.TickCount - _armTick > 3000)
+                else if (System.Environment.TickCount - _armTick > ApplyWindowMs)
                 {
-                    // Temps never materialised (definition rejected?). Replay a few times, then stop -
-                    // a batch the game always rejects must not rebuild forever.
+                    // The window ran out. Either the definitions never materialised (count == 0,
+                    // rejected?) or they did but the commit could never be driven (no active tool,
+                    // applyMode setter gone). Both strand the batch: anything still standing is an
+                    // uncommitted course that must not join a later pass (see DiscardStaleNetTemps).
+                    // Replay a few times, then stop - a batch the game always rejects must not
+                    // rebuild forever.
                     _pendingApply = false;
+                    _awaitingDrain = false;
+                    if (count > 0) DiscardStaleNetTemps("apply window expired with the batch uncommitted");
+
                     System.Action replay = _onCommitLost;
                     _onCommitLost = null;
                     if (replay != null && _expiryReplays < 3)
                     {
                         _expiryReplays++;
-                        Mod.log.Warn("[MP] NetApply: apply window expired with no Temp entities - re-queueing batch (attempt " +
-                                     _expiryReplays + "/3).");
+                        Mod.log.Warn("[MP] NetApply: apply window expired (temps=" + count +
+                                     ") - re-queueing batch (attempt " + _expiryReplays + "/3).");
+                        Diagnostics.FlightRecorder.Note("net apply window expired temps=" + count +
+                            "; replay " + _expiryReplays + "/3");
                         replay();
                     }
                     else
                     {
-                        Mod.log.Warn("[MP] NetApply: apply window expired with no Temp entities - batch dropped" +
+                        Mod.log.Warn("[MP] NetApply: apply window expired (temps=" + count + ") - batch dropped" +
                                      (replay != null ? " after " + _expiryReplays + " replays." : "."));
+                        Diagnostics.FlightRecorder.Note("net apply window expired temps=" + count + "; batch dropped");
                     }
                 }
                 else
@@ -138,11 +182,16 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                 }
                 else if (!toolIdle && _drainFrames >= 2)
                 {
-                    // The remaining Temps are the tool's regenerated preview, not our batch.
+                    // The remaining Temps are the tool's regenerated preview, not our batch - and the
+                    // next batch's PrepareDefinitionFrame wipes them anyway (a tool is out).
                     _awaitingDrain = false;
                 }
-                else if (System.Environment.TickCount - _drainArmTick > 3000)
+                else if (System.Environment.TickCount - _drainArmTick > DrainWindowMs)
                 {
+                    // Committed Temps that never drained, with the idle tool active: nothing else
+                    // will ever clear them (the hijack wipe no-ops while idle), so they would ride
+                    // into the next batch's ApplyTool pass and can crash the game natively.
+                    DiscardStaleNetTemps("commit never drained");
                     _awaitingDrain = false;
                 }
             }
@@ -232,59 +281,118 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                 }
             }
 
-            int temps = 0;
-            if (!_allTempEntities.IsEmptyIgnoreFilter)
-            {
-                NativeArray<Entity> tempEntities = _allTempEntities.ToEntityArray(Allocator.Temp);
-                try
-                {
-                    for (int i = 0; i < tempEntities.Length; i++)
-                    {
-                        Entity e = tempEntities[i];
-                        if (!EntityManager.Exists(e) || EntityManager.HasComponent<Deleted>(e)) continue;
-
-                        Temp temp = EntityManager.GetComponentData<Temp>(e);
-                        // A preview that was hiding its original (modify/move ghosts) must restore it,
-                        // exactly like the game's clear pass - or the road/building stays invisible.
-                        if (temp.m_Original != Entity.Null && EntityManager.Exists(temp.m_Original)
-                            && EntityManager.HasComponent<Hidden>(temp.m_Original))
-                        {
-                            EntityManager.RemoveComponent<Hidden>(temp.m_Original);
-                            EntityManager.AddComponent<BatchesUpdated>(temp.m_Original);
-                        }
-                        // Highlighted street-name aggregates get their highlight dropped with the Temp.
-                        if (EntityManager.HasBuffer<AggregateElement>(e))
-                        {
-                            DynamicBuffer<AggregateElement> buffer =
-                                EntityManager.GetBuffer<AggregateElement>(e, isReadOnly: true);
-                            var elements = new NativeArray<Entity>(
-                                buffer.AsNativeArray().Reinterpret<Entity>(), Allocator.Temp);
-                            try
-                            {
-                                for (int j = 0; j < elements.Length; j++)
-                                {
-                                    if (!EntityManager.Exists(elements[j])) continue;
-                                    EntityManager.AddComponent<BatchesUpdated>(elements[j]);
-                                    if (EntityManager.HasComponent<Highlighted>(elements[j]))
-                                        EntityManager.RemoveComponent<Highlighted>(elements[j]);
-                                }
-                            }
-                            finally
-                            {
-                                elements.Dispose();
-                            }
-                        }
-                        EntityManager.AddComponent<Deleted>(e);
-                        temps++;
-                    }
-                }
-                finally
-                {
-                    tempEntities.Dispose();
-                }
-            }
+            int temps = ClearTempEntities(_allTempEntities);
 
             TryForceToolUpdate(tool);
+            if (defs > 0 || temps > 0)
+                Diagnostics.FlightRecorder.Note("hijack wipe defs=" + defs + " temps=" + temps +
+                    " tool=" + tool.GetType().Name);
+        }
+
+        /// <summary>
+        /// Mark every live Temp matched by <paramref name="query"/> as Deleted, the way the game's
+        /// own clear pass does: restore an original the preview was hiding, drop the highlight on
+        /// street-name aggregates, then tag the Temp. Returns how many were cleared.
+        /// </summary>
+        private int ClearTempEntities(EntityQuery query)
+        {
+            if (query.IsEmptyIgnoreFilter) return 0;
+
+            int cleared = 0;
+            NativeArray<Entity> tempEntities = query.ToEntityArray(Allocator.Temp);
+            try
+            {
+                for (int i = 0; i < tempEntities.Length; i++)
+                {
+                    Entity e = tempEntities[i];
+                    if (!EntityManager.Exists(e) || EntityManager.HasComponent<Deleted>(e)) continue;
+
+                    Temp temp = EntityManager.GetComponentData<Temp>(e);
+                    // A preview that was hiding its original (modify/move ghosts) must restore it,
+                    // exactly like the game's clear pass - or the road/building stays invisible.
+                    if (temp.m_Original != Entity.Null && EntityManager.Exists(temp.m_Original)
+                        && EntityManager.HasComponent<Hidden>(temp.m_Original))
+                    {
+                        EntityManager.RemoveComponent<Hidden>(temp.m_Original);
+                        EntityManager.AddComponent<BatchesUpdated>(temp.m_Original);
+                    }
+                    // Highlighted street-name aggregates get their highlight dropped with the Temp.
+                    if (EntityManager.HasBuffer<AggregateElement>(e))
+                    {
+                        DynamicBuffer<AggregateElement> buffer =
+                            EntityManager.GetBuffer<AggregateElement>(e, isReadOnly: true);
+                        var elements = new NativeArray<Entity>(
+                            buffer.AsNativeArray().Reinterpret<Entity>(), Allocator.Temp);
+                        try
+                        {
+                            for (int j = 0; j < elements.Length; j++)
+                            {
+                                if (!EntityManager.Exists(elements[j])) continue;
+                                EntityManager.AddComponent<BatchesUpdated>(elements[j]);
+                                if (EntityManager.HasComponent<Highlighted>(elements[j]))
+                                    EntityManager.RemoveComponent<Highlighted>(elements[j]);
+                            }
+                        }
+                        finally
+                        {
+                            elements.Dispose();
+                        }
+                    }
+                    EntityManager.AddComponent<Deleted>(e);
+                    cleared++;
+                }
+            }
+            finally
+            {
+                tempEntities.Dispose();
+            }
+            return cleared;
+        }
+
+        /// <summary>
+        /// Tear down net Temps left standing by a batch that armed but never committed.
+        ///
+        /// An uncommitted Temp course must never survive into a LATER ApplyTool pass. Two courses
+        /// that each touch an existing edge, committed in one pass, make the game's net apply step
+        /// dereference an edge the first split already replaced - a hard process crash. A stale
+        /// course is worse still: it points at a split target that may have been bulldozed since.
+        /// Neither the game's clear pass nor <see cref="PrepareDefinitionFrame"/> removes them while
+        /// the idle default tool is active, so the timeout paths clear them explicitly.
+        /// </summary>
+        /// <summary>
+        /// True when any live net Temp references an original entity that no longer exists or is
+        /// being torn down. Split targets and reuse nodes were resolved when the batch was built —
+        /// a frame before the commit — and ApplyNetSystem dereferences originals unchecked, so a
+        /// batch this has gone stale under must be discarded, never committed. Runs only on frames
+        /// with an armed commit; cost is a component read per standing Temp.
+        /// </summary>
+        private bool ArmedBatchReferencesVanishedOriginal()
+        {
+            NativeArray<Entity> temps = _tempNetEntities.ToEntityArray(Allocator.Temp);
+            try
+            {
+                for (int i = 0; i < temps.Length; i++)
+                {
+                    if (!EntityManager.HasComponent<Temp>(temps[i])) continue;
+                    Entity original = EntityManager.GetComponentData<Temp>(temps[i]).m_Original;
+                    if (original == Entity.Null) continue;
+                    if (!EntityManager.Exists(original) || EntityManager.HasComponent<Deleted>(original))
+                        return true;
+                }
+            }
+            finally
+            {
+                temps.Dispose();
+            }
+            return false;
+        }
+
+        private void DiscardStaleNetTemps(string why)
+        {
+            int cleared = ClearTempEntities(_tempNetEntities);
+            if (cleared <= 0) return;
+            Mod.log.Warn("[MP] NetApply: discarded " + cleared + " uncommitted net Temp(s) - " + why + ".");
+            Diagnostics.FlightRecorder.Note("net temps discarded=" + cleared + " (" + why + ")");
         }
 
         /// <summary>
@@ -296,12 +404,13 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
         /// armed batch never materialises (the apply window expiring) - it must re-queue the batch's
         /// source commands so the work is rebuilt, not lost.
         /// </summary>
-        public void ArmNetCommit(System.Action onCommitLost)
+        public void ArmNetCommit(System.Action onCommitLost, string source)
         {
             if (_pendingApply || _awaitingDrain) return;
             _pendingApply = true;
             _armTick = System.Environment.TickCount;
             _onCommitLost = onCommitLost;
+            Diagnostics.FlightRecorder.Note("net " + source + " batch armed");
         }
 
         /// <summary>

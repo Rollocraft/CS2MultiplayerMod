@@ -14,8 +14,19 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 {
     public partial class BuildSyncSystem
     {
+        /// <summary>Attach-node position match tolerance, squared metres (2 m XZ).</summary>
+        private const float AttachNodeTolSq = 4f;
+
+        /// <summary>Never attach to a node stacked on another level (bridge over junction).</summary>
+        private const float AttachNodeMaxDy = 4f;
+
+        /// <summary>How far (metres, 3D) an anchor may sit off an edge's centreline to match it.</summary>
+        private const float AttachEdgeTol = 2f;
+
         private void RealizeIncoming(MultiplayerSession session, long now)
         {
+            RetryPendingAttachments(now);
+
             SimulationCommandMessage message;
             while (_incoming.TryDequeue(out message))
             {
@@ -34,24 +45,158 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     continue;
                 }
 
-                var position = new float3(command.PosX, command.PosY, command.PosZ);
-                var rotation = new quaternion(command.RotX, command.RotY, command.RotZ, command.RotW);
-
-                // Remember it so our own detector treats the soon-to-appear object as a replica.
-                _guard.Mark(ReplicationGuard.Key(command.PrefabName, position), now);
-                try
+                // A net object placed on a road that has not reached us yet has nothing to hang off.
+                // Placing it now would strand it as an inert prop, so wait for the road instead.
+                if (command.AttachKind != ObjectAttachKind.None && FindAttachTarget(command) == Entity.Null)
                 {
-                    RealizeObject(prefab, position, rotation);
-                    ConstructionCharger.ChargeObject(EntityManager, prefab, command.PrefabName);
-                    Mod.Verbose("[MP] BuildSync realize: spawned '" + command.PrefabName + "' from player " +
-                                message.OriginPlayerId + " at (" + position.x.ToString("F1") + "," +
-                                position.z.ToString("F1") + ").");
+                    if (_attachRetry.Count >= MaxPendingAttachments)
+                    {
+                        // A peer cannot be allowed to grow this without bound; the oldest waiter
+                        // has had the most time to find its node, so it is the one to force through.
+                        var oldest = _attachRetry[0];
+                        _attachRetry.RemoveAt(0);
+                        RealizeCommand(oldest.command, oldest.prefab, oldest.originPlayerId, now);
+                    }
+                    _attachRetry.Add((command, prefab, message.OriginPlayerId, now + AttachRetryWindowMs));
+                    continue;
                 }
-                catch (System.Exception ex)
+
+                RealizeCommand(command, prefab, message.OriginPlayerId, now);
+            }
+        }
+
+        /// <summary>Re-attempt net objects whose parent node was missing; give up after the window.</summary>
+        private void RetryPendingAttachments(long now)
+        {
+            for (int i = _attachRetry.Count - 1; i >= 0; i--)
+            {
+                var pending = _attachRetry[i];
+
+                if (FindAttachTarget(pending.command) != Entity.Null)
                 {
-                    Mod.log.Error("[MP] BuildSync realize FAILED for '" + command.PrefabName + "': " + ex);
+                    _attachRetry.RemoveAt(i);
+                    RealizeCommand(pending.command, pending.prefab, pending.originPlayerId, now);
+                }
+                else if (now >= pending.deadline)
+                {
+                    _attachRetry.RemoveAt(i);
+                    Mod.log.Warn("[MP] BuildSync realize: no local road for '" + pending.command.PrefabName +
+                                 "' after " + (AttachRetryWindowMs / 1000) + " s; placing it unattached " +
+                                 "(it will have no effect on the road).");
+                    RealizeCommand(pending.command, pending.prefab, pending.originPlayerId, now);
                 }
             }
+        }
+
+        private void RealizeCommand(ObjectPlacementCommand command, Entity prefab, int originPlayerId, long now)
+        {
+            var position = new float3(command.PosX, command.PosY, command.PosZ);
+            var rotation = new quaternion(command.RotX, command.RotY, command.RotZ, command.RotW);
+            Entity attachParent = FindAttachTarget(command);
+
+            // Remember it so our own detector treats the soon-to-appear object as a replica.
+            _guard.Mark(ReplicationGuard.Key(command.PrefabName, position), now);
+            try
+            {
+                RealizeObject(prefab, position, rotation, attachParent);
+                ConstructionCharger.ChargeObject(EntityManager, prefab, command.PrefabName);
+                Mod.Verbose("[MP] BuildSync realize: spawned '" + command.PrefabName + "' from player " +
+                            originPlayerId + " at (" + position.x.ToString("F1") + "," +
+                            position.z.ToString("F1") + ").");
+            }
+            catch (System.Exception ex)
+            {
+                Mod.log.Error("[MP] BuildSync realize FAILED for '" + command.PrefabName + "': " + ex);
+            }
+        }
+
+        /// <summary>The local net entity this command's object hangs off, or Null (also when unattached).</summary>
+        private Entity FindAttachTarget(ObjectPlacementCommand command)
+        {
+            var anchor = new float3(command.AttachX, command.AttachY, command.AttachZ);
+            switch (command.AttachKind)
+            {
+                case ObjectAttachKind.NetNode: return FindAttachNode(anchor);
+                case ObjectAttachKind.NetEdge: return FindAttachEdge(anchor);
+                default: return Entity.Null;
+            }
+        }
+
+        /// <summary>
+        /// The live edge whose centreline passes closest to <paramref name="anchor"/>. The anchor sits
+        /// exactly on the sender's parent centreline, so a receiver that subdivided the road differently
+        /// still finds the piece under it; 3D distance keeps a bridge overhead from winning.
+        /// </summary>
+        private Entity FindAttachEdge(float3 anchor)
+        {
+            Entity best = Entity.Null, bestOwned = Entity.Null;
+            float bestDist = AttachEdgeTol, bestOwnedDist = AttachEdgeTol;
+
+            NativeArray<Entity> entities = _liveEdges.ToEntityArray(Allocator.Temp);
+            try
+            {
+                for (int i = 0; i < entities.Length; i++)
+                {
+                    Bezier4x3 curve = EntityManager.GetComponentData<global::Game.Net.Curve>(entities[i]).m_Bezier;
+
+                    // Solving for the closest point on a cubic is far too costly to run against every
+                    // edge in the city; the control hull bounds the curve, so this rejects almost all.
+                    Bounds3 bounds = MathUtils.Bounds(curve);
+                    if (math.any(anchor < bounds.min - AttachEdgeTol) ||
+                        math.any(anchor > bounds.max + AttachEdgeTol)) continue;
+
+                    float t;
+                    float dist = MathUtils.Distance(curve, anchor, out t);
+
+                    // A driveway meets its road on the road's centreline, so right at that point the
+                    // two tie. Road markings belong to the road, so an owned sub-net only ever wins
+                    // when nothing else is in range.
+                    if (EntityManager.HasComponent<Owner>(entities[i]))
+                    {
+                        if (dist >= bestOwnedDist) continue;
+                        bestOwned = entities[i];
+                        bestOwnedDist = dist;
+                        continue;
+                    }
+
+                    if (dist >= bestDist) continue;
+                    best = entities[i];
+                    bestDist = dist;
+                }
+            }
+            finally
+            {
+                entities.Dispose();
+            }
+            return best != Entity.Null ? best : bestOwned;
+        }
+
+        /// <summary>The live road node closest to <paramref name="wanted"/>, or Null when none is near.</summary>
+        private Entity FindAttachNode(float3 wanted)
+        {
+            Entity best = Entity.Null;
+            float bestDistSq = AttachNodeTolSq;
+
+            NativeArray<Entity> entities = _liveNodes.ToEntityArray(Allocator.Temp);
+            try
+            {
+                for (int i = 0; i < entities.Length; i++)
+                {
+                    float3 pos = EntityManager.GetComponentData<global::Game.Net.Node>(entities[i]).m_Position;
+                    // A bridge node stacked over a junction sits at the same XZ - never match it.
+                    if (math.abs(pos.y - wanted.y) > AttachNodeMaxDy) continue;
+
+                    float distSq = math.distancesq(pos.xz, wanted.xz);
+                    if (distSq >= bestDistSq) continue;
+                    best = entities[i];
+                    bestDistSq = distSq;
+                }
+            }
+            finally
+            {
+                entities.Dispose();
+            }
+            return best;
         }
 
         /// <summary>
@@ -59,13 +204,20 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         /// <see cref="OwnerDefinition"/>, with <see cref="CreationFlags.Permanent"/> for direct build.
         /// Must run in ToolUpdate (see <see cref="SyncRealizeSystem"/>). Fixes prior recipe: m_ParentMesh=-1
         /// ground marker, local transform, sub-definitions.
+        ///
+        /// <paramref name="attachParent"/> is the road node or edge a net object hangs off (Null
+        /// otherwise). Permanent skips the tool's apply pass, so the parent is tagged here instead -
+        /// see <see cref="NetAttachment"/>.
         /// </summary>
-        private void RealizeObject(Entity prefab, float3 position, quaternion rotation)
+        private void RealizeObject(Entity prefab, float3 position, quaternion rotation, Entity attachParent)
         {
             // Seed procedural detail from the world position so every machine realizing this same
             // placement derives identical variation (no shared seed travels over the wire).
             uint hash = math.hash(position);
             var random = new Unity.Mathematics.Random(hash == 0u ? 1u : hash);
+
+            CreationFlags flags = CreationFlags.Permanent;
+            if (attachParent != Entity.Null) flags |= CreationFlags.Attach;
 
             // 1) The building itself.
             Entity definition = EntityManager.CreateEntity();
@@ -73,7 +225,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             {
                 m_Prefab = prefab,
                 m_RandomSeed = random.NextInt(),
-                m_Flags = CreationFlags.Permanent,
+                m_Attached = attachParent,
+                m_Flags = flags,
             });
             EntityManager.AddComponentData(definition, new ObjectDefinition
             {
@@ -102,6 +255,12 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             };
             RealizeSubAreas(prefab, owner, ref random);
             RealizeSubNets(prefab, owner, ref random);
+
+            // The composition that draws the ring, or applies the sign's restriction, is re-selected
+            // only for Updated entities, and nothing else will tag them on this path. GenerateObjects
+            // (M1) creates the object, AttachSystem (M3) files it under the parent, and
+            // CompositionSelect reads it immediately after - all downstream of this ToolUpdate call.
+            if (attachParent != Entity.Null) NetAttachment.TagParentUpdated(EntityManager, attachParent);
         }
 
         /// <summary>
@@ -168,6 +327,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                         m_Flags = CreationFlags.Permanent,
                     });
                     EntityManager.AddComponent<Updated>(areaDef);
+                    EntityManager.AddComponent<Deleted>(areaDef); // consumed this frame, swept at Cleanup
                     EntityManager.AddComponentData(areaDef, owner);
 
                     DynamicBuffer<global::Game.Areas.Node> nodes =
@@ -277,6 +437,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 m_Flags = CreationFlags.Permanent,
             });
             EntityManager.AddComponent<Updated>(netDef);
+            EntityManager.AddComponent<Deleted>(netDef); // consumed this frame, swept at Cleanup
             EntityManager.AddComponentData(netDef, owner);
 
             var course = default(NetCourse);

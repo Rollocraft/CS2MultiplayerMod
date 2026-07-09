@@ -203,10 +203,13 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
             _toolSystem = World.GetOrCreateSystemManaged<global::Game.Tools.ToolSystem>();
             // Live net Temp entities (a tool preview, or our own pre-commit definitions), used to
             // confirm a commit (count drops to 0 after ApplyTool) and to detect a tool preview.
+            // Deleted is excluded: a wiped Temp lingers until Cleanup, and counting those corpses
+            // as live made the commit/drain checks act on a batch that no longer exists.
             _tempNetEntities = GetEntityQuery(new EntityQueryDesc
             {
                 All = new[] { ComponentType.ReadOnly<Temp>() },
                 Any = new[] { ComponentType.ReadOnly<Edge>(), ComponentType.ReadOnly<Node>() },
+                None = new[] { ComponentType.ReadOnly<Deleted>() },
             });
 
             // Every live preview Temp of any domain — what the game's own clear pass operates on.

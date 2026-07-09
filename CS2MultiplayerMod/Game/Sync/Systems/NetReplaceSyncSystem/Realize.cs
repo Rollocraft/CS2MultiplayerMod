@@ -197,7 +197,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 _netSync.ArmNetCommit(delegate
                 {
                     _replayCommands.AddRange(armed);
-                });
+                }, "replace n=" + replaced);
             }
 
             // Whatever segment isn't present locally yet probably races its own placement —

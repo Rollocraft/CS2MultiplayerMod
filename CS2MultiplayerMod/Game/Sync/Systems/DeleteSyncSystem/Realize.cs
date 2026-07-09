@@ -10,6 +10,7 @@ using Unity.Collections;
 using Unity.Entities;
 using Unity.Mathematics;
 using CS2MultiplayerMod.Game.Sync.Commands;
+using CS2MultiplayerMod.Game.Sync.Infrastructure;
 
 namespace CS2MultiplayerMod.Game.Sync.Systems
 {
@@ -88,7 +89,13 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                         string victimName = bestExact ? targets[t].name : _prefabSystem.GetPrefabName(bestPrefab);
                         if (string.IsNullOrEmpty(victimName)) victimName = targets[t].name;
                         _guard.Mark(DeleteKey(victimName, EntityManager.GetComponentData<Transform>(best).m_Position), now);
+
+                        // Read the parent before the delete: removing a roundabout island or a turn
+                        // sign only drops its effect if the parent re-selects its composition now.
+                        Entity attachParent = NetAttachment.GetNetParent(EntityManager, best);
+
                         EntityManager.AddComponent<Deleted>(best);
+                        if (attachParent != Entity.Null) NetAttachment.TagParentUpdated(EntityManager, attachParent);
                         taken.Add(best);
                         deleted++;
                     }
@@ -186,7 +193,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 _netSync.ArmNetCommit(delegate
                 {
                     _replayEdgeDeletes.AddRange(armed);
-                });
+                }, "delete n=" + deleted);
             }
 
             int unmatched = 0;

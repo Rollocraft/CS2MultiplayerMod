@@ -70,11 +70,13 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     Mod.log.Warn("[MP] World re-sync save faulted (" +
                                  (_saveTask.Exception != null ? _saveTask.Exception.Message : "?") +
                                  "); streaming the newest existing save instead.");
+                    CS2MultiplayerMod.Game.Diagnostics.FlightRecorder.Note("resync save FAULTED; streaming newest existing save");
                     for (int i = 0; i < _targets.Count; i++) service.StreamWorld(_targets[i]);
                 }
                 else
                 {
                     Mod.log.Info("[MP] World re-sync: live save completed in " + (now - _saveStartMs) + " ms; streaming to " + _targets.Count + " target(s).");
+                    CS2MultiplayerMod.Game.Diagnostics.FlightRecorder.Note("resync save done in " + (now - _saveStartMs) + " ms; streaming to " + _targets.Count + " target(s)");
                     // Stream only the save the just-completed task actually produced —
                     // never an unrelated file that happens to be newest in the folder.
                     for (int i = 0; i < _targets.Count; i++) service.StreamWorld(_targets[i], _saveStartUtc);
@@ -112,6 +114,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 _saving = true;
                 _saveStartMs = service.NowMs;
                 Mod.log.Info("[MP] World re-sync: saving the live world before streaming to " + _targets.Count + " target(s)...");
+                CS2MultiplayerMod.Game.Diagnostics.FlightRecorder.Note("resync save started (targets=" + _targets.Count + ")");
             }
             catch (Exception ex)
             {

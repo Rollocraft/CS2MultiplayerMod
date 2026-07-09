@@ -1,6 +1,7 @@
 using Colossal.IO.AssetDatabase;
 using Colossal.Logging;
 using CS2MultiplayerMod.Game;
+using CS2MultiplayerMod.Game.Diagnostics;
 using CS2MultiplayerMod.Localization;
 using Game;
 using Game.Modding;
@@ -36,6 +37,10 @@ namespace CS2MultiplayerMod
         public void OnLoad(UpdateSystem updateSystem)
         {
             log.Info(nameof(OnLoad));
+
+            // Crash forensics first: the flight log must be recording before anything
+            // else of ours can fail (see FlightRecorder).
+            FlightRecorder.Start(typeof(Mod).Assembly.GetName().Version.ToString());
 
             if (GameManager.instance.modManager.TryGetExecutableAsset(this, out var asset))
                 log.Info($"Current mod asset at {asset.path}");
@@ -144,6 +149,8 @@ namespace CS2MultiplayerMod
                 Setting.UnregisterInOptionsUI();
                 Setting = null;
             }
+
+            FlightRecorder.Stop();
         }
     }
 }

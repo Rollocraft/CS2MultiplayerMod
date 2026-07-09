@@ -67,6 +67,7 @@ namespace CS2MultiplayerMod.Game
         {
             _log.Info("[MP] Map blob delivered to game layer (" +
                       (data != null ? data.Length / 1024 : 0) + " KB); staging and loading.");
+            Diagnostics.FlightRecorder.Note("world blob received " + (data != null ? data.Length >> 10 : 0) + " KB; reloading world");
             SetPhase(ClientWorldPhase.LoadingMap);
             if (!JoinMapLoader.StageAndLoad(data, _log))
             {

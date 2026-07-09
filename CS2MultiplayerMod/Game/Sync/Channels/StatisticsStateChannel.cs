@@ -35,6 +35,14 @@ namespace CS2MultiplayerMod.Game.Sync.Channels
         private CityStatisticsSystem _stats;
         private bool _warned;
 
+        // What each counter will read once the events we already queued have been processed.
+        // The game drains that queue from its own statistics job, which runs minutes apart (and
+        // not at all while paused) - so the naive "host value minus current value" delta gets
+        // re-queued every snapshot and applies dozens of times over. Tracking the in-flight
+        // target instead makes each snapshot queue only the part not already on its way.
+        private readonly System.Collections.Generic.Dictionary<StatisticType, long> _inFlightTarget =
+            new System.Collections.Generic.Dictionary<StatisticType, long>();
+
         private CityStatisticsSystem Resolve(EntityManager em) =>
             _stats ?? (_stats = em.World.GetOrCreateSystemManaged<CityStatisticsSystem>());
 
@@ -68,7 +76,16 @@ namespace CS2MultiplayerMod.Game.Sync.Channels
                 {
                     var type = (StatisticType)reader.ReadByte();
                     long hostValue = reader.ReadLong();
-                    long delta = hostValue - stats.GetStatisticValueLong(type, 0);
+                    long localValue = stats.GetStatisticValueLong(type, 0);
+
+                    // Where this counter is headed: the value it will hold once the events already
+                    // queued are processed. Once the local value has caught up to that target the
+                    // queue has drained and the target is simply the current value again.
+                    long target;
+                    if (!_inFlightTarget.TryGetValue(type, out target) || target == localValue)
+                        target = localValue;
+
+                    long delta = hostValue - target;
                     if (delta == 0) continue;
 
                     JobHandle deps;
@@ -80,6 +97,7 @@ namespace CS2MultiplayerMod.Game.Sync.Channels
                         m_Parameter = 0,
                         m_Change = delta,
                     });
+                    _inFlightTarget[type] = hostValue;
                 }
             }
             catch (System.Exception ex)

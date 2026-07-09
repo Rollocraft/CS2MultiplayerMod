@@ -29,6 +29,15 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             new ConcurrentQueue<SimulationCommandMessage>();
         private readonly ReplicationGuard _guard = new ReplicationGuard();
 
+        /// <summary>A net object can outrun the road it attaches to; hold it until the node exists.</summary>
+        private const long AttachRetryWindowMs = 10000;
+
+        /// <summary>Ceiling on the wait list, so a peer can never grow it without bound.</summary>
+        private const int MaxPendingAttachments = 256;
+
+        private readonly List<(ObjectPlacementCommand command, Entity prefab, int originPlayerId, long deadline)> _attachRetry =
+            new List<(ObjectPlacementCommand, Entity, int, long)>();
+
         private readonly Dictionary<string, int> _diag = new Dictionary<string, int>();
         private long _diagStartMs = -1;
         private int _diagTotal;
@@ -42,6 +51,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         private PrefabIndex _prefabIndex;
         private ToolSystem _toolSystem;
         private EntityQuery _createdObjects;
+        private EntityQuery _liveNodes;
+        private EntityQuery _liveEdges;
         private CommandObserver _observer;
 
         // Used by the realize path to reproduce the game's own building placement (a building
@@ -81,6 +92,30 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     ComponentType.ReadOnly<Owner>(),
                     ComponentType.ReadOnly<Deleted>(),
                     ComponentType.ReadOnly<global::Game.Net.Edge>(),
+                },
+            });
+
+            // Attach targets for incoming net objects, matched by position.
+            _liveNodes = GetEntityQuery(new EntityQueryDesc
+            {
+                All = new[] { ComponentType.ReadOnly<global::Game.Net.Node>() },
+                None = new[]
+                {
+                    ComponentType.ReadOnly<Temp>(),
+                    ComponentType.ReadOnly<Deleted>(),
+                },
+            });
+            _liveEdges = GetEntityQuery(new EntityQueryDesc
+            {
+                All = new[]
+                {
+                    ComponentType.ReadOnly<global::Game.Net.Edge>(),
+                    ComponentType.ReadOnly<global::Game.Net.Curve>(),
+                },
+                None = new[]
+                {
+                    ComponentType.ReadOnly<Temp>(),
+                    ComponentType.ReadOnly<Deleted>(),
                 },
             });
 
@@ -210,6 +245,15 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     // Skip objects we just realized from a remote command — don't echo them.
                     if (_guard.Consume(ReplicationGuard.Key(name, transform.m_Position), now)) continue;
 
+                    // A net object (roundabout island, turn-restriction sign) is inert without its
+                    // parent: the ring and the restriction are derived from the parent's sub-objects,
+                    // never from the object's transform. AttachSystem resolved the parent by now.
+                    var attachKind = ObjectAttachKind.None;
+                    bool isNode;
+                    Unity.Mathematics.float3 attachPos;
+                    if (NetAttachment.TryGetAttachment(EntityManager, entity, out isNode, out attachPos))
+                        attachKind = isNode ? ObjectAttachKind.NetNode : ObjectAttachKind.NetEdge;
+
                     var command = new ObjectPlacementCommand
                     {
                         PrefabName = name,
@@ -220,6 +264,10 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                         RotY = transform.m_Rotation.value.y,
                         RotZ = transform.m_Rotation.value.z,
                         RotW = transform.m_Rotation.value.w,
+                        AttachKind = attachKind,
+                        AttachX = attachPos.x,
+                        AttachY = attachPos.y,
+                        AttachZ = attachPos.z,
                     };
                     session.SendCommand(0, ObjectPlacementCommand.Id, command.Encode());
                     RecordDiagnostic(name);

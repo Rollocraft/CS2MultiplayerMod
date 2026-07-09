@@ -139,17 +139,24 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
 
                     bool defer = startKind == KindDeferBatchEdge || endKind == KindDeferBatchEdge;
                     bool splittingCourse = startKind == KindSplit || endKind == KindSplit;
+                    // A course whose BODY crosses or hugs an existing edge splits it at Temp generation
+                    // exactly like an endpoint tap, but ClassifyEndpoint only sees the two endpoints —
+                    // probe the span interior too, or two fast drags across the same road slip into one
+                    // batch and hit the stale-edge crash below.
+                    if (!defer && !splittingCourse)
+                        splittingCourse = BodyTouchesExistingEdge(bezier, edgeCurves);
                     // At most ONE existing-edge-splitting course per batch: two courses committed in the
                     // same ApplyTool pass that both touch an existing edge can make ApplyNetSystem
                     // dereference a stale (already-split/deleted) edge and crash the process natively.
-                    // Non-splitting courses are unbounded (safe — the net tool grids many at once).
+                    // Courses touching nothing pre-existing are unbounded (safe — the net tool grids
+                    // many at once).
                     if (!defer && splittingCourse && splitUsed) defer = true;
 
                     if (defer)
                     {
                         string why = (startKind == KindDeferBatchEdge || endKind == KindDeferBatchEdge)
                             ? "taps a not-yet-real batch edge"
-                            : "2nd existing-edge split this batch (serialised to avoid a stale-edge crash)";
+                            : "2nd existing-edge touch this batch (serialised to avoid a stale-edge crash)";
                         // Re-queue this and every remaining item, in order, for the next cycle - after
                         // this batch has committed and its edges/nodes have become real.
                         for (int j = i; j < work.Count; j++) _incoming.Enqueue(work[j]);
@@ -204,6 +211,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                 {
                     for (int j = 0; j < batchSources.Count; j++) _incoming.Enqueue(batchSources[j]);
                 };
+                Diagnostics.FlightRecorder.Note("net build batch armed n=" + built + (splitUsed ? " +split" : ""));
             }
             else
             {
@@ -238,6 +246,50 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                 if (!covered) return false;
             }
             return true;
+        }
+
+        /// <summary>
+        /// True when the course's interior (away from both endpoints, which
+        /// <see cref="ClassifyEndpoint"/> already resolved) comes within splitting range of any
+        /// existing edge — a transversal crossing or a lengthwise overlap. The game cuts every such
+        /// edge during Temp generation, so the course counts against the one-splitting-course-per-batch
+        /// rule even though neither endpoint classifies as a split. Layer-blind and endpoint-snap-blind
+        /// on purpose: a false positive only defers a course one cycle, a false negative is a CTD.
+        /// </summary>
+        private static bool BodyTouchesExistingEdge(Bezier4x3 course, NativeArray<Curve> edgeCurves)
+        {
+            // The control hull contains the curve, so an expanded-AABB miss is an exact reject.
+            float3 lo = math.min(math.min(course.a, course.b), math.min(course.c, course.d))
+                - new float3(EdgeSnapDistance, VerticalSnapTol, EdgeSnapDistance);
+            float3 hi = math.max(math.max(course.a, course.b), math.max(course.c, course.d))
+                + new float3(EdgeSnapDistance, VerticalSnapTol, EdgeSnapDistance);
+
+            // Sample tightly enough (≈ EdgeSnapDistance apart, via the control-polygon length upper
+            // bound) that a perpendicular crossing cannot slip between two samples.
+            float approxLen = math.distance(course.a, course.b) + math.distance(course.b, course.c)
+                + math.distance(course.c, course.d);
+            int samples = math.clamp((int)(approxLen / EdgeSnapDistance), 8, 128);
+
+            for (int i = 0; i < edgeCurves.Length; i++)
+            {
+                Bezier4x3 bez = edgeCurves[i].m_Bezier;
+                float3 elo = math.min(math.min(bez.a, bez.b), math.min(bez.c, bez.d));
+                float3 ehi = math.max(math.max(bez.a, bez.b), math.max(bez.c, bez.d));
+                if (math.any(elo > hi) || math.any(ehi < lo)) continue;
+
+                for (int s = 1; s < samples; s++)
+                {
+                    float3 p = MathUtils.Position(course, s / (float)samples);
+                    // Endpoint neighbourhoods belong to endpoint classification (reuse/split/merge).
+                    if (math.distance(p.xz, course.a.xz) < NodeSnapDistance) continue;
+                    if (math.distance(p.xz, course.d.xz) < NodeSnapDistance) continue;
+                    float t;
+                    if (MathUtils.Distance(bez.xz, p.xz, out t) >= EdgeSnapDistance) continue;
+                    if (math.abs(MathUtils.Position(bez, t).y - p.y) > VerticalSnapTol) continue; // other level
+                    return true;
+                }
+            }
+            return false;
         }
 
         /// <summary>

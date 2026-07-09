@@ -72,6 +72,7 @@ namespace CS2MultiplayerMod.Game
             _phaseChangedMs = NowMs;
             if (phase != ClientWorldPhase.LoadingMap) _sawLoading = false;
             _log.Info("[MP] World phase: " + phase);
+            Diagnostics.FlightRecorder.Note("phase " + phase);
 
             // A joined client plays in the host's (transient) world: autosaving it would
             // pile copies of the host's city into the local Saves folder and can collide
