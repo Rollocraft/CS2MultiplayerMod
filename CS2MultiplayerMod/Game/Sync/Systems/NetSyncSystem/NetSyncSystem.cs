@@ -136,12 +136,11 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
         // of a same-frame Deleted edge) rather than something the player drew.
         private int _capFilteredHalves;
 
-        // Pieces of a span that was REBUILT at a different height this frame (the raise/lower-road
-        // gesture commits delete + create along the same XZ path). They are held back one frame so
-        // DeleteSyncSystem's delete of the old span is on the wire first — the receiver must bulldoze
-        // its old edge before it rebuilds, or the arriving delete would tear down the fresh pieces
-        // (they lie exactly on the deleted span). See CaptureNewEdges.
-        private readonly List<NetPlacementCommand> _deferredRebuiltPieces = new List<NetPlacementCommand>();
+        // Pieces of a span whose delete is replicated this frame (rebuilt at another height, or
+        // partially consumed by a placement such as a roundabout). Held back one frame so the delete
+        // travels first — otherwise it would tear down the fresh pieces on arrival (they lie exactly
+        // on the deleted span). See CaptureNewEdges.
+        private readonly List<NetPlacementCommand> _deferredSpanPieces = new List<NetPlacementCommand>();
 
         // --- Temp + ApplyTool realize (the real fix for T-junctions) -----------------------------
         // The shipped realize uses CreationFlags.Permanent, which makes GenerateEdgesSystem build a
@@ -168,7 +167,13 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
         // "net Temps == 0" never happens — the committed geometry is query-able one frame after the
         // ApplyTool pass, and the frame counter releases the drain then (Apply.cs).
         private int _drainFrames;
-        private long _suppressCaptureUntilMs;
+        // True only on the frame a self-driven ApplyTool pass commits our batch: every non-Temp
+        // Created edge at that frame's ModificationEnd is from OUR pass (the player's own gesture
+        // never commits on a self-flip frame - that branch runs only when the tool isn't applying),
+        // so capture skips exactly that one frame instead of a wall-clock window that also
+        // swallowed roads the player built while remote batches streamed in. Set by the commit
+        // flip (Apply.cs), cleared by the next frame's BeginRealizeFrame.
+        private bool _suppressCaptureThisFrame;
         // One preview wipe per realize frame (see PrepareDefinitionFrame); reset by BeginRealizeFrame.
         private bool _prepDoneThisFrame;
         // Spans this machine realized from remote commands recently. A realize commit can trigger the
@@ -331,7 +336,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
             MultiplayerSession session = service.Session;
             if (!service.GameplaySyncReady)
             {
-                if (_deferredRebuiltPieces.Count > 0) _deferredRebuiltPieces.Clear();
+                if (_deferredSpanPieces.Count > 0) _deferredSpanPieces.Clear();
                 return;
             }
 
@@ -344,7 +349,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
             _peakUpdated = System.Math.Max(_peakUpdated, _updatedEdges.CalculateEntityCount());
             _peakDeleted = System.Math.Max(_peakDeleted, _deletedEdges.CalculateEntityCount());
 
-            FlushDeferredRebuiltPieces(session);
+            FlushDeferredSpanPieces(session);
             CaptureNewEdges(session, now);
             FlushDiagnostics(now);
         }

@@ -23,6 +23,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
         public void BeginRealizeFrame()
         {
             _prepDoneThisFrame = false;
+            // Last frame's commit-frame capture skip has served its purpose (the one-frame
+            // Created tags it targeted are gone); a commit this frame re-sets it below.
+            _suppressCaptureThisFrame = false;
         }
 
         /// <summary>
@@ -83,7 +86,11 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                     _awaitingDrain = true;
                     _drainArmTick = System.Environment.TickCount;
                     _drainFrames = 0;
-                    _suppressCaptureUntilMs = (Mod.Service != null ? Mod.Service.NowMs : 0) + 250;
+                    // Skip capture at THIS frame's ModificationEnd only: the pass commits our
+                    // batch and nothing of the player's (their gesture isn't applying on a
+                    // self-flip frame). Echoes surfacing on later frames (node-reduction merges)
+                    // are caught per-edge by the realize guard marks, like the ride-along path.
+                    _suppressCaptureThisFrame = true;
                 }
                 else if (count == 0 && System.Environment.TickCount - _armTick > 3000)
                 {
@@ -201,8 +208,28 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
             int defs = 0;
             if (!_freshDefinitions.IsEmptyIgnoreFilter)
             {
-                defs = _freshDefinitions.CalculateEntityCount();
-                EntityManager.DestroyEntity(_freshDefinitions);
+                // Only NON-Permanent definitions can pollute the commit window (they materialise as
+                // Temps; Permanent ones build real entities directly and never enter ApplyTool).
+                // Permanent definitions here are a sibling realize from THIS frame - a remote
+                // building/upgrade/move/area/route created before this wipe - or the game's own
+                // simulation spawns; destroying them silently killed those placements whenever a
+                // net batch realized in the same frame with a build tool out.
+                NativeArray<Entity> defEntities = _freshDefinitions.ToEntityArray(Allocator.Temp);
+                try
+                {
+                    for (int i = 0; i < defEntities.Length; i++)
+                    {
+                        CreationDefinition def =
+                            EntityManager.GetComponentData<CreationDefinition>(defEntities[i]);
+                        if ((def.m_Flags & CreationFlags.Permanent) != 0) continue;
+                        EntityManager.DestroyEntity(defEntities[i]);
+                        defs++;
+                    }
+                }
+                finally
+                {
+                    defEntities.Dispose();
+                }
             }
 
             int temps = 0;

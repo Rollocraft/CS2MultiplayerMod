@@ -83,9 +83,13 @@ namespace CS2MultiplayerMod
             // Renders the other players' camera positions as ground rings. Rendering phase
             // so the markers draw every frame, in every state (including paused).
             updateSystem.UpdateAt<Game.Sync.Players.RemotePlayerMarkerSystem>(SystemUpdatePhase.Rendering);
-            // Policy changes are detected by content scan and applied via the game's own
-            // SetPolicy (an event entity), so no Modification-phase timing is needed.
-            updateSystem.UpdateAt<Game.Sync.Systems.PolicySyncSystem>(SystemUpdatePhase.GameSimulation);
+            // UIUpdate, not GameSimulation: policies can be toggled while the game is paused
+            // (the policies panel works paused - the game routes the change through an event
+            // entity consumed by the every-frame modification pipeline), but the GameSimulation
+            // phase stops ticking at speed 0. A detector there never saw a change made while
+            // paused and never applied an incoming one until unpause. The content scan is
+            // 1 Hz-gated internally, so the render-rate phase adds no extra cost.
+            updateSystem.UpdateAt<Game.Sync.Systems.PolicySyncSystem>(SystemUpdatePhase.UIUpdate);
             // Placement capture runs at ModificationEnd, where the one-frame Created tags
             // from a tool apply are still alive (they are gone by GameSimulation).
             updateSystem.UpdateAt<Game.Sync.Systems.BuildSyncSystem>(SystemUpdatePhase.ModificationEnd);

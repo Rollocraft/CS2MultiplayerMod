@@ -191,7 +191,24 @@ namespace CS2MultiplayerMod.Game
                 // Stop() fires Offline unconditionally (also after faults and no-op
                 // disconnects), so "closed" is only posted when a session actually ran.
                 if (status == SessionStatus.Connected && _service._session.Role == SessionRole.Host)
+                {
                     _service.AppendChatEntry(null, "Session started - players can join now.");
+                    if (_service._session.PublicExposure)
+                        _service.AppendChatEntry(null, "Friends from another network can only join if you forward TCP port " +
+                            _service._session.Port + " to this PC on your router and allow it through your firewall.");
+                    else
+                        _service.AppendChatEntry(null, "LAN-only is enabled - only players on your local network can join. " +
+                            "If they cannot connect, allow TCP port " + _service._session.Port + " through your firewall.");
+                }
+                else if (status == SessionStatus.Connected && _service._session.Role == SessionRole.Client)
+                {
+                    // Joining replaces the client's world with the host's copy. Without this notice
+                    // the swap reads as "my buildings disappeared" when both play the same city:
+                    // anything built outside the session is not in the host's world.
+                    _service.AppendChatEntry(null, "Connected - downloading the host's city. It will replace the world " +
+                        "you have open in a moment, so anything you built outside this shared session (for example just " +
+                        "before joining) is not part of it. Your own saves are untouched.");
+                }
                 else if (status == SessionStatus.Offline && _lastStatus == SessionStatus.Connected)
                 {
                     // A live session ended cleanly (we left, or the host closed it — both are normal).

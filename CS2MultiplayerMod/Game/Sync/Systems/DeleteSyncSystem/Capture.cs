@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using Colossal.Mathematics;
 using Game.Net;
 using Game.Objects;
@@ -51,11 +52,11 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             // bulldoze. A split deletes the original edge and creates two halves on its centreline;
             // replicating that delete would tear down the receiver's still-whole edge before its own
             // local split runs, leaving the new road disconnected ("not accessible"). So below we skip
-            // deleting an edge whose same-prefab Created halves lie on its centreline in 3D — the
-            // receiver reproduces the split locally from the drawn-edge command instead. Pieces that
-            // follow the centreline only in XZ but at a different HEIGHT mean the span was REBUILT at
-            // a new elevation (the raise/lower gesture, also committed as delete + create): that
-            // delete IS sent, and NetSyncSystem sends the rebuilt pieces one frame behind it.
+            // deleting an edge whose same-prefab Created halves lie on its centreline in 3D AND cover
+            // its whole span — the receiver reproduces the split locally from the drawn-edge command.
+            // Height-mismatching pieces (span REBUILT at another elevation) or a coverage gap (part
+            // of the span CONSUMED, e.g. by a roundabout placed on top) are no split: that delete IS
+            // sent, and NetSyncSystem sends the kept pieces one frame behind it.
             NativeArray<Entity> createdEnts = _createdEdges.ToEntityArray(Allocator.Temp);
             NativeArray<Curve> createdCurves = _createdEdges.ToComponentDataArray<Curve>(Allocator.Temp);
             var createdPrefabs = new NativeArray<Entity>(createdEnts.Length, Allocator.Temp);
@@ -143,23 +144,24 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         }
 
         /// <summary>
-        /// True when <paramref name="deleted"/> is being split (not bulldozed/rebuilt): same-prefab
-        /// Created edges match XZ and height (3D split halves). Different height means rebuild at new
-        /// elevation, delete replicated.
+        /// True when <paramref name="deleted"/> is being split (not bulldozed/rebuilt/consumed):
+        /// same-prefab Created edges match XZ and height AND jointly cover the whole span. A height
+        /// mismatch (rebuild at new elevation) or a coverage gap (span partially consumed, e.g. by
+        /// a roundabout placed on top) means the delete must replicate.
         /// </summary>
         private static bool IsBeingSplit(Bezier4x3 deleted, Entity prefab,
             NativeArray<Entity> createdPrefabs, NativeArray<Curve> createdCurves)
         {
-            bool covered = false;
+            List<Bezier4x3> pieces = null;
             for (int i = 0; i < createdCurves.Length; i++)
             {
                 if (createdPrefabs[i] != prefab) continue;
                 Bezier4x3 c = createdCurves[i].m_Bezier;
                 if (!SplitMatch.FollowsXZ(c, deleted)) continue;
                 if (!SplitMatch.HeightMatches(c, deleted)) return false; // rebuilt at a new height
-                covered = true;
+                (pieces ?? (pieces = new List<Bezier4x3>())).Add(c);
             }
-            return covered;
+            return SplitMatch.CoverWholeSpan(pieces, deleted);
         }
 
     }

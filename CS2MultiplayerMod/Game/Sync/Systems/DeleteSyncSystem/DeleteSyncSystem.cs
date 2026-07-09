@@ -55,6 +55,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
             // Top-level objects being deleted this frame. Temp excludes tool previews;
             // Owner excludes sub-objects (they die with their owner on both machines).
+            // Vehicles/creatures are per-sim churn each machine despawns on its own; a
+            // replicated despawn can only mis-match remotely (the two sims never agree
+            // on where a vehicle is), so they stay off the wire entirely.
             _deletedObjects = GetEntityQuery(new EntityQueryDesc
             {
                 All = new[]
@@ -68,6 +71,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     ComponentType.ReadOnly<Temp>(),
                     ComponentType.ReadOnly<Owner>(),
                     ComponentType.ReadOnly<Edge>(),
+                    ComponentType.ReadOnly<global::Game.Vehicles.Vehicle>(),
+                    ComponentType.ReadOnly<global::Game.Creatures.Creature>(),
                 },
             });
 
@@ -131,6 +136,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             });
 
             // Lookup pools for realizing remote deletes (scan + match by prefab/position).
+            // Vehicles/creatures excluded to mirror the capture query above.
             _liveObjects = GetEntityQuery(new EntityQueryDesc
             {
                 All = new[]
@@ -144,6 +150,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     ComponentType.ReadOnly<Owner>(),
                     ComponentType.ReadOnly<Deleted>(),
                     ComponentType.ReadOnly<Edge>(),
+                    ComponentType.ReadOnly<global::Game.Vehicles.Vehicle>(),
+                    ComponentType.ReadOnly<global::Game.Creatures.Creature>(),
                 },
             });
 
@@ -258,10 +266,12 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         // Bulldoze targets rarely land on the exact same coordinate on both machines:
         // the two cities drift (each runs its own simulation between world resyncs) and
         // growables level up — which CHANGES their prefab. So matching has to be tolerant:
-        // pick the nearest object of the requested prefab within this radius, and, failing
-        // that, the nearest *building* at the spot (a levelled growable is the same lot
-        // with a different prefab). The radius is well below lot spacing, so "nearest"
-        // never reaches a neighbour.
+        // pick the nearest object of the requested prefab within this radius. Only when
+        // BOTH the command and the candidate are growable buildings may the prefab differ
+        // (the same lot at another level); everything else — and every ploppable — matches
+        // by exact prefab or not at all, so a stray delete can never widen into a nearby
+        // hospital. The radius is well below lot spacing, so "nearest" never reaches a
+        // neighbour.
         private const float ObjectMatchRadius = 8f;
 
 

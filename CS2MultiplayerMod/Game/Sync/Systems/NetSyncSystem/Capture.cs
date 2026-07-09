@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using System.Text;
 using Colossal.Mathematics;
 using Game.Net;
@@ -69,27 +70,26 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
         }
 
         /// <summary>
-        /// Send the pieces of a span rebuilt at another height that were captured LAST frame - one
-        /// frame behind DeleteSyncSystem's delete of the old span, so the receiver always bulldozes
-        /// before it rebuilds (commands are delivered in send order).
+        /// Send the pieces captured LAST frame that ride behind a replicated span delete - one frame
+        /// after it, so the receiver always bulldozes before it rebuilds (commands arrive in send order).
         /// </summary>
-        private void FlushDeferredRebuiltPieces(MultiplayerSession session)
+        private void FlushDeferredSpanPieces(MultiplayerSession session)
         {
-            if (_deferredRebuiltPieces.Count == 0) return;
-            for (int i = 0; i < _deferredRebuiltPieces.Count; i++)
+            if (_deferredSpanPieces.Count == 0) return;
+            for (int i = 0; i < _deferredSpanPieces.Count; i++)
             {
-                NetPlacementCommand command = _deferredRebuiltPieces[i];
+                NetPlacementCommand command = _deferredSpanPieces[i];
                 session.SendCommand(0, NetPlacementCommand.Id, command.Encode());
             }
-            _deferredRebuiltPieces.Clear();
+            _deferredSpanPieces.Clear();
         }
 
         private void CaptureNewEdges(MultiplayerSession session, long now)
         {
-            // Briefly stop capturing right after we drove an ApplyTool commit: the edges it created
-            // would otherwise be re-captured next frame and echoed back. Coarse (also pauses local
-            // capture for the window) but the realize bursts are short; refined in the intent stage.
-            if (now < _suppressCaptureUntilMs) return;
+            // On the frame a self-driven ApplyTool pass commits a remote batch, every Created edge
+            // here is that batch's output - skip exactly this frame (never a wall-clock window,
+            // which also swallowed roads the player built while remote batches streamed in).
+            if (_suppressCaptureThisFrame) return;
             if (_createdEdges.IsEmptyIgnoreFilter) return;
 
             // Snapshot this frame's Deleted edges. When the player taps a road mid-span, CS2 makes the
@@ -101,12 +101,11 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
             // same-prefab Deleted edge (one of its halves) and send only the edge the player drew; the
             // receiver reproduces the split locally via the Temp+ApplyTool realize path.
             //
-            // The exception is the raise/lower-road gesture: redrawing a road over an existing one at a
-            // different elevation is ALSO committed as delete + create along the same XZ centreline,
-            // but the new pieces sit at a different HEIGHT (a new curve Y; the edge's Elevation state
-            // is derived from that geometry when it rebuilds). That pair is a real change the receiver
-            // cannot reproduce locally, so the delete IS replicated (see DeleteSyncSystem) and every
-            // piece of the rebuilt span is sent — held back one frame so the delete travels first.
+            // NOT a local split: a span REBUILT at another height (the raise/lower gesture) or only
+            // PARTIALLY re-covered (something placed on top consumed the rest - a roundabout swallows
+            // the stretch inside its circle; the receiver's own split would keep it). For those the
+            // delete IS replicated (DeleteSyncSystem, same test on the same frame's data) and every
+            // kept piece is sent one frame behind it so the delete travels first.
             NativeArray<Entity> delEnts = _deletedEdges.ToEntityArray(Allocator.Temp);
             NativeArray<Curve> delCurves = _deletedEdges.ToComponentDataArray<Curve>(Allocator.Temp);
             var delPrefabs = new NativeArray<Entity>(delEnts.Length, Allocator.Temp);
@@ -119,23 +118,27 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
             for (int i = 0; i < entities.Length; i++)
                 createdPrefabs[i] = EntityManager.GetComponentData<PrefabRef>(entities[i]).m_Prefab;
 
-            // Which deleted edges are being REBUILT at another height rather than split in place: some
-            // same-prefab created piece follows their XZ centreline but deviates in Y. Computed once so
-            // every piece of such a span - including height-matching remainder pieces - is sent; the
-            // receiver bulldozes the whole span and needs all of them back. DeleteSyncSystem runs the
-            // same test on the same frame's data, so the delete and the pieces always travel together.
+            // Which deleted spans are rebuilt at another height or only partially re-covered: their
+            // deletes replicate, so every piece on them must be sent back rather than dropped.
             var delRebuilt = new bool[delEnts.Length];
+            var delPartial = new bool[delEnts.Length];
             for (int dI = 0; dI < delEnts.Length; dI++)
             {
+                List<Bezier4x3> pieces = null;
                 for (int c = 0; c < createdCurves.Length; c++)
                 {
                     if (createdPrefabs[c] != delPrefabs[dI]) continue;
                     Bezier4x3 piece = createdCurves[c].m_Bezier;
                     if (!SplitMatch.FollowsXZ(piece, delCurves[dI].m_Bezier)) continue;
-                    if (SplitMatch.HeightMatches(piece, delCurves[dI].m_Bezier)) continue;
-                    delRebuilt[dI] = true;
-                    break;
+                    if (!SplitMatch.HeightMatches(piece, delCurves[dI].m_Bezier))
+                    {
+                        delRebuilt[dI] = true;
+                        break;
+                    }
+                    (pieces ?? (pieces = new List<Bezier4x3>())).Add(piece);
                 }
+                if (!delRebuilt[dI] && pieces != null)
+                    delPartial[dI] = !SplitMatch.CoverWholeSpan(pieces, delCurves[dI].m_Bezier);
             }
 
             try
@@ -156,18 +159,17 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
 
                     Bezier4x3 b = createdCurves[i].m_Bezier;
 
-                    // Classify against this frame's deleted edges: a piece lying on a SPLIT span is a
-                    // local side effect (dropped); a piece of a span REBUILT at another height is real
-                    // work and rides behind that span's delete.
-                    bool onDeletedSpan = false, onRebuiltSpan = false;
+                    // A piece on a purely-split span is a local side effect (dropped); a piece on a
+                    // span whose delete is replicated rides one frame behind that delete.
+                    bool onDeletedSpan = false, onKeptSpan = false;
                     for (int dI = 0; dI < delCurves.Length; dI++)
                     {
                         if (delPrefabs[dI] != prefab) continue;
                         if (!SplitMatch.FollowsXZ(b, delCurves[dI].m_Bezier)) continue;
                         onDeletedSpan = true;
-                        if (delRebuilt[dI]) { onRebuiltSpan = true; break; }
+                        if (delRebuilt[dI] || delPartial[dI]) { onKeptSpan = true; break; }
                     }
-                    if (onDeletedSpan && !onRebuiltSpan)
+                    if (onDeletedSpan && !onKeptSpan)
                     {
                         _capFilteredHalves++;
                         continue;
@@ -188,9 +190,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                         Dx = b.d.x, Dy = b.d.y, Dz = b.d.z,
                         Length = curve.m_Length,
                     };
-                    if (onRebuiltSpan)
+                    if (onKeptSpan)
                     {
-                        _deferredRebuiltPieces.Add(command);
+                        _deferredSpanPieces.Add(command);
                         RecordDiagnostic(name);
                         continue;
                     }

@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using Colossal.Mathematics;
 using Unity.Mathematics;
 
@@ -8,7 +9,9 @@ namespace CS2MultiplayerMod.Game.Sync.Infrastructure
     /// REBUILT at a different height. When the player taps a road mid-span, the game deletes the
     /// edge and creates its halves - exact 3D sub-curves of the original. When the player redraws a
     /// road over an existing one at a DIFFERENT elevation, the game also commits delete + create - but
-    /// the new pieces follow the old centreline only in XZ; their height differs.
+    /// the new pieces follow the old centreline only in XZ; their height differs. A placement can
+    /// also CONSUME part of the edge (a roundabout swallows the stretch inside its circle): true
+    /// sub-curves that no longer cover the whole span - <see cref="CoverWholeSpan"/> tells that apart.
     /// </summary>
     internal static class SplitMatch
     {
@@ -57,6 +60,41 @@ namespace CS2MultiplayerMod.Game.Sync.Infrastructure
         public static bool IsSubCurve3D(Bezier4x3 piece, Bezier4x3 whole)
         {
             return FollowsXZ(piece, whole) && HeightMatches(piece, whole);
+        }
+
+        // Coverage sampling step and the longest uncovered stretch still counted as covered: split
+        // halves meet at the split node (~0 m gap), the smallest consumed stretch is well past 4 m.
+        private const float CoverageStep = 2f;
+        private const float CoverageGapTol = 4f;
+
+        /// <summary>
+        /// True when <paramref name="pieces"/> (pre-filtered sub-curves of <paramref name="whole"/>)
+        /// jointly cover its entire span - a pure split. A gap past <see cref="CoverageGapTol"/> means
+        /// part of the span was consumed and its removal must replicate.
+        /// </summary>
+        public static bool CoverWholeSpan(List<Bezier4x3> pieces, Bezier4x3 whole)
+        {
+            if (pieces == null || pieces.Count == 0) return false;
+
+            float length = math.max(MathUtils.Length(whole), 1f);
+            int samples = math.clamp((int)math.ceil(length / CoverageStep) + 1, 9, 65);
+            float spacing = length / (samples - 1);
+
+            int uncoveredRun = 0;
+            for (int i = 0; i < samples; i++)
+            {
+                float3 p = MathUtils.Position(whole, i / (float)(samples - 1));
+                bool covered = false;
+                for (int j = 0; j < pieces.Count && !covered; j++)
+                {
+                    float t;
+                    covered = MathUtils.Distance(pieces[j].xz, p.xz, out t) <= TolXZ
+                           && math.abs(MathUtils.Position(pieces[j], t).y - p.y) <= TolY;
+                }
+                if (covered) { uncoveredRun = 0; continue; }
+                if (++uncoveredRun * spacing > CoverageGapTol) return false;
+            }
+            return true;
         }
 
         private static bool HeightAt(Bezier4x3 whole, float3 p)
