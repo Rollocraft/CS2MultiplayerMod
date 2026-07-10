@@ -67,10 +67,10 @@ namespace CS2MultiplayerMod.Game
 
         private void SetPhase(ClientWorldPhase phase)
         {
-            if (_phase == phase) return;
+            if (_phase == phase && phase != ClientWorldPhase.LoadingMap) return;
             _phase = phase;
             _phaseChangedMs = NowMs;
-            if (phase != ClientWorldPhase.LoadingMap) _sawLoading = false;
+            _sawLoading = false;
             _log.Info("[MP] World phase: " + phase);
             Diagnostics.FlightRecorder.Note("phase " + phase);
 
