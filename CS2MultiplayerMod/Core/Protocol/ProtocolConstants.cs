@@ -4,14 +4,15 @@ namespace CS2MultiplayerMod.Core.Protocol
     {
         /// <summary>
         /// Wire-format version. Bump when message layout changes to refuse handshake on mismatch.
-        /// Current v14 replaces the single-stroke TerrainBrushCommand with a batched one carrying
-        /// the terraforming tool prefab and each sample's complete applied brush state (so level/
-        /// slope/soften and terrain-material/resource brushes replicate at all). v13 added the
+        /// Current v15 carries native net-course endpoint/split/elevation intent and the source
+        /// frame delta for deterministic terrain-brush replay. v14 replaced the single-stroke
+        /// TerrainBrushCommand with a batched one carrying the terraforming tool prefab and each
+        /// sample's complete applied brush state. v13 added the
         /// attach kind + parent node position to ObjectPlacementCommand, so net objects (roundabout
         /// islands) reattach on the receiver.
         /// See <see cref="Messages.HandshakeRequest"/> and version notes in doc/internals.
         /// </summary>
-        public const int ProtocolVersion = 14;
+        public const int ProtocolVersion = 15;
 
         /// <summary>
         /// Hard cap on a single payload, guarding against corrupt length prefixes.

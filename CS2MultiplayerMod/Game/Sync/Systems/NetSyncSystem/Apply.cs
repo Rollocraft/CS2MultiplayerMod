@@ -107,6 +107,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                 }
                 else if (count > 0 && !toolIdle && toolMode == global::Game.Tools.ApplyMode.Apply)
                 {
+                    MultiplayerService currentService = Mod.Service;
+                    RecordPlacementOriginals(currentService != null ? currentService.NowMs : 0);
                     // The player's click drives the ApplyTool pass this frame and our armed batch
                     // rides along. Track it as a normal commit. NO capture-suppress window here: the
                     // player's own work is Created this same frame and a blanket skip would swallow
@@ -126,6 +128,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                 }
                 else if (count > 0 && TrySetApplyModeApply())
                 {
+                    MultiplayerService currentService = Mod.Service;
+                    RecordPlacementOriginals(currentService != null ? currentService.NowMs : 0);
                     _pendingApply = false;
                     _onCommitLost = null;
                     _expiryReplays = 0;
@@ -235,11 +239,17 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
         public bool IsCommitBusy => _pendingApply || _awaitingDrain;
 
         /// <summary>
-        /// True when a feeder (build/delete/replace) may create net definitions this frame. False
-        /// while a commit is in flight, and on the frame the player's own gesture applies - their
-        /// preview must survive to be committed by their click, so we never hijack that frame.
-        /// With any other tool state the pipeline runs LIVE: the def-frame wipes the tool's preview
-        /// (<see cref="PrepareDefinitionFrame"/>) and the commit overrides its applyMode next frame.
+        /// True until queued placement courses and their commit/drain have become queryable network
+        /// geometry. Systems that attach to or edit roads must not overtake this boundary.
+        /// </summary>
+        public bool HasPlacementBacklog => !_incoming.IsEmpty || _remoteDeferred.Count > 0 ||
+                                           _localReplays.Count > 0 || IsCommitBusy;
+
+        /// <summary>
+        /// True when a feeder may create Temp-backed work. Remote commits are deliberately queued
+        /// while any interactive tool is active: ApplyTool and ClearTool are global Temp phases, so
+        /// no amount of curve reconstruction can make a concurrent preview transaction-safe. The
+        /// default tool provides an unambiguous window without destroying or replaying local input.
         /// </summary>
         public bool CanBuildDefinitions
         {
@@ -247,8 +257,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
             {
                 if (_pendingApply || _awaitingDrain) return false;
                 global::Game.Tools.ToolBaseSystem tool = _toolSystem != null ? _toolSystem.activeTool : null;
-                if (tool == null || tool is global::Game.Tools.DefaultToolSystem) return true;
-                return tool.applyMode != global::Game.Tools.ApplyMode.Apply;
+                return tool == null || tool is global::Game.Tools.DefaultToolSystem;
             }
         }
 

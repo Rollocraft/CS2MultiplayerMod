@@ -22,6 +22,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
     /// </summary>
     public partial class MoveSyncSystem : GameSystemBase
     {
+        public bool DeferForTerrain;
         private readonly ConcurrentQueue<SimulationCommandMessage> _incoming =
             new ConcurrentQueue<SimulationCommandMessage>();
         private readonly ReplicationGuard _guard = new ReplicationGuard();
@@ -111,6 +112,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
             MultiplayerSession session = service.Session;
             if (!service.GameplaySyncReady) return;
+            if (DeferForTerrain) return;
             RealizeIncoming(session, service.NowMs);
         }
 

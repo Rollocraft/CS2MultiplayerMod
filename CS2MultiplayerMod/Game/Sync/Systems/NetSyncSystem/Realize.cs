@@ -14,26 +14,23 @@ using CS2MultiplayerMod.Game.Sync.Commands;
 namespace CS2MultiplayerMod.Game.Sync.Systems.Net
 {
     // Realize (client) side of NetSyncSystem: drain queued NetPlacementCommands into one working set,
-    // classify where each endpoint connects (reuse node / merge new node / split edge / defer / free),
-    // and route each course. Courses touching nothing pre-existing take the FAST path — a Permanent
-    // definition builds the finished real edge this same frame, with no arm, no preview wipe, no gate
-    // and no interaction with the local player's tool. Only courses that split an existing edge (or
-    // merge/cross this frame's Temp batch) go through the serialized Temp+ApplyTool commit slot.
+    // resolve captured native targets (or classify fallback geometry), then route every course
+    // through one serialized Temp+ApplyTool transaction. Dependent systems wait for its drain so
+    // they never observe half-realized network geometry.
     public partial class NetSyncSystem
     {
         private void RealizeIncoming(MultiplayerSession session, long now)
         {
-            if (_incoming.IsEmpty && _localReplays.Count == 0) return;
+            if (_incoming.IsEmpty && _remoteDeferred.Count == 0 && _localReplays.Count == 0) return;
 
             // One Temp batch in flight at a time (a course built before the previous batch's
             // nodes/edges are query-able could not connect to them), and never on the frame the
-            // player's own gesture applies. Any other tool state realizes LIVE: the def-frame hijack
-            // below wipes the player's preview for one frame and the commit overrides the tool's
-            // applyMode - see CanBuildDefinitions / PrepareDefinitionFrame in the .Apply partial.
+            // player's own gesture applies. New remote transactions start only while the default
+            // tool is active; a tool selected after arming is handled by the commit recovery path.
             if (!CanBuildDefinitions) return;
 
             // Drain a bounded working set so Temp courses can share a SINGLE ApplyTool pass (their
-            // coincident NEW nodes merge by exact position) and fast courses realize together. Local
+            // coincident NEW nodes merge by exact position). Local
             // click-replays first: they were swallowed a frame ago, and their Y was measured against
             // this machine's own terrain, so the terrain deferral never holds them.
             const int MaxBatch = 64;
@@ -45,25 +42,29 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
             }
             if (!DeferForTerrain)
             {
+                while (work.Count < MaxBatch && _remoteDeferred.Count > 0)
+                {
+                    work.Add(_remoteDeferred[0]);
+                    _remoteDeferred.RemoveAt(0);
+                }
                 SimulationCommandMessage msg;
                 while (work.Count < MaxBatch && _incoming.TryDequeue(out msg)) work.Add(msg);
             }
             if (work.Count == 0) return;
 
-            NativeArray<Entity> nodeEntities = default, edgeEntities = default, ownedNodeEntities = default;
+            NativeArray<Entity> nodeEntities = default, edgeEntities = default,
+                ownedNodeEntities = default, ownedEdgeEntities = default;
             NativeArray<Node> nodeData = default, ownedNodeData = default;
-            NativeArray<Curve> edgeCurves = default;
+            NativeArray<Curve> edgeCurves = default, ownedEdgeCurves = default;
             TerrainHeightData heightData = default;
             WaterSurfaceData<SurfaceWater> waterData = default;
             bool haveSnapshot = false;
             int built = 0;
-            int fastBuilt = 0;
             bool splitUsed = false;
 
             // Source messages of the courses the Temp batch builds, retained until the commit
             // actually runs: if the armed batch is wiped before committing (see _onCommitLost) they
-            // are re-enqueued and the batch rebuilds instead of being lost. Fast courses need no
-            // retention - their edges are real before this method returns.
+            // are re-enqueued and the batch rebuilds instead of being lost.
             List<SimulationCommandMessage> retained = null;
 
             // New nodes / edges the Temp batch will create, so a later course can recognise (a) an
@@ -72,13 +73,6 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
             // wait until that edge is real (deferred to the next, post-commit cycle).
             var batchNewNodes = new NativeList<float3>(MaxBatch, Allocator.Temp);
             var batchEdges = new NativeList<Bezier4x3>(MaxBatch, Allocator.Temp);
-            // Nodes / edges the FAST path created THIS frame. They are real but not query-able until
-            // next frame, and a Temp node stacked on a coincident same-frame real node commits as a
-            // second, disconnected node - so anything touching them defers one cycle (fast cycles
-            // have no drain, so "next cycle" is next frame and they are ordinary existing geometry).
-            var fastNewNodes = new NativeList<float3>(MaxBatch, Allocator.Temp);
-            var fastEdges = new NativeList<Bezier4x3>(MaxBatch, Allocator.Temp);
-
             try
             {
                 for (int i = 0; i < work.Count; i++)
@@ -100,12 +94,29 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                                      "' from player " + message.OriginPlayerId + "; skipping.");
                         continue;
                     }
+                    if (!EntityManager.HasComponent<global::Game.Prefabs.NetData>(prefab) ||
+                        !EntityManager.HasComponent<global::Game.Prefabs.NetGeometryData>(prefab))
+                    {
+                        Mod.log.Warn("[MP] NetSync realize: prefab '" + command.PrefabName +
+                                     "' is not a network prefab; skipping.");
+                        continue;
+                    }
 
                     var a = new float3(command.Ax, command.Ay, command.Az);
                     var b = new float3(command.Bx, command.By, command.Bz);
                     var c = new float3(command.Cx, command.Cy, command.Cz);
                     var d = new float3(command.Dx, command.Dy, command.Dz);
                     var bezier = new Bezier4x3 { a = a, b = b, c = c, d = d };
+                    float measuredLength = MathUtils.Length(bezier);
+                    if (!math.isfinite(measuredLength) || measuredLength < 0.1f)
+                    {
+                        Mod.log.Warn("[MP] NetSync realize: degenerate course for '" +
+                                     command.PrefabName + "'; skipping.");
+                        continue;
+                    }
+                    // Pricing and generation use geometry measured locally, never a peer-controlled
+                    // scalar that could disagree with the transmitted curve.
+                    command.Length = measuredLength;
 
                     if (!haveSnapshot)
                     {
@@ -116,10 +127,13 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                         // Building sub-net stubs a utility endpoint may connect to (FindUtilityNodeAt).
                         ownedNodeEntities = _ownedNodes.ToEntityArray(Allocator.Temp);
                         ownedNodeData = _ownedNodes.ToComponentDataArray<Node>(Allocator.Temp);
+                        ownedEdgeEntities = _ownedEdges.ToEntityArray(Allocator.Temp);
+                        ownedEdgeCurves = _ownedEdges.ToComponentDataArray<Curve>(Allocator.Temp);
                         // Surface samplers for the courses' endpoint elevations (see EndElevation).
                         // The water dependency completes here so the data is main-thread readable;
                         // between simulation steps the handle is already complete.
-                        heightData = _terrainSystem.GetHeightData();
+                        _terrainSystem.GetHeightData(waitForPending: true);
+                        heightData = _terrainSystem.GetHeightData(waitForPending: true);
                         JobHandle waterDeps;
                         waterData = _waterSystem.GetSurfaceData(out waterDeps);
                         waterDeps.Complete();
@@ -134,33 +148,97 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                     // span rebuilt at another elevation fails the height match — never wrongly skipped.
                     if (SpanAlreadyBuilt(prefab, bezier, edgeEntities, edgeCurves))
                     {
+                        if (command.HasNativeCourse)
+                            _nativeTargetDeadlines.Remove(NativeRetryKey(message, command));
                         continue;
                     }
 
                     NetPrefabInfo placedInfo = NetInfoOf(prefab);
                     int startKind, endKind;
                     float startT, endT;
-                    Entity startSnap = ClassifyEndpoint(a, placedInfo, nodeEntities, nodeData,
-                        edgeEntities, edgeCurves, ownedNodeEntities, ownedNodeData,
-                        batchNewNodes, batchEdges, out startT, out startKind);
-                    Entity endSnap = ClassifyEndpoint(d, placedInfo, nodeEntities, nodeData,
-                        edgeEntities, edgeCurves, ownedNodeEntities, ownedNodeData,
-                        batchNewNodes, batchEdges, out endT, out endKind);
+                    Entity startSnap, endSnap;
+                    bool nativeTargetsResolved = true;
+
+                    if (command.HasNativeCourse)
+                    {
+                        if (command.Start.Kind == NetEndpointTargetKind.Infer)
+                            startSnap = ClassifyEndpoint(a, placedInfo, nodeEntities, nodeData,
+                                edgeEntities, edgeCurves, ownedNodeEntities, ownedNodeData,
+                                batchNewNodes, batchEdges, out startT, out startKind);
+                        else
+                            nativeTargetsResolved &= TryResolveNativeEndpoint(command.Start, placedInfo,
+                                nodeEntities, nodeData, edgeEntities, edgeCurves,
+                                ownedNodeEntities, ownedNodeData, ownedEdgeEntities, ownedEdgeCurves,
+                                out startSnap, out startT, out startKind);
+
+                        if (command.End.Kind == NetEndpointTargetKind.Infer)
+                            endSnap = ClassifyEndpoint(d, placedInfo, nodeEntities, nodeData,
+                                edgeEntities, edgeCurves, ownedNodeEntities, ownedNodeData,
+                                batchNewNodes, batchEdges, out endT, out endKind);
+                        else
+                            nativeTargetsResolved &= TryResolveNativeEndpoint(command.End, placedInfo,
+                                nodeEntities, nodeData, edgeEntities, edgeCurves,
+                                ownedNodeEntities, ownedNodeData, ownedEdgeEntities, ownedEdgeCurves,
+                                out endSnap, out endT, out endKind);
+
+                        NativeTargetRetryKey retryKey = NativeRetryKey(message, command);
+                        if (!nativeTargetsResolved)
+                        {
+                            long deadline;
+                            if (!_nativeTargetDeadlines.TryGetValue(retryKey, out deadline))
+                            {
+                                deadline = now + NativeTargetRetryWindowMs;
+                                _nativeTargetDeadlines[retryKey] = deadline;
+                            }
+                            if (now < deadline)
+                            {
+                                RequeueFrom(work, i);
+                                break;
+                            }
+
+                            _nativeTargetDeadlines.Remove(retryKey);
+                            Mod.log.Warn("[MP] NetSync: native target unresolved after retry window for op=" +
+                                         command.OperationId + " course=" + command.CourseIndex +
+                                         "; using bounded geometry fallback.");
+                            startSnap = ClassifyEndpoint(a, placedInfo, nodeEntities, nodeData,
+                                edgeEntities, edgeCurves, ownedNodeEntities, ownedNodeData,
+                                batchNewNodes, batchEdges, out startT, out startKind);
+                            endSnap = ClassifyEndpoint(d, placedInfo, nodeEntities, nodeData,
+                                edgeEntities, edgeCurves, ownedNodeEntities, ownedNodeData,
+                                batchNewNodes, batchEdges, out endT, out endKind);
+                        }
+                        else
+                        {
+                            _nativeTargetDeadlines.Remove(retryKey);
+                        }
+                    }
+                    else
+                    {
+                        startSnap = ClassifyEndpoint(a, placedInfo, nodeEntities, nodeData,
+                            edgeEntities, edgeCurves, ownedNodeEntities, ownedNodeData,
+                            batchNewNodes, batchEdges, out startT, out startKind);
+                        endSnap = ClassifyEndpoint(d, placedInfo, nodeEntities, nodeData,
+                            edgeEntities, edgeCurves, ownedNodeEntities, ownedNodeData,
+                            batchNewNodes, batchEdges, out endT, out endKind);
+                    }
 
                     // The elevation each course end must carry (a reused node's committed value, or
                     // derived from the transmitted Y against the local surface — see EndElevation).
-                    float2 startElevation = EndElevation(prefab, startSnap, startKind, a, ref heightData, ref waterData);
-                    float2 endElevation = EndElevation(prefab, endSnap, endKind, d, ref heightData, ref waterData);
+                    float2 startElevation = command.HasNativeCourse
+                        ? new float2(command.Start.ElevationLeft, command.Start.ElevationRight)
+                        : EndElevation(prefab, startSnap, startKind, a, ref heightData, ref waterData);
+                    float2 endElevation = command.HasNativeCourse
+                        ? new float2(command.End.ElevationLeft, command.End.ElevationRight)
+                        : EndElevation(prefab, endSnap, endKind, d, ref heightData, ref waterData);
 
-                    bool defer = startKind == KindDeferBatchEdge || endKind == KindDeferBatchEdge
-                        || TouchesFrameCourses(a, d, bezier, fastNewNodes, fastEdges);
+                    bool defer = startKind == KindDeferBatchEdge || endKind == KindDeferBatchEdge;
                     bool splittingCourse = startKind == KindSplit || endKind == KindSplit;
                     // A course whose BODY crosses or hugs an existing edge splits it at Temp generation
                     // exactly like an endpoint tap, but ClassifyEndpoint only sees the two endpoints —
-                    // probe the span interior too, or two fast drags across the same road slip into one
+                    // probe the span interior too, or two quick drags across the same road slip into one
                     // batch and hit the stale-edge crash below.
                     if (!defer && !splittingCourse)
-                        splittingCourse = BodyTouchesExistingEdge(bezier, edgeCurves);
+                        splittingCourse = BodyTouchesExistingEdge(bezier, placedInfo, edgeEntities, edgeCurves);
                     // At most ONE existing-edge-splitting course per batch: two courses committed in the
                     // same ApplyTool pass that both touch an existing edge can make ApplyNetSystem
                     // dereference a stale (already-split/deleted) edge and crash the process natively.
@@ -171,56 +249,35 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                     if (defer)
                     {
                         // Re-queue this and every remaining item, in order, for the next cycle - after
-                        // this frame's edges (fast or committed) have become query-able.
+                        // this frame's committed edges have become query-able.
                         RequeueFrom(work, i);
                         break;
                     }
-
-                    // Merging or crossing this frame's Temp batch keeps a course on the Temp path:
-                    // Temp-vs-Temp in one pass is the native grid case (coincident new nodes merge,
-                    // crossings cut each other at commit).
-                    bool fast = !splittingCourse
-                        && startKind != KindMergeBatch && endKind != KindMergeBatch
-                        && !BodyTouchesAnyCurve(bezier, batchEdges);
 
                     MarkRealizeGuards(command.PrefabName, a, d, startSnap, startKind, startT,
                         endSnap, endKind, endT, now);
                     try
                     {
-                        if (fast)
-                        {
-                            // Permanent: the generate systems build the finished real edge at this
-                            // frame's Modification. No arm, no preview wipe, no gate frames, no
-                            // drain — and no interaction with the local player's preview or clicks.
-                            CreateCourse(prefab, bezier, command.Length, startSnap, startT, endSnap, endT,
-                                startElevation, endElevation, permanent: true);
-                            fastBuilt++;
-                            RecordRealizedSpan(bezier);
-                            _rzSegments++;
-                            TallyEnd(startKind);
-                            TallyEnd(endKind);
-                            if (startKind == KindFree) fastNewNodes.Add(a);
-                            if (endKind == KindFree) fastNewNodes.Add(d);
-                            fastEdges.Add(bezier);
-                        }
+                        // All replicated courses use the same Temp/apply transaction as the source.
+                        // The former Permanent shortcut could not recover a missed contact or split
+                        // and exposed half-realized geometry to dependent commands in this frame.
+                        if (built == 0) PrepareDefinitionFrame();
+                        if (command.HasNativeCourse)
+                            CreateNativeCourse(prefab, command, bezier,
+                                startSnap, startT, startKind, endSnap, endT, endKind);
                         else
-                        {
-                            // First Temp course of the frame: make the frame safe for our definitions
-                            // while a build tool is out (wipes its preview + fresh definitions; see .Apply).
-                            if (built == 0) PrepareDefinitionFrame();
                             CreateCourse(prefab, bezier, command.Length, startSnap, startT, endSnap, endT,
-                                startElevation, endElevation, permanent: false);
-                            built++;
-                            RecordRealizedSpan(bezier);
-                            (retained ?? (retained = new List<SimulationCommandMessage>())).Add(message);
-                            _rzSegments++;
-                            TallyEnd(startKind);
-                            TallyEnd(endKind);
-                            if (splittingCourse) splitUsed = true;
-                            if (startKind == KindFree) batchNewNodes.Add(a);
-                            if (endKind == KindFree) batchNewNodes.Add(d);
-                            batchEdges.Add(bezier);
-                        }
+                                startElevation, endElevation);
+                        built++;
+                        RecordRealizedSpan(bezier);
+                        (retained ?? (retained = new List<SimulationCommandMessage>())).Add(message);
+                        _rzSegments++;
+                        TallyEnd(startKind);
+                        TallyEnd(endKind);
+                        if (splittingCourse) splitUsed = true;
+                        if (startKind == KindFree) batchNewNodes.Add(a);
+                        if (endKind == KindFree) batchNewNodes.Add(d);
+                        batchEdges.Add(bezier);
                     }
                     catch (System.Exception ex)
                     {
@@ -234,15 +291,11 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                 {
                     nodeEntities.Dispose(); nodeData.Dispose(); edgeEntities.Dispose(); edgeCurves.Dispose();
                     ownedNodeEntities.Dispose(); ownedNodeData.Dispose();
+                    ownedEdgeEntities.Dispose(); ownedEdgeCurves.Dispose();
                 }
                 batchNewNodes.Dispose();
                 batchEdges.Dispose();
-                fastNewNodes.Dispose();
-                fastEdges.Dispose();
             }
-
-            if (fastBuilt > 0)
-                Diagnostics.FlightRecorder.Note("net fast realize n=" + fastBuilt);
 
             // Arm the commit for the Temp batch: those definitions become Temp edges at this frame's
             // Modification, and next frame's RealizePending flips applyMode=Apply so ToolOutputSystem
@@ -254,7 +307,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                 List<SimulationCommandMessage> batchSources = retained;
                 _onCommitLost = delegate
                 {
-                    for (int j = 0; j < batchSources.Count; j++) _incoming.Enqueue(batchSources[j]);
+                    RequeueAtFront(batchSources);
                 };
                 Diagnostics.FlightRecorder.Note("net build batch armed n=" + built + (splitUsed ? " +split" : ""));
             }
@@ -263,72 +316,47 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
         /// <summary>
         /// Re-queue <paramref name="work"/>[<paramref name="from"/>..] for the next cycle, each
         /// stream in its own order: local click-replays back to the front of their list, remote
-        /// messages to the shared queue.
+        /// messages to a simulation-thread prefix ahead of the shared inbox.
         /// </summary>
         private void RequeueFrom(List<SimulationCommandMessage> work, int from)
         {
             List<SimulationCommandMessage> locals = null;
+            List<SimulationCommandMessage> remotes = null;
             for (int j = from; j < work.Count; j++)
             {
                 if (work[j].OriginPlayerId < 0)
                     (locals ?? (locals = new List<SimulationCommandMessage>())).Add(work[j]);
                 else
-                    _incoming.Enqueue(work[j]);
+                    (remotes ?? (remotes = new List<SimulationCommandMessage>())).Add(work[j]);
             }
             if (locals != null) _localReplays.InsertRange(0, locals);
+            if (remotes != null) _remoteDeferred.InsertRange(0, remotes);
         }
 
-        /// <summary>
-        /// True when an endpoint or the body of <paramref name="course"/> touches a node or edge the
-        /// FAST path created this same frame (see the fast lists in <see cref="RealizeIncoming"/>).
-        /// </summary>
-        private static bool TouchesFrameCourses(float3 a, float3 d, Bezier4x3 course,
-            NativeList<float3> fastNewNodes, NativeList<Bezier4x3> fastEdges)
+        private void RequeueAtFront(List<SimulationCommandMessage> messages)
         {
-            if (fastNewNodes.Length == 0 && fastEdges.Length == 0) return false;
-            if (NearAny(a, fastNewNodes, NodeSnapDistance)) return true;
-            if (NearAny(d, fastNewNodes, NodeSnapDistance)) return true;
-            if (MidSpanOfAnyBatch(a, fastEdges)) return true;
-            if (MidSpanOfAnyBatch(d, fastEdges)) return true;
-            return BodyTouchesAnyCurve(course, fastEdges);
-        }
-
-        /// <summary>
-        /// The same interior probe as <see cref="BodyTouchesExistingEdge"/>, against a list of this
-        /// frame's own course curves instead of the world's committed edges.
-        /// </summary>
-        private static bool BodyTouchesAnyCurve(Bezier4x3 course, NativeList<Bezier4x3> curves)
-        {
-            if (curves.Length == 0) return false;
-
-            float3 lo = math.min(math.min(course.a, course.b), math.min(course.c, course.d))
-                - new float3(EdgeSnapDistance, VerticalSnapTol, EdgeSnapDistance);
-            float3 hi = math.max(math.max(course.a, course.b), math.max(course.c, course.d))
-                + new float3(EdgeSnapDistance, VerticalSnapTol, EdgeSnapDistance);
-
-            float approxLen = math.distance(course.a, course.b) + math.distance(course.b, course.c)
-                + math.distance(course.c, course.d);
-            int samples = math.clamp((int)(approxLen / EdgeSnapDistance), 8, 128);
-
-            for (int i = 0; i < curves.Length; i++)
+            List<SimulationCommandMessage> locals = null;
+            List<SimulationCommandMessage> remotes = null;
+            for (int i = 0; i < messages.Count; i++)
             {
-                Bezier4x3 bez = curves[i];
-                float3 elo = math.min(math.min(bez.a, bez.b), math.min(bez.c, bez.d));
-                float3 ehi = math.max(math.max(bez.a, bez.b), math.max(bez.c, bez.d));
-                if (math.any(elo > hi) || math.any(ehi < lo)) continue;
-
-                for (int s = 1; s < samples; s++)
-                {
-                    float3 p = MathUtils.Position(course, s / (float)samples);
-                    if (math.distance(p.xz, course.a.xz) < NodeSnapDistance) continue;
-                    if (math.distance(p.xz, course.d.xz) < NodeSnapDistance) continue;
-                    float t;
-                    if (MathUtils.Distance(bez.xz, p.xz, out t) >= EdgeSnapDistance) continue;
-                    if (math.abs(MathUtils.Position(bez, t).y - p.y) > VerticalSnapTol) continue;
-                    return true;
-                }
+                if (messages[i].OriginPlayerId < 0)
+                    (locals ?? (locals = new List<SimulationCommandMessage>())).Add(messages[i]);
+                else
+                    (remotes ?? (remotes = new List<SimulationCommandMessage>())).Add(messages[i]);
             }
-            return false;
+            if (locals != null) _localReplays.InsertRange(0, locals);
+            if (remotes != null) _remoteDeferred.InsertRange(0, remotes);
+        }
+
+        private static NativeTargetRetryKey NativeRetryKey(SimulationCommandMessage message,
+            NetPlacementCommand command)
+        {
+            return new NativeTargetRetryKey
+            {
+                Origin = message.OriginPlayerId,
+                Operation = command.OperationId,
+                Course = command.CourseIndex,
+            };
         }
 
         /// <summary>
@@ -366,16 +394,18 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
         /// <see cref="ClassifyEndpoint"/> already resolved) comes within splitting range of any
         /// existing edge — a transversal crossing or a lengthwise overlap. The game cuts every such
         /// edge during Temp generation, so the course counts against the one-splitting-course-per-batch
-        /// rule even though neither endpoint classifies as a split. Layer-blind and endpoint-snap-blind
-        /// on purpose: a false positive only defers a course one cycle, a false negative is a CTD.
+        /// rule even though neither endpoint classifies as a split. The fallback probe uses native
+        /// connection layers and physical widths; a conservative false positive only serializes work,
+        /// while a false negative could place two conflicting split courses in one commit.
         /// </summary>
-        private static bool BodyTouchesExistingEdge(Bezier4x3 course, NativeArray<Curve> edgeCurves)
+        private bool BodyTouchesExistingEdge(Bezier4x3 course, NetPrefabInfo placedInfo,
+            NativeArray<Entity> edgeEntities, NativeArray<Curve> edgeCurves)
         {
             // The control hull contains the curve, so an expanded-AABB miss is an exact reject.
             float3 lo = math.min(math.min(course.a, course.b), math.min(course.c, course.d))
-                - new float3(EdgeSnapDistance, VerticalSnapTol, EdgeSnapDistance);
+                - new float3(MaxEndpointSearch, VerticalSnapTol, MaxEndpointSearch);
             float3 hi = math.max(math.max(course.a, course.b), math.max(course.c, course.d))
-                + new float3(EdgeSnapDistance, VerticalSnapTol, EdgeSnapDistance);
+                + new float3(MaxEndpointSearch, VerticalSnapTol, MaxEndpointSearch);
 
             // Sample tightly enough (≈ EdgeSnapDistance apart, via the control-polygon length upper
             // bound) that a perpendicular crossing cannot slip between two samples.
@@ -386,6 +416,13 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
             for (int i = 0; i < edgeCurves.Length; i++)
             {
                 Bezier4x3 bez = edgeCurves[i].m_Bezier;
+                NetPrefabInfo targetInfo = default(NetPrefabInfo);
+                if (EntityManager.HasComponent<global::Game.Prefabs.PrefabRef>(edgeEntities[i]))
+                    targetInfo = NetInfoOf(EntityManager.GetComponentData<global::Game.Prefabs.PrefabRef>(edgeEntities[i]).m_Prefab);
+                if (!LayersCanConnect(placedInfo, targetInfo)) continue;
+                float touchDistance = math.max(EdgeSnapDistance,
+                    placedInfo.HalfWidth + EdgeHalfWidth(edgeEntities[i], targetInfo.HalfWidth) +
+                    placedInfo.SnapDistance);
                 float3 elo = math.min(math.min(bez.a, bez.b), math.min(bez.c, bez.d));
                 float3 ehi = math.max(math.max(bez.a, bez.b), math.max(bez.c, bez.d));
                 if (math.any(elo > hi) || math.any(ehi < lo)) continue;
@@ -397,7 +434,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                     if (math.distance(p.xz, course.a.xz) < NodeSnapDistance) continue;
                     if (math.distance(p.xz, course.d.xz) < NodeSnapDistance) continue;
                     float t;
-                    if (MathUtils.Distance(bez.xz, p.xz, out t) >= EdgeSnapDistance) continue;
+                    if (MathUtils.Distance(bez.xz, p.xz, out t) >= touchDistance) continue;
                     if (math.abs(MathUtils.Position(bez, t).y - p.y) > VerticalSnapTol) continue; // other level
                     return true;
                 }
@@ -428,7 +465,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
             // the sender drew it onto that stub, so the committed segment ends exactly there.
             if ((placedInfo.ConnectLayers & UtilityConnectLayers) != Layer.None)
             {
-                node = FindUtilityNodeAt(p, ownedNodeEntities, ownedNodeData, placedInfo.ConnectLayers);
+                node = FindUtilityNodeAt(p, ownedNodeEntities, ownedNodeData, placedInfo);
                 if (node != Entity.Null) { kind = KindReuseConnector; return node; }
             }
             // Coincides with a new node another course in this batch creates -> leave it as a fresh node

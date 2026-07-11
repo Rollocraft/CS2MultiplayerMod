@@ -59,8 +59,11 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         private PrefabSystem _prefabSystem;
         private PrefabIndex _prefabIndex;
         private NetSyncSystem _netSync;
+        private global::Game.Simulation.TerrainSystem _terrainSystem;
         private EntityQuery _appliedBrushes;
         private CommandObserver _observer;
+        private bool _awaitingHeightReadback;
+        private bool _commitFlipFailureLogged;
 
         private long _diagStartMs = -1;
         private int _diagCaptured, _diagRealized;
@@ -73,6 +76,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             _prefabSystem = World.GetOrCreateSystemManaged<PrefabSystem>();
             _prefabIndex = new PrefabIndex(_prefabSystem, GetEntityQuery(ComponentType.ReadOnly<PrefabData>()));
             _netSync = World.GetOrCreateSystemManaged<NetSyncSystem>();
+            _terrainSystem = World.GetOrCreateSystemManaged<global::Game.Simulation.TerrainSystem>();
 
             // Applied brush samples the local player just laid down: the ApplyTool pass tags each
             // consumed sample Applied (+Deleted). RemoteTerrainBrush excludes the ones we realized.
@@ -115,6 +119,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         {
             SyncInbox.Clear(_incoming);
             _pending.Clear();
+            _awaitingHeightReadback = false;
+            _commitFlipFailureLogged = false;
         }
 
         protected override void OnUpdate()
@@ -132,17 +138,42 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         /// <summary>
         /// True while remote terrain work is still queued. Read once per frame by
         /// <see cref="SyncRealizeSystem"/> to hold new net/object realizes until the surface matches
-        /// the sender's. Own-origin echoes at the queue head (the host loops its own sends back) are
-        /// not backlog - they never realize here.
+        /// the sender's. Own-origin echoes may defer one frame until they are discarded; treating any
+        /// queued command as backlog prevents a remote edit hidden behind that echo from being missed.
         /// </summary>
         public bool HasBacklog()
         {
+            if (_awaitingHeightReadback) return true;
             if (_pending.Count > 0) return true;
-            SimulationCommandMessage head;
-            if (!_incoming.TryPeek(out head)) return false;
-            MultiplayerService service = Mod.Service;
-            if (service != null && head.OriginPlayerId == service.Session.LocalPlayerId) return false;
-            return true;
+            return !_incoming.IsEmpty;
+        }
+
+        /// <summary>
+        /// Complete the asynchronous heightmap readback from the previous remote brush pass before
+        /// dependent roads and objects are allowed to sample terrain. Queue drain alone is not a
+        /// terrain-consistency barrier: the CPU height array can still contain the pre-edit surface.
+        /// </summary>
+        public void CompletePendingHeightReadback()
+        {
+            if (!_awaitingHeightReadback || _terrainSystem == null) return;
+            try
+            {
+                // A batch contains many ApplyBrush calls. If the first call already started a GPU
+                // request, later samples mark that request out-of-date; completing it immediately
+                // schedules one consolidated follow-up request. The second call waits that follow-up
+                // (or is a cheap no-op when there was only one request).
+                _terrainSystem.GetHeightData(waitForPending: true);
+                _terrainSystem.GetHeightData(waitForPending: true);
+                _awaitingHeightReadback = false;
+                Diagnostics.FlightRecorder.Note("terrain height readback complete");
+            }
+            catch (System.Exception ex)
+            {
+                // Do not wedge all subsequent construction forever if a future game build changes
+                // the readback contract. The next authoritative world sync remains the repair path.
+                _awaitingHeightReadback = false;
+                Mod.log.Warn("[MP] TerrainSync: height readback barrier failed: " + ex.Message);
+            }
         }
 
         /// <summary>Called by <see cref="SyncRealizeSystem"/> during ToolUpdate (see there for why).</summary>
@@ -157,7 +188,10 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             // Refill the pending list from the inbox (bounded scan), then apply from it.
             int scanned = 0;
             SimulationCommandMessage message;
-            while (_pending.Count < MaxPendingSamples && scanned < MaxDecodePerFrame
+            // Leave room for a maximum-size command before dequeueing it. This preserves every
+            // sample in that command instead of accepting a prefix and silently dropping its tail.
+            while (_pending.Count <= MaxPendingSamples - TerrainBrushCommand.MaxSamples &&
+                   scanned < MaxDecodePerFrame
                    && _incoming.TryDequeue(out message))
             {
                 scanned++;
@@ -176,7 +210,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 if (!EntityManager.HasComponent<TerraformingData>(tool)) continue;
                 if (!EntityManager.HasComponent<BrushData>(brush) || !EntityManager.HasBuffer<BrushCell>(brush)) continue;
 
-                for (int i = 0; i < command.Samples.Length && _pending.Count < MaxPendingSamples; i++)
+                for (int i = 0; i < command.Samples.Length; i++)
                     _pending.Add((tool, brush, command.Samples[i]));
             }
 
@@ -190,47 +224,104 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             // then materialise up to the budget and drive the pass this same frame.
             _netSync.PrepareDefinitionFrame();
 
-            int applied = 0;
-            while (applied < MaxApplyPerFrame && _pending.Count > 0)
+            int candidateCount = System.Math.Min(MaxApplyPerFrame, _pending.Count);
+            var created = new List<Entity>(candidateCount);
+            bool changesHeight = false;
+            try
             {
-                var item = _pending[0];
-                _pending.RemoveAt(0);
-                CreateRemoteBrush(item.tool, item.brush, item.sample);
-                applied++;
+                for (int i = 0; i < candidateCount; i++)
+                {
+                    var item = _pending[i];
+                    bool sampleChangesHeight;
+                    created.Add(CreateRemoteBrush(item.tool, item.brush, item.sample,
+                        out sampleChangesHeight));
+                    changesHeight |= sampleChangesHeight;
+                }
+            }
+            catch (System.Exception ex)
+            {
+                DestroyUncommittedBrushes(created);
+                Mod.log.Warn("[MP] TerrainSync: could not create remote brush batch: " + ex.Message);
+                return;
             }
 
-            if (applied > 0)
+            bool committed = false;
+            string commitError = null;
+            try { committed = created.Count > 0 && _netSync.CommitAuxiliaryTempsNow(); }
+            catch (System.Exception ex)
             {
-                _netSync.CommitAuxiliaryTempsNow();
-                _diagRealized += applied;
-                Diagnostics.FlightRecorder.Note("terrain realize n=" + applied +
-                    (_pending.Count > 0 ? " held=" + _pending.Count : ""));
+                commitError = ex.Message;
+            }
+
+            if (!committed)
+            {
+                DestroyUncommittedBrushes(created);
+                if (!_commitFlipFailureLogged)
+                {
+                    _commitFlipFailureLogged = true;
+                    Mod.log.Warn("[MP] TerrainSync: ApplyTool unavailable; remote samples remain queued" +
+                                 (string.IsNullOrEmpty(commitError) ? "." : ": " + commitError));
+                }
+                return;
+            }
+
+            _commitFlipFailureLogged = false;
+            _pending.RemoveRange(0, created.Count);
+            if (changesHeight) _awaitingHeightReadback = true;
+            _diagRealized += created.Count;
+            Diagnostics.FlightRecorder.Note("terrain realize n=" + created.Count +
+                (_pending.Count > 0 ? " held=" + _pending.Count : ""));
+        }
+
+        private Entity CreateRemoteBrush(Entity tool, Entity brushPrefab, TerrainBrushCommand.Sample s,
+            out bool changesHeight)
+        {
+            TerraformingData toolData = EntityManager.GetComponentData<TerraformingData>(tool);
+            changesHeight = toolData.m_Target == TerraformingTarget.Height;
+            float adjustedStrength = s.Strength;
+            if (changesHeight)
+            {
+                float receiverDelta = UnityEngine.Time.unscaledDeltaTime;
+                if (receiverDelta <= 0f || float.IsNaN(receiverDelta) || float.IsInfinity(receiverDelta))
+                    receiverDelta = 0.0001f;
+                adjustedStrength = s.Strength * s.DeltaTime / receiverDelta;
+            }
+            Entity brush = EntityManager.CreateEntity();
+            try
+            {
+                EntityManager.AddComponentData(brush, new Brush
+                {
+                    m_Tool = tool,
+                    m_Position = new float3(s.PosX, s.PosY, s.PosZ),
+                    m_Target = new float3(s.TargetX, s.TargetY, s.TargetZ),
+                    m_Start = new float3(s.StartX, s.StartY, s.StartZ),
+                    m_Size = s.Size,
+                    m_Angle = s.Angle,
+                    m_Strength = adjustedStrength,
+                    m_Opacity = s.Opacity,
+                });
+                EntityManager.AddComponentData(brush, new PrefabRef { m_Prefab = brushPrefab });
+                // A real applied brush is Temp + Brush; Essential|Create is the non-delete recipe
+                // GenerateBrushesSystem stamps. ApplyBrushesSystem consumes it and adds Applied+Deleted.
+                EntityManager.AddComponentData(brush, new Temp
+                {
+                    m_Original = Entity.Null,
+                    m_Flags = TempFlags.Essential | TempFlags.Create,
+                });
+                EntityManager.AddComponent<RemoteTerrainBrush>(brush);
+                return brush;
+            }
+            catch
+            {
+                if (EntityManager.Exists(brush)) EntityManager.DestroyEntity(brush);
+                throw;
             }
         }
 
-        private void CreateRemoteBrush(Entity tool, Entity brushPrefab, TerrainBrushCommand.Sample s)
+        private void DestroyUncommittedBrushes(List<Entity> brushes)
         {
-            Entity brush = EntityManager.CreateEntity();
-            EntityManager.AddComponentData(brush, new Brush
-            {
-                m_Tool = tool,
-                m_Position = new float3(s.PosX, s.PosY, s.PosZ),
-                m_Target = new float3(s.TargetX, s.TargetY, s.TargetZ),
-                m_Start = new float3(s.StartX, s.StartY, s.StartZ),
-                m_Size = s.Size,
-                m_Angle = s.Angle,
-                m_Strength = s.Strength,
-                m_Opacity = s.Opacity,
-            });
-            EntityManager.AddComponentData(brush, new PrefabRef { m_Prefab = brushPrefab });
-            // A real applied brush is Temp + Brush; Essential|Create is the non-delete recipe
-            // GenerateBrushesSystem stamps. ApplyBrushesSystem consumes it and adds Applied+Deleted.
-            EntityManager.AddComponentData(brush, new Temp
-            {
-                m_Original = Entity.Null,
-                m_Flags = TempFlags.Essential | TempFlags.Create,
-            });
-            EntityManager.AddComponent<RemoteTerrainBrush>(brush);
+            for (int i = 0; i < brushes.Count; i++)
+                if (EntityManager.Exists(brushes[i])) EntityManager.DestroyEntity(brushes[i]);
         }
 
         private void CaptureBrushes(MultiplayerSession session)
@@ -243,6 +334,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 // Batch consecutive samples that share a tool+brush into one command (a fast small
                 // brush drag applies many samples per frame).
                 var batches = new Dictionary<(string tool, string brush), List<TerrainBrushCommand.Sample>>();
+                float sourceDelta = UnityEngine.Time.unscaledDeltaTime;
+                if (sourceDelta <= 0f || sourceDelta > 10f ||
+                    float.IsNaN(sourceDelta) || float.IsInfinity(sourceDelta)) return;
                 for (int i = 0; i < entities.Length; i++)
                 {
                     Brush brush = EntityManager.GetComponentData<Brush>(entities[i]);
@@ -273,6 +367,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                         Angle = brush.m_Angle,
                         Strength = brush.m_Strength,
                         Opacity = brush.m_Opacity,
+                        DeltaTime = sourceDelta,
                     });
                 }
 

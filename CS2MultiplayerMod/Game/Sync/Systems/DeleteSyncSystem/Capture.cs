@@ -86,6 +86,15 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
                     Bezier4x3 b = EntityManager.GetComponentData<Curve>(entities[i]).m_Bezier;
 
+                    // A committing Temp transaction named this exact edge as an original immediately
+                    // before Apply. Its deletion is already represented by that placement/delete/
+                    // replace command, so it must not become a second bulldozer command. Geometry
+                    // matching below remains the fallback for uncaptured and simulation-driven work.
+                    if (_netSync != null && _netSync.ConsumeCommittedNetSideEffect(entities[i], now))
+                    {
+                        continue;
+                    }
+
                     // A node-reduction victim, not a bulldoze — a same-prefab neighbour was extended
                     // over this edge's span this same frame. The receiver's own commit reproduces the
                     // merge, so this delete stays local.

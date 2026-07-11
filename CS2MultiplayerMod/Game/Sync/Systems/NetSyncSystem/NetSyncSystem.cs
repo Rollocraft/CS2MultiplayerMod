@@ -21,8 +21,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
     /// so the game's net systems lay the actual nodes and edges.
     ///
     /// The same origin-skip + <see cref="ReplicationGuard"/> logic as objects prevents
-    /// echo loops. Realized geometry may snap/merge differently than the source - exact
-    /// fidelity is an in-game tuning item.
+    /// echo loops. Local tool definitions are captured before their endpoint/split/elevation intent
+    /// is reduced to final geometry; portable anchors resolve the equivalent local entities.
     ///
     /// This class is split across files by responsibility: this file holds state + lifecycle +
     /// the receive Observer; <c>.Apply</c> the commit/drain orchestration; <c>.Capture</c> the
@@ -32,8 +32,13 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
     /// </summary>
     public partial class NetSyncSystem : GameSystemBase
     {
+        private const int NetInboxCap = 4096;
         private readonly ConcurrentQueue<SimulationCommandMessage> _incoming =
             new ConcurrentQueue<SimulationCommandMessage>();
+        // Commands deferred from the front of a drained batch must remain ahead of messages that
+        // were still in the concurrent inbox. Only the simulation thread touches this prefix list.
+        private readonly List<SimulationCommandMessage> _remoteDeferred =
+            new List<SimulationCommandMessage>();
         private readonly ReplicationGuard _guard = new ReplicationGuard();
 
         private readonly Dictionary<string, int> _diag = new Dictionary<string, int>();
@@ -46,6 +51,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
         private EntityQuery _existingNodes;
         private EntityQuery _existingEdges;
         private EntityQuery _ownedNodes;
+        private EntityQuery _ownedEdges;
         private EntityQuery _updatedEdges;
         private EntityQuery _deletedEdges;
         private Observer _observer;
@@ -62,9 +68,11 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
         // never invalidate.
         private struct NetPrefabInfo
         {
+            public Layer RequiredLayers;
             public Layer ConnectLayers;
             public float ElevMin, ElevMax;
             public float HalfWidth;
+            public float SnapDistance;
             public bool Placeable;
         }
         private readonly Dictionary<Entity, NetPrefabInfo> _netInfoCache = new Dictionary<Entity, NetPrefabInfo>();
@@ -198,8 +206,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
         // courses, bulldoze targets and free-standing object ghosts. If the player's click lands
         // inside the armed window (it would apply nothing - the definitions that were to become its
         // committing Temps are gone) these are re-encoded as ordinary sync commands instead.
-        private readonly List<(Entity prefab, Colossal.Mathematics.Bezier4x3 curve, float length)> _stashCourses =
-            new List<(Entity, Colossal.Mathematics.Bezier4x3, float)>();
+        private readonly List<NetPlacementCommand> _stashCourses = new List<NetPlacementCommand>();
         private readonly List<Entity> _stashBulldozes = new List<Entity>();
         private readonly List<(Entity prefab, Unity.Mathematics.float3 position, Unity.Mathematics.quaternion rotation)> _stashObjects =
             new List<(Entity, Unity.Mathematics.float3, Unity.Mathematics.quaternion)>();
@@ -217,6 +224,48 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
         // Consecutive expired-window replays (reset by any successful commit). A batch whose
         // definitions the game always rejects would otherwise rebuild forever.
         private int _expiryReplays;
+
+        // The active net tool's latest native definitions, observed after ToolOutputBarrier. They
+        // are the definitions that produced the standing preview Temps and therefore describe the
+        // course committed by the next Apply frame. Capturing here preserves target/split/elevation
+        // intent that no longer exists on the final Created edges.
+        private readonly List<NetPlacementCommand> _cachedLocalCourses = new List<NetPlacementCommand>();
+        private long _nextLocalNetOperationId = 1;
+        private int _nativeApplyCapturedFrame = -1;
+
+        // Exact originals referenced by a committing placement's Temps. If one is Deleted by the
+        // resulting split/delete/replace, DeleteSync must not broadcast that lifecycle output as a
+        // second command. The short expiry covers the apply and its immediate network aftermath.
+        private readonly Dictionary<Entity, long> _committedNetSideEffects = new Dictionary<Entity, long>();
+
+        private struct NativeTargetRetryKey : System.IEquatable<NativeTargetRetryKey>
+        {
+            public int Origin;
+            public long Operation;
+            public short Course;
+
+            public bool Equals(NativeTargetRetryKey other) =>
+                Origin == other.Origin && Operation == other.Operation && Course == other.Course;
+            public override bool Equals(object obj) => obj is NativeTargetRetryKey && Equals((NativeTargetRetryKey)obj);
+            public override int GetHashCode()
+            {
+                unchecked
+                {
+                    int hash = Origin;
+                    hash = hash * 397 ^ Operation.GetHashCode();
+                    hash = hash * 397 ^ Course;
+                    return hash;
+                }
+            }
+        }
+
+        // A native target may be created by an earlier command whose geometry is not queryable yet.
+        // Wait for it instead of silently downgrading the endpoint to free ground; after the bounded
+        // window, fall back to geometric classification so a permanently divergent world cannot
+        // wedge every later placement.
+        private const long NativeTargetRetryWindowMs = 10000;
+        private readonly Dictionary<NativeTargetRetryKey, long> _nativeTargetDeadlines =
+            new Dictionary<NativeTargetRetryKey, long>();
 
         protected override void OnCreate()
         {
@@ -288,7 +337,12 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
             // Read-only: standalone edges, used to classify an incoming endpoint as a mid-span tap.
             _existingEdges = GetEntityQuery(new EntityQueryDesc
             {
-                All = new[] { ComponentType.ReadOnly<Edge>(), ComponentType.ReadOnly<Curve>() },
+                All = new[]
+                {
+                    ComponentType.ReadOnly<Edge>(),
+                    ComponentType.ReadOnly<Curve>(),
+                    ComponentType.ReadOnly<PrefabRef>(),
+                },
                 None = new[]
                 {
                     ComponentType.ReadOnly<Temp>(),
@@ -305,6 +359,24 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                 All = new[]
                 {
                     ComponentType.ReadOnly<Node>(),
+                    ComponentType.ReadOnly<Owner>(),
+                    ComponentType.ReadOnly<PrefabRef>(),
+                },
+                None = new[]
+                {
+                    ComponentType.ReadOnly<Temp>(),
+                    ComponentType.ReadOnly<Deleted>(),
+                },
+            });
+
+            // Owned connector edges are kept out of all fallback searches. Captured native intent
+            // may target one explicitly, in which case ResolveIntent searches this separate pool.
+            _ownedEdges = GetEntityQuery(new EntityQueryDesc
+            {
+                All = new[]
+                {
+                    ComponentType.ReadOnly<Edge>(),
+                    ComponentType.ReadOnly<Curve>(),
                     ComponentType.ReadOnly<Owner>(),
                     ComponentType.ReadOnly<PrefabRef>(),
                 },
@@ -348,13 +420,27 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                 _observer = new Observer(_incoming);
                 Mod.Service.Session.AddObserver(_observer);
             }
+            SyncInbox.RegisterDrain(DrainNetQueues);
         }
 
         protected override void OnDestroy()
         {
+            SyncInbox.UnregisterDrain(DrainNetQueues);
             if (_observer != null && Mod.Service != null)
                 Mod.Service.Session.RemoveObserver(_observer);
             base.OnDestroy();
+        }
+
+        private void DrainNetQueues()
+        {
+            SyncInbox.Clear(_incoming);
+            _remoteDeferred.Clear();
+            _localReplays.Clear();
+            _deferredSpanPieces.Clear();
+            _cachedLocalCourses.Clear();
+            _committedNetSideEffects.Clear();
+            _nativeTargetDeadlines.Clear();
+            _recentRealizedSpans.Clear();
         }
 
         protected override void OnUpdate()
@@ -366,11 +452,15 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
             if (!service.GameplaySyncReady)
             {
                 if (_deferredSpanPieces.Count > 0) _deferredSpanPieces.Clear();
+                _cachedLocalCourses.Clear();
+                _committedNetSideEffects.Clear();
+                _nativeTargetDeadlines.Clear();
                 return;
             }
 
             long now = service.NowMs;
             _guard.Prune(now);
+            PruneCommittedNetSideEffects(now);
 
             // Sample net-edge lifecycle tags every frame (peak over the 5 s window). Runs at
             // ModificationEnd where the one-frame Created/Updated/Deleted tags are still alive.
@@ -391,7 +481,11 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
             public override void OnCommandReceived(SimulationCommandMessage command)
             {
                 if (command.CommandId != NetPlacementCommand.Id) return;
-                SyncInbox.Push(_sink, command);
+                if (command.Body == null || command.Body.Length > NetPlacementCommand.MaxEncodedBytes) return;
+                // Remote Temp work intentionally waits while a local interactive tool is active.
+                // Keep a larger, still-hard-bounded road inbox so a long local drawing gesture does
+                // not immediately shed a partner's reliable ordered course stream.
+                SyncInbox.Push(_sink, command, NetInboxCap);
                 // Network thread: log on RECEIPT so a missing realize can be told apart from a missing
                 // send. The body is the encoded Bézier; we don't decode here (cheap + thread-safe).
             }

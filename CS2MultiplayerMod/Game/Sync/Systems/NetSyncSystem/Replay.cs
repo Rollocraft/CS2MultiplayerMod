@@ -56,7 +56,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                 NetCourse course = EntityManager.GetComponentData<NetCourse>(definition);
                 if (course.m_Length < 1f) return;
                 if (_stashCourses.Count >= MaxStashPerKind) return;
-                _stashCourses.Add((def.m_Prefab, course.m_Curve, course.m_Length));
+                NetPlacementCommand command = CaptureDefinitionCommand(def, course);
+                if (command != null) _stashCourses.Add(command);
                 return;
             }
 
@@ -99,20 +100,14 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
 
             int courses = 0, deletes = 0, objects = 0;
 
+            long operationId = _nextLocalNetOperationId++;
+            if (_nextLocalNetOperationId <= 0) _nextLocalNetOperationId = 1;
             for (int i = 0; i < _stashCourses.Count; i++)
             {
-                string name = _prefabSystem.GetPrefabName(_stashCourses[i].prefab);
-                if (string.IsNullOrEmpty(name)) continue;
-                Bezier4x3 b = _stashCourses[i].curve;
-                var command = new NetPlacementCommand
-                {
-                    PrefabName = name,
-                    Ax = b.a.x, Ay = b.a.y, Az = b.a.z,
-                    Bx = b.b.x, By = b.b.y, Bz = b.b.z,
-                    Cx = b.c.x, Cy = b.c.y, Cz = b.c.z,
-                    Dx = b.d.x, Dy = b.d.y, Dz = b.d.z,
-                    Length = _stashCourses[i].length,
-                };
+                NetPlacementCommand command = _stashCourses[i];
+                command.OperationId = operationId;
+                command.CourseIndex = (short)i;
+                command.CourseCount = (short)_stashCourses.Count;
                 byte[] body = command.Encode();
                 session.SendCommand(0, NetPlacementCommand.Id, body);
                 _localReplays.Add(new SimulationCommandMessage(-1, 0, NetPlacementCommand.Id, body));

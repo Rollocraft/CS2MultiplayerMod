@@ -24,6 +24,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
     /// </summary>
     public partial class DeleteSyncSystem : GameSystemBase
     {
+        public bool DeferNetForTerrain;
         private readonly ConcurrentQueue<SimulationCommandMessage> _incoming =
             new ConcurrentQueue<SimulationCommandMessage>();
         private readonly ReplicationGuard _guard = new ReplicationGuard();
@@ -237,10 +238,10 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             // terrain and node recombination, which a raw Deleted tag skips). That pipeline handles ONE
             // net batch at a time; while a batch is in flight (or on the frame the player's own gesture
             // applies) we leave incoming edge deletes queued and retry next cycle. A build tool merely
-            // being out no longer defers anything — the def-frame hijack (NetSync.PrepareDefinitionFrame)
-            // makes the commit safe with any tool active, so remote bulldozes land live in build mode.
-            // Object deletes (a raw Deleted tag on a real entity) always proceed.
-            bool netBusy = _netSync == null || !_netSync.CanBuildDefinitions;
+            // A net delete uses the global Temp/ApplyTool transaction, so it waits for terrain and
+            // for the default-tool window just like placement. Object deletes (a raw Deleted tag on
+            // a real entity) always proceed.
+            bool netBusy = DeferNetForTerrain || _netSync == null || !_netSync.CanBuildDefinitions;
             long now = service.NowMs;
             long freshDeadline = now + DeleteRetryWindowMs;
             List<(ObjectDeleteCommand cmd, long deadline)> objects = null;

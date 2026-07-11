@@ -129,6 +129,10 @@ namespace CS2MultiplayerMod
             // Realization must run at ToolUpdate: definition entities are consumed at
             // Modification1 and their Updated tag is stripped at Cleanup, so a definition
             // spawned at ModificationEnd is never realized (see SyncRealizeSystem).
+            // Complete remote terrain GPU readback at the very start of ToolUpdate, before a local
+            // road/object tool can generate a preview from stale CPU heights.
+            updateSystem.UpdateBefore<Game.Sync.Systems.TerrainReadbackBarrierSystem>(
+                SystemUpdatePhase.ToolUpdate);
             updateSystem.UpdateAt<Game.Sync.Systems.SyncRealizeSystem>(SystemUpdatePhase.ToolUpdate);
             // After ToolOutputBarrier: tools record their definitions through that end-of-phase
             // buffer, so this is the first (and only) slot where they exist as entities but have

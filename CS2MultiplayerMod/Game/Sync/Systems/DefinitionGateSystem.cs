@@ -55,13 +55,21 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         {
             MultiplayerService service = Mod.Service;
             if (service == null || !service.GameplaySyncReady) return;
-            if (_netSync == null || !_netSync.HasArmedNetCommit) return;
-            if (_foreignDefinitions.IsEmptyIgnoreFilter) return;
+            if (_netSync == null) return;
 
             int killed = 0;
-            NativeArray<Entity> definitions = _foreignDefinitions.ToEntityArray(Allocator.Temp);
+            NativeArray<Entity> definitions = _foreignDefinitions.IsEmptyIgnoreFilter
+                ? default(NativeArray<Entity>)
+                : _foreignDefinitions.ToEntityArray(Allocator.Temp);
             try
             {
+                // Cache the active net tool's exact native course intent on every frame. This runs
+                // before the optional armed-window gate below and is also needed when no commit is
+                // armed: the next Apply frame publishes this preview rather than inferring from
+                // its final Created edges.
+                _netSync.ObserveLocalNetDefinitions(definitions);
+
+                if (!_netSync.HasArmedNetCommit) return;
                 for (int i = 0; i < definitions.Length; i++)
                 {
                     CreationDefinition def =
@@ -74,7 +82,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             }
             finally
             {
-                definitions.Dispose();
+                if (definitions.IsCreated) definitions.Dispose();
             }
 
             if (killed > 0)
