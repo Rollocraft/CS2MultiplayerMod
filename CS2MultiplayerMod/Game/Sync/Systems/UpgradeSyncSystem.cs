@@ -27,6 +27,15 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             new ConcurrentQueue<SimulationCommandMessage>();
         private readonly ReplicationGuard _guard = new ReplicationGuard();
 
+        /// <summary>An upgrade can outrun the building it attaches to; hold it until the owner exists.</summary>
+        private const long OwnerRetryWindowMs = 10000;
+
+        /// <summary>Ceiling on the wait list, so a peer can never grow it without bound.</summary>
+        private const int MaxPendingOwners = 256;
+
+        private readonly System.Collections.Generic.List<(UpgradePlacementCommand cmd, int origin, long deadline)> _ownerRetry =
+            new System.Collections.Generic.List<(UpgradePlacementCommand, int, long)>();
+
         private PrefabSystem _prefabSystem;
         private PrefabIndex _prefabIndex;
         private EntityQuery _createdUpgrades;
@@ -140,6 +149,13 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     Entity owner = EntityManager.GetComponentData<Owner>(entity).m_Owner;
                     if (!EntityManager.HasComponent<PrefabRef>(owner) ||
                         !EntityManager.HasComponent<Transform>(owner)) continue;
+
+                    // An owner Created THIS frame is a brand-new building whose integral sub-objects
+                    // (a helipad's airspace, a fire station's parking) auto-spawn WITH it — not a
+                    // player-applied upgrade. Replicating them re-runs the spawn on the receiver
+                    // (which already made its own with the building) and echoes a duplicate. Only a
+                    // sub-object attached to a PRE-EXISTING building is a real upgrade.
+                    if (EntityManager.HasComponent<Created>(owner)) continue;
                     string ownerName = _prefabSystem.GetPrefabName(EntityManager.GetComponentData<PrefabRef>(owner).m_Prefab);
                     if (string.IsNullOrEmpty(ownerName)) continue;
                     float3 ownerPos = EntityManager.GetComponentData<Transform>(owner).m_Position;
@@ -165,6 +181,20 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
         private void RealizeIncoming(MultiplayerSession session, long now)
         {
+            // Retry upgrades whose owner building was missing last cycle before draining new ones.
+            for (int i = _ownerRetry.Count - 1; i >= 0; i--)
+            {
+                var pending = _ownerRetry[i];
+                if (TryRealize(pending.cmd, pending.origin, now)) { _ownerRetry.RemoveAt(i); continue; }
+                if (now >= pending.deadline)
+                {
+                    _ownerRetry.RemoveAt(i);
+                    Mod.log.Warn("[MP] UpgradeSync realize: no local '" + pending.cmd.OwnerPrefabName +
+                                 "' after " + (OwnerRetryWindowMs / 1000) + " s to attach '" +
+                                 pending.cmd.PrefabName + "'; dropping.");
+                }
+            }
+
             SimulationCommandMessage message;
             while (_incoming.TryDequeue(out message))
             {
@@ -174,42 +204,50 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 try { command = UpgradePlacementCommand.Decode(message.Body); }
                 catch (System.Exception ex) { Mod.log.Warn("[MP] UpgradeSync: dropping malformed command: " + ex.Message); continue; }
 
-                Entity prefab, ownerPrefab;
-                if (!_prefabIndex.TryResolve(command.PrefabName, out prefab) ||
-                    !_prefabIndex.TryResolve(command.OwnerPrefabName, out ownerPrefab))
-                {
-                    Mod.log.Warn("[MP] UpgradeSync realize: unknown prefab '" + command.PrefabName +
-                                 "'/'" + command.OwnerPrefabName + "'; skipping.");
-                    continue;
-                }
+                if (TryRealize(command, message.OriginPlayerId, now)) continue;
 
-                var ownerPos = new float3(command.OwnerX, command.OwnerY, command.OwnerZ);
-                Entity owner = FindOwner(ownerPrefab, ownerPos);
-                if (owner == Entity.Null)
-                {
-                    Mod.log.Warn("[MP] UpgradeSync realize: no local '" + command.OwnerPrefabName +
-                                 "' near (" + ownerPos.x.ToString("F0") + "," + ownerPos.z.ToString("F0") +
-                                 ") to attach '" + command.PrefabName + "' to; skipping.");
-                    continue;
-                }
-
-                var position = new float3(command.PosX, command.PosY, command.PosZ);
-                var rotation = new quaternion(command.RotX, command.RotY, command.RotZ, command.RotW);
-
-                _guard.Mark(UpgradeKey(command.PrefabName, position), now);
-                try
-                {
-                    RealizeUpgrade(prefab, owner, position, rotation,
-                        EntityManager.GetComponentData<Transform>(owner));
-                    ConstructionCharger.ChargeUpgrade(EntityManager, prefab, command.PrefabName);
-                    Mod.Verbose("[MP] UpgradeSync realize: attached '" + command.PrefabName + "' to '" +
-                                 command.OwnerPrefabName + "' from player " + message.OriginPlayerId + ".");
-                }
-                catch (System.Exception ex)
-                {
-                    Mod.log.Error("[MP] UpgradeSync realize FAILED for '" + command.PrefabName + "': " + ex);
-                }
+                // Its owner building may simply not have realized here yet — wait for it.
+                if (_ownerRetry.Count >= MaxPendingOwners) _ownerRetry.RemoveAt(0);
+                _ownerRetry.Add((command, message.OriginPlayerId, now + OwnerRetryWindowMs));
             }
+        }
+
+        /// <summary>
+        /// Attempt one upgrade; false when its owner building is not (yet) local, so the caller can
+        /// retry. An unknown prefab is a hard drop (returns true — nothing to wait for).
+        /// </summary>
+        private bool TryRealize(UpgradePlacementCommand command, int origin, long now)
+        {
+            Entity prefab, ownerPrefab;
+            if (!_prefabIndex.TryResolve(command.PrefabName, out prefab) ||
+                !_prefabIndex.TryResolve(command.OwnerPrefabName, out ownerPrefab))
+            {
+                Mod.log.Warn("[MP] UpgradeSync realize: unknown prefab '" + command.PrefabName +
+                             "'/'" + command.OwnerPrefabName + "'; skipping.");
+                return true;
+            }
+
+            var ownerPos = new float3(command.OwnerX, command.OwnerY, command.OwnerZ);
+            Entity owner = FindOwner(ownerPrefab, ownerPos);
+            if (owner == Entity.Null) return false;
+
+            var position = new float3(command.PosX, command.PosY, command.PosZ);
+            var rotation = new quaternion(command.RotX, command.RotY, command.RotZ, command.RotW);
+
+            _guard.Mark(UpgradeKey(command.PrefabName, position), now);
+            try
+            {
+                RealizeUpgrade(prefab, owner, position, rotation,
+                    EntityManager.GetComponentData<Transform>(owner));
+                ConstructionCharger.ChargeUpgrade(EntityManager, prefab, command.PrefabName);
+                Mod.Verbose("[MP] UpgradeSync realize: attached '" + command.PrefabName + "' to '" +
+                             command.OwnerPrefabName + "' from player " + origin + ".");
+            }
+            catch (System.Exception ex)
+            {
+                Mod.log.Error("[MP] UpgradeSync realize FAILED for '" + command.PrefabName + "': " + ex);
+            }
+            return true;
         }
 
         private Entity FindOwner(Entity ownerPrefab, float3 ownerPos)

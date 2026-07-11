@@ -93,11 +93,25 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             while (_joinTargets.TryDequeue(out joined))
                 if (!_targets.Contains(joined)) _targets.Add(joined);
 
-            if (_lastResyncMs < 0) _lastResyncMs = now; // arm the interval timer on first run
-            else if (HasPeers(session) && now - _lastResyncMs >= service.ResyncIntervalMs && !_targets.Contains(ConnectionId.None))
+            // Slide the interval timer while hosting alone: an idle host that outlived the interval
+            // must NOT fire an instantly-due periodic broadcast the moment the first client joins —
+            // that streamed the whole world twice back-to-back (the newcomer's own stream plus the
+            // due broadcast), and the client reloaded the map on the second copy, wiping whatever
+            // synced in between. With no handshaked peer the timer keeps resetting, so the first
+            // real interval only elapses once someone is actually connected.
+            if (_lastResyncMs < 0 || !HasPeers(session)) _lastResyncMs = now;
+            else if (now - _lastResyncMs >= service.ResyncIntervalMs && !_targets.Contains(ConnectionId.None))
                 _targets.Add(ConnectionId.None);
 
             if (_targets.Count == 0) return;
+
+            // A broadcast already reaches everyone, so drop any individual join targets riding in the
+            // same save — otherwise those clients receive the blob twice.
+            if (_targets.Contains(ConnectionId.None))
+            {
+                _targets.Clear();
+                _targets.Add(ConnectionId.None);
+            }
 
             StartSave(service);
         }

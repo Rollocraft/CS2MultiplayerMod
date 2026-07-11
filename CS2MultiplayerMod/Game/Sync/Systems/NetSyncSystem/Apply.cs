@@ -29,10 +29,21 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
         public void BeginRealizeFrame()
         {
             _prepDoneThisFrame = false;
+            _realizeFrame++;
             // Last frame's commit-frame capture skip has served its purpose (the one-frame
             // Created tags it targeted are gone); a commit this frame re-sets it below.
             _suppressCaptureThisFrame = false;
         }
+
+        /// <summary>
+        /// True on frames with an armed, not-yet-flipped commit - the frames where
+        /// <see cref="DefinitionGateSystem"/> must destroy the tool's freshly buffered definitions
+        /// (they would otherwise materialise as preview Temps inside the commit window and the flip
+        /// would place the player's un-applied gesture). The flip branch clears the flag mid-phase,
+        /// before the gate runs, so the commit frame itself is naturally excluded and the preview
+        /// returns the very frame the batch commits.
+        /// </summary>
+        public bool HasArmedNetCommit => _pendingApply;
 
         /// <summary>
         /// Called by <see cref="SyncRealizeSystem"/> during the ToolUpdate phase, where the
@@ -108,6 +119,10 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                     _drainArmTick = System.Environment.TickCount;
                     _drainFrames = 0;
                     Diagnostics.FlightRecorder.Note("net commit ride-along (temps=" + count + ")");
+                    // The click itself applies NOTHING of the player's: the gate destroyed the very
+                    // definitions that were to become its committing Temps one frame ago. Rebuild the
+                    // gesture from the gate's stash as ordinary sync commands (see .Replay).
+                    ReplaySwallowedClick();
                 }
                 else if (count > 0 && TrySetApplyModeApply())
                 {
@@ -161,8 +176,14 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                     // Still waiting: Temps not materialised yet (or a click frame with none of ours
                     // present). While a build tool is out, keep hijacking each waiting frame so the
                     // tool's fresh definitions can't materialise into the pending window and pollute
-                    // the eventual commit.
-                    if (count == 0 && !toolIdle) PrepareDefinitionFrame();
+                    // the eventual commit - EXCEPT on the frame the player's own click applies:
+                    // wiping then swallows the click a second way (the preview it was to commit is
+                    // destroyed under it). Replay the stashed gesture instead and leave the frame be.
+                    if (count == 0 && !toolIdle)
+                    {
+                        if (toolMode == global::Game.Tools.ApplyMode.Apply) ReplaySwallowedClick();
+                        else PrepareDefinitionFrame();
+                    }
                 }
             }
             // (A2) Wait for a committed batch's Temp entities to drain (become real) before building the
@@ -486,5 +507,27 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
             }
             if (_forceUpdateField != null) _forceUpdateField.SetValue(tool, true);
         }
+
+        /// <summary>
+        /// <see cref="DefinitionGateSystem"/>'s hook: after it destroys the tool's buffered
+        /// definitions on an armed frame, the tool must regenerate its gesture next update.
+        /// </summary>
+        public void ForceActiveToolUpdate()
+        {
+            global::Game.Tools.ToolBaseSystem tool = _toolSystem != null ? _toolSystem.activeTool : null;
+            if (tool != null && !(tool is global::Game.Tools.DefaultToolSystem)) TryForceToolUpdate(tool);
+        }
+
+        /// <summary>
+        /// Commit auxiliary Temps a sibling created THIS frame (terrain brush samples, which are
+        /// real <c>Temp + Brush</c> entities the moment they are created, not definitions awaiting a
+        /// Modification pass) by flipping the active tool's applyMode now - so this frame's
+        /// <c>ToolOutputSystem</c> runs the ApplyTool pass and <c>ApplyBrushesSystem</c> applies
+        /// them. Only valid right after the caller created its Temps following
+        /// <see cref="PrepareDefinitionFrame"/>, and only when <see cref="CanBuildDefinitions"/> is
+        /// true (no net batch armed/draining, not the player's own apply frame). Returns whether the
+        /// flip was driven.
+        /// </summary>
+        public bool CommitAuxiliaryTempsNow() => TrySetApplyModeApply();
     }
 }

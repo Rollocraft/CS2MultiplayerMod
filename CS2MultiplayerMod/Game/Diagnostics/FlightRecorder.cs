@@ -18,7 +18,7 @@ namespace CS2MultiplayerMod.Game.Diagnostics
         /// then opens no file and installs no exception hooks, and every <see cref="Note"/>
         /// returns before touching the lock.
         /// </summary>
-        public static bool Enabled = false;
+        public static bool Enabled = true;
 
         private const long RotateBytes = 4L * 1024 * 1024;
         private const int MaxMirroredExceptions = 40;

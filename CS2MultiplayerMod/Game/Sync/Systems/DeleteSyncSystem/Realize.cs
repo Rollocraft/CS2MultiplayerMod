@@ -16,7 +16,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 {
     public partial class DeleteSyncSystem
     {
-        private void RealizeObjectDeletes(List<ObjectDeleteCommand> commands, long now)
+        private void RealizeObjectDeletes(List<(ObjectDeleteCommand cmd, long deadline)> commands, long now)
         {
             // Resolve prefab names once; an unknown prefab (Entity.Null) still allows the
             // building fallback below to match a levelled growable.
@@ -24,13 +24,14 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             for (int i = 0; i < commands.Count; i++)
             {
                 Entity prefab;
-                _prefabIndex.TryResolve(commands[i].PrefabName, out prefab);
-                targets.Add((prefab, new float3(commands[i].PosX, commands[i].PosY, commands[i].PosZ), commands[i].PrefabName));
+                _prefabIndex.TryResolve(commands[i].cmd.PrefabName, out prefab);
+                targets.Add((prefab, new float3(commands[i].cmd.PosX, commands[i].cmd.PosY, commands[i].cmd.PosZ),
+                    commands[i].cmd.PrefabName));
             }
             if (targets.Count == 0) return;
 
             float radiusSq = ObjectMatchRadius * ObjectMatchRadius;
-            int deleted = 0, unmatched = 0;
+            int deleted = 0, waiting = 0, expired = 0;
 
             NativeArray<Entity> entities = _liveObjects.ToEntityArray(Allocator.Temp);
             int n = entities.Length;
@@ -99,7 +100,14 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                         taken.Add(best);
                         deleted++;
                     }
-                    else unmatched++;
+                    else if (now < commands[t].deadline)
+                    {
+                        // Its build may simply not have realized here yet — wait for it.
+                        if (_objectRetry.Count >= MaxPendingDeletes) _objectRetry.RemoveAt(0);
+                        _objectRetry.Add(commands[t]);
+                        waiting++;
+                    }
+                    else expired++;
                 }
             }
             finally
@@ -109,9 +117,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 entities.Dispose();
             }
 
-            if (deleted > 0 || unmatched > 0)
-                Mod.Verbose("[MP] DeleteSync: removed " + deleted + " object(s); " + unmatched +
-                             " without a local match.");
+            if (deleted > 0 || waiting > 0 || expired > 0)
+                Mod.Verbose("[MP] DeleteSync: removed " + deleted + " object(s); " + waiting +
+                             " awaiting a local match, " + expired + " gave up (already gone, or geometry diverged).");
         }
 
         // Endpoint-to-curve match tolerance (metres, XZ). The two cities' roads share the same XZ
@@ -126,14 +134,15 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         // stacked levels differ by a full elevation step.
         private const float EdgeMatchCurveTolY = 4f;
 
-        private void RealizeEdgeDeletes(List<NetDeleteCommand> commands, long now)
+        private void RealizeEdgeDeletes(List<(NetDeleteCommand cmd, long deadline)> commands, long now)
         {
-            var targets = new List<(Entity prefab, Bezier4x3 curve, string name, NetDeleteCommand cmd)>();
+            var targets = new List<(Entity prefab, Bezier4x3 curve, string name, NetDeleteCommand cmd, long deadline)>();
             for (int i = 0; i < commands.Count; i++)
             {
                 Entity prefab;
-                if (_prefabIndex.TryResolve(commands[i].PrefabName, out prefab))
-                    targets.Add((prefab, CurveOf(commands[i]), commands[i].PrefabName, commands[i]));
+                if (_prefabIndex.TryResolve(commands[i].cmd.PrefabName, out prefab))
+                    targets.Add((prefab, CurveOf(commands[i].cmd), commands[i].cmd.PrefabName,
+                        commands[i].cmd, commands[i].deadline));
             }
             if (targets.Count == 0) return;
 
@@ -196,13 +205,88 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 }, "delete n=" + deleted);
             }
 
-            int unmatched = 0;
-            for (int t = 0; t < matched.Length; t++) if (!matched[t]) unmatched++;
-            if (deleted > 0 || unmatched > 0)
+            int waiting = 0, expired = 0;
+            for (int t = 0; t < matched.Length; t++)
             {
-                Mod.Verbose("[MP] DeleteSync: bulldozing " + deleted + " road segment(s); " + unmatched +
-                             " bulldoze(s) matched no local edge (already gone, or geometry diverged).");
+                if (matched[t]) continue;
+                if (now < targets[t].deadline)
+                {
+                    // Its build may simply not have realized here yet — wait for it.
+                    if (_edgeRetry.Count >= MaxPendingDeletes) _edgeRetry.RemoveAt(0);
+                    _edgeRetry.Add((targets[t].cmd, targets[t].deadline));
+                    waiting++;
+                }
+                else expired++;
             }
+            if (deleted > 0 || waiting > 0 || expired > 0)
+            {
+                Mod.Verbose("[MP] DeleteSync: bulldozing " + deleted + " road segment(s); " + waiting +
+                             " awaiting a local match, " + expired +
+                             " gave up (already gone, or geometry diverged).");
+            }
+        }
+
+        /// <summary>
+        /// Realize the local player's swallowed bulldozer clicks (see <see cref="QueueLocalBulldoze"/>).
+        /// Objects delete immediately; edges need the net commit slot, so they wait while a batch is
+        /// in flight. Deliberately NO echo-guard marks anywhere here — the normal capture must
+        /// broadcast these deletes, exactly as if the click had landed.
+        /// </summary>
+        private void RealizeLocalBulldozes()
+        {
+            if (_localBulldozes.Count == 0) return;
+
+            int objectsDone = 0, edgesQueued = 0;
+            List<Entity> edges = null;
+            for (int i = 0; i < _localBulldozes.Count; i++)
+            {
+                Entity target = _localBulldozes[i];
+                if (!EntityManager.Exists(target) || EntityManager.HasComponent<Deleted>(target)) continue;
+                if (EntityManager.HasComponent<Edge>(target))
+                {
+                    if (edges == null || !edges.Contains(target))
+                        (edges ?? (edges = new List<Entity>())).Add(target);
+                    continue;
+                }
+                Entity attachParent = NetAttachment.GetNetParent(EntityManager, target);
+                EntityManager.AddComponent<Deleted>(target);
+                if (attachParent != Entity.Null) NetAttachment.TagParentUpdated(EntityManager, attachParent);
+                objectsDone++;
+            }
+            _localBulldozes.Clear();
+
+            if (edges != null)
+            {
+                // Re-checked live: a remote delete batch may have taken the slot earlier this frame.
+                if (_netSync != null && _netSync.CanBuildDefinitions)
+                {
+                    _netSync.PrepareDefinitionFrame();
+                    List<Entity> armed = null;
+                    for (int i = 0; i < edges.Count; i++)
+                    {
+                        if (!CreateEdgeDeleteDef(edges[i])) continue;
+                        (armed ?? (armed = new List<Entity>())).Add(edges[i]);
+                    }
+                    if (armed != null)
+                    {
+                        edgesQueued = armed.Count;
+                        _netSync.ArmNetCommit(delegate
+                        {
+                            // The originals are still alive on a lost commit; try again next cycle.
+                            for (int i = 0; i < armed.Count; i++) QueueLocalBulldoze(armed[i]);
+                        }, "local delete n=" + armed.Count);
+                    }
+                }
+                else
+                {
+                    // Slot busy — keep them for the next cycle.
+                    _localBulldozes.AddRange(edges);
+                }
+            }
+
+            if (objectsDone > 0 || edgesQueued > 0)
+                Diagnostics.FlightRecorder.Note("local bulldoze replay objects=" + objectsDone +
+                    " edges=" + edgesQueued);
         }
 
         /// <summary>
@@ -273,7 +357,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         /// <paramref name="matched"/>, returns prefab name in <paramref name="name"/>.
         /// </summary>
         private static bool CoveredByBatch(Bezier4x3 live, Entity livePrefab,
-            List<(Entity prefab, Bezier4x3 curve, string name, NetDeleteCommand cmd)> targets,
+            List<(Entity prefab, Bezier4x3 curve, string name, NetDeleteCommand cmd, long deadline)> targets,
             bool[] matched, out string name)
         {
             name = null;
@@ -291,7 +375,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         }
 
         private static int FindCoveringTarget(float3 p,
-            Entity livePrefab, List<(Entity prefab, Bezier4x3 curve, string name, NetDeleteCommand cmd)> targets)
+            Entity livePrefab, List<(Entity prefab, Bezier4x3 curve, string name, NetDeleteCommand cmd, long deadline)> targets)
         {
             for (int t = 0; t < targets.Count; t++)
             {

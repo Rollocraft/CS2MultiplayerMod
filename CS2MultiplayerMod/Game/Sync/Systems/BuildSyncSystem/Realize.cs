@@ -47,15 +47,19 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
         private void RealizeIncoming(MultiplayerSession session, long now)
         {
-            if (_incoming.IsEmpty && _attachRetry.Count == 0) return;
+            if (_incoming.IsEmpty && _attachRetry.Count == 0 && _localReplays.Count == 0) return;
 
             _rzFrameSpawned = 0;
             _rzFrameDuplicates = 0;
             _rzRealizedThisFrame.Clear();
             try
             {
-                RetryPendingAttachments(now);
-                DrainIncoming(session, now);
+                DrainLocalReplays(now);
+                if (!DeferForTerrain)
+                {
+                    RetryPendingAttachments(now);
+                    DrainIncoming(session, now);
+                }
 
                 if (_rzFrameSpawned > 0 || _rzFrameDuplicates > 0)
                 {
@@ -75,6 +79,23 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     _dupPrefabs.Dispose();
                     _dupSnapshotTaken = false;
                 }
+            }
+        }
+
+        /// <summary>
+        /// Realize the local player's swallowed object-tool clicks ahead of remote arrivals. They
+        /// share the per-frame spawn budget; free-standing by construction (the stash filters out
+        /// attached/owned ghosts), so no attach wait applies.
+        /// </summary>
+        private void DrainLocalReplays(long now)
+        {
+            while (_localReplays.Count > 0 && _rzFrameSpawned < MaxRealizePerFrame)
+            {
+                ObjectPlacementCommand command = _localReplays[0];
+                _localReplays.RemoveAt(0);
+                Entity prefab;
+                if (!_prefabIndex.TryResolve(command.PrefabName, out prefab)) continue;
+                RealizeCommand(command, prefab, -1, now);
             }
         }
 

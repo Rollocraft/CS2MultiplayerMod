@@ -27,7 +27,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
     /// This class is split across files by responsibility: this file holds state + lifecycle +
     /// the receive Observer; <c>.Apply</c> the commit/drain orchestration; <c>.Capture</c> the
     /// host-side detection + diagnostics; <c>.Realize</c> the batch builder + classification;
-    /// <c>.Course</c> the NetCourse construction + endpoint geometry + self-test.
+    /// <c>.Course</c> the NetCourse construction + endpoint geometry + self-test; <c>.Replay</c>
+    /// the click stash (gestures the definition gate killed) + swallowed-click replay.
     /// </summary>
     public partial class NetSyncSystem : GameSystemBase
     {
@@ -56,12 +57,14 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
         private global::Game.Simulation.WaterSystem _waterSystem;
 
         // Per-net-prefab facts consulted for every course endpoint (connect layers for the utility
-        // connector snap, the allowed elevation range for the ground dead zone). Prefab entities are
-        // stable for the session, so entries never invalidate.
+        // connector snap, the allowed elevation range for the ground dead zone, the half-width that
+        // scales the endpoint snap radii). Prefab entities are stable for the session, so entries
+        // never invalidate.
         private struct NetPrefabInfo
         {
             public Layer ConnectLayers;
             public float ElevMin, ElevMax;
+            public float HalfWidth;
             public bool Placeable;
         }
         private readonly Dictionary<Entity, NetPrefabInfo> _netInfoCache = new Dictionary<Entity, NetPrefabInfo>();
@@ -188,6 +191,29 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
         // callback here that re-queues the batch's source commands; RealizePending invokes it the frame
         // it sees the wipe coming (or on window expiry) so the batch is rebuilt instead of lost.
         private System.Action _onCommitLost;
+        // Realize-frame counter (BeginRealizeFrame). Ages the click stash below: gestures the gate
+        // killed at the end of frame N are replayable only during frame N+1 (see the .Replay partial).
+        private int _realizeFrame;
+        // The local player's gestures DefinitionGateSystem killed on the last armed frame: plain net
+        // courses, bulldoze targets and free-standing object ghosts. If the player's click lands
+        // inside the armed window (it would apply nothing - the definitions that were to become its
+        // committing Temps are gone) these are re-encoded as ordinary sync commands instead.
+        private readonly List<(Entity prefab, Colossal.Mathematics.Bezier4x3 curve, float length)> _stashCourses =
+            new List<(Entity, Colossal.Mathematics.Bezier4x3, float)>();
+        private readonly List<Entity> _stashBulldozes = new List<Entity>();
+        private readonly List<(Entity prefab, Unity.Mathematics.float3 position, Unity.Mathematics.quaternion rotation)> _stashObjects =
+            new List<(Entity, Unity.Mathematics.float3, Unity.Mathematics.quaternion)>();
+        private int _stashFrame = -1;
+        // Replayed local courses waiting to realize. Drained ahead of _incoming, and exempt from the
+        // terrain deferral below - their Y was measured against this machine's own terrain.
+        private readonly List<SimulationCommandMessage> _localReplays = new List<SimulationCommandMessage>();
+        /// <summary>
+        /// Set by <see cref="SyncRealizeSystem"/> while remote terrain edits are backlogged: no NEW
+        /// remote course realizes until terrain catches up (a course realized against pre-terraform
+        /// ground commits at the wrong height - craters, buried streets, missed height-gated snaps).
+        /// In-flight commits still finish, and local click-replays are exempt.
+        /// </summary>
+        public bool DeferForTerrain;
         // Consecutive expired-window replays (reset by any successful commit). A batch whose
         // definitions the game always rejects would otherwise rebuild forever.
         private int _expiryReplays;

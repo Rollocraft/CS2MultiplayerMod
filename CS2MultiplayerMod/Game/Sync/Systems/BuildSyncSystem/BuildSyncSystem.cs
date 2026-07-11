@@ -38,6 +38,24 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         private readonly List<(ObjectPlacementCommand command, Entity prefab, int originPlayerId, long deadline)> _attachRetry =
             new List<(ObjectPlacementCommand, Entity, int, long)>();
 
+        /// <summary>
+        /// Set by <see cref="SyncRealizeSystem"/> while remote terrain edits are backlogged: no new
+        /// remote object realizes until terrain catches up (its transmitted Y assumes the sender's
+        /// terrain). Local click-replays are exempt - their Y was measured on this machine.
+        /// </summary>
+        public bool DeferForTerrain;
+
+        // Object ghosts from the local player's swallowed clicks (see NetSyncSystem's .Replay):
+        // realized ahead of remote arrivals. The guard marks RealizeCommand sets suppress the
+        // capture echo - the explicit broadcast at replay time already informed the peers.
+        private readonly List<ObjectPlacementCommand> _localReplays = new List<ObjectPlacementCommand>();
+
+        /// <summary>A swallowed object-tool click, replayed as a local placement.</summary>
+        public void QueueLocalReplay(ObjectPlacementCommand command)
+        {
+            if (_localReplays.Count < MaxPendingAttachments) _localReplays.Add(command);
+        }
+
         private readonly Dictionary<string, int> _diag = new Dictionary<string, int>();
         private long _diagStartMs = -1;
         private int _diagTotal;

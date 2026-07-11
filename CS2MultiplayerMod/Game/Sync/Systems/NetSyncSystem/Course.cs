@@ -11,12 +11,34 @@ using Unity.Mathematics;
 using CS2MultiplayerMod.Game.Sync.Infrastructure;
 namespace CS2MultiplayerMod.Game.Sync.Systems.Net
 {
-    // Course construction for NetSyncSystem: build a NON-Permanent NetCourse definition at a resolved
-    // location, plus the geometry queries that resolve an endpoint to an existing node/edge.
+    // Course construction for NetSyncSystem: build a NetCourse definition (Temp-routed for splits,
+    // Permanent for the fast path) at a resolved location, plus the geometry queries that resolve
+    // an endpoint to an existing node/edge with width-scaled snap radii.
     public partial class NetSyncSystem
     {
+        // Cap on the per-prefab contribution to a width-scaled snap radius (metres). Twin highway
+        // carriageways sit further apart than this, so one can never grab the other.
+        private const float MaxSnapHalfWidth = 8f;
+
         /// <summary>
-        /// Nearest standalone node within <see cref="NodeSnapDistance"/> of <paramref name="position"/>
+        /// The accept radius against one candidate: half the placed net's width plus half the
+        /// target's, floored at the legacy fixed radius, capped by <see cref="MaxSnapHalfWidth"/>.
+        /// Mirrors the net tool's own snap: a merge endpoint metres from a wide junction node's
+        /// centre is physically INSIDE that junction and must connect, not land on free ground.
+        /// </summary>
+        private static float SnapRadius(float placedHalf, float targetHalf, float floor) =>
+            math.max(floor, math.min(placedHalf + targetHalf, MaxSnapHalfWidth));
+
+        /// <summary>
+        /// Connect-layer gate for the width-scaled radii: with both layer sets known they must
+        /// intersect (the wide radius must not join a power line to a road junction); missing data
+        /// on either side allows, exactly like the fixed-radius behaviour before scaling.
+        /// </summary>
+        private static bool LayersCanConnect(Layer placed, Layer target) =>
+            placed == Layer.None || target == Layer.None || (placed & target) != Layer.None;
+
+        /// <summary>
+        /// Nearest standalone node within the width-scaled snap radius of <paramref name="position"/>
         /// (ranked in XZ, so terrain-height noise never changes which node wins; candidates further
         /// than <see cref="VerticalSnapTol"/> above/below are rejected - a bridge endpoint passing over
         /// a ground junction crosses it, it doesn't connect to it), or <see cref="Entity.Null"/> in
@@ -31,18 +53,25 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
         /// "DELETED edge ... -> REUSE node #... -> commit ... -> [log ends]"). Treating a dying node as absent
         /// lands the endpoint on fresh ground instead - disconnected at worst, never a crash.
         /// </summary>
-        private Entity FindNodeAt(float3 position, NativeArray<Entity> nodeEntities, NativeArray<Node> nodeData)
+        private Entity FindNodeAt(float3 position, NetPrefabInfo placedInfo,
+            NativeArray<Entity> nodeEntities, NativeArray<Node> nodeData)
         {
             float2 p = position.xz;
-            float bestSq = NodeSnapDistance * NodeSnapDistance;
+            float bestSq = MaxSnapHalfWidth * MaxSnapHalfWidth;
             Entity best = Entity.Null;
             for (int i = 0; i < nodeData.Length; i++)
             {
                 float dSq = math.distancesq(p, nodeData[i].m_Position.xz);
+                // Only nodes inside the radius cap AND nearer than the current best reach the
+                // per-candidate lookups, so those run for a handful of candidates at most.
                 if (dSq >= bestSq) continue;
                 if (math.abs(nodeData[i].m_Position.y - position.y) > VerticalSnapTol) continue; // other level
-                // Only nodes nearer than the current best (always < NodeSnapDistance) reach the liveness
-                // check, so the buffer lookup runs for a handful of candidates at most.
+                NetPrefabInfo targetInfo = default;
+                if (EntityManager.HasComponent<PrefabRef>(nodeEntities[i]))
+                    targetInfo = NetInfoOf(EntityManager.GetComponentData<PrefabRef>(nodeEntities[i]).m_Prefab);
+                float radius = SnapRadius(placedInfo.HalfWidth, targetInfo.HalfWidth, NodeSnapDistance);
+                if (dSq >= radius * radius) continue;
+                if (!LayersCanConnect(placedInfo.ConnectLayers, targetInfo.ConnectLayers)) continue;
                 if (IsNodeBeingDeleted(nodeEntities[i])) continue;
                 bestSq = dSq;
                 best = nodeEntities[i];
@@ -80,7 +109,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
             return best;
         }
 
-        /// <summary>Cached connect layers + allowed elevation range of a net prefab.</summary>
+        /// <summary>Cached connect layers + allowed elevation range + half-width of a net prefab.</summary>
         private NetPrefabInfo NetInfoOf(Entity prefab)
         {
             NetPrefabInfo info;
@@ -94,6 +123,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                 info.ElevMax = range.max;
                 info.Placeable = true;
             }
+            if (EntityManager.HasComponent<NetGeometryData>(prefab))
+                info.HalfWidth = EntityManager.GetComponentData<NetGeometryData>(prefab).m_DefaultWidth * 0.5f;
             _netInfoCache[prefab] = info;
             return info;
         }
@@ -147,15 +178,18 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
         }
 
         /// <summary>
-        /// Build a NON-Permanent net-course definition (-> a Temp edge the game's ApplyNetSystem will
-        /// finalize), with each endpoint resolved to an existing node (reuse) or an existing edge
-        /// (split at <paramref name="endT"/>) or Entity.Null (fresh node). This mirrors what the net
-        /// tool's CreateDefinitionsJob produces - the difference from the shipped recipe is purely the
-        /// missing Permanent flag, which routes the edge through Temp + the ApplyTool split path.
+        /// Build a net-course definition with each endpoint resolved to an existing node (reuse) or
+        /// an existing edge (split at <paramref name="endT"/>) or Entity.Null (fresh node). This
+        /// mirrors what the net tool's CreateDefinitionsJob produces. Non-<paramref name="permanent"/>
+        /// routes the edge through Temp + the ApplyTool pipeline - required whenever an existing
+        /// edge must SPLIT (ApplyNetSystem is the only splitter). <paramref name="permanent"/> makes
+        /// the generate systems build the finished real edge directly in the same frame's
+        /// Modification - the fast path for courses that touch nothing pre-existing: no arm, no
+        /// preview wipe, no gate, no drain, no interaction with the local player's tool.
         /// </summary>
-        private void CreateTempCourse(Entity prefab, Bezier4x3 bez, float length,
+        private void CreateCourse(Entity prefab, Bezier4x3 bez, float length,
             Entity startSnap, float startT, Entity endSnap, float endT,
-            float2 startElevation, float2 endElevation)
+            float2 startElevation, float2 endElevation, bool permanent)
         {
             // Never bake a dead entity into the course: a snap/split target resolved this frame could
             // have been torn down (a remote bulldoze, the local sim) before the course is consumed.
@@ -170,11 +204,12 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
             {
                 m_Prefab = prefab,
                 // Seed from the (shared) geometry so procedural detail (wear/props) looks identical on
-                // every machine. NOT Permanent -> GenerateEdgesSystem makes a Temp edge -> ApplyNetSystem.
+                // every machine.
                 m_RandomSeed = math.asint(bez.a.x) ^ math.asint(bez.a.z) ^ math.asint(bez.d.x) ^ math.asint(bez.d.z),
-                // Matches the net tool's straight-line recipe (CreateStraightLine); without it the
-                // generated edge's sub-elevation isn't set up the way the game expects.
-                m_Flags = CreationFlags.SubElevation,
+                // SubElevation matches the net tool's straight-line recipe (CreateStraightLine);
+                // without it the generated edge's sub-elevation isn't set up the way the game expects.
+                m_Flags = permanent ? CreationFlags.SubElevation | CreationFlags.Permanent
+                                    : CreationFlags.SubElevation,
             });
             EntityManager.AddComponentData(definition, new NetCourse
             {
@@ -218,32 +253,60 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
         }
 
         /// <summary>
-        /// Nearest standalone edge whose centreline passes within <see cref="EdgeSnapDistance"/> (XZ)
+        /// Nearest standalone edge whose centreline passes within the width-scaled snap radius (XZ)
         /// of <paramref name="point"/> at a matching height (within <see cref="VerticalSnapTol"/> - a
-        /// bridge endpoint above a ground road crosses it, it does not T-junction into it), away from
-        /// its end nodes - i.e. a mid-span tap that should SPLIT that edge. Returns the edge and the
-        /// split parameter t, or Entity.Null in open ground.
+        /// bridge endpoint above a ground road crosses it, it does not T-junction into it). A tap in
+        /// the edge's interior SPLITS it (returns the edge + split parameter t); a tap inside an end
+        /// zone of <c>max(MinSplitOffset, min(halfWidth(target), cap))</c> around either end REUSES
+        /// that end's node instead (via <paramref name="endNode"/>) - the native curve-position
+        /// saturation - never planting a second junction node inside the existing one's footprint.
         /// </summary>
-        private void FindEdgeAt(float3 point, NativeArray<Entity> edgeEntities, NativeArray<Curve> edgeCurves,
-            out Entity edge, out float t)
+        private void FindEdgeAt(float3 point, NetPrefabInfo placedInfo,
+            NativeArray<Entity> edgeEntities, NativeArray<Curve> edgeCurves,
+            out Entity edge, out float t, out Entity endNode)
         {
             float2 p = point.xz;
-            float best = EdgeSnapDistance;
+            float best = MaxSnapHalfWidth;
             edge = Entity.Null;
             t = 0f;
+            endNode = Entity.Null;
             for (int i = 0; i < edgeCurves.Length; i++)
             {
                 Bezier4x3 bez = edgeCurves[i].m_Bezier;
                 float tt;
                 float dist = MathUtils.Distance(bez.xz, p, out tt);
                 if (dist >= best) continue;
+                NetPrefabInfo targetInfo = default;
+                if (EntityManager.HasComponent<PrefabRef>(edgeEntities[i]))
+                    targetInfo = NetInfoOf(EntityManager.GetComponentData<PrefabRef>(edgeEntities[i]).m_Prefab);
+                if (dist >= SnapRadius(placedInfo.HalfWidth, targetInfo.HalfWidth, EdgeSnapDistance)) continue;
+                if (!LayersCanConnect(placedInfo.ConnectLayers, targetInfo.ConnectLayers)) continue;
                 float3 sp = MathUtils.Position(bez, tt);
                 if (math.abs(sp.y - point.y) > VerticalSnapTol) continue; // passes above/below, no tap
-                if (math.distance(sp.xz, bez.a.xz) < MinSplitOffset) continue;
-                if (math.distance(sp.xz, bez.d.xz) < MinSplitOffset) continue;
+
+                float endZone = math.max(MinSplitOffset, math.min(targetInfo.HalfWidth, MaxSnapHalfWidth));
+                Entity reuse = Entity.Null;
+                if (math.distance(sp.xz, bez.a.xz) < endZone)
+                    reuse = EntityManager.GetComponentData<Edge>(edgeEntities[i]).m_Start;
+                else if (math.distance(sp.xz, bez.d.xz) < endZone)
+                    reuse = EntityManager.GetComponentData<Edge>(edgeEntities[i]).m_End;
+
+                if (reuse != Entity.Null)
+                {
+                    // Same liveness rules as FindNodeAt - a dying node must classify as absent.
+                    if (!EntityManager.Exists(reuse) || EntityManager.HasComponent<Deleted>(reuse)
+                        || IsNodeBeingDeleted(reuse)) continue;
+                    best = dist;
+                    edge = Entity.Null;
+                    t = 0f;
+                    endNode = reuse;
+                    continue;
+                }
+
                 best = dist;
                 edge = edgeEntities[i];
                 t = tt;
+                endNode = Entity.Null;
             }
         }
     }

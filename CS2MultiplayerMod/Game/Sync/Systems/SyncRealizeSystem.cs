@@ -39,11 +39,31 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             _tileSync = World.GetOrCreateSystemManaged<TilePurchaseSyncSystem>();
         }
 
+        private bool _wasDeferringTerrain;
+
         protected override void OnUpdate()
         {
             // Reset the net pipeline's per-frame state (the one-preview-wipe-per-frame guard) before
             // any feeder runs — DeleteSync/NetReplaceSync may hijack the frame before NetSync does.
             _netSync.BeginRealizeFrame();
+
+            // Hold NEW net/object realizes while remote terrain edits are backlogged: a course or
+            // object drawn right after a terraform stroke assumes the sender's post-edit surface, and
+            // realizing it against this machine's not-yet-graded terrain buries/floats it and misses
+            // every height-gated snap. Terrain drains within frames (its capture rate is far below
+            // the apply budget), so the hold is frames long. In-flight net commits still finish;
+            // local click-replays are exempt (their Y was measured here).
+            bool deferTerrain = _terrainSync.HasBacklog();
+            _netSync.DeferForTerrain = deferTerrain;
+            _buildSync.DeferForTerrain = deferTerrain;
+            if (deferTerrain != _wasDeferringTerrain)
+            {
+                _wasDeferringTerrain = deferTerrain;
+                CS2MultiplayerMod.Game.Diagnostics.FlightRecorder.Note(deferTerrain
+                    ? "net/build realize deferred (terrain backlog)"
+                    : "terrain drained; net/build realize resumed");
+            }
+
             _buildSync.RealizePending();
             // DeleteSync BEFORE NetSync: a remote bulldoze applied this frame tags its edge Deleted,
             // and NetSync's split-target query excludes Deleted edges — so NetSync never resolves a

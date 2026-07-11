@@ -68,6 +68,9 @@ namespace CS2MultiplayerMod.Game
             _log.Info("[MP] Map blob delivered to game layer (" +
                       (data != null ? data.Length / 1024 : 0) + " KB); staging and loading.");
             Diagnostics.FlightRecorder.Note("world blob received " + (data != null ? data.Length >> 10 : 0) + " KB; reloading world");
+            // Purge every sync inbox before the reload: queued commands describe the pre-reload
+            // world and would apply stale edits (or reference vanished entities) on the new one.
+            Sync.Infrastructure.SyncInbox.DrainAll();
             SetPhase(ClientWorldPhase.LoadingMap);
             if (!JoinMapLoader.StageAndLoad(data, _log))
             {

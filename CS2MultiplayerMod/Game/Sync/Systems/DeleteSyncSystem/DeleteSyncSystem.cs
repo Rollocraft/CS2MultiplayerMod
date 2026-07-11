@@ -32,6 +32,28 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         // NetSyncSystem._onCommitLost). Replayed ahead of fresh arrivals next cycle.
         private readonly List<NetDeleteCommand> _replayEdgeDeletes = new List<NetDeleteCommand>();
 
+        /// <summary>Unmatched remote deletes wait this long for their build to land locally.</summary>
+        private const long DeleteRetryWindowMs = 10000;
+
+        /// <summary>Ceiling on each pending-delete list, so a peer can never grow them without bound.</summary>
+        private const int MaxPendingDeletes = 256;
+
+        // Remote deletes that matched nothing yet. Builds and deletes travel in separate queues with
+        // different draining rules, so under backlog a delete can be processed BEFORE the build it
+        // targets has realized locally; dropping it (the old behaviour) resurrected the street or
+        // building on one machine only. Retried every cycle, ahead of fresh arrivals, until the
+        // deadline — by then either the build has landed (the retry matches and deletes it) or the
+        // geometry genuinely diverged.
+        private readonly List<(ObjectDeleteCommand cmd, long deadline)> _objectRetry =
+            new List<(ObjectDeleteCommand, long)>();
+        private readonly List<(NetDeleteCommand cmd, long deadline)> _edgeRetry =
+            new List<(NetDeleteCommand, long)>();
+
+        // Bulldoze targets from the local player's swallowed clicks (see NetSyncSystem's .Replay):
+        // realized as LOCAL work with NO echo-guard marks, so the normal delete capture broadcasts
+        // them — exactly as if the click had landed.
+        private readonly List<Entity> _localBulldozes = new List<Entity>();
+
         private PrefabSystem _prefabSystem;
         private PrefabIndex _prefabIndex;
         private NetSyncSystem _netSync;
@@ -219,8 +241,10 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             // makes the commit safe with any tool active, so remote bulldozes land live in build mode.
             // Object deletes (a raw Deleted tag on a real entity) always proceed.
             bool netBusy = _netSync == null || !_netSync.CanBuildDefinitions;
-            List<ObjectDeleteCommand> objects = null;
-            List<NetDeleteCommand> edges = null;
+            long now = service.NowMs;
+            long freshDeadline = now + DeleteRetryWindowMs;
+            List<(ObjectDeleteCommand cmd, long deadline)> objects = null;
+            List<(NetDeleteCommand cmd, long deadline)> edges = null;
             List<SimulationCommandMessage> deferredEdges = null;
             SimulationCommandMessage message;
             while (_incoming.TryDequeue(out message))
@@ -229,13 +253,15 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 try
                 {
                     if (message.CommandId == ObjectDeleteCommand.Id)
-                        (objects ?? (objects = new List<ObjectDeleteCommand>())).Add(ObjectDeleteCommand.Decode(message.Body));
+                        (objects ?? (objects = new List<(ObjectDeleteCommand, long)>()))
+                            .Add((ObjectDeleteCommand.Decode(message.Body), freshDeadline));
                     else if (message.CommandId == NetDeleteCommand.Id)
                     {
                         if (netBusy)
                             (deferredEdges ?? (deferredEdges = new List<SimulationCommandMessage>())).Add(message);
                         else
-                            (edges ?? (edges = new List<NetDeleteCommand>())).Add(NetDeleteCommand.Decode(message.Body));
+                            (edges ?? (edges = new List<(NetDeleteCommand, long)>()))
+                                .Add((NetDeleteCommand.Decode(message.Body), freshDeadline));
                     }
                 }
                 catch (System.Exception ex) { Mod.log.Warn("[MP] DeleteSync: dropping malformed command: " + ex.Message); }
@@ -250,14 +276,39 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             // ahead of fresh arrivals once the pipeline is idle again.
             if (!netBusy && _replayEdgeDeletes.Count > 0)
             {
-                if (edges == null) edges = new List<NetDeleteCommand>(_replayEdgeDeletes);
-                else edges.InsertRange(0, _replayEdgeDeletes);
+                if (edges == null) edges = new List<(NetDeleteCommand, long)>();
+                for (int i = _replayEdgeDeletes.Count - 1; i >= 0; i--)
+                    edges.Insert(0, (_replayEdgeDeletes[i], freshDeadline));
                 _replayEdgeDeletes.Clear();
             }
 
-            long now = service.NowMs;
+            // Unmatched deletes still inside their retry window run ahead of everything fresh.
+            if (_objectRetry.Count > 0)
+            {
+                if (objects == null) objects = new List<(ObjectDeleteCommand, long)>(_objectRetry);
+                else objects.InsertRange(0, _objectRetry);
+                _objectRetry.Clear();
+            }
+            if (!netBusy && _edgeRetry.Count > 0)
+            {
+                if (edges == null) edges = new List<(NetDeleteCommand, long)>(_edgeRetry);
+                else edges.InsertRange(0, _edgeRetry);
+                _edgeRetry.Clear();
+            }
+
             if (objects != null) RealizeObjectDeletes(objects, now);
             if (edges != null) RealizeEdgeDeletes(edges, now);
+            RealizeLocalBulldozes();
+        }
+
+        /// <summary>
+        /// A swallowed bulldozer click's target (object or edge), handed over by the definition
+        /// gate's stash. Realized as local work on the next cycle - deliberately unguarded so the
+        /// normal capture broadcasts the delete to the peers.
+        /// </summary>
+        public void QueueLocalBulldoze(Entity target)
+        {
+            if (_localBulldozes.Count < MaxPendingDeletes) _localBulldozes.Add(target);
         }
 
 
