@@ -54,13 +54,11 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
             // Modification-nested system its barriers crash ("EntityCommandBuffer not allowed").
             //
             // This works with ANY active tool, not just the idle default: the def-frame's preview
-            // hijack (PrepareDefinitionFrame) wiped the tool's standing preview Temps, and
-            // DefinitionGateSystem has destroyed every tool definition born (via ToolOutputBarrier)
-            // on the armed frames since - so the world's Temps here are OURS ALONE, and overriding
-            // the tool's Clear/None with Apply commits exactly our batch and nothing the player is
-            // previewing. The tool's fresh definitions (made this frame, before us) only materialise
-            // at this frame's Modification, AFTER the ApplyTool pass - and the flip below clears
-            // _pendingApply, so the gate lets them live: the preview returns the same frame as our
+            // hijack (PrepareDefinitionFrame) wiped the tool's own preview Temps and its pending
+            // definitions, so the world's Temps here are OURS ALONE - overriding the tool's Clear/None
+            // with Apply commits exactly our batch and nothing the player is previewing. The tool's
+            // fresh definitions (made this frame, before us) only materialise at this frame's
+            // Modification, AFTER the ApplyTool pass - its preview returns untouched right behind our
             // commit.
             if (_pendingApply)
             {
@@ -216,16 +214,6 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
         public bool IsCommitBusy => _pendingApply || _awaitingDrain;
 
         /// <summary>
-        /// True from the frame a batch arms until the frame its flip (or discard) runs - the window
-        /// in which no tool definition may materialise into a Temp, or the eventual ApplyTool pass
-        /// would commit the player's preview along with the batch. Read by
-        /// <see cref="SyncRealizeSystem"/>'s sibling <c>DefinitionGateSystem</c> at the end of
-        /// ToolUpdate; deliberately excludes the flip frame itself (cleared before the gate runs),
-        /// so the preview regenerates the same frame the batch commits.
-        /// </summary>
-        public bool HasArmedNetCommit => _pendingApply;
-
-        /// <summary>
         /// True when a feeder (build/delete/replace) may create net definitions this frame. False
         /// while a commit is in flight, and on the frame the player's own gesture applies - their
         /// preview must survive to be committed by their click, so we never hijack that frame.
@@ -246,19 +234,13 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
         /// <summary>
         /// Make this frame safe for creating our net definitions while the local player has a build
         /// tool out. Observed runtime behaviour this mirrors: the game's clear pass (the only ClearTool
-        /// system) deletes EVERY Temp entity in the world and restores originals it was hiding. We
-        /// clear all live preview Temps the same way, then set the tool's force-update flag so it
-        /// rebuilds its preview from its own retained gesture (control points survive; the preview
-        /// blinks for one frame). Idempotent per frame; no-op while the idle default tool is active
-        /// (nothing to hijack).
-        ///
-        /// The tool's SAME-FRAME definitions cannot be handled here: tools record them through
-        /// ToolOutputBarrier, which plays them back at the end of ToolUpdate - after this system.
-        /// The destroy loop below only catches stray entity-visible definitions from other
-        /// producers; the barrier-buffered ones are destroyed by <c>DefinitionGateSystem</c>
-        /// (registered after the barrier), which keys on <see cref="HasArmedNetCommit"/> every
-        /// armed frame. Without that gate the preview materialised right back into the commit
-        /// window and the flip committed the player's un-applied gesture with our batch.
+        /// system) deletes EVERY Temp entity in the world and restores originals it was hiding, and
+        /// each tool destroys its own definitions before regenerating them. We do both here - destroy
+        /// the tool's fresh definitions (created before us this ToolUpdate, or they'd materialise as
+        /// preview Temps inside our commit), clear all live preview Temps the same way the clear pass
+        /// does, then set the tool's force-update flag so it rebuilds its preview from its own retained
+        /// gesture (control points survive; the preview blinks for one frame). Idempotent per frame;
+        /// no-op while the idle default tool is active (nothing to hijack).
         ///
         /// Callers: every feeder, immediately before creating its first definition of the frame.
         /// Feeders gate on <see cref="CanBuildDefinitions"/>, so no armed batch of ours exists here -
@@ -488,13 +470,12 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
 
         /// <summary>
         /// Set the tool's protected <c>m_ForceUpdate</c> flag so it regenerates its preview
-        /// definitions on its next update even with a motionless cursor - the def-frame hijack (and
-        /// <c>DefinitionGateSystem</c>, which shares this helper) wiped the preview, and without
-        /// this a parked cursor would show none until moved. Runtime access to the loaded game
-        /// assembly's own member; a rename in a future patch degrades gracefully (the preview simply
-        /// returns on the next cursor move).
+        /// definitions on its next update even with a motionless cursor - the def-frame hijack wiped
+        /// the preview, and without this a parked cursor would show none until moved. Runtime access
+        /// to the loaded game assembly's own member; a rename in a future patch degrades gracefully
+        /// (the preview simply returns on the next cursor move).
         /// </summary>
-        internal void TryForceToolUpdate(global::Game.Tools.ToolBaseSystem tool)
+        private void TryForceToolUpdate(global::Game.Tools.ToolBaseSystem tool)
         {
             if (!_forceUpdateFieldResolved)
             {

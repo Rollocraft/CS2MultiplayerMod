@@ -126,13 +126,6 @@ namespace CS2MultiplayerMod
             // Modification1 and their Updated tag is stripped at Cleanup, so a definition
             // spawned at ModificationEnd is never realized (see SyncRealizeSystem).
             updateSystem.UpdateAt<Game.Sync.Systems.SyncRealizeSystem>(SystemUpdatePhase.ToolUpdate);
-            // Directly after ToolOutputBarrier - the only slot where the active tool's preview
-            // definitions exist as entities (the barrier plays them back at the end of ToolUpdate)
-            // but have not yet been consumed. While a net commit is armed the gate destroys them,
-            // or the ApplyTool flip would commit the player's un-applied preview along with the
-            // remote batch (see DefinitionGateSystem).
-            updateSystem.UpdateAfter<Game.Sync.Systems.DefinitionGateSystem, global::Game.Tools.ToolOutputBarrier>(
-                SystemUpdatePhase.ToolUpdate);
             // UIUpdate, not GameSimulation, for the same reason as the session pump:
             // hosting starts from the options screen, which pauses the simulation -
             // at GameSimulation the queued initial world stream for a joining client
