@@ -1,4 +1,5 @@
 using Game;
+using Game.SceneFlow;
 using Unity.Entities;
 using CS2MultiplayerMod.Core.Session;
 using CS2MultiplayerMod.Game.Diagnostics;
@@ -13,11 +14,13 @@ namespace CS2MultiplayerMod.Game
     /// </summary>
     public partial class MultiplayerSystem : GameSystemBase
     {
-        private const long HealthIntervalMs = 30000;
+        private const long ActiveHealthIntervalMs = 10000;
+        private const long IdleHealthIntervalMs = 60000;
 
         private EntityQuery _tempEntities;
         private EntityQuery _definitionEntities;
         private long _lastHealthMs;
+        private bool _wroteHealth;
 
         protected override void OnCreate()
         {
@@ -51,38 +54,116 @@ namespace CS2MultiplayerMod.Game
         }
 
         /// <summary>
-        /// One flight-log line every 30 s while a session runs: memory and entity trends
-        /// plus queue depth. After a crash the last lines tell an out-of-memory ramp apart
-        /// from a sudden native death (see <see cref="FlightRecorder"/>).
+        /// One flight-log line every 10 s while multiplayer is active (60 s while idle):
+        /// process memory/CPU/GC, entity trends, transport/blob progress, peer latency,
+        /// world-load state and the most recently applied command. After a crash the tail
+        /// distinguishes a resource ramp, stalled transfer and operation-specific native CTD.
         /// </summary>
         private void PumpHealth(MultiplayerService service)
         {
+            if (!FlightRecorder.Enabled) return;
             MultiplayerSession session = service.Session;
-            if (session.Status != SessionStatus.Connected) return;
-
             long now = service.NowMs;
-            if (now - _lastHealthMs < HealthIntervalMs) return;
+            bool active = session.Role != SessionRole.None ||
+                          session.Status != SessionStatus.Offline ||
+                          service.WorldPhase != ClientWorldPhase.None;
+            long interval = active ? ActiveHealthIntervalMs : IdleHealthIntervalMs;
+            if (_wroteHealth && now - _lastHealthMs < interval) return;
             _lastHealthMs = now;
+            _wroteHealth = true;
 
-            long heapMb = System.GC.GetTotalMemory(false) >> 20;
-            long workingSetMb = 0;
-            try { workingSetMb = System.Environment.WorkingSet >> 20; } catch { }
+            try
+            {
+                WriteHealth(service, session, now);
+            }
+            catch (System.Exception ex)
+            {
+                // Diagnostics are never allowed to become the crash they are meant to explain.
+                FlightRecorder.NoteException("health-snapshot", ex);
+            }
+        }
 
-            int entities = 0;
-            try { entities = EntityManager.Debug.EntityCount; } catch { }
+        private void WriteHealth(MultiplayerService service, MultiplayerSession session, long now)
+        {
+            int entities = SafeEntityCount();
+            int temps = SafeQueryCount(_tempEntities);
+            int definitions = SafeQueryCount(_definitionEntities);
 
             int peers = 0;
-            foreach (Peer peer in session.Peers) if (peer.Handshaked) peers++;
+            int pendingPeers = 0;
+            int latencyMin = int.MaxValue;
+            int latencyMax = -1;
+            long latencyTotal = 0;
+            int latencySamples = 0;
+            long oldestPeerAge = 0;
+            foreach (Peer peer in session.Peers)
+            {
+                if (!peer.Handshaked)
+                {
+                    pendingPeers++;
+                    continue;
+                }
+
+                peers++;
+                if (peer.LatencyMs >= 0)
+                {
+                    if (peer.LatencyMs < latencyMin) latencyMin = peer.LatencyMs;
+                    if (peer.LatencyMs > latencyMax) latencyMax = peer.LatencyMs;
+                    latencyTotal += peer.LatencyMs;
+                    latencySamples++;
+                }
+                long age = now - peer.LastSeenUnixMs;
+                if (age > oldestPeerAge) oldestPeerAge = age;
+            }
+
+            int remotePlayers = 0;
+            foreach (RemotePlayer ignored in service.RemotePlayers) remotePlayers++;
+
+            bool gameLoading = false;
+            try { gameLoading = GameManager.instance != null && GameManager.instance.isGameLoading; }
+            catch { }
+
+            string latency = latencySamples == 0
+                ? "?"
+                : latencyMin + "/" + (latencyTotal / latencySamples) + "/" + latencyMax;
+            string incomingChannel = string.IsNullOrEmpty(session.IncomingBlobChannel)
+                ? "none"
+                : session.IncomingBlobChannel;
 
             FlightRecorder.Note("health role=" + session.Role +
+                " status=" + session.Status +
                 " phase=" + service.WorldPhase +
+                " gameLoading=" + gameLoading +
+                " playerId=" + session.LocalPlayerId +
                 " peers=" + peers +
-                " heapMB=" + heapMb +
-                " wsMB=" + workingSetMb +
-                " entities=" + entities +
-                " temps=" + _tempEntities.CalculateEntityCount() +
-                " defs=" + _definitionEntities.CalculateEntityCount() +
-                " sendKB=" + (session.PendingSendBytes >> 10));
+                " pendingPeers=" + pendingPeers +
+                " remotePlayers=" + remotePlayers +
+                " latencyMS=" + latency +
+                " oldestPeerAgeMS=" + oldestPeerAge +
+                " entities=" + Value(entities) +
+                " temps=" + Value(temps) +
+                " defs=" + Value(definitions) +
+                " sendKB=" + (session.PendingSendBytes >> 10) +
+                " incomingBlob=" + incomingChannel +
+                " incomingKB=" + (session.IncomingBlobReceived >> 10) + "/" + (session.IncomingBlobTotal >> 10) +
+                " outgoingBlob=" + session.OutgoingBlobActive +
+                " outgoingKB=" + (session.OutgoingBlobSent >> 10) + "/" + (session.OutgoingBlobTotal >> 10) +
+                " " + service.CommandDiagnosticSnapshot(now) +
+                " " + FlightRecorder.ProcessSnapshot());
         }
+
+        private int SafeEntityCount()
+        {
+            try { return EntityManager.Debug.EntityCount; }
+            catch { return -1; }
+        }
+
+        private static int SafeQueryCount(EntityQuery query)
+        {
+            try { return query.CalculateEntityCount(); }
+            catch { return -1; }
+        }
+
+        private static string Value(int value) => value < 0 ? "?" : value.ToString();
     }
 }

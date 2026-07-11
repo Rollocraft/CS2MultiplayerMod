@@ -65,6 +65,7 @@ namespace CS2MultiplayerMod
             // Stand up the multiplayer core (portable session + game logger adapter) and
             // register the ECS system that pumps it once per simulation tick.
             Service = new MultiplayerService(new ColossalModLogger(log));
+            FlightRecorder.Note("startup-stage service-created");
             log.Info("Multiplayer core initialised. Protocol v" +
                      CS2MultiplayerMod.Core.Protocol.ProtocolConstants.ProtocolVersion +
                      ". Registering sync systems...");
@@ -140,6 +141,7 @@ namespace CS2MultiplayerMod
             // was never processed while the host sat in the (paused) menu, leaving
             // the client stuck in WaitingForMap forever.
             updateSystem.UpdateAt<Game.Sync.Systems.WorldResyncSystem>(SystemUpdatePhase.UIUpdate);
+            FlightRecorder.Note("startup-complete systems-registered");
         }
 
         public void OnDispose()

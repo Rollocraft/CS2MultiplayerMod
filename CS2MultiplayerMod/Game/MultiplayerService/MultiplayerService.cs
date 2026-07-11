@@ -55,6 +55,18 @@ namespace CS2MultiplayerMod.Game
         private bool _sawLoading;
         private string _lastFault;
 
+        // The service observer runs before the individual realization observers. Keeping
+        // this breadcrumb here means it is flushed before a received command can enter a
+        // crash-prone game operation, including failures in native code with no stack trace.
+        private long _appliedCommandTotal;
+        private ushort _lastAppliedCommandId;
+        private int _lastAppliedCommandOrigin;
+        private int _lastAppliedCommandBytes;
+        private long _lastAppliedCommandMs;
+        private ushort _lastLoggedCommandId;
+        private long _lastCommandLogMs;
+        private long _lastCommandLoggedTotal;
+
         public MultiplayerService(IModLogger log)
         {
             _log = log;
@@ -99,6 +111,91 @@ namespace CS2MultiplayerMod.Game
             ModEnabled &&
             _session.Status == SessionStatus.Connected &&
             (_session.Role == SessionRole.Host || _phase == ClientWorldPhase.InSession);
+
+        internal string CommandDiagnosticSnapshot(long nowMs)
+        {
+            if (_appliedCommandTotal == 0) return "commands=0 lastCommand=none";
+            long age = nowMs - _lastAppliedCommandMs;
+            if (age < 0) age = 0;
+            return "commands=" + _appliedCommandTotal +
+                   " lastCommand=" + CommandName(_lastAppliedCommandId) +
+                   " lastCommandId=" + _lastAppliedCommandId +
+                   " lastCommandOrigin=" + _lastAppliedCommandOrigin +
+                   " lastCommandBytes=" + _lastAppliedCommandBytes +
+                   " lastCommandAgeMS=" + age;
+        }
+
+        private void RecordAppliedCommand(SimulationCommandMessage command)
+        {
+            if (command == null) return;
+
+            long now = _clock.ElapsedMilliseconds;
+            _appliedCommandTotal++;
+            _lastAppliedCommandId = command.CommandId;
+            _lastAppliedCommandOrigin = command.OriginPlayerId;
+            _lastAppliedCommandBytes = command.Body != null ? command.Body.Length : 0;
+            _lastAppliedCommandMs = now;
+
+            // Continuous brushes and road drags can produce many commands per second.
+            // Log the first, every operation-type change, and one sample per second so
+            // the file remains small without losing the operation active at a CTD.
+            if (_lastCommandLoggedTotal != 0 &&
+                command.CommandId == _lastLoggedCommandId &&
+                now - _lastCommandLogMs < 1000)
+                return;
+
+            long commandsSinceLog = _appliedCommandTotal - _lastCommandLoggedTotal;
+            _lastLoggedCommandId = command.CommandId;
+            _lastCommandLogMs = now;
+            _lastCommandLoggedTotal = _appliedCommandTotal;
+            Diagnostics.FlightRecorder.Note(
+                "command-apply name=" + CommandName(command.CommandId) +
+                " id=" + command.CommandId +
+                " origin=" + command.OriginPlayerId +
+                " tick=" + command.Tick +
+                " bytes=" + _lastAppliedCommandBytes +
+                " sinceLast=" + commandsSinceLog +
+                " total=" + _appliedCommandTotal);
+        }
+
+        private void ResetCommandDiagnostics()
+        {
+            _appliedCommandTotal = 0;
+            _lastAppliedCommandId = 0;
+            _lastAppliedCommandOrigin = 0;
+            _lastAppliedCommandBytes = 0;
+            _lastAppliedCommandMs = 0;
+            _lastLoggedCommandId = 0;
+            _lastCommandLogMs = 0;
+            _lastCommandLoggedTotal = 0;
+        }
+
+        private static string CommandName(ushort id)
+        {
+            switch (id)
+            {
+                case ObjectPlacementCommand.Id: return "object-place";
+                case NetPlacementCommand.Id: return "net-place";
+                case ObjectDeleteCommand.Id: return "object-delete";
+                case NetDeleteCommand.Id: return "net-delete";
+                case ZonePaintCommand.Id: return "zone-paint";
+                case TerrainBrushCommand.Id: return "terrain-brush";
+                case UpgradePlacementCommand.Id: return "building-upgrade";
+                case ObjectMoveCommand.Id: return "object-move";
+                case NetUpgradeCommand.Id: return "net-upgrade";
+                case AreaCreateCommand.Id: return "area-create";
+                case AreaDeleteCommand.Id: return "area-delete";
+                case RouteCreateCommand.Id: return "route-create";
+                case RouteDeleteCommand.Id: return "route-delete";
+                case TilePurchaseCommand.Id: return "tile-purchase";
+                case EntityPolicyCommand.Id: return "policy-edit";
+                case AreaUpdateCommand.Id: return "area-update";
+                case RouteUpdateCommand.Id: return "route-update";
+                case DevTreePurchaseCommand.Id: return "dev-tree-purchase";
+                case NetReplaceCommand.Id: return "net-replace";
+                default: return "unknown";
+            }
+        }
 
         // All Status*/UiStatus* texts are re-read every UI frame by the options screen
         // and the cs2mp bindings, so resolving them through L10n here makes them follow
@@ -195,7 +292,16 @@ namespace CS2MultiplayerMod.Game
             public override void OnStatusChanged(SessionStatus status, string detail)
             {
                 _log.Info("[MP] " + status + ": " + detail);
-                Diagnostics.FlightRecorder.Note("status " + status + (string.IsNullOrEmpty(detail) ? "" : ": " + detail));
+                // Players commonly attach the flight log to a public support post. Keep
+                // the target IP/hostname in the private main log, but retain the port and
+                // transport mode needed to diagnose a connection-stage failure here.
+                string flightDetail = status == SessionStatus.Connecting
+                    ? "target=redacted port=" + _service._session.Port +
+                      " encryption=" + _service._session.EncryptionActive
+                    : detail;
+                Diagnostics.FlightRecorder.Note("status " + status +
+                    " role=" + _service._session.Role +
+                    (string.IsNullOrEmpty(flightDetail) ? "" : " detail=" + flightDetail));
                 if (status == SessionStatus.Connected &&
                     _service._session.Role == SessionRole.Client &&
                     _service._phase == ClientWorldPhase.Connecting)
@@ -266,6 +372,8 @@ namespace CS2MultiplayerMod.Game
                 _log.Info("[MP] " + (sender ?? "system") + ": " + text);
                 _service.AppendChatEntry(sender, text);
             }
+            public override void OnCommandReceived(SimulationCommandMessage command) =>
+                _service.RecordAppliedCommand(command);
             public override void OnPlayerStateReceived(PlayerStateMessage state) => _service.RecordRemotePlayer(state);
             public override void OnBlobReceived(string channel, byte[] data)
             {
