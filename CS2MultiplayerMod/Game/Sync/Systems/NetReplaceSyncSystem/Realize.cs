@@ -31,8 +31,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             // replace of the same edge in one ApplyTool pass can make ApplyNetSystem deref a stale edge
             // and native-crash. While a batch is in flight (or on the frame the player's own gesture
             // applies), leave incoming commands and retries queued for the next cycle — RealizePending
-            // runs after DeleteSync, so a delete armed this frame defers us. A build tool merely being
-            // out now defers too: new Temp transactions start only in the default-tool window.
+            // runs after DeleteSync, so a delete armed this frame defers us. A selected build tool is
+            // allowed on quiet preview frames; only its actual Apply/Clear frame has priority.
             if (_netSync == null || !_netSync.CanBuildDefinitions) return;
 
             long now = service.NowMs;

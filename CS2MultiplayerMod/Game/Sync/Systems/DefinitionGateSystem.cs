@@ -8,24 +8,13 @@ using CS2MultiplayerMod.Game.Sync.Systems.Net;
 namespace CS2MultiplayerMod.Game.Sync.Systems
 {
     /// <summary>
-    /// Keeps the local player's tool definitions out of an armed net commit. Every tool records its
-    /// definitions through <see cref="ToolOutputBarrier"/>, an end-of-phase command buffer - so at
-    /// <c>PrepareDefinitionFrame</c> time (mid-ToolUpdate) they are not yet entities and the def
-    /// wipe can never catch them. The barrier then re-materialises the preview right into the armed
-    /// window, and the next frame's flip would commit the player's un-applied gesture together with
-    /// the remote batch (half-drawn roads placed mid-bend, hovered ghosts planted, a hovered
-    /// bulldozer deleting its target).
-    ///
-    /// This system runs after the barrier - the one slot where the tool's definitions exist but
-    /// Modification has not yet consumed them. On every armed frame it destroys each fresh
-    /// non-Permanent definition that is not ours (every sync feeder tags its definitions Deleted at
-    /// birth for frame-end cleanup, which no tool does, so the query simply excludes Deleted),
-    /// stashing what it kills so a click swallowed by the window can be replayed (see
-    /// <see cref="NetSyncSystem.StashKilledDefinition"/>), then re-sets the tool's force-update flag
-    /// so the gesture regenerates. Permanent definitions (sibling realizes, the game's zone-growth
-    /// spawns) never become Temps and are spared. The flip frame is naturally excluded: the flip
-    /// branch clears the armed flag mid-phase, before this system runs, so the preview is back the
-    /// very frame the batch commits.
+    /// Keeps freshly buffered local tool definitions out of an armed remote net transaction. Tool
+    /// definitions become visible only after <see cref="ToolOutputBarrier"/>; this system runs in
+    /// that gap and removes non-Permanent local definitions while the remote batch is still waiting
+    /// to materialise. Sync-created definitions carry Deleted from birth and are excluded by the
+    /// query. On the commit frame the armed flag clears before this system runs, so local definition
+    /// generation resumes immediately. The active tool is asked to regenerate after a gated frame,
+    /// preserving the visible preview without ever applying it as part of the remote transaction.
     /// </summary>
     public partial class DefinitionGateSystem : GameSystemBase
     {
@@ -57,6 +46,10 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             if (service == null || !service.GameplaySyncReady) return;
             if (_netSync == null) return;
 
+            // ToolOutputBarrier has consumed this frame. Restore whichever side of the net/brush
+            // transaction was temporarily Disabled before inspecting newly buffered definitions.
+            _netSync.FinishIsolationAfterToolOutput();
+
             int killed = 0;
             NativeArray<Entity> definitions = _foreignDefinitions.IsEmptyIgnoreFilter
                 ? default(NativeArray<Entity>)
@@ -75,7 +68,6 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     CreationDefinition def =
                         EntityManager.GetComponentData<CreationDefinition>(definitions[i]);
                     if ((def.m_Flags & CreationFlags.Permanent) != 0) continue;
-                    _netSync.StashKilledDefinition(definitions[i]);
                     EntityManager.DestroyEntity(definitions[i]);
                     killed++;
                 }

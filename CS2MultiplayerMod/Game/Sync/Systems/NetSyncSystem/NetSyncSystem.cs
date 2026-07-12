@@ -27,8 +27,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
     /// This class is split across files by responsibility: this file holds state + lifecycle +
     /// the receive Observer; <c>.Apply</c> the commit/drain orchestration; <c>.Capture</c> the
     /// host-side detection + diagnostics; <c>.Realize</c> the batch builder + classification;
-    /// <c>.Course</c> the NetCourse construction + endpoint geometry + self-test; <c>.Replay</c>
-    /// the click stash (gestures the definition gate killed) + swallowed-click replay.
+    /// <c>.Course</c> the NetCourse construction + endpoint geometry + self-test.
     /// </summary>
     public partial class NetSyncSystem : GameSystemBase
     {
@@ -153,20 +152,19 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
         // on the deleted span). See CaptureNewEdges.
         private readonly List<NetPlacementCommand> _deferredSpanPieces = new List<NetPlacementCommand>();
 
-        // --- Temp + ApplyTool realize (the real fix for T-junctions) -----------------------------
-        // The shipped realize uses CreationFlags.Permanent, which makes GenerateEdgesSystem build a
-        // finished edge directly and NEVER enters the Temp/ApplyTool pipeline — so it can create and
-        // reuse-node but can never SPLIT an existing edge (ApplyNetSystem, the only splitter, runs
-        // ONLY in SystemUpdatePhase.ApplyTool, gated by ToolOutputSystem on applyMode==Apply). This
-        // path instead builds a NON-Permanent definition (→ Temp edge) and drives the ApplyTool phase
-        // ourselves so the game splits/connects/zones natively (see the .Apply / .Course partials).
+        // Remote courses use the same Temp-backed network transaction as an interactive placement.
+        // The net domain is applied directly while local previews are structurally isolated.
         private global::Game.Tools.ToolSystem _toolSystem;
+        private global::Game.Tools.ApplyNetSystem _applyNetSystem;
+        private global::Game.Tools.ApplyBrushesSystem _applyBrushesSystem;
         private EntityQuery _tempNetEntities;
-        // ALL live preview Temps (net, object, zone, area …) and the definitions created this frame —
-        // what PrepareDefinitionFrame clears so a commit while a build tool is out contains ONLY our
-        // batch, never the player's preview (see Apply.cs).
-        private EntityQuery _allTempEntities;
-        private EntityQuery _freshDefinitions;
+        private EntityQuery _localBrushTemps;
+        private readonly List<Entity> _isolatedLocalNetTemps = new List<Entity>();
+        private readonly List<Entity> _protectedRemoteNetTemps = new List<Entity>();
+        private readonly List<Entity> _committingRemoteNetTemps = new List<Entity>();
+        private readonly List<Entity> _isolatedLocalBrushTemps = new List<Entity>();
+        private bool _clearLocalNetIsolationAfterBarrier;
+        private bool _localToolOutputProtectedThisFrame;
         private bool _pendingApply;
         // After a commit we must WAIT for its Temp entities to clear (the committed nodes/edges only
         // become query-able then) before building the next batch — otherwise a course that should
@@ -174,18 +172,12 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
         private bool _awaitingDrain;
         private int _armTick;
         private int _drainArmTick;
-        // Frames spent draining. With a build tool out its preview Temps regenerate every frame, so
-        // "net Temps == 0" never happens — the committed geometry is query-able one frame after the
-        // ApplyTool pass, and the frame counter releases the drain then (Apply.cs).
+        // Frames spent waiting for the isolated entities to leave their Temp state.
         private int _drainFrames;
-        // True only on the frame a self-driven ApplyTool pass commits our batch: every non-Temp
-        // Created edge at that frame's ModificationEnd is from OUR pass (the player's own gesture
-        // never commits on a self-flip frame - that branch runs only when the tool isn't applying),
-        // so capture skips exactly that one frame instead of a wall-clock window that also
-        // swallowed roads the player built while remote batches streamed in. Set by the commit
-        // flip (Apply.cs), cleared by the next frame's BeginRealizeFrame.
+        // True only on the frame the isolated net-domain pass commits a remote batch. Capture skips
+        // that pass's Created edges; local Apply frames are never suppressed.
         private bool _suppressCaptureThisFrame;
-        // One preview wipe per realize frame (see PrepareDefinitionFrame); reset by BeginRealizeFrame.
+        // One local-net isolation per realize frame; reset by BeginRealizeFrame.
         private bool _prepDoneThisFrame;
         // Spans this machine realized from remote commands recently. A realize commit can trigger the
         // game's node reduction, which re-surfaces the just-built span as a LOCAL Updated/Created edge
@@ -193,32 +185,15 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
         // detection) recognise that geometry as remote work, not something to broadcast back.
         private readonly List<(Colossal.Mathematics.Bezier4x3 curve, long expiresMs)> _recentRealizedSpans =
             new List<(Colossal.Mathematics.Bezier4x3, long)>();
-        // Recovery hook for an armed-but-never-committed batch: while a build tool is out, the game's
-        // per-frame clear pass deletes EVERY Temp entity (it is not scoped to the tool's own preview),
-        // which destroys an armed batch before its commit can run. Whoever arms a commit leaves a
-        // callback here that re-queues the batch's source commands; RealizePending invokes it the frame
-        // it sees the wipe coming (or on window expiry) so the batch is rebuilt instead of lost.
+        // Recovery hook for a batch whose Temps vanished or became stale before commit.
         private System.Action _onCommitLost;
-        // Realize-frame counter (BeginRealizeFrame). Ages the click stash below: gestures the gate
-        // killed at the end of frame N are replayable only during frame N+1 (see the .Replay partial).
+        // Realize-frame counter used to correlate native local intent with its Apply frame.
         private int _realizeFrame;
-        // The local player's gestures DefinitionGateSystem killed on the last armed frame: plain net
-        // courses, bulldoze targets and free-standing object ghosts. If the player's click lands
-        // inside the armed window (it would apply nothing - the definitions that were to become its
-        // committing Temps are gone) these are re-encoded as ordinary sync commands instead.
-        private readonly List<NetPlacementCommand> _stashCourses = new List<NetPlacementCommand>();
-        private readonly List<Entity> _stashBulldozes = new List<Entity>();
-        private readonly List<(Entity prefab, Unity.Mathematics.float3 position, Unity.Mathematics.quaternion rotation)> _stashObjects =
-            new List<(Entity, Unity.Mathematics.float3, Unity.Mathematics.quaternion)>();
-        private int _stashFrame = -1;
-        // Replayed local courses waiting to realize. Drained ahead of _incoming, and exempt from the
-        // terrain deferral below - their Y was measured against this machine's own terrain.
-        private readonly List<SimulationCommandMessage> _localReplays = new List<SimulationCommandMessage>();
         /// <summary>
         /// Set by <see cref="SyncRealizeSystem"/> while remote terrain edits are backlogged: no NEW
         /// remote course realizes until terrain catches up (a course realized against pre-terraform
         /// ground commits at the wrong height - craters, buried streets, missed height-gated snaps).
-        /// In-flight commits still finish, and local click-replays are exempt.
+        /// In-flight commits still finish.
         /// </summary>
         public bool DeferForTerrain;
         // Consecutive expired-window replays (reset by any successful commit). A batch whose
@@ -276,6 +251,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
             _prefabIndex = new PrefabIndex(_prefabSystem, GetEntityQuery(ComponentType.ReadOnly<PrefabData>()));
 
             _toolSystem = World.GetOrCreateSystemManaged<global::Game.Tools.ToolSystem>();
+            _applyNetSystem = World.GetOrCreateSystemManaged<global::Game.Tools.ApplyNetSystem>();
+            _applyBrushesSystem = World.GetOrCreateSystemManaged<global::Game.Tools.ApplyBrushesSystem>();
             // Live net Temp entities (a tool preview, or our own pre-commit definitions), used to
             // confirm a commit (count drops to 0 after ApplyTool) and to detect a tool preview.
             // Deleted is excluded: a wiped Temp lingers until Cleanup, and counting those corpses
@@ -287,18 +264,19 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                 None = new[] { ComponentType.ReadOnly<Deleted>() },
             });
 
-            // Every live preview Temp of any domain — what the game's own clear pass operates on.
-            _allTempEntities = GetEntityQuery(new EntityQueryDesc
+            _localBrushTemps = GetEntityQuery(new EntityQueryDesc
             {
-                All = new[] { ComponentType.ReadOnly<Temp>() },
-                None = new[] { ComponentType.ReadOnly<Deleted>() },
+                All = new[]
+                {
+                    ComponentType.ReadOnly<Temp>(),
+                    ComponentType.ReadOnly<Brush>(),
+                },
+                None = new[]
+                {
+                    ComponentType.ReadOnly<Deleted>(),
+                    ComponentType.ReadOnly<RemoteTerrainBrush>(),
+                },
             });
-
-            // Definition entities created THIS frame (they carry Updated only on their birth frame;
-            // stale ones are inert — the generate systems consume Updated definitions only).
-            _freshDefinitions = GetEntityQuery(
-                ComponentType.ReadOnly<CreationDefinition>(),
-                ComponentType.ReadOnly<Updated>());
 
             _createdEdges = GetEntityQuery(new EntityQueryDesc
             {
@@ -426,6 +404,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
         protected override void OnDestroy()
         {
             SyncInbox.UnregisterDrain(DrainNetQueues);
+            ReleaseAllIsolation();
             if (_observer != null && Mod.Service != null)
                 Mod.Service.Session.RemoveObserver(_observer);
             base.OnDestroy();
@@ -433,14 +412,39 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
 
         private void DrainNetQueues()
         {
+            // Never leave an isolated remote Temp transaction behind for a later local click. Which
+            // side is enabled depends on whether this frame had protected the remote batch.
+            if (_protectedRemoteNetTemps.Count > 0)
+            {
+                ClearTrackedTemps(_protectedRemoteNetTemps, clearPreview: true);
+                _protectedRemoteNetTemps.Clear();
+            }
+            else if (_pendingApply)
+            {
+                ClearTempEntities(_tempNetEntities);
+            }
+            if (_committingRemoteNetTemps.Count > 0)
+            {
+                ClearTrackedTemps(_committingRemoteNetTemps, clearPreview: true);
+                _committingRemoteNetTemps.Clear();
+            }
+            ReleaseAllIsolation();
             SyncInbox.Clear(_incoming);
             _remoteDeferred.Clear();
-            _localReplays.Clear();
             _deferredSpanPieces.Clear();
             _cachedLocalCourses.Clear();
             _committedNetSideEffects.Clear();
             _nativeTargetDeadlines.Clear();
+            _operationAssemblyDeadlines.Clear();
+            _nativeOperationDeadlines.Clear();
             _recentRealizedSpans.Clear();
+            _pendingApply = false;
+            _awaitingDrain = false;
+            _onCommitLost = null;
+            _expiryReplays = 0;
+            _suppressCaptureThisFrame = false;
+            _prepDoneThisFrame = false;
+            DeferForTerrain = false;
         }
 
         protected override void OnUpdate()
@@ -451,10 +455,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
             MultiplayerSession session = service.Session;
             if (!service.GameplaySyncReady)
             {
-                if (_deferredSpanPieces.Count > 0) _deferredSpanPieces.Clear();
-                _cachedLocalCourses.Clear();
-                _committedNetSideEffects.Clear();
-                _nativeTargetDeadlines.Clear();
+                DrainNetQueues();
                 return;
             }
 

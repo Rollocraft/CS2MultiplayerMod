@@ -226,69 +226,6 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         }
 
         /// <summary>
-        /// Realize the local player's swallowed bulldozer clicks (see <see cref="QueueLocalBulldoze"/>).
-        /// Objects delete immediately; edges need the net commit slot, so they wait while a batch is
-        /// in flight. Deliberately NO echo-guard marks anywhere here — the normal capture must
-        /// broadcast these deletes, exactly as if the click had landed.
-        /// </summary>
-        private void RealizeLocalBulldozes()
-        {
-            if (_localBulldozes.Count == 0) return;
-
-            int objectsDone = 0, edgesQueued = 0;
-            List<Entity> edges = null;
-            for (int i = 0; i < _localBulldozes.Count; i++)
-            {
-                Entity target = _localBulldozes[i];
-                if (!EntityManager.Exists(target) || EntityManager.HasComponent<Deleted>(target)) continue;
-                if (EntityManager.HasComponent<Edge>(target))
-                {
-                    if (edges == null || !edges.Contains(target))
-                        (edges ?? (edges = new List<Entity>())).Add(target);
-                    continue;
-                }
-                Entity attachParent = NetAttachment.GetNetParent(EntityManager, target);
-                EntityManager.AddComponent<Deleted>(target);
-                if (attachParent != Entity.Null) NetAttachment.TagParentUpdated(EntityManager, attachParent);
-                objectsDone++;
-            }
-            _localBulldozes.Clear();
-
-            if (edges != null)
-            {
-                // Re-checked live: a remote delete batch may have taken the slot earlier this frame.
-                if (_netSync != null && _netSync.CanBuildDefinitions)
-                {
-                    _netSync.PrepareDefinitionFrame();
-                    List<Entity> armed = null;
-                    for (int i = 0; i < edges.Count; i++)
-                    {
-                        if (!CreateEdgeDeleteDef(edges[i])) continue;
-                        (armed ?? (armed = new List<Entity>())).Add(edges[i]);
-                    }
-                    if (armed != null)
-                    {
-                        edgesQueued = armed.Count;
-                        _netSync.ArmNetCommit(delegate
-                        {
-                            // The originals are still alive on a lost commit; try again next cycle.
-                            for (int i = 0; i < armed.Count; i++) QueueLocalBulldoze(armed[i]);
-                        }, "local delete n=" + armed.Count);
-                    }
-                }
-                else
-                {
-                    // Slot busy — keep them for the next cycle.
-                    _localBulldozes.AddRange(edges);
-                }
-            }
-
-            if (objectsDone > 0 || edgesQueued > 0)
-                Diagnostics.FlightRecorder.Note("local bulldoze replay objects=" + objectsDone +
-                    " edges=" + edgesQueued);
-        }
-
-        /// <summary>
         /// Build bulldoze delete-definition for <paramref name="edge"/>: non-Permanent
         /// <see cref="CreationDefinition"/> with <see cref="CreationFlags.Delete"/> and <see cref="NetCourse"/>.
         /// Returns false if edge missing or lacks geometry.

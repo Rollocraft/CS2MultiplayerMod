@@ -50,11 +50,6 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         private readonly List<(NetDeleteCommand cmd, long deadline)> _edgeRetry =
             new List<(NetDeleteCommand, long)>();
 
-        // Bulldoze targets from the local player's swallowed clicks (see NetSyncSystem's .Replay):
-        // realized as LOCAL work with NO echo-guard marks, so the normal delete capture broadcasts
-        // them — exactly as if the click had landed.
-        private readonly List<Entity> _localBulldozes = new List<Entity>();
-
         private PrefabSystem _prefabSystem;
         private PrefabIndex _prefabIndex;
         private NetSyncSystem _netSync;
@@ -199,13 +194,24 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 _observer = new CommandObserver(_incoming, ObjectDeleteCommand.Id, NetDeleteCommand.Id);
                 Mod.Service.Session.AddObserver(_observer);
             }
+            SyncInbox.RegisterDrain(DrainQueue);
         }
 
         protected override void OnDestroy()
         {
+            SyncInbox.UnregisterDrain(DrainQueue);
             if (_observer != null && Mod.Service != null)
                 Mod.Service.Session.RemoveObserver(_observer);
             base.OnDestroy();
+        }
+
+        private void DrainQueue()
+        {
+            SyncInbox.Clear(_incoming);
+            _replayEdgeDeletes.Clear();
+            _objectRetry.Clear();
+            _edgeRetry.Clear();
+            DeferNetForTerrain = false;
         }
 
         protected override void OnUpdate()
@@ -214,7 +220,11 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             if (service == null) return;
 
             MultiplayerSession session = service.Session;
-            if (!service.GameplaySyncReady) return;
+            if (!service.GameplaySyncReady)
+            {
+                DrainQueue();
+                return;
+            }
 
             long now = service.NowMs;
             _guard.Prune(now);
@@ -234,12 +244,11 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             // Drain everything first, then do one scan per category — bulldozing tends to
             // arrive in bursts and the match scan is the expensive part.
             //
-            // Edge deletes go through NetSync's ApplyTool commit (a real bulldoze — props, lanes,
+            // Edge deletes go through NetSync's isolated net commit (a real bulldoze — props, lanes,
             // terrain and node recombination, which a raw Deleted tag skips). That pipeline handles ONE
             // net batch at a time; while a batch is in flight (or on the frame the player's own gesture
-            // applies) we leave incoming edge deletes queued and retry next cycle. A build tool merely
-            // A net delete uses the global Temp/ApplyTool transaction, so it waits for terrain and
-            // for the default-tool window just like placement. Object deletes (a raw Deleted tag on
+            // applies) we leave incoming edge deletes queued and retry next cycle. A selected build
+            // tool only blocks on its actual Apply/Clear frame. Object deletes (a raw Deleted tag on
             // a real entity) always proceed.
             bool netBusy = DeferNetForTerrain || _netSync == null || !_netSync.CanBuildDefinitions;
             long now = service.NowMs;
@@ -299,17 +308,6 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
             if (objects != null) RealizeObjectDeletes(objects, now);
             if (edges != null) RealizeEdgeDeletes(edges, now);
-            RealizeLocalBulldozes();
-        }
-
-        /// <summary>
-        /// A swallowed bulldozer click's target (object or edge), handed over by the definition
-        /// gate's stash. Realized as local work on the next cycle - deliberately unguarded so the
-        /// normal capture broadcasts the delete to the peers.
-        /// </summary>
-        public void QueueLocalBulldoze(Entity target)
-        {
-            if (_localBulldozes.Count < MaxPendingDeletes) _localBulldozes.Add(target);
         }
 
 

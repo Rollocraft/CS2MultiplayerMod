@@ -9,6 +9,7 @@ using Game.Prefabs;
 using Game.Tools;
 using Unity.Collections;
 using Unity.Entities;
+using Unity.Mathematics;
 using CS2MultiplayerMod.Core.Protocol.Messages;
 using CS2MultiplayerMod.Core.Session;
 
@@ -41,20 +42,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         /// <summary>
         /// Set by <see cref="SyncRealizeSystem"/> while remote terrain edits are backlogged: no new
         /// remote object realizes until terrain catches up (its transmitted Y assumes the sender's
-        /// terrain). Local click-replays are exempt - their Y was measured on this machine.
+        /// terrain).
         /// </summary>
         public bool DeferForTerrain;
-
-        // Object ghosts from the local player's swallowed clicks (see NetSyncSystem's .Replay):
-        // realized ahead of remote arrivals. The guard marks RealizeCommand sets suppress the
-        // capture echo - the explicit broadcast at replay time already informed the peers.
-        private readonly List<ObjectPlacementCommand> _localReplays = new List<ObjectPlacementCommand>();
-
-        /// <summary>A swallowed object-tool click, replayed as a local placement.</summary>
-        public void QueueLocalReplay(ObjectPlacementCommand command)
-        {
-            if (_localReplays.Count < MaxPendingAttachments) _localReplays.Add(command);
-        }
 
         private readonly Dictionary<string, int> _diag = new Dictionary<string, int>();
         private long _diagStartMs = -1;
@@ -68,6 +58,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         private PrefabSystem _prefabSystem;
         private PrefabIndex _prefabIndex;
         private ToolSystem _toolSystem;
+        private bool _localObjectApplyThisFrame;
         private EntityQuery _createdObjects;
         private EntityQuery _liveNodes;
         private EntityQuery _liveEdges;
@@ -166,13 +157,23 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 _observer = new CommandObserver(_incoming, ObjectPlacementCommand.Id);
                 Mod.Service.Session.AddObserver(_observer);
             }
+            SyncInbox.RegisterDrain(DrainQueue);
         }
 
         protected override void OnDestroy()
         {
+            SyncInbox.UnregisterDrain(DrainQueue);
             if (_observer != null && Mod.Service != null)
                 Mod.Service.Session.RemoveObserver(_observer);
             base.OnDestroy();
+        }
+
+        private void DrainQueue()
+        {
+            SyncInbox.Clear(_incoming);
+            _attachRetry.Clear();
+            _localObjectApplyThisFrame = false;
+            DeferForTerrain = false;
         }
 
         protected override void OnUpdate()
@@ -194,7 +195,21 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 _guard.Prune(now);
                 CaptureNewObjects(session, now);
             }
+            else DrainQueue();
+            _localObjectApplyThisFrame = false;
             FlushDiagnostics(now, service.GameplaySyncReady);
+        }
+
+        /// <summary>
+        /// Remember the ToolUpdate decision that can produce Created objects later this frame.
+        /// Some one-shot placements leave the object tool before ModificationEnd, so checking the
+        /// active tool only at capture time loses the placement entirely.
+        /// </summary>
+        public void ObserveLocalToolOutput()
+        {
+            global::Game.Tools.ToolBaseSystem active = _toolSystem != null ? _toolSystem.activeTool : null;
+            _localObjectApplyThisFrame = active is ObjectToolSystem &&
+                                         active.applyMode == ApplyMode.Apply;
         }
 
         /// <summary>
@@ -265,7 +280,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             // on frames where the object tool is active. Simulation-spawned objects
             // (zone growth, sub-spawns) arrive regardless of the active tool, so
             // requiring it filters them out. (In-game verification tracked in docs.)
-            if (!(_toolSystem.activeTool is ObjectToolSystem)) return;
+            if (!_localObjectApplyThisFrame) return;
 
             NativeArray<Entity> entities = _createdObjects.ToEntityArray(Allocator.Temp);
             try
@@ -278,6 +293,12 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     if (string.IsNullOrEmpty(name)) continue;
 
                     Transform transform = EntityManager.GetComponentData<Transform>(entity);
+                    int randomSeed = EntityManager.HasComponent<PseudoRandomSeed>(entity)
+                        ? EntityManager.GetComponentData<PseudoRandomSeed>(entity).m_Seed
+                        : (int)(math.hash(transform.m_Position) & 0xffffu);
+                    float age = EntityManager.HasComponent<Tree>(entity)
+                        ? TreeAge(EntityManager.GetComponentData<Tree>(entity))
+                        : 0f;
 
                     // Skip objects we just realized from a remote command — don't echo them.
                     if (_guard.Consume(ReplicationGuard.Key(name, transform.m_Position), now)) continue;
@@ -301,6 +322,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                         RotY = transform.m_Rotation.value.y,
                         RotZ = transform.m_Rotation.value.z,
                         RotW = transform.m_Rotation.value.w,
+                        RandomSeed = randomSeed,
+                        Age = age,
                         AttachKind = attachKind,
                         AttachX = attachPos.x,
                         AttachY = attachPos.y,
@@ -314,6 +337,25 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             {
                 entities.Dispose();
             }
+        }
+
+        private static float TreeAge(Tree tree)
+        {
+            float growth = tree.m_Growth + 0.5f;
+            TreeState stage = tree.m_State &
+                              (TreeState.Teen | TreeState.Adult | TreeState.Elderly |
+                               TreeState.Dead | TreeState.Stump);
+            float age;
+            switch (stage)
+            {
+                case TreeState.Teen: age = 0.1f + growth / 1706.6666f; break;
+                case TreeState.Adult: age = 0.25f + growth / 731.4286f; break;
+                case TreeState.Elderly: age = 0.6f + growth / 731.4286f; break;
+                case TreeState.Dead:
+                case TreeState.Stump: age = 0.95f + growth / 5120f; break;
+                default: age = growth / 2560f; break;
+            }
+            return math.clamp(age, 0f, 1f);
         }
 
 

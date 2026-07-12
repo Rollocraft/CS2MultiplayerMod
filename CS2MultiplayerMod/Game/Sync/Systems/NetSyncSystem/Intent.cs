@@ -32,6 +32,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                 _cachedLocalCourses.Clear();
                 return;
             }
+            var netTool = (global::Game.Tools.NetToolSystem)active;
+            bool pointOperation = netTool.actualMode == global::Game.Tools.NetToolSystem.Mode.Point;
 
             var next = new List<NetPlacementCommand>();
             bool overflow = false;
@@ -46,7 +48,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                 if (!IsPlainLocalNetDefinition(definition)) continue;
 
                 NetCourse course = EntityManager.GetComponentData<NetCourse>(entity);
-                if (course.m_Length < 1f) continue; // point/cursor marker, never a committed segment
+                // Point-mode network prefabs intentionally commit a zero-length course (for example
+                // a circular junction). Other modes' zero-length definitions are only cursor markers.
+                if (course.m_Length < 1f && !pointOperation) continue;
 
                 NetPlacementCommand command = CaptureDefinitionCommand(definition, course);
                 if (command == null) continue;
@@ -91,9 +95,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                 active.applyMode != global::Game.Tools.ApplyMode.Apply ||
                 _cachedLocalCourses.Count == 0) return;
 
-            // A rare tool switch can overlap an already armed remote batch. Its gate/replay path owns
-            // that frame; publishing this cache would claim a local placement that may not commit.
-            if (_pendingApply || _awaitingDrain) return;
+            // When a remote batch is armed, BeginRealizeFrame has already Disabled its Temps and
+            // restored the local preview for this Apply frame. The local operation therefore commits
+            // normally and must still be published; the remote batch waits intact for a quiet frame.
 
             long now = service.NowMs;
             RecordPlacementOriginals(now);

@@ -46,6 +46,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             // Reset the net pipeline's per-frame state (the one-preview-wipe-per-frame guard) before
             // any feeder runs — DeleteSync/NetReplaceSync may hijack the frame before NetSync does.
             _netSync.BeginRealizeFrame();
+            _buildSync.ObserveLocalToolOutput();
 
             // The active net tool has already selected Apply, while ToolOutputSystem has not yet
             // consumed its standing preview. Publish the native definition cached after last

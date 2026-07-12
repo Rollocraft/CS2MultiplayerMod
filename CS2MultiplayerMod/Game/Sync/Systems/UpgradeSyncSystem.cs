@@ -18,8 +18,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
     /// <summary>
     /// Replicates service-building upgrades (<see cref="ServiceUpgrade"/>, <see cref="Extension"/>):
     /// detect Created + broadcast <see cref="UpgradePlacementCommand"/> with owner prefab+position.
-    /// Realize by finding owner building, spawn <see cref="CreationDefinition"/> with <c>m_Owner</c>
-    /// and Permanent|Attach|Upgrade flags. Host charges via <see cref="ConstructionCharger"/>.
+    /// Realization first creates the owned extension, then emits its prefab-owned areas and access
+    /// networks once the extension entity is queryable. Host charges via <see cref="ConstructionCharger"/>.
     /// </summary>
     public partial class UpgradeSyncSystem : GameSystemBase
     {
@@ -35,10 +35,14 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
         private readonly System.Collections.Generic.List<(UpgradePlacementCommand cmd, int origin, long deadline)> _ownerRetry =
             new System.Collections.Generic.List<(UpgradePlacementCommand, int, long)>();
+        private readonly System.Collections.Generic.List<(Entity prefab, float3 position, int seed, long deadline)>
+            _ownedElementRetry = new System.Collections.Generic.List<(Entity, float3, int, long)>();
 
         private PrefabSystem _prefabSystem;
         private PrefabIndex _prefabIndex;
+        private BuildSyncSystem _buildSync;
         private EntityQuery _createdUpgrades;
+        private EntityQuery _liveUpgrades;
         private EntityQuery _liveOwners;
         private CommandObserver _observer;
 
@@ -49,6 +53,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             Mod.log.Info(nameof(UpgradeSyncSystem) + " ready.");
             _prefabSystem = World.GetOrCreateSystemManaged<PrefabSystem>();
             _prefabIndex = new PrefabIndex(_prefabSystem, GetEntityQuery(ComponentType.ReadOnly<PrefabData>()));
+            _buildSync = World.GetOrCreateSystemManaged<BuildSyncSystem>();
 
             // Owned sub-objects created this frame that are genuine service upgrades —
             // Any{} keeps out the decorative props the game also parents to buildings.
@@ -57,6 +62,26 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 All = new[]
                 {
                     ComponentType.ReadOnly<Created>(),
+                    ComponentType.ReadOnly<PrefabRef>(),
+                    ComponentType.ReadOnly<Transform>(),
+                    ComponentType.ReadOnly<Owner>(),
+                },
+                Any = new[]
+                {
+                    ComponentType.ReadOnly<global::Game.Buildings.ServiceUpgrade>(),
+                    ComponentType.ReadOnly<Extension>(),
+                },
+                None = new[]
+                {
+                    ComponentType.ReadOnly<Temp>(),
+                    ComponentType.ReadOnly<Deleted>(),
+                },
+            });
+
+            _liveUpgrades = GetEntityQuery(new EntityQueryDesc
+            {
+                All = new[]
+                {
                     ComponentType.ReadOnly<PrefabRef>(),
                     ComponentType.ReadOnly<Transform>(),
                     ComponentType.ReadOnly<Owner>(),
@@ -95,13 +120,22 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 _observer = new CommandObserver(_incoming, UpgradePlacementCommand.Id);
                 Mod.Service.Session.AddObserver(_observer);
             }
+            SyncInbox.RegisterDrain(DrainQueue);
         }
 
         protected override void OnDestroy()
         {
+            SyncInbox.UnregisterDrain(DrainQueue);
             if (_observer != null && Mod.Service != null)
                 Mod.Service.Session.RemoveObserver(_observer);
             base.OnDestroy();
+        }
+
+        private void DrainQueue()
+        {
+            SyncInbox.Clear(_incoming);
+            _ownerRetry.Clear();
+            _ownedElementRetry.Clear();
         }
 
         protected override void OnUpdate()
@@ -124,8 +158,14 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             if (service == null) return;
 
             MultiplayerSession session = service.Session;
-            if (!service.GameplaySyncReady) return;
-            RealizeIncoming(session, service.NowMs);
+            if (!service.GameplaySyncReady)
+            {
+                DrainQueue();
+                return;
+            }
+            long now = service.NowMs;
+            RealizePendingOwnedElements(now);
+            RealizeIncoming(session, now);
         }
 
         private void CaptureNewUpgrades(MultiplayerSession session, long now)
@@ -159,6 +199,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     string ownerName = _prefabSystem.GetPrefabName(EntityManager.GetComponentData<PrefabRef>(owner).m_Prefab);
                     if (string.IsNullOrEmpty(ownerName)) continue;
                     float3 ownerPos = EntityManager.GetComponentData<Transform>(owner).m_Position;
+                    int randomSeed = EntityManager.HasComponent<PseudoRandomSeed>(entity)
+                        ? EntityManager.GetComponentData<PseudoRandomSeed>(entity).m_Seed
+                        : (int)(math.hash(transform.m_Position) & 0xffffu);
 
                     var command = new UpgradePlacementCommand
                     {
@@ -168,6 +211,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                         PosX = transform.m_Position.x, PosY = transform.m_Position.y, PosZ = transform.m_Position.z,
                         RotX = transform.m_Rotation.value.x, RotY = transform.m_Rotation.value.y,
                         RotZ = transform.m_Rotation.value.z, RotW = transform.m_Rotation.value.w,
+                        RandomSeed = randomSeed,
                     };
                     session.SendCommand(0, UpgradePlacementCommand.Id, command.Encode());
                     Mod.Verbose("[MP] UpgradeSync captured '" + name + "' on '" + ownerName + "'.");
@@ -234,11 +278,16 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             var position = new float3(command.PosX, command.PosY, command.PosZ);
             var rotation = new quaternion(command.RotX, command.RotY, command.RotZ, command.RotW);
 
+            // Reliable retries and reconnect boundaries must not duplicate an already-realized
+            // extension. Ownership is part of the identity because two nearby service buildings can
+            // legitimately use the same upgrade prefab.
+            if (FindUpgrade(prefab, position, owner) != Entity.Null) return true;
+
             _guard.Mark(UpgradeKey(command.PrefabName, position), now);
             try
             {
                 RealizeUpgrade(prefab, owner, position, rotation,
-                    EntityManager.GetComponentData<Transform>(owner));
+                    EntityManager.GetComponentData<Transform>(owner), command.RandomSeed);
                 ConstructionCharger.ChargeUpgrade(EntityManager, prefab, command.PrefabName);
                 Mod.Verbose("[MP] UpgradeSync realize: attached '" + command.PrefabName + "' to '" +
                              command.OwnerPrefabName + "' from player " + origin + ".");
@@ -269,20 +318,17 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             return Entity.Null;
         }
 
-        /// <summary>
-        /// Same definition recipe as <see cref="BuildSyncSystem"/>, plus <c>m_Owner</c> and
-        /// the Attach|Upgrade flags so <c>GenerateObjectsSystem</c> parents the extension to
-        /// the building (registering it as a service upgrade) instead of placing a loose prop.
-        /// </summary>
-        private void RealizeUpgrade(Entity prefab, Entity owner, float3 position, quaternion rotation, Transform ownerTransform)
+        /// <summary>Create the top-level service extension with a direct, already-live owner.</summary>
+        private void RealizeUpgrade(Entity prefab, Entity owner, float3 position, quaternion rotation,
+            Transform ownerTransform, int randomSeed)
         {
             Entity definition = EntityManager.CreateEntity();
             EntityManager.AddComponentData(definition, new CreationDefinition
             {
                 m_Prefab = prefab,
                 m_Owner = owner,
-                m_RandomSeed = 0,
-                m_Flags = CreationFlags.Permanent | CreationFlags.Attach | CreationFlags.Upgrade,
+                m_RandomSeed = randomSeed,
+                m_Flags = CreationFlags.Permanent,
             });
             // World transform travels on the wire; the local one (relative to the owner)
             // is derived here. m_ParentMesh = -1 means "attached to the building itself,
@@ -294,12 +340,72 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 m_Rotation = rotation,
                 m_LocalPosition = math.mul(inverseOwner, position - ownerTransform.m_Position),
                 m_LocalRotation = math.mul(inverseOwner, rotation),
-                m_ParentMesh = -1,
+                m_ParentMesh = EntityManager.HasComponent<BuildingData>(prefab) ? -1 : 0,
                 m_Scale = new float3(1f, 1f, 1f),
+                m_Intensity = 1f,
                 m_Probability = 100,
+                m_PrefabSubIndex = -1,
             });
             EntityManager.AddComponent<Updated>(definition);
             EntityManager.AddComponent<Deleted>(definition);
+
+            if (EntityManager.HasBuffer<SubNet>(prefab) || EntityManager.HasBuffer<SubArea>(prefab))
+            {
+                if (_ownedElementRetry.Count >= MaxPendingOwners) _ownedElementRetry.RemoveAt(0);
+                long now = Mod.Service != null ? Mod.Service.NowMs : 0;
+                _ownedElementRetry.Add((prefab, position, randomSeed, now + OwnerRetryWindowMs));
+            }
+        }
+
+        private void RealizePendingOwnedElements(long now)
+        {
+            for (int i = _ownedElementRetry.Count - 1; i >= 0; i--)
+            {
+                var pending = _ownedElementRetry[i];
+                Entity upgrade = FindUpgrade(pending.prefab, pending.position, Entity.Null);
+                if (upgrade != Entity.Null)
+                {
+                    try
+                    {
+                        var random = new Unity.Mathematics.Random((uint)math.max(1, pending.seed));
+                        _buildSync.RealizeOwnedSubElements(pending.prefab, upgrade,
+                            EntityManager.GetComponentData<Transform>(upgrade), ref random);
+                    }
+                    catch (System.Exception ex)
+                    {
+                        Mod.log.Error("[MP] UpgradeSync owned-element realization FAILED: " + ex);
+                    }
+                    _ownedElementRetry.RemoveAt(i);
+                }
+                else if (now >= pending.deadline)
+                {
+                    _ownedElementRetry.RemoveAt(i);
+                    Mod.log.Warn("[MP] UpgradeSync: created extension did not become queryable; " +
+                                 "owned access elements were dropped.");
+                }
+            }
+        }
+
+        private Entity FindUpgrade(Entity prefab, float3 position, Entity expectedOwner)
+        {
+            NativeArray<Entity> candidates = _liveUpgrades.ToEntityArray(Allocator.Temp);
+            try
+            {
+                for (int i = 0; i < candidates.Length; i++)
+                {
+                    Entity candidate = candidates[i];
+                    if (EntityManager.GetComponentData<PrefabRef>(candidate).m_Prefab != prefab) continue;
+                    if (expectedOwner != Entity.Null &&
+                        EntityManager.GetComponentData<Owner>(candidate).m_Owner != expectedOwner) continue;
+                    float3 candidatePosition = EntityManager.GetComponentData<Transform>(candidate).m_Position;
+                    if (math.distancesq(candidatePosition, position) <= 4f) return candidate;
+                }
+            }
+            finally
+            {
+                candidates.Dispose();
+            }
+            return Entity.Null;
         }
 
         private static string UpgradeKey(string prefabName, float3 position) =>

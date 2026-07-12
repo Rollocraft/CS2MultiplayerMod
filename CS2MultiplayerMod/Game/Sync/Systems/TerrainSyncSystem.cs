@@ -28,9 +28,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
     /// one <see cref="TerrainBrushCommand"/>.
     ///
     /// Realize (ToolUpdate, via <see cref="SyncRealizeSystem"/>): recreate each sample as a real
-    /// <c>Temp + Brush</c> entity (tagged <see cref="RemoteTerrainBrush"/>) and reserve the same
-    /// frame's ApplyTool pass through the net commit coordinator, so <c>ApplyBrushesSystem</c> runs
-    /// the height/material/resource change on the normal path and tags each sample
+    /// <c>Temp + Brush</c> entity (tagged <see cref="RemoteTerrainBrush"/>) and apply the isolated
+    /// brush domain through <c>ApplyBrushesSystem</c>. This runs the height/material/resource change
+    /// on the normal path and tags each sample
     /// <c>Applied + Deleted</c>. Independent bounds cap samples-per-frame, decode scan and inbox size;
     /// residual GPU/float drift is trued by the periodic world resync.
     /// </summary>
@@ -63,7 +63,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         private EntityQuery _appliedBrushes;
         private CommandObserver _observer;
         private bool _awaitingHeightReadback;
-        private bool _commitFlipFailureLogged;
+        private bool _commitApplyFailureLogged;
 
         private long _diagStartMs = -1;
         private int _diagCaptured, _diagRealized;
@@ -120,7 +120,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             SyncInbox.Clear(_incoming);
             _pending.Clear();
             _awaitingHeightReadback = false;
-            _commitFlipFailureLogged = false;
+            _commitApplyFailureLogged = false;
         }
 
         protected override void OnUpdate()
@@ -216,13 +216,11 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
             if (_pending.Count == 0) return;
 
-            // The ApplyTool flip must not fight a net commit or the player's own apply: gate on the
-            // coordinator, exactly like the delete/replace feeders.
-            if (_netSync == null || !_netSync.CanBuildDefinitions) return;
+            // A local Apply/Clear frame gets priority. Merely keeping a build/terrain tool selected
+            // is safe because the brush domain is isolated from its standing preview below.
+            if (_netSync == null || !_netSync.CanApplyAuxiliaryTemps) return;
 
-            // Clear the player's preview for one frame so the flip commits only our brush samples,
-            // then materialise up to the budget and drive the pass this same frame.
-            _netSync.PrepareDefinitionFrame();
+            _netSync.PrepareAuxiliaryTemps();
 
             int candidateCount = System.Math.Min(MaxApplyPerFrame, _pending.Count);
             var created = new List<Entity>(candidateCount);
@@ -256,16 +254,16 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             if (!committed)
             {
                 DestroyUncommittedBrushes(created);
-                if (!_commitFlipFailureLogged)
+                if (!_commitApplyFailureLogged)
                 {
-                    _commitFlipFailureLogged = true;
-                    Mod.log.Warn("[MP] TerrainSync: ApplyTool unavailable; remote samples remain queued" +
+                    _commitApplyFailureLogged = true;
+                    Mod.log.Warn("[MP] TerrainSync: brush apply unavailable; remote samples remain queued" +
                                  (string.IsNullOrEmpty(commitError) ? "." : ": " + commitError));
                 }
                 return;
             }
 
-            _commitFlipFailureLogged = false;
+            _commitApplyFailureLogged = false;
             _pending.RemoveRange(0, created.Count);
             if (changesHeight) _awaitingHeightReadback = true;
             _diagRealized += created.Count;
