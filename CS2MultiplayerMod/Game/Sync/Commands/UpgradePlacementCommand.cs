@@ -17,6 +17,7 @@ namespace CS2MultiplayerMod.Game.Sync.Commands
         public float OwnerX, OwnerY, OwnerZ;
         public float PosX, PosY, PosZ;
         public float RotX, RotY, RotZ, RotW;
+        public int RandomSeed;
 
         public ushort CommandId => Id;
 
@@ -27,6 +28,7 @@ namespace CS2MultiplayerMod.Game.Sync.Commands
             writer.WriteFloat(OwnerX); writer.WriteFloat(OwnerY); writer.WriteFloat(OwnerZ);
             writer.WriteFloat(PosX); writer.WriteFloat(PosY); writer.WriteFloat(PosZ);
             writer.WriteFloat(RotX); writer.WriteFloat(RotY); writer.WriteFloat(RotZ); writer.WriteFloat(RotW);
+            writer.WriteInt(RandomSeed);
         }
 
         public void Read(NetworkReader reader)
@@ -36,6 +38,12 @@ namespace CS2MultiplayerMod.Game.Sync.Commands
             OwnerX = WireGuard.ReadCoordinate(reader); OwnerY = WireGuard.ReadCoordinate(reader); OwnerZ = WireGuard.ReadCoordinate(reader);
             PosX = WireGuard.ReadCoordinate(reader); PosY = WireGuard.ReadCoordinate(reader); PosZ = WireGuard.ReadCoordinate(reader);
             RotX = WireGuard.ReadFinite(reader); RotY = WireGuard.ReadFinite(reader); RotZ = WireGuard.ReadFinite(reader); RotW = WireGuard.ReadFinite(reader);
+            RandomSeed = reader.ReadInt();
+            if (RandomSeed < 0 || RandomSeed > ushort.MaxValue)
+                throw new ProtocolException("Upgrade random seed is outside ushort range.");
+            if (reader.Remaining != 0)
+                throw new ProtocolException("Trailing bytes in upgrade-placement command: " +
+                                            reader.Remaining + ".");
         }
 
         public byte[] Encode()

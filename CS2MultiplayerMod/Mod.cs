@@ -42,6 +42,9 @@ namespace CS2MultiplayerMod
             // else of ours can fail (see FlightRecorder).
             FlightRecorder.Start(typeof(Mod).Assembly.GetName().Version.ToString());
 
+            // Route the sync inbox's rare backpressure/drain warnings to the mod log.
+            Game.Sync.Infrastructure.SyncInbox.LogWarn = log.Warn;
+
             if (GameManager.instance.modManager.TryGetExecutableAsset(this, out var asset))
                 log.Info($"Current mod asset at {asset.path}");
 
@@ -62,6 +65,7 @@ namespace CS2MultiplayerMod
             // Stand up the multiplayer core (portable session + game logger adapter) and
             // register the ECS system that pumps it once per simulation tick.
             Service = new MultiplayerService(new ColossalModLogger(log));
+            FlightRecorder.Note("startup-stage service-created");
             log.Info("Multiplayer core initialised. Protocol v" +
                      CS2MultiplayerMod.Core.Protocol.ProtocolConstants.ProtocolVersion +
                      ". Registering sync systems...");
@@ -125,13 +129,23 @@ namespace CS2MultiplayerMod
             // Realization must run at ToolUpdate: definition entities are consumed at
             // Modification1 and their Updated tag is stripped at Cleanup, so a definition
             // spawned at ModificationEnd is never realized (see SyncRealizeSystem).
+            // Complete remote terrain GPU readback at the very start of ToolUpdate, before a local
+            // road/object tool can generate a preview from stale CPU heights.
+            updateSystem.UpdateBefore<Game.Sync.Systems.TerrainReadbackBarrierSystem>(
+                SystemUpdatePhase.ToolUpdate);
             updateSystem.UpdateAt<Game.Sync.Systems.SyncRealizeSystem>(SystemUpdatePhase.ToolUpdate);
+            // After ToolOutputBarrier: tools record their definitions through that end-of-phase
+            // buffer, so this is the first (and only) slot where they exist as entities but have
+            // not been consumed - the gate keeps them out of an armed net commit (see there).
+            updateSystem.UpdateAfter<Game.Sync.Systems.DefinitionGateSystem, global::Game.Tools.ToolOutputBarrier>(
+                SystemUpdatePhase.ToolUpdate);
             // UIUpdate, not GameSimulation, for the same reason as the session pump:
             // hosting starts from the options screen, which pauses the simulation -
             // at GameSimulation the queued initial world stream for a joining client
             // was never processed while the host sat in the (paused) menu, leaving
             // the client stuck in WaitingForMap forever.
             updateSystem.UpdateAt<Game.Sync.Systems.WorldResyncSystem>(SystemUpdatePhase.UIUpdate);
+            FlightRecorder.Note("startup-complete systems-registered");
         }
 
         public void OnDispose()

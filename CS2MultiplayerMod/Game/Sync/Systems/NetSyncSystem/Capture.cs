@@ -86,6 +86,11 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
 
         private void CaptureNewEdges(MultiplayerSession session, long now)
         {
+            // A local net-tool Apply was already serialized from its native NetCourse intent in
+            // ToolUpdate. Every Created edge in that operation (drawn courses, split halves and
+            // reductions) is output, not another placement command.
+            if (_nativeApplyCapturedFrame == _realizeFrame) return;
+
             // On the frame a self-driven ApplyTool pass commits a remote batch, every Created edge
             // here is that batch's output - skip exactly this frame (never a wall-clock window,
             // which also swallowed roads the player built while remote batches streamed in).

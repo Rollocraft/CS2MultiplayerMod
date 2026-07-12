@@ -119,6 +119,7 @@ namespace CS2MultiplayerMod.Game
         {
             if (!ModEnabled) { _log.Warn("Cannot host: the mod is disabled in settings."); return; }
             if (_session.Role != SessionRole.None) { _log.Warn("Cannot host: a session is already active."); return; }
+            ResetCommandDiagnostics();
             _lastFault = null;
             var config = BuildConfig(settings, hosting: true);
             _log.Info("[MP] Host requested: port=" + config.Port +
@@ -135,6 +136,7 @@ namespace CS2MultiplayerMod.Game
         {
             if (!ModEnabled) { _log.Warn("Cannot join: the mod is disabled in settings."); return; }
             if (_session.Role != SessionRole.None) { _log.Warn("Cannot join: a session is already active."); return; }
+            ResetCommandDiagnostics();
             _lastFault = null;
             var config = BuildConfig(settings, hosting: false);
             _log.Info("[MP] Join requested: target=" + config.HostAddress + ":" + config.Port +
@@ -188,6 +190,9 @@ namespace CS2MultiplayerMod.Game
             try { gameVersion = UnityEngine.Application.version; }
             catch (Exception) { gameVersion = ""; }
 
+            string[] dlcs = DlcCheck.OwnedSyncRelevantDlcs(_log);
+            Diagnostics.FlightRecorder.RecordLoadedContent(dlcs);
+
             // Encryption is permanently off in-game: the game's Mono runtime cannot
             // create the TLS certificate (CertificateRequest is missing and the attempt
             // crashed the host silently). Authentication is unaffected - the password
@@ -197,7 +202,7 @@ namespace CS2MultiplayerMod.Game
                 hosting ? settings.HostPassword : settings.JoinPassword,
                 settings.LanOnly, useEncryption: false, maxPlayers: maxPlayers,
                 modVersion: modVersion, gameVersion: gameVersion,
-                dlcList: DlcCheck.OwnedSyncRelevantDlcs(_log));
+                dlcList: dlcs);
         }
 
     }

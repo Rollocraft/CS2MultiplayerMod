@@ -176,13 +176,24 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 _observer = new CommandObserver(_incoming, NetReplaceCommand.Id);
                 Mod.Service.Session.AddObserver(_observer);
             }
+            SyncInbox.RegisterDrain(DrainQueue);
         }
 
         protected override void OnDestroy()
         {
+            SyncInbox.UnregisterDrain(DrainQueue);
             if (_observer != null && Mod.Service != null)
                 Mod.Service.Session.RemoveObserver(_observer);
             base.OnDestroy();
+        }
+
+        private void DrainQueue()
+        {
+            SyncInbox.Clear(_incoming);
+            _edgeBaseline.Clear();
+            _retry.Clear();
+            _replayCommands.Clear();
+            _seeded = false;
         }
 
         protected override void OnUpdate()
@@ -194,13 +205,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             if (!service.GameplaySyncReady)
             {
                 // Drop the baseline between sessions/world-loads so the next world re-seeds cleanly.
-                if (_edgeBaseline.Count > 0 || _retry.Count > 0 || _replayCommands.Count > 0 || _seeded)
-                {
-                    _edgeBaseline.Clear();
-                    _retry.Clear();
-                    _replayCommands.Clear();
-                    _seeded = false;
-                }
+                DrainQueue();
                 return;
             }
 

@@ -54,8 +54,11 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             _rzRealizedThisFrame.Clear();
             try
             {
-                RetryPendingAttachments(now);
-                DrainIncoming(session, now);
+                if (!DeferForTerrain)
+                {
+                    RetryPendingAttachments(now);
+                    DrainIncoming(session, now);
+                }
 
                 if (_rzFrameSpawned > 0 || _rzFrameDuplicates > 0)
                 {
@@ -162,7 +165,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             _guard.Mark(ReplicationGuard.Key(command.PrefabName, position), now);
             try
             {
-                RealizeObject(prefab, position, rotation, attachParent);
+                RealizeObject(prefab, position, rotation, attachParent,
+                    command.RandomSeed, command.Age);
                 ConstructionCharger.ChargeObject(EntityManager, prefab, command.PrefabName);
                 _rzFrameSpawned++;
                 _rzRealizedThisFrame.Add((prefab, position));
@@ -334,12 +338,10 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         /// otherwise). Permanent skips the tool's apply pass, so the parent is tagged here instead -
         /// see <see cref="NetAttachment"/>.
         /// </summary>
-        private void RealizeObject(Entity prefab, float3 position, quaternion rotation, Entity attachParent)
+        private void RealizeObject(Entity prefab, float3 position, quaternion rotation, Entity attachParent,
+            int randomSeed, float age)
         {
-            // Seed procedural detail from the world position so every machine realizing this same
-            // placement derives identical variation (no shared seed travels over the wire).
-            uint hash = math.hash(position);
-            var random = new Unity.Mathematics.Random(hash == 0u ? 1u : hash);
+            var random = new Unity.Mathematics.Random((uint)math.max(1, randomSeed));
 
             CreationFlags flags = CreationFlags.Permanent;
             if (attachParent != Entity.Null) flags |= CreationFlags.Attach;
@@ -349,7 +351,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             EntityManager.AddComponentData(definition, new CreationDefinition
             {
                 m_Prefab = prefab,
-                m_RandomSeed = random.NextInt(),
+                m_RandomSeed = randomSeed,
                 m_Attached = attachParent,
                 m_Flags = flags,
             });
@@ -365,6 +367,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 m_LocalRotation = rotation,
                 m_Scale = new float3(1f, 1f, 1f),
                 m_Intensity = 1f,
+                m_Age = age,
                 m_Probability = 100,
                 m_PrefabSubIndex = -1,
             });
@@ -378,8 +381,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 m_Position = position,
                 m_Rotation = rotation,
             };
-            RealizeSubAreas(prefab, owner, ref random);
-            RealizeSubNets(prefab, owner, ref random);
+            RealizeOwnedSubElements(prefab, owner, ref random);
 
             // The composition that draws the ring, or applies the sign's restriction, is re-selected
             // only for Updated entities, and nothing else will tag them on this path. GenerateObjects
@@ -388,12 +390,34 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             if (attachParent != Entity.Null) NetAttachment.TagParentUpdated(EntityManager, attachParent);
         }
 
+        internal void RealizeOwnedSubElements(Entity prefab, OwnerDefinition owner,
+            ref Unity.Mathematics.Random random)
+        {
+            RealizeSubAreas(prefab, owner, Entity.Null, ref random);
+            RealizeSubNets(prefab, owner, Entity.Null, ref random);
+        }
+
+        internal void RealizeOwnedSubElements(Entity prefab, Entity ownerEntity,
+            global::Game.Objects.Transform ownerTransform, ref Unity.Mathematics.Random random)
+        {
+            PrefabRef ownerPrefab = EntityManager.GetComponentData<PrefabRef>(ownerEntity);
+            var owner = new OwnerDefinition
+            {
+                m_Prefab = ownerPrefab.m_Prefab,
+                m_Position = ownerTransform.m_Position,
+                m_Rotation = ownerTransform.m_Rotation,
+            };
+            RealizeSubAreas(prefab, owner, ownerEntity, ref random);
+            RealizeSubNets(prefab, owner, ownerEntity, ref random);
+        }
+
         /// <summary>
         /// Emit lot/area definitions per <see cref="SubArea"/>, terrain-following polygons from
         /// <see cref="SubAreaNode"/> buffer (local to world). Resolve placeholder prefabs via
         /// SelectAreaPrefab, guarded against missing <see cref="SpawnableObjectData"/>.
         /// </summary>
-        private void RealizeSubAreas(Entity prefab, OwnerDefinition owner, ref Unity.Mathematics.Random random)
+        private void RealizeSubAreas(Entity prefab, OwnerDefinition owner, Entity ownerEntity,
+            ref Unity.Mathematics.Random random)
         {
             if (!EntityManager.HasBuffer<SubArea>(prefab)) return;
             DynamicBuffer<SubArea> subAreas = EntityManager.GetBuffer<SubArea>(prefab, isReadOnly: true);
@@ -448,12 +472,13 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     EntityManager.AddComponentData(areaDef, new CreationDefinition
                     {
                         m_Prefab = areaPrefab,
+                        m_Owner = ownerEntity,
                         m_RandomSeed = seed,
                         m_Flags = CreationFlags.Permanent,
                     });
                     EntityManager.AddComponent<Updated>(areaDef);
                     EntityManager.AddComponent<Deleted>(areaDef); // consumed this frame, swept at Cleanup
-                    EntityManager.AddComponentData(areaDef, owner);
+                    if (ownerEntity == Entity.Null) EntityManager.AddComponentData(areaDef, owner);
 
                     DynamicBuffer<global::Game.Areas.Node> nodes =
                         EntityManager.AddBuffer<global::Game.Areas.Node>(areaDef);
@@ -494,10 +519,10 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
         /// <summary>
         /// Emit connection-net definitions per <see cref="SubNet"/>, curves averaged at shared
-        /// node indices, mirrored for left-hand traffic, transformed local to world, marked
-        /// <see cref="CoursePosFlags.DisableMerge"/> to prevent node fusion.
+        /// node indices, mirrored for left-hand traffic and transformed local to world.
         /// </summary>
-        private void RealizeSubNets(Entity prefab, OwnerDefinition owner, ref Unity.Mathematics.Random random)
+        private void RealizeSubNets(Entity prefab, OwnerDefinition owner, Entity ownerEntity,
+            ref Unity.Mathematics.Random random)
         {
             if (!EntityManager.HasBuffer<SubNet>(prefab)) return;
             DynamicBuffer<SubNet> subNets = EntityManager.GetBuffer<SubNet>(prefab, isReadOnly: true);
@@ -541,7 +566,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                         continue;
                     }
                     RealizeSubNetCourse(subNet.m_Prefab, subNet.m_Curve, subNet.m_NodeIndex,
-                        subNet.m_ParentMesh, subNet.m_Upgrades, nodePositions, owner, ref random);
+                        subNet.m_ParentMesh, subNet.m_Upgrades, nodePositions, owner, ownerEntity,
+                        ref random);
                 }
             }
             finally
@@ -552,18 +578,19 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
         private void RealizeSubNetCourse(Entity netPrefab, Bezier4x3 curve, int2 nodeIndex, int2 parentMesh,
             CompositionFlags upgrades, NativeList<float4> nodePositions, OwnerDefinition owner,
-            ref Unity.Mathematics.Random random)
+            Entity ownerEntity, ref Unity.Mathematics.Random random)
         {
             Entity netDef = EntityManager.CreateEntity();
             EntityManager.AddComponentData(netDef, new CreationDefinition
             {
                 m_Prefab = netPrefab,
+                m_Owner = ownerEntity,
                 m_RandomSeed = random.NextInt(),
                 m_Flags = CreationFlags.Permanent,
             });
             EntityManager.AddComponent<Updated>(netDef);
             EntityManager.AddComponent<Deleted>(netDef); // consumed this frame, swept at Cleanup
-            EntityManager.AddComponentData(netDef, owner);
+            if (ownerEntity == Entity.Null) EntityManager.AddComponentData(netDef, owner);
 
             var course = default(NetCourse);
             course.m_Curve = global::Game.Objects.ObjectUtils.LocalToWorld(owner.m_Position, owner.m_Rotation, curve);
@@ -586,8 +613,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
             course.m_Length = MathUtils.Length(course.m_Curve);
             course.m_FixedIndex = -1;
-            course.m_StartPosition.m_Flags |= CoursePosFlags.IsFirst | CoursePosFlags.DisableMerge;
-            course.m_EndPosition.m_Flags |= CoursePosFlags.IsLast | CoursePosFlags.DisableMerge;
+            course.m_StartPosition.m_Flags |= CoursePosFlags.IsFirst;
+            course.m_EndPosition.m_Flags |= CoursePosFlags.IsLast;
             if (course.m_StartPosition.m_Position.Equals(course.m_EndPosition.m_Position))
             {
                 course.m_StartPosition.m_Flags |= CoursePosFlags.IsLast;

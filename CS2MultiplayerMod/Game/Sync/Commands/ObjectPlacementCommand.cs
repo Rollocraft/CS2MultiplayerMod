@@ -40,6 +40,8 @@ namespace CS2MultiplayerMod.Game.Sync.Commands
         public string PrefabName;
         public float PosX, PosY, PosZ;
         public float RotX, RotY, RotZ, RotW;
+        public int RandomSeed;
+        public float Age;
 
         public ObjectAttachKind AttachKind;
         public float AttachX, AttachY, AttachZ;
@@ -56,6 +58,8 @@ namespace CS2MultiplayerMod.Game.Sync.Commands
             writer.WriteFloat(RotY);
             writer.WriteFloat(RotZ);
             writer.WriteFloat(RotW);
+            writer.WriteInt(RandomSeed);
+            writer.WriteFloat(Age);
             writer.WriteByte((byte)AttachKind);
             if (AttachKind == ObjectAttachKind.None) return;
             writer.WriteFloat(AttachX);
@@ -73,16 +77,26 @@ namespace CS2MultiplayerMod.Game.Sync.Commands
             RotY = WireGuard.ReadFinite(reader);
             RotZ = WireGuard.ReadFinite(reader);
             RotW = WireGuard.ReadFinite(reader);
+            RandomSeed = reader.ReadInt();
+            if (RandomSeed < 0 || RandomSeed > ushort.MaxValue)
+                throw new ProtocolException("Object random seed is outside ushort range.");
+            Age = WireGuard.ReadFinite(reader);
+            if (Age < 0f || Age > 1f)
+                throw new ProtocolException("Object age is outside [0,1].");
 
             byte kind = reader.ReadByte();
             if (kind > (byte)ObjectAttachKind.NetEdge)
                 throw new ProtocolException("Unknown object attach kind " + kind + ".");
             AttachKind = (ObjectAttachKind)kind;
-            if (AttachKind == ObjectAttachKind.None) return;
-
-            AttachX = WireGuard.ReadCoordinate(reader);
-            AttachY = WireGuard.ReadCoordinate(reader);
-            AttachZ = WireGuard.ReadCoordinate(reader);
+            if (AttachKind != ObjectAttachKind.None)
+            {
+                AttachX = WireGuard.ReadCoordinate(reader);
+                AttachY = WireGuard.ReadCoordinate(reader);
+                AttachZ = WireGuard.ReadCoordinate(reader);
+            }
+            if (reader.Remaining != 0)
+                throw new ProtocolException("Trailing bytes in object-placement command: " +
+                                            reader.Remaining + ".");
         }
 
         public byte[] Encode()

@@ -24,6 +24,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
     /// </summary>
     public partial class DeleteSyncSystem : GameSystemBase
     {
+        public bool DeferNetForTerrain;
         private readonly ConcurrentQueue<SimulationCommandMessage> _incoming =
             new ConcurrentQueue<SimulationCommandMessage>();
         private readonly ReplicationGuard _guard = new ReplicationGuard();
@@ -31,6 +32,23 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         // Edge deletes whose armed commit never materialised (apply window expired — see
         // NetSyncSystem._onCommitLost). Replayed ahead of fresh arrivals next cycle.
         private readonly List<NetDeleteCommand> _replayEdgeDeletes = new List<NetDeleteCommand>();
+
+        /// <summary>Unmatched remote deletes wait this long for their build to land locally.</summary>
+        private const long DeleteRetryWindowMs = 10000;
+
+        /// <summary>Ceiling on each pending-delete list, so a peer can never grow them without bound.</summary>
+        private const int MaxPendingDeletes = 256;
+
+        // Remote deletes that matched nothing yet. Builds and deletes travel in separate queues with
+        // different draining rules, so under backlog a delete can be processed BEFORE the build it
+        // targets has realized locally; dropping it (the old behaviour) resurrected the street or
+        // building on one machine only. Retried every cycle, ahead of fresh arrivals, until the
+        // deadline — by then either the build has landed (the retry matches and deletes it) or the
+        // geometry genuinely diverged.
+        private readonly List<(ObjectDeleteCommand cmd, long deadline)> _objectRetry =
+            new List<(ObjectDeleteCommand, long)>();
+        private readonly List<(NetDeleteCommand cmd, long deadline)> _edgeRetry =
+            new List<(NetDeleteCommand, long)>();
 
         private PrefabSystem _prefabSystem;
         private PrefabIndex _prefabIndex;
@@ -176,13 +194,24 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 _observer = new CommandObserver(_incoming, ObjectDeleteCommand.Id, NetDeleteCommand.Id);
                 Mod.Service.Session.AddObserver(_observer);
             }
+            SyncInbox.RegisterDrain(DrainQueue);
         }
 
         protected override void OnDestroy()
         {
+            SyncInbox.UnregisterDrain(DrainQueue);
             if (_observer != null && Mod.Service != null)
                 Mod.Service.Session.RemoveObserver(_observer);
             base.OnDestroy();
+        }
+
+        private void DrainQueue()
+        {
+            SyncInbox.Clear(_incoming);
+            _replayEdgeDeletes.Clear();
+            _objectRetry.Clear();
+            _edgeRetry.Clear();
+            DeferNetForTerrain = false;
         }
 
         protected override void OnUpdate()
@@ -191,7 +220,11 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             if (service == null) return;
 
             MultiplayerSession session = service.Session;
-            if (!service.GameplaySyncReady) return;
+            if (!service.GameplaySyncReady)
+            {
+                DrainQueue();
+                return;
+            }
 
             long now = service.NowMs;
             _guard.Prune(now);
@@ -211,16 +244,17 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             // Drain everything first, then do one scan per category — bulldozing tends to
             // arrive in bursts and the match scan is the expensive part.
             //
-            // Edge deletes go through NetSync's ApplyTool commit (a real bulldoze — props, lanes,
+            // Edge deletes go through NetSync's isolated net commit (a real bulldoze — props, lanes,
             // terrain and node recombination, which a raw Deleted tag skips). That pipeline handles ONE
             // net batch at a time; while a batch is in flight (or on the frame the player's own gesture
-            // applies) we leave incoming edge deletes queued and retry next cycle. A build tool merely
-            // being out no longer defers anything — the def-frame hijack (NetSync.PrepareDefinitionFrame)
-            // makes the commit safe with any tool active, so remote bulldozes land live in build mode.
-            // Object deletes (a raw Deleted tag on a real entity) always proceed.
-            bool netBusy = _netSync == null || !_netSync.CanBuildDefinitions;
-            List<ObjectDeleteCommand> objects = null;
-            List<NetDeleteCommand> edges = null;
+            // applies) we leave incoming edge deletes queued and retry next cycle. A selected build
+            // tool only blocks on its actual Apply/Clear frame. Object deletes (a raw Deleted tag on
+            // a real entity) always proceed.
+            bool netBusy = DeferNetForTerrain || _netSync == null || !_netSync.CanBuildDefinitions;
+            long now = service.NowMs;
+            long freshDeadline = now + DeleteRetryWindowMs;
+            List<(ObjectDeleteCommand cmd, long deadline)> objects = null;
+            List<(NetDeleteCommand cmd, long deadline)> edges = null;
             List<SimulationCommandMessage> deferredEdges = null;
             SimulationCommandMessage message;
             while (_incoming.TryDequeue(out message))
@@ -229,13 +263,15 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 try
                 {
                     if (message.CommandId == ObjectDeleteCommand.Id)
-                        (objects ?? (objects = new List<ObjectDeleteCommand>())).Add(ObjectDeleteCommand.Decode(message.Body));
+                        (objects ?? (objects = new List<(ObjectDeleteCommand, long)>()))
+                            .Add((ObjectDeleteCommand.Decode(message.Body), freshDeadline));
                     else if (message.CommandId == NetDeleteCommand.Id)
                     {
                         if (netBusy)
                             (deferredEdges ?? (deferredEdges = new List<SimulationCommandMessage>())).Add(message);
                         else
-                            (edges ?? (edges = new List<NetDeleteCommand>())).Add(NetDeleteCommand.Decode(message.Body));
+                            (edges ?? (edges = new List<(NetDeleteCommand, long)>()))
+                                .Add((NetDeleteCommand.Decode(message.Body), freshDeadline));
                     }
                 }
                 catch (System.Exception ex) { Mod.log.Warn("[MP] DeleteSync: dropping malformed command: " + ex.Message); }
@@ -250,12 +286,26 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             // ahead of fresh arrivals once the pipeline is idle again.
             if (!netBusy && _replayEdgeDeletes.Count > 0)
             {
-                if (edges == null) edges = new List<NetDeleteCommand>(_replayEdgeDeletes);
-                else edges.InsertRange(0, _replayEdgeDeletes);
+                if (edges == null) edges = new List<(NetDeleteCommand, long)>();
+                for (int i = _replayEdgeDeletes.Count - 1; i >= 0; i--)
+                    edges.Insert(0, (_replayEdgeDeletes[i], freshDeadline));
                 _replayEdgeDeletes.Clear();
             }
 
-            long now = service.NowMs;
+            // Unmatched deletes still inside their retry window run ahead of everything fresh.
+            if (_objectRetry.Count > 0)
+            {
+                if (objects == null) objects = new List<(ObjectDeleteCommand, long)>(_objectRetry);
+                else objects.InsertRange(0, _objectRetry);
+                _objectRetry.Clear();
+            }
+            if (!netBusy && _edgeRetry.Count > 0)
+            {
+                if (edges == null) edges = new List<(NetDeleteCommand, long)>(_edgeRetry);
+                else edges.InsertRange(0, _edgeRetry);
+                _edgeRetry.Clear();
+            }
+
             if (objects != null) RealizeObjectDeletes(objects, now);
             if (edges != null) RealizeEdgeDeletes(edges, now);
         }

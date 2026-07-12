@@ -21,8 +21,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
     /// so the game's net systems lay the actual nodes and edges.
     ///
     /// The same origin-skip + <see cref="ReplicationGuard"/> logic as objects prevents
-    /// echo loops. Realized geometry may snap/merge differently than the source - exact
-    /// fidelity is an in-game tuning item.
+    /// echo loops. Local tool definitions are captured before their endpoint/split/elevation intent
+    /// is reduced to final geometry; portable anchors resolve the equivalent local entities.
     ///
     /// This class is split across files by responsibility: this file holds state + lifecycle +
     /// the receive Observer; <c>.Apply</c> the commit/drain orchestration; <c>.Capture</c> the
@@ -31,8 +31,13 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
     /// </summary>
     public partial class NetSyncSystem : GameSystemBase
     {
+        private const int NetInboxCap = 4096;
         private readonly ConcurrentQueue<SimulationCommandMessage> _incoming =
             new ConcurrentQueue<SimulationCommandMessage>();
+        // Commands deferred from the front of a drained batch must remain ahead of messages that
+        // were still in the concurrent inbox. Only the simulation thread touches this prefix list.
+        private readonly List<SimulationCommandMessage> _remoteDeferred =
+            new List<SimulationCommandMessage>();
         private readonly ReplicationGuard _guard = new ReplicationGuard();
 
         private readonly Dictionary<string, int> _diag = new Dictionary<string, int>();
@@ -45,6 +50,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
         private EntityQuery _existingNodes;
         private EntityQuery _existingEdges;
         private EntityQuery _ownedNodes;
+        private EntityQuery _ownedEdges;
         private EntityQuery _updatedEdges;
         private EntityQuery _deletedEdges;
         private Observer _observer;
@@ -56,12 +62,16 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
         private global::Game.Simulation.WaterSystem _waterSystem;
 
         // Per-net-prefab facts consulted for every course endpoint (connect layers for the utility
-        // connector snap, the allowed elevation range for the ground dead zone). Prefab entities are
-        // stable for the session, so entries never invalidate.
+        // connector snap, the allowed elevation range for the ground dead zone, the half-width that
+        // scales the endpoint snap radii). Prefab entities are stable for the session, so entries
+        // never invalidate.
         private struct NetPrefabInfo
         {
+            public Layer RequiredLayers;
             public Layer ConnectLayers;
             public float ElevMin, ElevMax;
+            public float HalfWidth;
+            public float SnapDistance;
             public bool Placeable;
         }
         private readonly Dictionary<Entity, NetPrefabInfo> _netInfoCache = new Dictionary<Entity, NetPrefabInfo>();
@@ -142,20 +152,19 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
         // on the deleted span). See CaptureNewEdges.
         private readonly List<NetPlacementCommand> _deferredSpanPieces = new List<NetPlacementCommand>();
 
-        // --- Temp + ApplyTool realize (the real fix for T-junctions) -----------------------------
-        // The shipped realize uses CreationFlags.Permanent, which makes GenerateEdgesSystem build a
-        // finished edge directly and NEVER enters the Temp/ApplyTool pipeline — so it can create and
-        // reuse-node but can never SPLIT an existing edge (ApplyNetSystem, the only splitter, runs
-        // ONLY in SystemUpdatePhase.ApplyTool, gated by ToolOutputSystem on applyMode==Apply). This
-        // path instead builds a NON-Permanent definition (→ Temp edge) and drives the ApplyTool phase
-        // ourselves so the game splits/connects/zones natively (see the .Apply / .Course partials).
+        // Remote courses use the same Temp-backed network transaction as an interactive placement.
+        // The net domain is applied directly while local previews are structurally isolated.
         private global::Game.Tools.ToolSystem _toolSystem;
+        private global::Game.Tools.ApplyNetSystem _applyNetSystem;
+        private global::Game.Tools.ApplyBrushesSystem _applyBrushesSystem;
         private EntityQuery _tempNetEntities;
-        // ALL live preview Temps (net, object, zone, area …) and the definitions created this frame —
-        // what PrepareDefinitionFrame clears so a commit while a build tool is out contains ONLY our
-        // batch, never the player's preview (see Apply.cs).
-        private EntityQuery _allTempEntities;
-        private EntityQuery _freshDefinitions;
+        private EntityQuery _localBrushTemps;
+        private readonly List<Entity> _isolatedLocalNetTemps = new List<Entity>();
+        private readonly List<Entity> _protectedRemoteNetTemps = new List<Entity>();
+        private readonly List<Entity> _committingRemoteNetTemps = new List<Entity>();
+        private readonly List<Entity> _isolatedLocalBrushTemps = new List<Entity>();
+        private bool _clearLocalNetIsolationAfterBarrier;
+        private bool _localToolOutputProtectedThisFrame;
         private bool _pendingApply;
         // After a commit we must WAIT for its Temp entities to clear (the committed nodes/edges only
         // become query-able then) before building the next batch — otherwise a course that should
@@ -163,18 +172,12 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
         private bool _awaitingDrain;
         private int _armTick;
         private int _drainArmTick;
-        // Frames spent draining. With a build tool out its preview Temps regenerate every frame, so
-        // "net Temps == 0" never happens — the committed geometry is query-able one frame after the
-        // ApplyTool pass, and the frame counter releases the drain then (Apply.cs).
+        // Frames spent waiting for the isolated entities to leave their Temp state.
         private int _drainFrames;
-        // True only on the frame a self-driven ApplyTool pass commits our batch: every non-Temp
-        // Created edge at that frame's ModificationEnd is from OUR pass (the player's own gesture
-        // never commits on a self-flip frame - that branch runs only when the tool isn't applying),
-        // so capture skips exactly that one frame instead of a wall-clock window that also
-        // swallowed roads the player built while remote batches streamed in. Set by the commit
-        // flip (Apply.cs), cleared by the next frame's BeginRealizeFrame.
+        // True only on the frame the isolated net-domain pass commits a remote batch. Capture skips
+        // that pass's Created edges; local Apply frames are never suppressed.
         private bool _suppressCaptureThisFrame;
-        // One preview wipe per realize frame (see PrepareDefinitionFrame); reset by BeginRealizeFrame.
+        // One local-net isolation per realize frame; reset by BeginRealizeFrame.
         private bool _prepDoneThisFrame;
         // Spans this machine realized from remote commands recently. A realize commit can trigger the
         // game's node reduction, which re-surfaces the just-built span as a LOCAL Updated/Created edge
@@ -182,15 +185,62 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
         // detection) recognise that geometry as remote work, not something to broadcast back.
         private readonly List<(Colossal.Mathematics.Bezier4x3 curve, long expiresMs)> _recentRealizedSpans =
             new List<(Colossal.Mathematics.Bezier4x3, long)>();
-        // Recovery hook for an armed-but-never-committed batch: while a build tool is out, the game's
-        // per-frame clear pass deletes EVERY Temp entity (it is not scoped to the tool's own preview),
-        // which destroys an armed batch before its commit can run. Whoever arms a commit leaves a
-        // callback here that re-queues the batch's source commands; RealizePending invokes it the frame
-        // it sees the wipe coming (or on window expiry) so the batch is rebuilt instead of lost.
+        // Recovery hook for a batch whose Temps vanished or became stale before commit.
         private System.Action _onCommitLost;
+        // Realize-frame counter used to correlate native local intent with its Apply frame.
+        private int _realizeFrame;
+        /// <summary>
+        /// Set by <see cref="SyncRealizeSystem"/> while remote terrain edits are backlogged: no NEW
+        /// remote course realizes until terrain catches up (a course realized against pre-terraform
+        /// ground commits at the wrong height - craters, buried streets, missed height-gated snaps).
+        /// In-flight commits still finish.
+        /// </summary>
+        public bool DeferForTerrain;
         // Consecutive expired-window replays (reset by any successful commit). A batch whose
         // definitions the game always rejects would otherwise rebuild forever.
         private int _expiryReplays;
+
+        // The active net tool's latest native definitions, observed after ToolOutputBarrier. They
+        // are the definitions that produced the standing preview Temps and therefore describe the
+        // course committed by the next Apply frame. Capturing here preserves target/split/elevation
+        // intent that no longer exists on the final Created edges.
+        private readonly List<NetPlacementCommand> _cachedLocalCourses = new List<NetPlacementCommand>();
+        private long _nextLocalNetOperationId = 1;
+        private int _nativeApplyCapturedFrame = -1;
+
+        // Exact originals referenced by a committing placement's Temps. If one is Deleted by the
+        // resulting split/delete/replace, DeleteSync must not broadcast that lifecycle output as a
+        // second command. The short expiry covers the apply and its immediate network aftermath.
+        private readonly Dictionary<Entity, long> _committedNetSideEffects = new Dictionary<Entity, long>();
+
+        private struct NativeTargetRetryKey : System.IEquatable<NativeTargetRetryKey>
+        {
+            public int Origin;
+            public long Operation;
+            public short Course;
+
+            public bool Equals(NativeTargetRetryKey other) =>
+                Origin == other.Origin && Operation == other.Operation && Course == other.Course;
+            public override bool Equals(object obj) => obj is NativeTargetRetryKey && Equals((NativeTargetRetryKey)obj);
+            public override int GetHashCode()
+            {
+                unchecked
+                {
+                    int hash = Origin;
+                    hash = hash * 397 ^ Operation.GetHashCode();
+                    hash = hash * 397 ^ Course;
+                    return hash;
+                }
+            }
+        }
+
+        // A native target may be created by an earlier command whose geometry is not queryable yet.
+        // Wait for it instead of silently downgrading the endpoint to free ground; after the bounded
+        // window, fall back to geometric classification so a permanently divergent world cannot
+        // wedge every later placement.
+        private const long NativeTargetRetryWindowMs = 10000;
+        private readonly Dictionary<NativeTargetRetryKey, long> _nativeTargetDeadlines =
+            new Dictionary<NativeTargetRetryKey, long>();
 
         protected override void OnCreate()
         {
@@ -201,6 +251,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
             _prefabIndex = new PrefabIndex(_prefabSystem, GetEntityQuery(ComponentType.ReadOnly<PrefabData>()));
 
             _toolSystem = World.GetOrCreateSystemManaged<global::Game.Tools.ToolSystem>();
+            _applyNetSystem = World.GetOrCreateSystemManaged<global::Game.Tools.ApplyNetSystem>();
+            _applyBrushesSystem = World.GetOrCreateSystemManaged<global::Game.Tools.ApplyBrushesSystem>();
             // Live net Temp entities (a tool preview, or our own pre-commit definitions), used to
             // confirm a commit (count drops to 0 after ApplyTool) and to detect a tool preview.
             // Deleted is excluded: a wiped Temp lingers until Cleanup, and counting those corpses
@@ -212,18 +264,19 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                 None = new[] { ComponentType.ReadOnly<Deleted>() },
             });
 
-            // Every live preview Temp of any domain — what the game's own clear pass operates on.
-            _allTempEntities = GetEntityQuery(new EntityQueryDesc
+            _localBrushTemps = GetEntityQuery(new EntityQueryDesc
             {
-                All = new[] { ComponentType.ReadOnly<Temp>() },
-                None = new[] { ComponentType.ReadOnly<Deleted>() },
+                All = new[]
+                {
+                    ComponentType.ReadOnly<Temp>(),
+                    ComponentType.ReadOnly<Brush>(),
+                },
+                None = new[]
+                {
+                    ComponentType.ReadOnly<Deleted>(),
+                    ComponentType.ReadOnly<RemoteTerrainBrush>(),
+                },
             });
-
-            // Definition entities created THIS frame (they carry Updated only on their birth frame;
-            // stale ones are inert — the generate systems consume Updated definitions only).
-            _freshDefinitions = GetEntityQuery(
-                ComponentType.ReadOnly<CreationDefinition>(),
-                ComponentType.ReadOnly<Updated>());
 
             _createdEdges = GetEntityQuery(new EntityQueryDesc
             {
@@ -262,7 +315,12 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
             // Read-only: standalone edges, used to classify an incoming endpoint as a mid-span tap.
             _existingEdges = GetEntityQuery(new EntityQueryDesc
             {
-                All = new[] { ComponentType.ReadOnly<Edge>(), ComponentType.ReadOnly<Curve>() },
+                All = new[]
+                {
+                    ComponentType.ReadOnly<Edge>(),
+                    ComponentType.ReadOnly<Curve>(),
+                    ComponentType.ReadOnly<PrefabRef>(),
+                },
                 None = new[]
                 {
                     ComponentType.ReadOnly<Temp>(),
@@ -279,6 +337,24 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                 All = new[]
                 {
                     ComponentType.ReadOnly<Node>(),
+                    ComponentType.ReadOnly<Owner>(),
+                    ComponentType.ReadOnly<PrefabRef>(),
+                },
+                None = new[]
+                {
+                    ComponentType.ReadOnly<Temp>(),
+                    ComponentType.ReadOnly<Deleted>(),
+                },
+            });
+
+            // Owned connector edges are kept out of all fallback searches. Captured native intent
+            // may target one explicitly, in which case ResolveIntent searches this separate pool.
+            _ownedEdges = GetEntityQuery(new EntityQueryDesc
+            {
+                All = new[]
+                {
+                    ComponentType.ReadOnly<Edge>(),
+                    ComponentType.ReadOnly<Curve>(),
                     ComponentType.ReadOnly<Owner>(),
                     ComponentType.ReadOnly<PrefabRef>(),
                 },
@@ -322,13 +398,53 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                 _observer = new Observer(_incoming);
                 Mod.Service.Session.AddObserver(_observer);
             }
+            SyncInbox.RegisterDrain(DrainNetQueues);
         }
 
         protected override void OnDestroy()
         {
+            SyncInbox.UnregisterDrain(DrainNetQueues);
+            ReleaseAllIsolation();
             if (_observer != null && Mod.Service != null)
                 Mod.Service.Session.RemoveObserver(_observer);
             base.OnDestroy();
+        }
+
+        private void DrainNetQueues()
+        {
+            // Never leave an isolated remote Temp transaction behind for a later local click. Which
+            // side is enabled depends on whether this frame had protected the remote batch.
+            if (_protectedRemoteNetTemps.Count > 0)
+            {
+                ClearTrackedTemps(_protectedRemoteNetTemps, clearPreview: true);
+                _protectedRemoteNetTemps.Clear();
+            }
+            else if (_pendingApply)
+            {
+                ClearTempEntities(_tempNetEntities);
+            }
+            if (_committingRemoteNetTemps.Count > 0)
+            {
+                ClearTrackedTemps(_committingRemoteNetTemps, clearPreview: true);
+                _committingRemoteNetTemps.Clear();
+            }
+            ReleaseAllIsolation();
+            SyncInbox.Clear(_incoming);
+            _remoteDeferred.Clear();
+            _deferredSpanPieces.Clear();
+            _cachedLocalCourses.Clear();
+            _committedNetSideEffects.Clear();
+            _nativeTargetDeadlines.Clear();
+            _operationAssemblyDeadlines.Clear();
+            _nativeOperationDeadlines.Clear();
+            _recentRealizedSpans.Clear();
+            _pendingApply = false;
+            _awaitingDrain = false;
+            _onCommitLost = null;
+            _expiryReplays = 0;
+            _suppressCaptureThisFrame = false;
+            _prepDoneThisFrame = false;
+            DeferForTerrain = false;
         }
 
         protected override void OnUpdate()
@@ -339,12 +455,13 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
             MultiplayerSession session = service.Session;
             if (!service.GameplaySyncReady)
             {
-                if (_deferredSpanPieces.Count > 0) _deferredSpanPieces.Clear();
+                DrainNetQueues();
                 return;
             }
 
             long now = service.NowMs;
             _guard.Prune(now);
+            PruneCommittedNetSideEffects(now);
 
             // Sample net-edge lifecycle tags every frame (peak over the 5 s window). Runs at
             // ModificationEnd where the one-frame Created/Updated/Deleted tags are still alive.
@@ -365,7 +482,11 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
             public override void OnCommandReceived(SimulationCommandMessage command)
             {
                 if (command.CommandId != NetPlacementCommand.Id) return;
-                SyncInbox.Push(_sink, command);
+                if (command.Body == null || command.Body.Length > NetPlacementCommand.MaxEncodedBytes) return;
+                // Remote Temp work intentionally waits while a local interactive tool is active.
+                // Keep a larger, still-hard-bounded road inbox so a long local drawing gesture does
+                // not immediately shed a partner's reliable ordered course stream.
+                SyncInbox.Push(_sink, command, NetInboxCap);
                 // Network thread: log on RECEIPT so a missing realize can be told apart from a missing
                 // send. The body is the encoded Bézier; we don't decode here (cheap + thread-safe).
             }
