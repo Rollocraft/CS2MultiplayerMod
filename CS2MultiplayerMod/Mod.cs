@@ -126,6 +126,11 @@ namespace CS2MultiplayerMod
             // that points channel, the local spend and the host's deduction keep pace whether
             // the game is paused or not.
             updateSystem.UpdateAt<Game.Sync.Systems.DevTreeSyncSystem>(SystemUpdatePhase.UIUpdate);
+            // Visual customization writes existing render/building components directly from
+            // SelectedInfo UI callbacks, including while paused. Run after that UI system so
+            // color, historical, and palette changes are visible in the same frame.
+            updateSystem.UpdateAfter<Game.Sync.Systems.VisualCustomizationSyncSystem,
+                global::Game.UI.InGame.SelectedInfoUISystem>(SystemUpdatePhase.UIUpdate);
             // Realization must run at ToolUpdate: definition entities are consumed at
             // Modification1 and their Updated tag is stripped at Cleanup, so a definition
             // spawned at ModificationEnd is never realized (see SyncRealizeSystem).

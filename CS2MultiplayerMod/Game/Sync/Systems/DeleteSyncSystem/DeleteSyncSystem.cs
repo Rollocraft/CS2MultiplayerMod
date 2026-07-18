@@ -253,6 +253,14 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             bool netBusy = DeferNetForTerrain || _netSync == null || !_netSync.CanBuildDefinitions;
             long now = service.NowMs;
             long freshDeadline = now + DeleteRetryWindowMs;
+
+            // A waiting edge delete can only be matched while the net pipeline is idle; a peer
+            // building non-stop keeps it busy far longer than the retry window, so the window
+            // must count idle time only — otherwise the delete expires unattempted and the
+            // bulldozed road survives on this machine forever.
+            if (netBusy)
+                for (int i = 0; i < _edgeRetry.Count; i++)
+                    _edgeRetry[i] = (_edgeRetry[i].cmd, freshDeadline);
             List<(ObjectDeleteCommand cmd, long deadline)> objects = null;
             List<(NetDeleteCommand cmd, long deadline)> edges = null;
             List<SimulationCommandMessage> deferredEdges = null;

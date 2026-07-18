@@ -159,8 +159,11 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                 bool prefabMatch = targetPrefab != Entity.Null &&
                     string.Equals(PrefabNameOf(targetPrefab), intent.TargetPrefabName,
                         System.StringComparison.Ordinal);
-                float score = xz * xz + dy * dy * 0.25f + (1f - alignment) * 16f +
-                              (prefabMatch || string.IsNullOrEmpty(intent.TargetPrefabName) ? 0f : 25f);
+                // An explicit source prefab is part of an edge's portable identity. Falling through
+                // to a different parallel road here is worse than waiting for the intended piece:
+                // it splits the wrong carriageway and permanently overlaps the junction geometry.
+                if (!string.IsNullOrEmpty(intent.TargetPrefabName) && !prefabMatch) continue;
+                float score = xz * xz + dy * dy * 0.25f + (1f - alignment) * 16f;
                 if (score >= best) continue;
                 best = score;
                 bestEdge = edge;

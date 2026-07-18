@@ -1,10 +1,13 @@
 using System.Text;
 using Colossal.Mathematics;
+using Game.Buildings;
 using Game.Common;
 using Game.Prefabs;
+using Game.Simulation;
 using Game.Tools;
 using Unity.Collections;
 using Unity.Entities;
+using Unity.Jobs;
 using Unity.Mathematics;
 using CS2MultiplayerMod.Core.Protocol.Messages;
 using CS2MultiplayerMod.Core.Session;
@@ -32,15 +35,19 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         /// </summary>
         private const int MaxRealizePerFrame = 8;
 
-        /// <summary>A same-prefab object standing this close is the same placement arriving twice —
-        /// the sender's own overlap validation keeps distinct placements further apart.</summary>
-        private const float DuplicateRadiusSq = 1.5f * 1.5f;
-        private const float DuplicateMaxDy = 3f;
+        /// <summary>
+        /// Exact-delivery tolerance only. Dense tree/prop brushes may legitimately put the same
+        /// prefab close together, so position plus rotation—not a broad overlap radius—is the
+        /// duplicate identity.
+        /// </summary>
+        private const float DuplicateRadiusSq = 0.1f * 0.1f;
+        private const float DuplicateMaxDy = 0.25f;
+        private const float DuplicateRotationDot = 0.9999f;
 
         private int _rzFrameSpawned;
         private int _rzFrameDuplicates;
-        private readonly System.Collections.Generic.List<(Entity prefab, float3 position)> _rzRealizedThisFrame =
-            new System.Collections.Generic.List<(Entity, float3)>();
+        private readonly System.Collections.Generic.List<(Entity prefab, float3 position, quaternion rotation)>
+            _rzRealizedThisFrame = new System.Collections.Generic.List<(Entity, float3, quaternion)>();
         private NativeArray<global::Game.Objects.Transform> _dupTransforms;
         private NativeArray<PrefabRef> _dupPrefabs;
         private bool _dupSnapshotTaken;
@@ -101,6 +108,16 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     continue;
                 }
 
+                // A moving-object prefab (citizen, animal, vehicle) can only reach us through a
+                // peer's capture leak; realized as a permanent object it becomes an agent no
+                // simulation owns — a native-crash seed, not a placement.
+                if (EntityManager.HasComponent<MovingObjectData>(prefab))
+                {
+                    Mod.log.Warn("[MP] BuildSync realize: refusing moving-object prefab '" +
+                                 command.PrefabName + "' from player " + message.OriginPlayerId + ".");
+                    continue;
+                }
+
                 // A net object placed on a road that has not reached us yet has nothing to hang off.
                 // Placing it now would strand it as an inert prop, so wait for the road instead.
                 if (command.AttachKind != ObjectAttachKind.None && FindAttachTarget(command) == Entity.Null)
@@ -148,12 +165,14 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         private void RealizeCommand(ObjectPlacementCommand command, Entity prefab, int originPlayerId, long now)
         {
             var position = new float3(command.PosX, command.PosY, command.PosZ);
-            var rotation = new quaternion(command.RotX, command.RotY, command.RotZ, command.RotW);
+            var rotation = new quaternion(math.normalizesafe(
+                new float4(command.RotX, command.RotY, command.RotZ, command.RotW),
+                new float4(0f, 0f, 0f, 1f)));
 
             // The same placement arriving twice (a replayed message, a lagged echo) would stack a
             // second building exactly inside the first — geometry the sender's own validation can
             // never produce, and native systems don't tolerate what the tools forbid.
-            if (AlreadyStandsAt(prefab, position))
+            if (AlreadyStandsAt(prefab, position, rotation))
             {
                 _rzFrameDuplicates++;
                 return;
@@ -169,7 +188,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     command.RandomSeed, command.Age);
                 ConstructionCharger.ChargeObject(EntityManager, prefab, command.PrefabName);
                 _rzFrameSpawned++;
-                _rzRealizedThisFrame.Add((prefab, position));
+                _rzRealizedThisFrame.Add((prefab, position, rotation));
                 Mod.Verbose("[MP] BuildSync realize: spawned '" + command.PrefabName + "' from player " +
                             originPlayerId + " at (" + position.x.ToString("F1") + "," +
                             position.z.ToString("F1") + ").");
@@ -187,14 +206,15 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         /// <see cref="DuplicateRadiusSq"/> of <paramref name="position"/>. The world snapshot is
         /// taken once per frame, only on frames that realize something.
         /// </summary>
-        private bool AlreadyStandsAt(Entity prefab, float3 position)
+        private bool AlreadyStandsAt(Entity prefab, float3 position, quaternion rotation)
         {
             for (int i = 0; i < _rzRealizedThisFrame.Count; i++)
             {
                 if (_rzRealizedThisFrame[i].prefab != prefab) continue;
                 float3 p = _rzRealizedThisFrame[i].position;
                 if (math.distancesq(p.xz, position.xz) < DuplicateRadiusSq
-                    && math.abs(p.y - position.y) <= DuplicateMaxDy) return true;
+                    && math.abs(p.y - position.y) <= DuplicateMaxDy
+                    && SameRotation(_rzRealizedThisFrame[i].rotation, rotation)) return true;
             }
 
             if (!_dupSnapshotTaken)
@@ -208,9 +228,17 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 if (_dupPrefabs[i].m_Prefab != prefab) continue;
                 float3 p = _dupTransforms[i].m_Position;
                 if (math.distancesq(p.xz, position.xz) < DuplicateRadiusSq
-                    && math.abs(p.y - position.y) <= DuplicateMaxDy) return true;
+                    && math.abs(p.y - position.y) <= DuplicateMaxDy
+                    && SameRotation(_dupTransforms[i].m_Rotation, rotation)) return true;
             }
             return false;
+        }
+
+        private static bool SameRotation(quaternion a, quaternion b)
+        {
+            float4 av = math.normalizesafe(a.value, new float4(0f, 0f, 0f, 1f));
+            float4 bv = math.normalizesafe(b.value, new float4(0f, 0f, 0f, 1f));
+            return math.abs(math.dot(av, bv)) >= DuplicateRotationDot;
         }
 
         // Prefab-name digest for the per-frame flight note, e.g. " [WaterPumpingStation x3]".
@@ -468,13 +496,19 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                         continue;
                     }
 
+                    CreationFlags areaFlags = CreationFlags.Permanent;
+                    if (EntityManager.HasComponent<AreaGeometryData>(areaPrefab) &&
+                        EntityManager.GetComponentData<AreaGeometryData>(areaPrefab).m_Type !=
+                        global::Game.Areas.AreaType.Lot)
+                        areaFlags |= CreationFlags.Hidden;
+
                     Entity areaDef = EntityManager.CreateEntity();
                     EntityManager.AddComponentData(areaDef, new CreationDefinition
                     {
                         m_Prefab = areaPrefab,
                         m_Owner = ownerEntity,
                         m_RandomSeed = seed,
-                        m_Flags = CreationFlags.Permanent,
+                        m_Flags = areaFlags,
                     });
                     EntityManager.AddComponent<Updated>(areaDef);
                     EntityManager.AddComponent<Deleted>(areaDef); // consumed this frame, swept at Cleanup
@@ -528,6 +562,14 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             DynamicBuffer<SubNet> subNets = EntityManager.GetBuffer<SubNet>(prefab, isReadOnly: true);
             if (subNets.Length == 0) return;
 
+            TerrainHeightData heightData = _terrainSystem.GetHeightData(waitForPending: true);
+            JobHandle waterDependencies;
+            WaterSurfaceData<SurfaceWater> waterData =
+                _waterSystem.GetSurfaceData(out waterDependencies);
+            waterDependencies.Complete();
+            BuildingUtils.LotInfo lotInfo;
+            bool hasLot = TryGetOwnerLot(ownerEntity, out lotInfo);
+
             // Average the curve endpoints that share a node index, so sub-nets meeting at a node agree
             // on one position (.w counts contributors; divide to get the mean).
             var nodePositions = new NativeList<float4>(subNets.Length * 2, Allocator.Temp);
@@ -567,7 +609,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     }
                     RealizeSubNetCourse(subNet.m_Prefab, subNet.m_Curve, subNet.m_NodeIndex,
                         subNet.m_ParentMesh, subNet.m_Upgrades, nodePositions, owner, ownerEntity,
-                        ref random);
+                        hasLot, ref lotInfo, ref heightData, ref waterData, ref random);
                 }
             }
             finally
@@ -578,7 +620,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
         private void RealizeSubNetCourse(Entity netPrefab, Bezier4x3 curve, int2 nodeIndex, int2 parentMesh,
             CompositionFlags upgrades, NativeList<float4> nodePositions, OwnerDefinition owner,
-            Entity ownerEntity, ref Unity.Mathematics.Random random)
+            Entity ownerEntity, bool hasLot, ref BuildingUtils.LotInfo lotInfo,
+            ref TerrainHeightData heightData, ref WaterSurfaceData<SurfaceWater> waterData,
+            ref Unity.Mathematics.Random random)
         {
             Entity netDef = EntityManager.CreateEntity();
             EntityManager.AddComponentData(netDef, new CreationDefinition
@@ -593,7 +637,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             if (ownerEntity == Entity.Null) EntityManager.AddComponentData(netDef, owner);
 
             var course = default(NetCourse);
-            course.m_Curve = global::Game.Objects.ObjectUtils.LocalToWorld(owner.m_Position, owner.m_Rotation, curve);
+            course.m_Curve = AdjustOwnedSubNetCurve(netPrefab, curve, parentMesh, owner,
+                hasLot, ref lotInfo, ref heightData, ref waterData);
 
             course.m_StartPosition.m_Position = course.m_Curve.a;
             course.m_StartPosition.m_Rotation = global::Game.Net.NetUtils.GetNodeRotation(MathUtils.StartTangent(course.m_Curve), owner.m_Rotation);
@@ -613,8 +658,13 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
             course.m_Length = MathUtils.Length(course.m_Curve);
             course.m_FixedIndex = -1;
-            course.m_StartPosition.m_Flags |= CoursePosFlags.IsFirst;
-            course.m_EndPosition.m_Flags |= CoursePosFlags.IsLast;
+            // Building sub-nets commit with merging disabled at both ends (the game's own spawn
+            // recipe): a driveway or connector stub whose endpoint happens to coincide with street
+            // geometry must never fuse into it — the road link comes from attachment. Without this
+            // a realized building beside a road can weld its hidden sub-net into the street,
+            // creating junctions the placing player never drew.
+            course.m_StartPosition.m_Flags |= CoursePosFlags.IsFirst | CoursePosFlags.DisableMerge;
+            course.m_EndPosition.m_Flags |= CoursePosFlags.IsLast | CoursePosFlags.DisableMerge;
             if (course.m_StartPosition.m_Position.Equals(course.m_EndPosition.m_Position))
             {
                 course.m_StartPosition.m_Flags |= CoursePosFlags.IsLast;
@@ -624,6 +674,105 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
             if (!upgrades.Equals(default(CompositionFlags)))
                 EntityManager.AddComponentData(netDef, new global::Game.Net.Upgraded { m_Flags = upgrades });
+        }
+
+        private Bezier4x3 AdjustOwnedSubNetCurve(Entity netPrefab, Bezier4x3 localCurve,
+            int2 parentMesh, OwnerDefinition owner, bool hasLot, ref BuildingUtils.LotInfo lotInfo,
+            ref TerrainHeightData heightData, ref WaterSurfaceData<SurfaceWater> waterData)
+        {
+            global::Game.Net.GeometryFlags geometryFlags =
+                EntityManager.GetComponentData<NetGeometryData>(netPrefab).m_Flags;
+
+            if ((geometryFlags & global::Game.Net.GeometryFlags.OnWater) != 0)
+            {
+                Bezier4x3 waterCurve = localCurve;
+                waterCurve.y = default(Bezier4x1);
+                var worldWater = new global::Game.Net.Curve
+                {
+                    m_Bezier = global::Game.Objects.ObjectUtils.LocalToWorld(
+                        owner.m_Position, owner.m_Rotation, waterCurve),
+                };
+                return global::Game.Net.NetUtils.AdjustPosition(worldWater,
+                    false, false, false, ref heightData, ref waterData).m_Bezier;
+            }
+
+            var world = new global::Game.Net.Curve
+            {
+                m_Bezier = global::Game.Objects.ObjectUtils.LocalToWorld(
+                    owner.m_Position, owner.m_Rotation, localCurve),
+            };
+            bool fixedStart = parentMesh.x >= 0;
+            bool fixedEnd = parentMesh.y >= 0;
+            if (fixedStart && fixedEnd) return world.m_Bezier;
+
+            bool linearMiddle = fixedStart || fixedEnd;
+            if ((geometryFlags & global::Game.Net.GeometryFlags.FlattenTerrain) != 0)
+            {
+                if (!hasLot) return world.m_Bezier;
+                world = global::Game.Net.NetUtils.AdjustPosition(world,
+                    fixedStart, linearMiddle, fixedEnd, ref lotInfo);
+            }
+            else
+            {
+                world = global::Game.Net.NetUtils.AdjustPosition(world,
+                    fixedStart, linearMiddle, fixedEnd, ref heightData);
+            }
+
+            world.m_Bezier.a.y += localCurve.a.y;
+            world.m_Bezier.b.y += localCurve.b.y;
+            world.m_Bezier.c.y += localCurve.c.y;
+            world.m_Bezier.d.y += localCurve.d.y;
+            return world.m_Bezier;
+        }
+
+        private bool TryGetOwnerLot(Entity ownerEntity, out BuildingUtils.LotInfo lotInfo)
+        {
+            lotInfo = default(BuildingUtils.LotInfo);
+            Entity lotOwner = ownerEntity;
+            for (int depth = 0; depth < 8 && lotOwner != Entity.Null &&
+                 EntityManager.Exists(lotOwner); depth++)
+            {
+                if (EntityManager.HasComponent<global::Game.Buildings.Lot>(lotOwner)) break;
+                if (!EntityManager.HasComponent<Owner>(lotOwner)) return false;
+                lotOwner = EntityManager.GetComponentData<Owner>(lotOwner).m_Owner;
+            }
+
+            if (lotOwner == Entity.Null || !EntityManager.Exists(lotOwner) ||
+                !EntityManager.HasComponent<global::Game.Buildings.Lot>(lotOwner) ||
+                !EntityManager.HasComponent<global::Game.Objects.Transform>(lotOwner) ||
+                !EntityManager.HasComponent<PrefabRef>(lotOwner) ||
+                !EntityManager.HasBuffer<InstalledUpgrade>(lotOwner)) return false;
+
+            PrefabRef prefabRef = EntityManager.GetComponentData<PrefabRef>(lotOwner);
+            if (!EntityManager.HasComponent<BuildingData>(prefabRef.m_Prefab)) return false;
+
+            _objectTransformLookup.Update(this);
+            _prefabRefLookup.Update(this);
+            _objectGeometryLookup.Update(this);
+            _buildingTerraformLookup.Update(this);
+            _buildingExtensionLookup.Update(this);
+
+            global::Game.Objects.Elevation elevation = default(global::Game.Objects.Elevation);
+            if (EntityManager.HasComponent<global::Game.Objects.Elevation>(lotOwner))
+                elevation = EntityManager.GetComponentData<global::Game.Objects.Elevation>(lotOwner);
+
+            BuildingData buildingData = EntityManager.GetComponentData<BuildingData>(prefabRef.m_Prefab);
+            bool ignoredExtensionLots;
+            lotInfo = BuildingUtils.CalculateLotInfo(
+                new float2(buildingData.m_LotSize) * 4f,
+                EntityManager.GetComponentData<global::Game.Objects.Transform>(lotOwner),
+                elevation,
+                EntityManager.GetComponentData<global::Game.Buildings.Lot>(lotOwner),
+                prefabRef,
+                EntityManager.GetBuffer<InstalledUpgrade>(lotOwner, isReadOnly: true),
+                _objectTransformLookup,
+                _prefabRefLookup,
+                _objectGeometryLookup,
+                _buildingTerraformLookup,
+                _buildingExtensionLookup,
+                defaultNoSmooth: false,
+                out ignoredExtensionLots);
+            return true;
         }
     }
 }

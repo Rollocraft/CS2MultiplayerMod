@@ -65,6 +65,24 @@ namespace CS2MultiplayerMod.Game
 
         private void LoadReceivedMap(byte[] data)
         {
+            // A second world can land while the previous one is still loading (an impatient
+            // /sync, a broadcast behind a join stream). Restaging now would delete the .cok
+            // the running load is reading from disk; hold the newest blob instead and load
+            // it once the current load settles (see PumpWorldPhase).
+            if (_phase == ClientWorldPhase.LoadingMap)
+            {
+                _pendingWorldBlob = data;
+                _log.Info("[MP] Another host world arrived mid-load (" +
+                          (data != null ? data.Length / 1024 : 0) + " KB); it loads when the current load finishes.");
+                Diagnostics.FlightRecorder.Note("world blob queued behind in-flight load");
+                return;
+            }
+
+            StartWorldLoad(data);
+        }
+
+        private void StartWorldLoad(byte[] data)
+        {
             _log.Info("[MP] Map blob delivered to game layer (" +
                       (data != null ? data.Length / 1024 : 0) + " KB); staging and loading.");
             Diagnostics.FlightRecorder.Note("world blob received " + (data != null ? data.Length >> 10 : 0) + " KB; reloading world");
@@ -72,6 +90,10 @@ namespace CS2MultiplayerMod.Game
             // world and would apply stale edits (or reference vanished entities) on the new one.
             Sync.Infrastructure.SyncInbox.DrainAll();
             SetPhase(ClientWorldPhase.LoadingMap);
+            // Restart load observation by hand: for a queued blob the phase never left
+            // LoadingMap, so SetPhase alone would keep the previous load's state.
+            _sawLoading = false;
+            _phaseChangedMs = NowMs;
             if (!JoinMapLoader.StageAndLoad(data, _log))
             {
                 // Defined, recoverable state instead of a half-connected limbo.

@@ -16,27 +16,48 @@ namespace CS2MultiplayerMod.Game.Sync.Infrastructure
     public sealed class ReplicationGuard
     {
         private const long TtlMs = 15000;
-        private readonly Dictionary<string, long> _expiry = new Dictionary<string, long>();
+        private struct Marker
+        {
+            public long ExpiresAt;
+            public int Count;
+        }
 
-        public void Mark(string key, long nowMs) => _expiry[key] = nowMs + TtlMs;
+        private readonly Dictionary<string, Marker> _markers = new Dictionary<string, Marker>();
+
+        public void Mark(string key, long nowMs)
+        {
+            Marker marker;
+            if (!_markers.TryGetValue(key, out marker) || marker.ExpiresAt < nowMs)
+                marker.Count = 0;
+            marker.Count++;
+            marker.ExpiresAt = nowMs + TtlMs;
+            _markers[key] = marker;
+        }
 
         /// <summary>Returns true (and forgets the key) if it was a still-valid replica marker.</summary>
         public bool Consume(string key, long nowMs)
         {
-            long expiresAt;
-            if (!_expiry.TryGetValue(key, out expiresAt)) return false;
-            _expiry.Remove(key);
-            return expiresAt >= nowMs;
+            Marker marker;
+            if (!_markers.TryGetValue(key, out marker)) return false;
+            if (marker.ExpiresAt < nowMs)
+            {
+                _markers.Remove(key);
+                return false;
+            }
+
+            if (--marker.Count <= 0) _markers.Remove(key);
+            else _markers[key] = marker;
+            return true;
         }
 
         public void Prune(long nowMs)
         {
-            if (_expiry.Count == 0) return;
+            if (_markers.Count == 0) return;
             List<string> dead = null;
-            foreach (var pair in _expiry)
-                if (pair.Value < nowMs) (dead ?? (dead = new List<string>())).Add(pair.Key);
+            foreach (var pair in _markers)
+                if (pair.Value.ExpiresAt < nowMs) (dead ?? (dead = new List<string>())).Add(pair.Key);
             if (dead == null) return;
-            for (int i = 0; i < dead.Count; i++) _expiry.Remove(dead[i]);
+            for (int i = 0; i < dead.Count; i++) _markers.Remove(dead[i]);
         }
 
         /// <summary>Spatial key: prefab name + position rounded to 0.5 m buckets.</summary>

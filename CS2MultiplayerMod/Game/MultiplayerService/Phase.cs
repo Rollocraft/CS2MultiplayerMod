@@ -50,6 +50,12 @@ namespace CS2MultiplayerMod.Game
 
             if (_sawLoading)
             {
+                // A newer world queued up during the load supersedes the one that just
+                // finished — load it before announcing the session.
+                byte[] pending = _pendingWorldBlob;
+                _pendingWorldBlob = null;
+                if (pending != null) { StartWorldLoad(pending); return; }
+
                 SetPhase(ClientWorldPhase.InSession);
                 _log.Info("[MP] Host world loaded - gameplay sync active.");
                 return;
@@ -57,6 +63,10 @@ namespace CS2MultiplayerMod.Game
 
             if (NowMs - _phaseChangedMs > MapLoadTimeoutMs)
             {
+                byte[] pending = _pendingWorldBlob;
+                _pendingWorldBlob = null;
+                if (pending != null) { StartWorldLoad(pending); return; }
+
                 // The load never started (failed staging, asset index miss, …). Recover
                 // to a defined state instead of idling half-connected forever.
                 SetPhase(ClientWorldPhase.WaitingForMap);
@@ -151,6 +161,7 @@ namespace CS2MultiplayerMod.Game
         public void Disconnect()
         {
             _session.Stop();
+            _pendingWorldBlob = null;
             SetPhase(ClientWorldPhase.None);
             JoinMapLoader.DeleteTransient(_log); // a joining client keeps no copy of the host world
         }
@@ -158,6 +169,7 @@ namespace CS2MultiplayerMod.Game
         public void Shutdown()
         {
             _session.Stop();
+            _pendingWorldBlob = null;
             SetPhase(ClientWorldPhase.None);
             RestoreAutosave(); // even if the phase was already None
             JoinMapLoader.DeleteTransient(_log);

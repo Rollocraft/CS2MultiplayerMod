@@ -53,6 +53,9 @@ namespace CS2MultiplayerMod.Game
         private ClientWorldPhase _phase = ClientWorldPhase.None;
         private long _phaseChangedMs;
         private bool _sawLoading;
+        // Newest world blob that arrived while a previous one was still loading; loaded
+        // once the in-flight load settles (see LoadReceivedMap / PumpWorldPhase).
+        private byte[] _pendingWorldBlob;
         private string _lastFault;
 
         // The service observer runs before the individual realization observers. Keeping
@@ -85,7 +88,7 @@ namespace CS2MultiplayerMod.Game
                 AreaCreateCommand.Id, AreaUpdateCommand.Id, AreaDeleteCommand.Id,
                 RouteCreateCommand.Id, RouteUpdateCommand.Id, RouteDeleteCommand.Id,
                 TilePurchaseCommand.Id, EntityPolicyCommand.Id, DevTreePurchaseCommand.Id,
-                NetReplaceCommand.Id);
+                NetReplaceCommand.Id, VisualCustomizationCommand.Id, ColorPaletteCommand.Id);
         }
 
         public MultiplayerSession Session => _session;
@@ -193,6 +196,8 @@ namespace CS2MultiplayerMod.Game
                 case RouteUpdateCommand.Id: return "route-update";
                 case DevTreePurchaseCommand.Id: return "dev-tree-purchase";
                 case NetReplaceCommand.Id: return "net-replace";
+                case VisualCustomizationCommand.Id: return "visual-customization";
+                case ColorPaletteCommand.Id: return "color-palette";
                 default: return "unknown";
             }
         }

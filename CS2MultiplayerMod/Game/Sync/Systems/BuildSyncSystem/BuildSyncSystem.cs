@@ -70,8 +70,15 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         // leftHandTraffic mirrors the driveway sub-nets the way the game does; the two prefab
         // lookups feed NetUtils.GetSubNet / AreaUtils.SelectAreaPrefab. See Realize.cs.
         private CityConfigurationSystem _cityConfig;
+        private global::Game.Simulation.TerrainSystem _terrainSystem;
+        private global::Game.Simulation.WaterSystem _waterSystem;
         private ComponentLookup<NetGeometryData> _netGeometryLookup;
         private ComponentLookup<SpawnableObjectData> _spawnableObjectLookup;
+        private ComponentLookup<global::Game.Objects.Transform> _objectTransformLookup;
+        private ComponentLookup<PrefabRef> _prefabRefLookup;
+        private ComponentLookup<ObjectGeometryData> _objectGeometryLookup;
+        private ComponentLookup<BuildingTerraformData> _buildingTerraformLookup;
+        private ComponentLookup<BuildingExtensionData> _buildingExtensionLookup;
 
         protected override void OnCreate()
         {
@@ -83,11 +90,21 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             _prefabIndex = new PrefabIndex(_prefabSystem, GetEntityQuery(ComponentType.ReadOnly<PrefabData>()));
 
             _cityConfig = World.GetOrCreateSystemManaged<CityConfigurationSystem>();
+            _terrainSystem = World.GetOrCreateSystemManaged<global::Game.Simulation.TerrainSystem>();
+            _waterSystem = World.GetOrCreateSystemManaged<global::Game.Simulation.WaterSystem>();
             _netGeometryLookup = GetComponentLookup<NetGeometryData>(isReadOnly: true);
             _spawnableObjectLookup = GetComponentLookup<SpawnableObjectData>(isReadOnly: true);
+            _objectTransformLookup = GetComponentLookup<global::Game.Objects.Transform>(isReadOnly: true);
+            _prefabRefLookup = GetComponentLookup<PrefabRef>(isReadOnly: true);
+            _objectGeometryLookup = GetComponentLookup<ObjectGeometryData>(isReadOnly: true);
+            _buildingTerraformLookup = GetComponentLookup<BuildingTerraformData>(isReadOnly: true);
+            _buildingExtensionLookup = GetComponentLookup<BuildingExtensionData>(isReadOnly: true);
 
             // Top-level objects created this frame: prefab + transform, not a tool preview
             // (Temp), not an owned sub-object (Owner), not being deleted, not a net edge.
+            // Citizens, animals and vehicles are per-sim churn, never placements — and they
+            // spawn in bursts that can share a frame with a tool apply, so the active-tool
+            // gate alone cannot keep them out of the capture.
             _createdObjects = GetEntityQuery(new EntityQueryDesc
             {
                 All = new[]
@@ -102,6 +119,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     ComponentType.ReadOnly<Owner>(),
                     ComponentType.ReadOnly<Deleted>(),
                     ComponentType.ReadOnly<global::Game.Net.Edge>(),
+                    ComponentType.ReadOnly<global::Game.Objects.Moving>(),
+                    ComponentType.ReadOnly<global::Game.Vehicles.Vehicle>(),
+                    ComponentType.ReadOnly<global::Game.Creatures.Creature>(),
                 },
             });
 

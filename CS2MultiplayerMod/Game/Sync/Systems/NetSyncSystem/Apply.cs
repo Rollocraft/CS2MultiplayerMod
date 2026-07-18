@@ -405,8 +405,10 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
             {
                 if (_pendingApply || _awaitingDrain) return false;
                 global::Game.Tools.ToolBaseSystem tool = _toolSystem != null ? _toolSystem.activeTool : null;
-                return tool == null || tool is global::Game.Tools.DefaultToolSystem ||
-                       tool.applyMode == global::Game.Tools.ApplyMode.None;
+                // The direct brush pass runs before ToolOutputSystem. A later Clear pass only
+                // discards Temps (local brush previews are isolated below), but a later Apply pass
+                // would run ApplyBrushesSystem again and apply the remote samples twice.
+                return tool == null || tool.applyMode != global::Game.Tools.ApplyMode.Apply;
             }
         }
 
@@ -434,6 +436,11 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                     Entity original = EntityManager.GetComponentData<Temp>(temps[i]).m_Original;
                     if (original == Entity.Null) continue;
                     if (!EntityManager.Exists(original) || EntityManager.HasComponent<Deleted>(original))
+                        return true;
+                    // Net cleanup can leave a node entity alive for a frame after every connected
+                    // edge has entered deletion. It is just as stale to ApplyNetSystem as a node
+                    // already carrying Deleted, even though Exists still returns true.
+                    if (EntityManager.HasComponent<Node>(original) && IsNodeBeingDeleted(original))
                         return true;
                 }
             }
@@ -532,13 +539,21 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
 
         /// <summary>
         /// Apply remote terrain samples through the brush domain only. Local brush previews were
-        /// Disabled by <see cref="PrepareAuxiliaryTemps"/> and are restored after ToolOutputBarrier.
+        /// Disabled by <see cref="PrepareAuxiliaryTemps"/> only for this direct pass. Restore them
+        /// before ToolOutputSystem so a pending local Clear still disposes its previous preview.
         /// </summary>
         public bool CommitAuxiliaryTempsNow()
         {
-            if (_applyBrushesSystem == null) return false;
-            _applyBrushesSystem.Update();
-            return true;
+            try
+            {
+                if (_applyBrushesSystem == null) return false;
+                _applyBrushesSystem.Update();
+                return true;
+            }
+            finally
+            {
+                ReleaseTrackedTemps(_isolatedLocalBrushTemps);
+            }
         }
     }
 }

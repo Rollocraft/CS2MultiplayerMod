@@ -35,8 +35,13 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
         private readonly System.Collections.Generic.List<(UpgradePlacementCommand cmd, int origin, long deadline)> _ownerRetry =
             new System.Collections.Generic.List<(UpgradePlacementCommand, int, long)>();
-        private readonly System.Collections.Generic.List<(Entity prefab, float3 position, int seed, long deadline)>
-            _ownedElementRetry = new System.Collections.Generic.List<(Entity, float3, int, long)>();
+
+        private readonly System.Collections.Generic.List<(
+            Entity prefab, Entity buildingOwner, float3 position, int seed, long deadline)>
+            _ownedElementRetry = new System.Collections.Generic.List<(Entity, Entity, float3, int, long)>();
+
+        private const float UpgradeMatchRadiusSq = 0.1f * 0.1f;
+        private const float UpgradeMatchMaxDy = 0.25f;
 
         private PrefabSystem _prefabSystem;
         private PrefabIndex _prefabIndex;
@@ -196,7 +201,14 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     // (which already made its own with the building) and echoes a duplicate. Only a
                     // sub-object attached to a PRE-EXISTING building is a real upgrade.
                     if (EntityManager.HasComponent<Created>(owner)) continue;
-                    string ownerName = _prefabSystem.GetPrefabName(EntityManager.GetComponentData<PrefabRef>(owner).m_Prefab);
+
+                    // Growables grow their own extensions (mixed-use storefronts) as they level;
+                    // players can only upgrade placed service buildings, so a zone-spawnable owner
+                    // marks simulation churn the receiver's own zone growth reproduces.
+                    Entity ownerPrefabEntity = EntityManager.GetComponentData<PrefabRef>(owner).m_Prefab;
+                    if (EntityManager.HasComponent<SpawnableObjectData>(ownerPrefabEntity)) continue;
+
+                    string ownerName = _prefabSystem.GetPrefabName(ownerPrefabEntity);
                     if (string.IsNullOrEmpty(ownerName)) continue;
                     float3 ownerPos = EntityManager.GetComponentData<Transform>(owner).m_Position;
                     int randomSeed = EntityManager.HasComponent<PseudoRandomSeed>(entity)
@@ -271,12 +283,24 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 return true;
             }
 
+            // Mirrors the capture filter: an upgrade "on" a zone-spawnable owner can only be a
+            // peer's capture leak of its own zone growth — realizing it stacks a duplicate
+            // extension into a building this machine's growth already populates.
+            if (EntityManager.HasComponent<SpawnableObjectData>(ownerPrefab))
+            {
+                Mod.log.Warn("[MP] UpgradeSync realize: refusing upgrade '" + command.PrefabName +
+                             "' on zone-spawnable '" + command.OwnerPrefabName + "' from player " + origin + ".");
+                return true;
+            }
+
             var ownerPos = new float3(command.OwnerX, command.OwnerY, command.OwnerZ);
             Entity owner = FindOwner(ownerPrefab, ownerPos);
             if (owner == Entity.Null) return false;
 
             var position = new float3(command.PosX, command.PosY, command.PosZ);
-            var rotation = new quaternion(command.RotX, command.RotY, command.RotZ, command.RotW);
+            var rotation = new quaternion(math.normalizesafe(
+                new float4(command.RotX, command.RotY, command.RotZ, command.RotW),
+                new float4(0f, 0f, 0f, 1f)));
 
             // Reliable retries and reconnect boundaries must not duplicate an already-realized
             // extension. Ownership is part of the identity because two nearby service buildings can
@@ -353,7 +377,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             {
                 if (_ownedElementRetry.Count >= MaxPendingOwners) _ownedElementRetry.RemoveAt(0);
                 long now = Mod.Service != null ? Mod.Service.NowMs : 0;
-                _ownedElementRetry.Add((prefab, position, randomSeed, now + OwnerRetryWindowMs));
+                _ownedElementRetry.Add((prefab, owner, position, randomSeed,
+                    now + OwnerRetryWindowMs));
             }
         }
 
@@ -362,7 +387,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             for (int i = _ownedElementRetry.Count - 1; i >= 0; i--)
             {
                 var pending = _ownedElementRetry[i];
-                Entity upgrade = FindUpgrade(pending.prefab, pending.position, Entity.Null);
+                Entity upgrade = FindUpgrade(pending.prefab, pending.position,
+                    pending.buildingOwner);
                 if (upgrade != Entity.Null)
                 {
                     try
@@ -398,7 +424,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     if (expectedOwner != Entity.Null &&
                         EntityManager.GetComponentData<Owner>(candidate).m_Owner != expectedOwner) continue;
                     float3 candidatePosition = EntityManager.GetComponentData<Transform>(candidate).m_Position;
-                    if (math.distancesq(candidatePosition, position) <= 4f) return candidate;
+                    if (math.distancesq(candidatePosition.xz, position.xz) <= UpgradeMatchRadiusSq &&
+                        math.abs(candidatePosition.y - position.y) <= UpgradeMatchMaxDy) return candidate;
                 }
             }
             finally

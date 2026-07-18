@@ -77,6 +77,7 @@ namespace CS2MultiplayerMod.Game.Sync.Commands
             RotY = WireGuard.ReadFinite(reader);
             RotZ = WireGuard.ReadFinite(reader);
             RotW = WireGuard.ReadFinite(reader);
+            WireGuard.ValidateQuaternion(RotX, RotY, RotZ, RotW, "Object rotation");
             RandomSeed = reader.ReadInt();
             if (RandomSeed < 0 || RandomSeed > ushort.MaxValue)
                 throw new ProtocolException("Object random seed is outside ushort range.");

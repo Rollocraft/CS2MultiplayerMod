@@ -216,8 +216,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
             if (_pending.Count == 0) return;
 
-            // A local Apply/Clear frame gets priority. Merely keeping a build/terrain tool selected
-            // is safe because the brush domain is isolated from its standing preview below.
+            // A local Apply frame gets priority because ToolOutputSystem would run the brush pass
+            // again later this frame. Clear is safe: the isolated remote brush is applied here
+            // first, while the standing local brush preview is disabled only for that direct pass.
             if (_netSync == null || !_netSync.CanApplyAuxiliaryTemps) return;
 
             _netSync.PrepareAuxiliaryTemps();

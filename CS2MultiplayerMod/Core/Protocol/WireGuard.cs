@@ -58,6 +58,25 @@ namespace CS2MultiplayerMod.Core.Protocol
             return value;
         }
 
+        /// <summary>
+        /// Prove that four remote-controlled values can represent a rotation. Real placement
+        /// quaternions are unit length; the wider bounds tolerate harmless numeric drift while
+        /// rejecting zero/huge inputs before they reach geometry jobs.
+        /// </summary>
+        public static void ValidateQuaternion(float x, float y, float z, float w, string name)
+        {
+            const float maxComponent = 2f;
+            if (x < -maxComponent || x > maxComponent ||
+                y < -maxComponent || y > maxComponent ||
+                z < -maxComponent || z > maxComponent ||
+                w < -maxComponent || w > maxComponent)
+                throw new ProtocolException(name + " has an implausible component.");
+
+            float lengthSq = x * x + y * y + z * z + w * w;
+            if (lengthSq < 0.25f || lengthSq > 4f)
+                throw new ProtocolException(name + " has an implausible length.");
+        }
+
         /// <summary>Read a prefab-style name: required, sane length, no control characters.</summary>
         public static string ReadName(NetworkReader reader)
         {
