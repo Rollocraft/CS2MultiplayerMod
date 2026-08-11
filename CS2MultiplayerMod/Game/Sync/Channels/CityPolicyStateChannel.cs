@@ -129,7 +129,7 @@ namespace CS2MultiplayerMod.Game.Sync.Channels
             {
                 for (int i = 0; i < prefabs.Length; i++)
                 {
-                    string candidate = _prefabSystem.GetPrefabName(prefabs[i]);
+                    string candidate = PrefabIndex.SafeName(_prefabSystem, prefabs[i]);
                     if (!string.IsNullOrEmpty(candidate) && !_policyByName.ContainsKey(candidate))
                         _policyByName[candidate] = prefabs[i];
                 }

@@ -338,6 +338,20 @@ namespace CS2MultiplayerMod.Game
             !string.IsNullOrEmpty(fault) &&
             fault.IndexOf(value, StringComparison.OrdinalIgnoreCase) >= 0;
 
+        private const string DlcMismatchMarker = "DLC mismatch - ";
+
+        /// <summary>
+        /// The host names the differing DLCs in its reject reason. That naming is the only
+        /// part that says what to change, so it is shown verbatim (English, like every
+        /// other fault text) beside the translated advice.
+        /// </summary>
+        private static string DlcMismatchDetail(string fault)
+        {
+            if (string.IsNullOrEmpty(fault)) return "";
+            int at = fault.IndexOf(DlcMismatchMarker, StringComparison.OrdinalIgnoreCase);
+            return at < 0 ? "" : fault.Substring(at + DlcMismatchMarker.Length).Trim();
+        }
+
         private static string FriendlyFaultSummary(string fault)
         {
             if (FaultContains(fault, "removed you") || FaultContains(fault, "kicked"))
@@ -388,7 +402,12 @@ namespace CS2MultiplayerMod.Game
             if (FaultContains(fault, "Game version mismatch"))
                 return L10n.T(L10n.Key.ErrorGameVersionHelp);
             if (FaultContains(fault, "DLC mismatch"))
-                return L10n.T(L10n.Key.ErrorDlcHelp);
+            {
+                string detail = DlcMismatchDetail(fault);
+                return detail.Length > 0
+                    ? detail + " " + L10n.T(L10n.Key.ErrorDlcHelp)
+                    : L10n.T(L10n.Key.ErrorDlcHelp);
+            }
             if (FaultContains(fault, "Server is full"))
                 return L10n.T(L10n.Key.ErrorFullHelp);
             if (FaultContains(fault, "HostNotFound") ||

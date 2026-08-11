@@ -53,7 +53,7 @@ namespace CS2MultiplayerMod.Core.Session
                       "' protocol=" + request.ProtocolVersion +
                       " mod=" + (request.ModVersion ?? "?") +
                       " game=" + (request.GameVersion ?? "?") +
-                      " dlcs=" + (request.DlcList != null ? request.DlcList.Length : 0) +
+                      " dlcs=[" + string.Join(", ", request.DlcList ?? Array.Empty<string>()) + "]" +
                       " passwordProof=" + (request.PasswordProof != null && request.PasswordProof.Length > 0 ? "present" : "missing") + ".");
 
             if (request.ProtocolVersion != ProtocolConstants.ProtocolVersion)

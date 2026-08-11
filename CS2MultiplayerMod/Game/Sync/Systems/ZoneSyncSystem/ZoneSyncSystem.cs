@@ -334,7 +334,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 for (int i = 0; i < prefabs.Length; i++)
                 {
                     ushort index = EntityManager.GetComponentData<ZoneData>(prefabs[i]).m_ZoneType.m_Index;
-                    string name = _prefabSystem.GetPrefabName(prefabs[i]);
+                    string name = PrefabIndex.SafeName(_prefabSystem, prefabs[i]);
                     if (string.IsNullOrEmpty(name)) continue;
                     _indexToName[index] = name;
                     _nameToIndex[name] = index;

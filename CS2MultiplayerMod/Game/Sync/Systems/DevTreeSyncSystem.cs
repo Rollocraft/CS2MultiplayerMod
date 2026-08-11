@@ -115,7 +115,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 for (int i = 0; i < nodes.Length; i++)
                 {
                     if (IsLocked(nodes[i])) continue;
-                    string name = _prefabSystem.GetPrefabName(nodes[i]);
+                    string name = PrefabIndex.SafeName(_prefabSystem, nodes[i]);
                     if (!string.IsNullOrEmpty(name)) _knownUnlocked.Add(name);
                 }
             }
@@ -129,7 +129,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             {
                 for (int i = 0; i < nodes.Length; i++)
                 {
-                    string name = _prefabSystem.GetPrefabName(nodes[i]);
+                    string name = PrefabIndex.SafeName(_prefabSystem, nodes[i]);
                     if (string.IsNullOrEmpty(name)) continue;
 
                     bool unlocked = !IsLocked(nodes[i]);
@@ -215,7 +215,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             {
                 for (int i = 0; i < nodes.Length; i++)
                 {
-                    string candidate = _prefabSystem.GetPrefabName(nodes[i]);
+                    string candidate = PrefabIndex.SafeName(_prefabSystem, nodes[i]);
                     if (!string.IsNullOrEmpty(candidate)) _nodeByName[candidate] = nodes[i];
                 }
             }

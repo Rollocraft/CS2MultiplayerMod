@@ -1,3 +1,5 @@
+using System;
+using System.Collections.Generic;
 using Game;
 
 using CS2MultiplayerMod.Game.Sync.Systems.Net;
@@ -43,19 +45,49 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
         private bool _wasDeferringTerrain;
 
+        private const int FaultReportThrottleMs = 10000;
+        private readonly Dictionary<string, int> _lastFaultTick = new Dictionary<string, int>();
+
+        /// <summary>
+        /// Run one stage in isolation. The stages are ordered but not dependent: letting a
+        /// throw escape costs every stage behind it that frame, and a fault that repeats
+        /// (a bad remote command, a torn-down prefab) silently strands whole features for
+        /// as long as it lasts.
+        /// </summary>
+        private void Step(string stage, Action work)
+        {
+            try
+            {
+                work();
+            }
+            catch (Exception ex)
+            {
+                int now = Environment.TickCount;
+                int last;
+                if (_lastFaultTick.TryGetValue(stage, out last) &&
+                    unchecked(now - last) < FaultReportThrottleMs) return;
+                _lastFaultTick[stage] = now;
+
+                Mod.log.Warn("[MP] " + stage + " failed this frame and was skipped: " +
+                             ex.GetType().Name + ": " + ex.Message);
+                CS2MultiplayerMod.Game.Diagnostics.FlightRecorder.NoteException(
+                    "realize stage " + stage, ex);
+            }
+        }
+
         protected override void OnUpdate()
         {
             // Reset the net pipeline's per-frame state (the one-preview-wipe-per-frame guard) before
             // any feeder runs — DeleteSync/NetReplaceSync may hijack the frame before NetSync does.
             _netSync.BeginRealizeFrame();
-            _buildSync.ObserveLocalToolOutput();
-            _buildSync.CaptureLocalObjectApply();
+            Step("BuildSync.ObserveLocalToolOutput", _buildSync.ObserveLocalToolOutput);
+            Step("BuildSync.CaptureLocalObjectApply", _buildSync.CaptureLocalObjectApply);
 
             // The active net tool has already selected Apply, while ToolOutputSystem has not yet
             // consumed its standing preview. Publish its cached native courses and remember exact
             // split originals now. Object graphs are captured later at the dedicated pre-output
             // hook, directly from their standing definitions and only on the Apply frame.
-            _netSync.CaptureLocalNetApply();
+            Step("NetSync.CaptureLocalNetApply", _netSync.CaptureLocalNetApply);
 
             // Hold NEW net/object realizes while remote terrain edits are backlogged: a course or
             // object drawn right after a terraform stroke assumes the sender's post-edit surface, and
@@ -63,7 +95,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             // every height-gated snap. Terrain drains within frames (its capture rate is far below
             // the apply budget), so the hold is frames long. In-flight net commits still finish;
             // local click-replays are exempt (their Y was measured here).
-            _terrainSync.CompletePendingHeightReadback();
+            Step("TerrainSync.CompletePendingHeightReadback", _terrainSync.CompletePendingHeightReadback);
             bool deferTerrain = _terrainSync.HasBacklog();
             _netSync.DeferForTerrain = deferTerrain;
             _buildSync.DeferForTerrain = deferTerrain;
@@ -77,32 +109,32 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     : "terrain drained; net/build realize resumed");
             }
 
-            _buildSync.RealizePending();
+            Step("BuildSync", _buildSync.RealizePending);
             // DeleteSync BEFORE NetSync: a remote bulldoze applied this frame tags its edge Deleted,
             // and NetSync's split-target query excludes Deleted edges — so NetSync never resolves a
             // split onto an edge that is being removed this same frame (a stale-reference crash in
             // ApplyNetSystem). NetSync's own commit (flipping applyMode) is independent of delete order.
-            _deleteSync.RealizePending();
+            Step("DeleteSync", _deleteSync.RealizePending);
             // Road-type replacements also drive NetSync's single ApplyTool commit slot, so run after
             // DeleteSync and before NetSync's build: a delete armed this frame makes replace defer
             // (IsCommitBusy), and an armed replace makes NetSync's build defer — only one net batch
             // enters any one ApplyTool pass, never a build+replace of the same edge together.
-            if (!deferTerrain) _netReplaceSync.RealizePending();
-            _netSync.RealizePending();
+            if (!deferTerrain) Step("NetReplaceSync", _netReplaceSync.RealizePending);
+            Step("NetSync", _netSync.RealizePending);
             bool deferNetworkDependents = deferTerrain || _netSync.HasPlacementBacklog;
-            if (!deferNetworkDependents) _zoneSync.RealizePending();
-            _terrainSync.RealizePending();
-            _upgradeSync.RealizePending();
-            _moveSync.RealizePending();
-            if (!deferNetworkDependents) _netUpgradeSync.RealizePending();
-            _areaSync.RealizePending();
-            _routeSync.FinalizePending();
-            if (!deferNetworkDependents) _routeSync.RealizePending();
-            _tileSync.RealizePending();
+            if (!deferNetworkDependents) Step("ZoneSync", _zoneSync.RealizePending);
+            Step("TerrainSync", _terrainSync.RealizePending);
+            Step("UpgradeSync", _upgradeSync.RealizePending);
+            Step("MoveSync", _moveSync.RealizePending);
+            if (!deferNetworkDependents) Step("NetUpgradeSync", _netUpgradeSync.RealizePending);
+            Step("AreaSync", _areaSync.RealizePending);
+            Step("RouteSync.FinalizePending", _routeSync.FinalizePending);
+            if (!deferNetworkDependents) Step("RouteSync", _routeSync.RealizePending);
+            Step("TilePurchaseSync", _tileSync.RealizePending);
             // Disaster events are plain simulation entities - no definitions, no terrain
             // dependency - but they must still be created here: the game's event initialization
             // runs later this frame and only ever looks at freshly Created events.
-            _disasterSync.RealizePending();
+            Step("DisasterSync", _disasterSync.RealizePending);
         }
     }
 }

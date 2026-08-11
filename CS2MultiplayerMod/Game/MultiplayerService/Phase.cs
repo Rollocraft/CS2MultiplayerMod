@@ -151,7 +151,7 @@ namespace CS2MultiplayerMod.Game
                       " maxPlayers=" + config.MaxPlayers +
                       " name='" + config.PlayerName + "'" +
                       " mod=" + config.ModVersion + " game=" + config.GameVersion +
-                      " dlcs=" + config.DlcList.Length);
+                      " dlcs=[" + string.Join(", ", config.DlcList) + "]");
             _session.StartHost(config);
         }
 
@@ -170,7 +170,7 @@ namespace CS2MultiplayerMod.Game
                       " password=" + (config.Password.Length > 0 ? "SET" : "NONE") +
                       " name='" + config.PlayerName + "'" +
                       " mod=" + config.ModVersion + " game=" + config.GameVersion +
-                      " dlcs=" + config.DlcList.Length);
+                      " dlcs=[" + string.Join(", ", config.DlcList) + "]");
             SetPhase(ClientWorldPhase.Connecting);
             _session.Join(config);
         }

@@ -17,23 +17,30 @@ namespace CS2MultiplayerMod.Game
     /// </summary>
     internal static class DlcCheck
     {
-        /// <summary>DLCs with no effect on the simulation (CS2M's verified list).</summary>
-        private static readonly string[] ClientSideDlcs =
-            { 
-                "AtmosphericPianoRadio", 
-                "DeluxeRelaxRadio", 
-                "FeelgoodFunkRadio", 
-                "JadeRoadRadio", 
-                "CloudLoungeFMRadio", 
-                "ColdWaveRadio", 
-                "SkyrailRadio", 
-                "SoftRockRadio", 
-                "SynthAndSteelRadio"
+        /// <summary>
+        /// Not compared. The radio packs are music only, with no effect on the simulation
+        /// (CS2M's verified list). CS1TreasureHunt is a Cities: Skylines 1 ownership reward
+        /// that the store offers no way to turn off, so blocking on it would leave the two
+        /// players nothing to change; it is content, so its assets can still desync a player
+        /// who lacks it.
+        /// </summary>
+        private static readonly string[] IgnoredDlcs =
+            {
+                "AtmosphericPianoRadio",
+                "DeluxeRelaxRadio",
+                "FeelgoodFunkRadio",
+                "JadeRoadRadio",
+                "CloudLoungeFMRadio",
+                "ColdWaveRadio",
+                "SkyrailRadio",
+                "SoftRockRadio",
+                "SynthAndSteelRadio",
+                "CS1TreasureHunt"
             };
 
         /// <summary>
-        /// The owned, sync-relevant DLC names: canonical (prefix stripped), sorted
-        /// ordinally so host and client produce byte-identical lists for equal content.
+        /// The owned, sync-relevant DLC names: canonical, sorted ordinally so host and
+        /// client produce byte-identical lists for equal content.
         /// Returns an empty array when enumeration fails. The handshake compares that
         /// as a real empty set, so a peer reporting any DLC is rejected rather than
         /// being admitted with an unverified prefab catalogue.
@@ -43,13 +50,18 @@ namespace CS2MultiplayerMod.Game
             try
             {
                 var names = new List<string>();
+                var seenIds = new HashSet<int>();
                 foreach (IDlc dlc in PlatformManager.instance.EnumerateDLCs())
                 {
+                    // The same DLC is enumerated once per store backend, and the negative
+                    // ids are the reserved ones (invalid / base game / the placeholder the
+                    // account backend publishes on login) - none are content.
+                    if (dlc.id.id < 0 || !seenIds.Add(dlc.id.id)) continue;
                     if (!PlatformManager.instance.IsDlcOwned(dlc)) continue;
-                    if (IsClientSide(dlc.internalName)) continue;
+                    if (IsIgnored(dlc.internalName)) continue;
 
                     string name = CanonicalName(dlc);
-                    if (name.Length > 0 && !names.Contains(name)) names.Add(name);
+                    if (name.Length > 0) names.Add(name);
 
                     if (names.Count >= ProtocolConstants.MaxDlcEntries) break;
                 }
@@ -65,20 +77,26 @@ namespace CS2MultiplayerMod.Game
             }
         }
 
-        private static bool IsClientSide(string internalName)
+        private static bool IsIgnored(string internalName)
         {
-            for (int i = 0; i < ClientSideDlcs.Length; i++)
-                if (string.Equals(ClientSideDlcs[i], internalName, StringComparison.Ordinal)) return true;
+            for (int i = 0; i < IgnoredDlcs.Length; i++)
+                if (string.Equals(IgnoredDlcs[i], internalName, StringComparison.Ordinal)) return true;
             return false;
         }
 
+        /// <summary>
+        /// Identity for the wire. Only <see cref="IDlc.internalName"/> is machine-neutral:
+        /// the store-facing name is whatever the storefront returns, so it varies with the
+        /// store client's language and with which backend supplied the entry - two players
+        /// owning exactly the same DLC would compare as a mismatch. The id backs it up when
+        /// a backend reports the entry without a name.
+        /// </summary>
         private static string CanonicalName(IDlc dlc)
         {
-            string name = dlc.backendName;
-            if (string.IsNullOrEmpty(name)) name = dlc.internalName;
-            if (string.IsNullOrEmpty(name)) return string.Empty;
+            string name = dlc.internalName;
+            if (string.IsNullOrEmpty(name)) return "#" + dlc.id.id;
 
-            name = name.Replace("Cities: Skylines II - ", "").Trim();
+            name = name.Trim();
             if (name.Length > ProtocolConstants.MaxDlcNameLength)
                 name = name.Substring(0, ProtocolConstants.MaxDlcNameLength);
             return name;

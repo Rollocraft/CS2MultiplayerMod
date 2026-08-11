@@ -10,8 +10,9 @@
 		Play Cities: Skylines II together.
 
 		CS2 Multiplayer is a client-server multiplayer mod that allows multiple players to build and manage the same city in real time.
+		**Mods currently do not work in Multiplayer!**
 		The mod is currently experimental. Please back up your saves and expect bugs, missing features or crashes while development continues.
-		To host a game, start a multiplayer world, optionally protect it with a password, and share your IP address with your friends.
+		To host a game, start a multiplayer world, optionally protect it with a password, and share your IP address with your friends or share ur steamcode.
 		If you encounter any issues or have feedback, our Discord server ( https://discord.gg/KFZTW2YSJt ) is the preferred place to get support and report bugs.
 		This project is not affiliated with, endorsed by, or sponsored by Colossal Order, Paradox Interactive, or Iceflake Studio.	
 	</LongDescription>
@@ -27,7 +28,7 @@
 	<!--Link to the forum post where the mod can be discussed-->
 	<ForumLink Value="" />
 	<!--Version of the mod-->
-	<ModVersion Value="0.1.5" />
+	<ModVersion Value="0.1.5h1" />
 	<!--Recommended version of the base game to use the mod-->
 	<GameVersion Value="1.6.*" />
 	<!--Dependency for the mod, can be set multiple times-->
@@ -36,7 +37,7 @@
 	<RequiredDLC Value="" />
 	<!--Change log for new version. Single line or multi line. Supports minimal markdown subset-->
 	<ChangeLog>
-		Updated the Ingame UI, enhanced the Host connection Experience, added a way to kick player, added an automatic server close/disconnect on Host closing World/Game aswell for clients and fixed some smal Bugs.
+		Hotfix for the CS1TreasureHunt DLC and client placement issues.
 	</ChangeLog>
 	<!--External link, can be set multiple times. supported types are "discord", "github", "youtube", "twitch", "x", "paypal", "patreon", "buymeacoffee", "kofi", "crowdin", "gitlab", "gofundme"-->
 	<ExternalLink Type="discord" Url="https://discord.gg/KFZTW2YSJt" />

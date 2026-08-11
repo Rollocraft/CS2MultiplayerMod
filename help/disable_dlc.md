@@ -25,7 +25,8 @@ In the Settings app:
 
 ---
 
-CS1TreasureHunt DLC cannot be disabled. This is a known issue.
+The CS1 Treasure Hunt DLC cannot be disabled, so the mod no longer compares it — you can join
+each other whether or not you own Cities: Skylines 1.
 
 ---
 
