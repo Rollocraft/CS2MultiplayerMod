@@ -79,6 +79,14 @@ namespace CS2MultiplayerMod.Localization
             // {0} = running build, {1} = comma-separated tested builds.
             public const string UiVersionWarning = "CS2MP.UI.VersionWarning";
 
+            // -- Other-mods block (host and join are both refused while any is live) --
+            public const string UiModsBlockedTitle = "CS2MP.UI.ModsBlockedTitle";
+            // {0} = comma-separated names of the other live mods.
+            public const string UiModsBlocked = "CS2MP.UI.ModsBlocked";
+            // Same, for a block that came from the loaded-assembly fallback: that one only
+            // clears on restart, so it must not tell the player to just toggle the mod off.
+            public const string UiModsBlockedRestart = "CS2MP.UI.ModsBlockedRestart";
+
             // -- Full-screen join loading overlay --
             public const string UiCancel = "CS2MP.UI.Cancel";
             public const string UiJoiningTitle = "CS2MP.UI.JoiningTitle";
@@ -148,6 +156,8 @@ namespace CS2MultiplayerMod.Localization
             public const string ErrorGameVersionHelp = "CS2MP.Error.GameVersion.Help";
             public const string ErrorDlc = "CS2MP.Error.Dlc";
             public const string ErrorDlcHelp = "CS2MP.Error.Dlc.Help";
+            public const string ErrorMods = "CS2MP.Error.Mods";
+            public const string ErrorModsHelp = "CS2MP.Error.Mods.Help";
             public const string ErrorFull = "CS2MP.Error.Full";
             public const string ErrorFullHelp = "CS2MP.Error.Full.Help";
             public const string ErrorAddress = "CS2MP.Error.Address";

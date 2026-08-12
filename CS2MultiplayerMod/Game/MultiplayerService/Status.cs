@@ -345,11 +345,14 @@ namespace CS2MultiplayerMod.Game
         /// part that says what to change, so it is shown verbatim (English, like every
         /// other fault text) beside the translated advice.
         /// </summary>
-        private static string DlcMismatchDetail(string fault)
+        private static string DlcMismatchDetail(string fault) => MarkedDetail(fault, DlcMismatchMarker);
+
+        /// <summary>Whatever a fault lists after its marker, or "" when it carries none.</summary>
+        private static string MarkedDetail(string fault, string marker)
         {
             if (string.IsNullOrEmpty(fault)) return "";
-            int at = fault.IndexOf(DlcMismatchMarker, StringComparison.OrdinalIgnoreCase);
-            return at < 0 ? "" : fault.Substring(at + DlcMismatchMarker.Length).Trim();
+            int at = fault.IndexOf(marker, StringComparison.OrdinalIgnoreCase);
+            return at < 0 ? "" : fault.Substring(at + marker.Length).Trim();
         }
 
         private static string FriendlyFaultSummary(string fault)
@@ -368,6 +371,8 @@ namespace CS2MultiplayerMod.Game
                 return L10n.T(L10n.Key.ErrorGameVersion);
             if (FaultContains(fault, "DLC mismatch"))
                 return L10n.T(L10n.Key.ErrorDlc);
+            if (FaultContains(fault, ModsCheck.FaultMarker))
+                return L10n.T(L10n.Key.ErrorMods);
             if (FaultContains(fault, "Server is full"))
                 return L10n.T(L10n.Key.ErrorFull);
             if (FaultContains(fault, "HostNotFound") ||
@@ -407,6 +412,13 @@ namespace CS2MultiplayerMod.Game
                 return detail.Length > 0
                     ? detail + " " + L10n.T(L10n.Key.ErrorDlcHelp)
                     : L10n.T(L10n.Key.ErrorDlcHelp);
+            }
+            if (FaultContains(fault, ModsCheck.FaultMarker))
+            {
+                string detail = MarkedDetail(fault, ModsCheck.FaultMarker);
+                return detail.Length > 0
+                    ? detail + " - " + L10n.T(L10n.Key.ErrorModsHelp)
+                    : L10n.T(L10n.Key.ErrorModsHelp);
             }
             if (FaultContains(fault, "Server is full"))
                 return L10n.T(L10n.Key.ErrorFullHelp);

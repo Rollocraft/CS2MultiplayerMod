@@ -134,10 +134,29 @@ namespace CS2MultiplayerMod.Game
             }
         }
 
+        /// <summary>
+        /// Refuses the action when any mod other than this one is live, and records the
+        /// reason as a fault so the status screen and the error overlay explain it. Enforced
+        /// here rather than only in the UI because the options screen's Host button and the
+        /// hub reach these entry points directly. True when the caller must stop.
+        /// </summary>
+        private bool RefuseForOtherMods(string action)
+        {
+            string detail = ModsCheck.FaultDetail();
+            if (detail.Length == 0) return false;
+
+            _lastFault = detail;
+            _log.Warn("[MP] Cannot " + action + ": " + detail +
+                      ". Multiplayer runs only with CS2 Multiplayer Mod alone - disable the " +
+                      "others in the active playset and restart the game.");
+            return true;
+        }
+
         public void HostFromSettings(Setting settings)
         {
             if (!ModEnabled) { _log.Warn("Cannot host: the mod is disabled in settings."); return; }
             if (_session.Role != SessionRole.None) { _log.Warn("Cannot host: a session is already active."); return; }
+            if (RefuseForOtherMods("host")) return;
             ClearClientExitNotice();
             ResetCommandDiagnostics();
             _lastFault = null;
@@ -159,6 +178,7 @@ namespace CS2MultiplayerMod.Game
         {
             if (!ModEnabled) { _log.Warn("Cannot join: the mod is disabled in settings."); return; }
             if (_session.Role != SessionRole.None) { _log.Warn("Cannot join: a session is already active."); return; }
+            if (RefuseForOtherMods("join")) return;
             ClearClientExitNotice();
             ResetCommandDiagnostics();
             _lastFault = null;

@@ -75,9 +75,14 @@ namespace CS2MultiplayerMod
             return !IsHosting();
         }
 
+        /// <summary>
+        /// Also false while another mod is live: the options screen's Host button reaches
+        /// the service directly, so the rule has to hold here too and not only on the
+        /// multiplayer screens.
+        /// </summary>
         public bool CannotStartHost()
         {
-            return IsNotInGame() || !IsNotInSession();
+            return IsNotInGame() || !IsNotInSession() || CS2MultiplayerMod.Game.ModsCheck.AnyOtherMods;
         }
 
         /// <summary>

@@ -22,6 +22,7 @@ import {
 } from "react";
 import { useBackKey } from "mods/back-action";
 import { DisclaimerModal, disclaimerAccepted$ } from "mods/disclaimer";
+import { OtherModsBanner } from "mods/mods-banner";
 import { TransferProgress } from "mods/transfer-progress";
 import { VersionWarningBanner } from "mods/version-banner";
 
@@ -1000,6 +1001,9 @@ const HostSetupView = () => {
         <PanelBody
             middle={
                 <div style={styles.scrollArea}>
+                    {/* Explains the disabled Host button: canHost is false C#-side while
+                        any other mod is live. */}
+                    <OtherModsBanner />
                     <VersionWarningBanner />
                     <SettingsFields />
                     {statusKind === "error" ? (

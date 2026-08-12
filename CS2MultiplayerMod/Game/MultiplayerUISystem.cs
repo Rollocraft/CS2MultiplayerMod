@@ -111,6 +111,12 @@ namespace CS2MultiplayerMod.Game
             AddUpdateBinding(new GetterValueBinding<string>(Group, "versionWarning",
                 () => GameVersionCheck.WarningText()));
 
+            // Other mods live in the active playset: localized sentence naming them,
+            // otherwise "" (banner hidden). Non-empty is what disables Join and both
+            // host-world tiles - the scan behind it is cached, see ModsCheck.
+            AddUpdateBinding(new GetterValueBinding<string>(Group, "modsBlocked",
+                () => ModsCheck.BlockText()));
+
             // One-time disclaimer gate: the UI shows it before the first host/join and
             // only flips this once the player accepts. Persisted in Setting so it never
             // reappears for that user.
@@ -143,9 +149,11 @@ namespace CS2MultiplayerMod.Game
             // Joins waiting for the host's approval (empty on a client / when approval is off).
             AddUpdateBinding(new GetterValueBinding<string>(Group, "pendingJoins",
                 () => Mod.Service != null ? Mod.Service.PendingJoinsJson : "[]"));
-            // Hosting shares the loaded city, so it needs one — and no running session.
+            // Hosting shares the loaded city, so it needs one — and no running session,
+            // and no other mod live (which would desync or crash whoever joins).
             AddUpdateBinding(new GetterValueBinding<bool>(Group, "canHost",
-                () => Mod.Setting != null && !Mod.Setting.CannotStartHost() && MultiplayerService.ModEnabled));
+                () => Mod.Setting != null && !Mod.Setting.CannotStartHost() && MultiplayerService.ModEnabled &&
+                      !ModsCheck.AnyOtherMods));
 
             // Connection mode: "relay" (default) or "direct". The join code is what a
             // relay host hands out instead of an address and port.
