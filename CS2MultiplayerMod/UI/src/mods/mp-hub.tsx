@@ -98,6 +98,8 @@ const worldSendPercent$ = bindValue<number>(GROUP, "worldSendPercent", -1);
 const playerName$ = bindValue<string>(GROUP, "playerName", "Player");
 const hostConnection$ = bindValue<string>(GROUP, "hostConnection", "relay");
 const sessionUsesRelay$ = bindValue<boolean>(GROUP, "sessionUsesRelay", false);
+// False without Steam (Microsoft Store / Game Pass): the hub drops the picker.
+const relaySupported$ = bindValue<boolean>(GROUP, "relaySupported", false);
 const joinCode$ = bindValue<string>(GROUP, "joinCode", "");
 const hostPort$ = bindValue<string>(GROUP, "hostPort", "25001");
 const hostPassword$ = bindValue<string>(GROUP, "hostPassword", "");
@@ -804,11 +806,12 @@ const SettingsFields = () => {
     const resyncMinutes = useValue(resyncMinutes$);
     const hostConnection = useValue(hostConnection$);
     const sessionUsesRelay = useValue(sessionUsesRelay$);
+    const relaySupported = useValue(relaySupported$);
     const joinCode = useValue(joinCode$);
 
     // In a live session follow what it actually runs on; outside one, what is
     // configured for the next.
-    const relay = inSession ? sessionUsesRelay : hostConnection !== CONNECTION_DIRECT;
+    const relay = inSession ? sessionUsesRelay : relaySupported && hostConnection !== CONNECTION_DIRECT;
 
     return (
         <>
@@ -818,14 +821,16 @@ const SettingsFields = () => {
                 disabled={inSession}
                 onChange={(v) => trigger(GROUP, "setPlayerName", v)}
             />
-            <div style={styles.row}>
-                <div style={styles.label}>{t(LOC.mode, "Connection")}</div>
-                <ConnectionSegmented
-                    value={relay ? CONNECTION_RELAY : CONNECTION_DIRECT}
-                    disabled={inSession}
-                    onChange={(v) => trigger(GROUP, "setHostConnection", v)}
-                />
-            </div>
+            {relaySupported && (
+                <div style={styles.row}>
+                    <div style={styles.label}>{t(LOC.mode, "Connection")}</div>
+                    <ConnectionSegmented
+                        value={relay ? CONNECTION_RELAY : CONNECTION_DIRECT}
+                        disabled={inSession}
+                        onChange={(v) => trigger(GROUP, "setHostConnection", v)}
+                    />
+                </div>
+            )}
             {/* A relay session has no port to show; the code is what a host passes on.
                 Read-only and select-on-click - the game exposes no clipboard API. */}
             {relay ? (

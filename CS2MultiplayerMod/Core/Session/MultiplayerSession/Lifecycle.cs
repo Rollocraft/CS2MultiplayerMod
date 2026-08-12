@@ -119,7 +119,7 @@ namespace CS2MultiplayerMod.Core.Session
             if (!RelayProvider.IsAvailable)
             {
                 Fault("Cannot host over the Steam relay: " + RelayProvider.UnavailableReason +
-                      " Switch the host connection to Direct, or start the game through Steam.");
+                      " Switch the host connection to Direct and share your address and port instead.");
                 return;
             }
 
@@ -181,7 +181,7 @@ namespace CS2MultiplayerMod.Core.Session
             if (!RelayProvider.IsAvailable)
             {
                 Fault("Cannot join over the Steam relay: " + RelayProvider.UnavailableReason +
-                      " Ask the host for an address and port instead, or start the game through Steam.");
+                      " Ask the host for an address and port and use Direct Connection instead.");
                 return;
             }
 

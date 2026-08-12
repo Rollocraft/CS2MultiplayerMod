@@ -1,0 +1,48 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+    <!--The Steam relay backend, kept out of the mod assembly on purpose.
+
+    The game resolves every assembly reference a mod declares before it will load it,
+    and Steamworks only ships with the Steam build of the game. A mod assembly that
+    names it is therefore refused outright on Microsoft Store / Game Pass copies -
+    "com.rlabrecque.steamworks.net" comes back as a missing dependency and nothing of
+    the mod runs. Nothing references this assembly at build time; the mod loads it by
+    hand where Steam exists (see SteamRelayBootstrap).-->
+
+    <PropertyGroup>
+        <Configurations>Debug;Release</Configurations>
+        <OutputType>Library</OutputType>
+        <TargetFramework>net48</TargetFramework>
+        <LangVersion>9.0</LangVersion>
+        <AssemblyName>CS2MultiplayerMod.Steam</AssemblyName>
+        <RootNamespace>CS2MultiplayerMod.Core.Networking.Steam</RootNamespace>
+        <!--Nothing here is part of the mod's own API surface.-->
+        <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    </PropertyGroup>
+
+    <!--This ships to players, so its symbols must not carry the build machine's paths.-->
+    <PropertyGroup>
+        <PathMap>$(MSBuildProjectDirectory)\=CS2MultiplayerMod.Steam\</PathMap>
+        <EnableSourceLink>false</EnableSourceLink>
+        <DebugType>portable</DebugType>
+    </PropertyGroup>
+
+    <PropertyGroup>
+        <ManagedPath>$([System.Environment]::GetEnvironmentVariable('CSII_MANAGEDPATH', 'EnvironmentVariableTarget.User'))</ManagedPath>
+        <AssemblySearchPaths>$(AssemblySearchPaths);$(ManagedPath)</AssemblySearchPaths>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <!--A plain file reference rather than a ProjectReference: the mod's build is
+        what drives this project (its post-build target), and a project cycle would
+        make that impossible.-->
+        <Reference Include="CS2MultiplayerMod">
+            <HintPath>..\CS2MultiplayerMod\bin\$(Configuration)\net48\CS2MultiplayerMod.dll</HintPath>
+            <Private>false</Private>
+        </Reference>
+        <Reference Include="com.rlabrecque.steamworks.net">
+            <Private>false</Private>
+        </Reference>
+    </ItemGroup>
+
+</Project>

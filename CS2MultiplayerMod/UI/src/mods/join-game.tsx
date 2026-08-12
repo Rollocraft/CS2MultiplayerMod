@@ -61,6 +61,9 @@ const multiplayerMenuActive$ = bindValue<boolean>(GROUP, "multiplayerMenuActive"
 const hostConnection$ = bindValue<string>(GROUP, "hostConnection", CONNECTION_RELAY);
 const joinCode$ = bindValue<string>(GROUP, "joinCode", "");
 const relayAvailable$ = bindValue<boolean>(GROUP, "relayAvailable", false);
+// False on copies of the game that ship no Steam library (Microsoft Store / Game
+// Pass): there is no relay to pick, so the choice itself is left out.
+const relaySupported$ = bindValue<boolean>(GROUP, "relaySupported", false);
 const relayUnavailableReason$ = bindValue<string>(GROUP, "relayUnavailableReason", "");
 const joinConnection$ = bindValue<string>(GROUP, "joinConnection", CONNECTION_RELAY);
 const joinCodeInput$ = bindValue<string>(GROUP, "joinCodeInput", "");
@@ -422,21 +425,24 @@ const ConnectionPicker = () => {
     const mode = useValue(hostConnection$);
     const code = useValue(joinCode$);
     const relayAvailable = useValue(relayAvailable$);
+    const relaySupported = useValue(relaySupported$);
     const relayReason = useValue(relayUnavailableReason$);
 
-    const relay = mode !== CONNECTION_DIRECT;
+    const relay = relaySupported && mode !== CONNECTION_DIRECT;
 
     return (
         <div style={styles.connectionRail}>
         <div style={styles.connectionPanel} onMouseDown={(e) => e.stopPropagation()}>
-            <div style={styles.connectionRow}>
-                <div style={styles.label}>{t(LOC.mode, "Connection")}</div>
-                <ConnectionDropdown
-                    value={mode}
-                    style={styles.dropdownToggle}
-                    onChange={(value) => trigger(GROUP, "setHostConnection", value)}
-                />
-            </div>
+            {relaySupported && (
+                <div style={styles.connectionRow}>
+                    <div style={styles.label}>{t(LOC.mode, "Connection")}</div>
+                    <ConnectionDropdown
+                        value={mode}
+                        style={styles.dropdownToggle}
+                        onChange={(value) => trigger(GROUP, "setHostConnection", value)}
+                    />
+                </div>
+            )}
 
             {relay && relayAvailable && (
                 <>
@@ -522,7 +528,8 @@ export const MultiplayerScreenRenderer = ({ focusKey, className, onClose }: Nati
     const joinConnection = useValue(joinConnection$);
     const joinCodeInput = useValue(joinCodeInput$);
     const hasSavedGame = useValue(savedGames$).length > 0;
-    const joinIsRelay = joinConnection !== CONNECTION_DIRECT;
+    const relaySupported = useValue(relaySupported$);
+    const joinIsRelay = relaySupported && joinConnection !== CONNECTION_DIRECT;
     const [view, setView] = useState<MultiplayerView>("choice");
 
     // Keep the multiplayer marker alive through the native exit animation. Once
@@ -585,15 +592,17 @@ export const MultiplayerScreenRenderer = ({ focusKey, className, onClose }: Nati
                         value={playerName}
                         onChange={(v) => trigger(GROUP, "setPlayerName", v)}
                     />
-                    <div style={styles.row}>
-                        <div style={styles.label}>{t(LOC.mode, "Connection")}</div>
-                        <ConnectionDropdown
-                            value={joinConnection}
-                            disabled={inSession}
-                            style={styles.dropdownToggle}
-                            onChange={(v) => trigger(GROUP, "setJoinConnection", v)}
-                        />
-                    </div>
+                    {relaySupported && (
+                        <div style={styles.row}>
+                            <div style={styles.label}>{t(LOC.mode, "Connection")}</div>
+                            <ConnectionDropdown
+                                value={joinConnection}
+                                disabled={inSession}
+                                style={styles.dropdownToggle}
+                                onChange={(v) => trigger(GROUP, "setJoinConnection", v)}
+                            />
+                        </div>
+                    )}
                     {/* Relay joins carry no address or port: the code is the whole target,
                         so asking for the other two would only be more to get wrong. */}
                     {joinIsRelay ? (

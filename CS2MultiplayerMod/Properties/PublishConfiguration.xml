@@ -28,7 +28,7 @@
 	<!--Link to the forum post where the mod can be discussed-->
 	<ForumLink Value="" />
 	<!--Version of the mod-->
-	<ModVersion Value="0.1.5h1" />
+	<ModVersion Value="0.1.5h2" />
 	<!--Recommended version of the base game to use the mod-->
 	<GameVersion Value="1.6.*" />
 	<!--Dependency for the mod, can be set multiple times-->
@@ -37,7 +37,7 @@
 	<RequiredDLC Value="" />
 	<!--Change log for new version. Single line or multi line. Supports minimal markdown subset-->
 	<ChangeLog>
-		Hotfix for the CS1TreasureHunt DLC and client placement issues.
+		Fixes the mod failing to load on Microsoft Store / Game Pass copies of the game, which report a missing dependency and never start the mod. The Steam relay now ships separately and is only loaded where Steam exists; on those copies the connection picker is hidden and games are hosted and joined by address and port.
 	</ChangeLog>
 	<!--External link, can be set multiple times. supported types are "discord", "github", "youtube", "twitch", "x", "paypal", "patreon", "buymeacoffee", "kofi", "crowdin", "gitlab", "gofundme"-->
 	<ExternalLink Type="discord" Url="https://discord.gg/KFZTW2YSJt" />

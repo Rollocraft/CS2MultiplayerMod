@@ -80,6 +80,16 @@ namespace CS2MultiplayerMod
             return IsNotInGame() || !IsNotInSession();
         }
 
+        /// <summary>
+        /// Whether the relay is a choice on this machine. Copies of the game without Steam
+        /// (Microsoft Store / Game Pass) have no relay backend, so the picker is hidden and
+        /// everything behaves as if direct had been chosen.
+        /// </summary>
+        public bool RelayUnsupported()
+        {
+            return !RelayProvider.IsSupported;
+        }
+
         /// <summary>Relay hosting opens no port, so the port and LAN controls do not apply.</summary>
         public bool IsRelayHosting()
         {
@@ -161,9 +171,12 @@ namespace CS2MultiplayerMod
         [SettingsUIDropdown(typeof(Setting), nameof(GetHostConnectionValues))]
         [SettingsUISection(HostTab, HostSetupGroup)]
         [SettingsUIDisableByCondition(typeof(Setting), nameof(IsInSession))]
+        [SettingsUIHideByCondition(typeof(Setting), nameof(RelayUnsupported))]
         public string HostConnection
         {
-            get { return _hostConnection; }
+            // Reads as direct where there is no relay backend, so the options screen, the
+            // UI bindings and HostTransport() all agree without each having to check.
+            get { return RelayProvider.IsSupported ? _hostConnection : ConnectionDirect; }
             set
             {
                 if (IsInSession()) return;
@@ -303,9 +316,10 @@ namespace CS2MultiplayerMod
         [SettingsUIDropdown(typeof(Setting), nameof(GetHostConnectionValues))]
         [SettingsUISection(JoinTab, JoinSetupGroup)]
         [SettingsUIDisableByCondition(typeof(Setting), nameof(IsInSession))]
+        [SettingsUIHideByCondition(typeof(Setting), nameof(RelayUnsupported))]
         public string JoinConnection
         {
-            get { return _joinConnection; }
+            get { return RelayProvider.IsSupported ? _joinConnection : ConnectionDirect; }
             set
             {
                 if (IsInSession()) return;

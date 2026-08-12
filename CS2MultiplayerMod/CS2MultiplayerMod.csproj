@@ -45,11 +45,10 @@
         <Reference Include="Colossal.PSI.Common">
             <Private>false</Private>
         </Reference>
-        <!--Steamworks.NET, shipped with the game. Used only for the relay transport, and
-        only after a runtime probe: builds without it fall back to direct connections.-->
-        <Reference Include="com.rlabrecque.steamworks.net">
-            <Private>false</Private>
-        </Reference>
+        <!--No reference to Steamworks here, deliberately: the game refuses to load a mod
+        whose declared references it cannot resolve, and only the Steam build of the game
+        ships that assembly. The relay lives in CS2MultiplayerMod.Steam.dll instead, which
+        nothing links at build time - see Game/SteamRelayBootstrap.cs.-->
         <Reference Include="Unity.InputSystem">
             <Private>false</Private>
         </Reference>
@@ -104,6 +103,23 @@
     <ItemGroup>
         <EmbeddedResource Include="Localization\locales\*.properties"/>
     </ItemGroup>
+
+    <!--The Steam relay backend builds against this assembly, so it can only be built once
+    this one is done - and DeployWIP has wiped and refilled the mod folder by then, hence
+    the copy into both the output and the deployed folder.-->
+    <Target Name="BuildSteamBackend" AfterTargets="DeployWIP" Condition="'$(NeedBuild)'=='true'">
+        <PropertyGroup>
+            <SteamBackendDir>$(MSBuildProjectDirectory)\..\CS2MultiplayerMod.Steam</SteamBackendDir>
+        </PropertyGroup>
+        <MSBuild Projects="$(SteamBackendDir)\CS2MultiplayerMod.Steam.csproj"
+                 Targets="Build" Properties="Configuration=$(Configuration)"/>
+        <ItemGroup>
+            <SteamBackendFiles Include="$(SteamBackendDir)\bin\$(Configuration)\net48\CS2MultiplayerMod.Steam.dll"/>
+            <SteamBackendFiles Include="$(SteamBackendDir)\bin\$(Configuration)\net48\CS2MultiplayerMod.Steam.pdb"/>
+        </ItemGroup>
+        <Copy SourceFiles="@(SteamBackendFiles)" DestinationFolder="$(OutDir)"/>
+        <Copy SourceFiles="@(SteamBackendFiles)" DestinationFolder="$(DeployDir)" Condition="Exists('$(DeployDir)')"/>
+    </Target>
 
     <!--Build the UI module after the C# build. Must run after Mod.targets' DeployWIP
     (which wipes and refills the local mods folder) because webpack writes the compiled
