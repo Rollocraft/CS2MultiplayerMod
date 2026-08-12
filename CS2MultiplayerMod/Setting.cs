@@ -112,9 +112,52 @@ namespace CS2MultiplayerMod
         [SettingsUISection(GeneralTab, GeneralGroup)]
         public bool EnableMod { get; set; } = true;
 
+        /// <summary>The name every copy of the game falls back to when it knows no better.</summary>
+        public const string DefaultPlayerName = "Player";
+
         [SettingsUITextInput]
         [SettingsUISection(GeneralTab, GeneralGroup)]
-        public string PlayerName { get; set; } = "Player";
+        public string PlayerName { get; set; } = DefaultPlayerName;
+
+        /// <summary>
+        /// Set once <see cref="ApplyPlatformNamePreset"/> has had its one chance to fill
+        /// <see cref="PlayerName"/> in. Persisted and hidden: without it a player who
+        /// deliberately calls themselves "Player" would be renamed on every start.
+        /// </summary>
+        [SettingsUIHidden]
+        public bool PlayerNamePresetApplied { get; set; } = false;
+
+        /// <summary>
+        /// First run only: prefer the platform account's own display name over the plain
+        /// "Player" default, so a signed-in host is recognisable to the people joining.
+        /// Copies of the game with no platform backend (Microsoft Store / Game Pass) have
+        /// no name to read and keep the default.
+        /// </summary>
+        public void ApplyPlatformNamePreset()
+        {
+            if (PlayerNamePresetApplied) return;
+
+            // Anything the player chose themselves wins, and is recorded as the final
+            // answer so a later start never revisits this.
+            string current = (PlayerName ?? "").Trim();
+            if (current.Length > 0 && current != DefaultPlayerName)
+            {
+                PlayerNamePresetApplied = true;
+                ApplyAndSave();
+                return;
+            }
+
+            // Empty means the platform cannot say (not signed in yet, or no backend at
+            // all). Leave the flag unset so a later start can still pick the name up.
+            string platformName = RelayProvider.LocalPlayerName;
+            if (string.IsNullOrEmpty(platformName.Trim())) return;
+
+            string preset = Core.Protocol.WireGuard.SanitizePlayerName(platformName);
+            PlayerName = preset;
+            PlayerNamePresetApplied = true;
+            ApplyAndSave();
+            Mod.log.Info("Player name preset from the platform account: '" + preset + "'.");
+        }
 
         /// <summary>
         /// Off: only the important lines (connect/disconnect, world transfer, faults).
@@ -380,7 +423,10 @@ namespace CS2MultiplayerMod
         {
             EnableMod = true;
             VerboseLogging = false;
-            PlayerName = "Player";
+            PlayerName = DefaultPlayerName;
+            // Resetting the name asks for the default name again, which on a signed-in
+            // copy of the game is the account name, not the literal "Player".
+            PlayerNamePresetApplied = false;
             ServerAddress = "127.0.0.1";
             HostConnection = ConnectionRelay;
             JoinConnection = ConnectionRelay;

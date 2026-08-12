@@ -194,6 +194,16 @@ namespace CS2MultiplayerMod.Game
                 JoinMapLoader.DeleteTransient(_log);
         }
 
+        /// <summary>
+        /// Forget the last fault. A closed error screen has to stay closed: the UI
+        /// re-reads the status on every mount, so leaving the fault remembered brings the
+        /// same error back the next time the player opens multiplayer.
+        /// </summary>
+        public void DismissFault()
+        {
+            _lastFault = null;
+        }
+
         public void Shutdown()
         {
             ResetWorldSyncState(restoreSpeed: false); // the world is going away with the process

@@ -16,6 +16,13 @@ namespace CS2MultiplayerMod.Core.Networking
         /// <summary>What other players type to reach this machine; empty when unavailable.</summary>
         string LocalJoinCode { get; }
 
+        /// <summary>
+        /// The display name this machine's platform account already goes by, or empty
+        /// when there is none. Used once as the first-run player name, so a signed-in
+        /// player is not called "Player" by default.
+        /// </summary>
+        string LocalPlayerName { get; }
+
         ITransport CreateHost(IModLogger log);
 
         ITransport CreateClient(IModLogger log, string joinCode);
@@ -58,6 +65,20 @@ namespace CS2MultiplayerMod.Core.Networking
         public static string LocalJoinCode
         {
             get { return Current != null ? (Current.LocalJoinCode ?? "") : ""; }
+        }
+
+        /// <summary>
+        /// The platform account's display name, or empty on a copy of the game with no
+        /// platform backend (Microsoft Store / Game Pass) - those keep the plain default.
+        /// </summary>
+        public static string LocalPlayerName
+        {
+            get
+            {
+                if (Current == null) return "";
+                try { return Current.LocalPlayerName ?? ""; }
+                catch (System.Exception) { return ""; }
+            }
         }
 
         /// <summary>

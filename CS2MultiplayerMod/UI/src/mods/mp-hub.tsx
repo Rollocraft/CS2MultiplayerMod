@@ -1,5 +1,5 @@
 import { bindValue, trigger, useValue } from "cs2/api";
-import { AutoNavigationScope, InputActionBarrier, NavigationDirection } from "cs2/input";
+import { AutoNavigationScope, BackConsumer, InputActionBarrier, NavigationDirection } from "cs2/input";
 import { useLocalization } from "cs2/l10n";
 import { getModule } from "cs2/modding";
 import { Button, Portal, Tooltip } from "cs2/ui";
@@ -11,6 +11,7 @@ import {
     JoinCodeDisplay,
 } from "mods/connection-picker";
 import { CSSProperties, MouseEvent as ReactMouseEvent, useEffect, useMemo, useRef, useState } from "react";
+import { useBackKey } from "mods/back-action";
 import { DisclaimerModal, disclaimerAccepted$ } from "mods/disclaimer";
 import { TransferProgress } from "mods/transfer-progress";
 import { VersionWarningBanner } from "mods/version-banner";
@@ -268,11 +269,13 @@ const styles: Record<string, CSSProperties> = {
         right: "64rem",
         top: "50%",
         transform: "translateY(-50%)",
-        width: "440rem",
+        width: "460rem",
         // Definite height: the flex chain below (body → chat list) can only
         // distribute space the panel actually has, so "auto" would re-introduce
-        // the buttons-in-the-middle look.
-        height: "520rem",
+        // the buttons-in-the-middle look. Tall by default because the chat is what
+        // grows into the leftover space; capped so it still fits a short screen.
+        height: "660rem",
+        maxHeight: "86%",
         display: "flex",
         flexDirection: "column",
         backgroundColor: "rgba(24, 33, 51, 0.97)",
@@ -324,7 +327,7 @@ const styles: Record<string, CSSProperties> = {
     scrollArea: {
         flexGrow: 1,
         flexShrink: 1,
-        flexBasis: "0%",
+        flexBasis: "0rem",
         minHeight: 0,
         overflowY: "auto",
     },
@@ -335,11 +338,15 @@ const styles: Record<string, CSSProperties> = {
         color: "#9dc1de",
         textTransform: "uppercase",
     },
+    // The one element that takes the panel's leftover height. A length basis, not
+    // "0%": a percentage resolves against a container whose own height comes from
+    // the flex chain, which leaves the list at content height and the rest of the
+    // panel empty below the buttons.
     chatList: {
         flexGrow: 1,
         flexShrink: 1,
-        flexBasis: "0%",
-        minHeight: "80rem",
+        flexBasis: "0rem",
+        minHeight: "120rem",
         overflowY: "auto",
         backgroundColor: "rgba(0, 0, 0, 0.3)",
         border: "1rem solid rgba(157, 193, 222, 0.2)",
@@ -376,9 +383,12 @@ const styles: Record<string, CSSProperties> = {
         textAlign: "center",
         wordBreak: "break-word",
     },
+    // "auto" top margin pins this row and the footer under it to the panel bottom
+    // even if the chat list above them ever fails to take the free space.
     inputRow: {
         display: "flex",
         alignItems: "center",
+        marginTop: "auto",
         marginBottom: "10rem",
         flexShrink: 0,
     },
@@ -1058,6 +1068,9 @@ const ClientWorldSaveDialog = ({ onClose }: { onClose: () => void }) => {
     const saving = submitted && saveStatus === "saving";
     const saved = submitted && saveStatus === "saved";
 
+    // Escape leaves the dialog from anywhere in it, not only from the name field.
+    useBackKey(onClose, !saving);
+
     useEffect(() => {
         inputRef.current?.focus();
         inputRef.current?.select();
@@ -1110,6 +1123,7 @@ const ClientWorldSaveDialog = ({ onClose }: { onClose: () => void }) => {
                     direction={NavigationDirection.Both}
                     initialFocused={saved ? "close" : "save-copy"}
                     allowLooping>
+                <BackConsumer disabled={saving} onAction={onClose}>
                 <div
                     style={styles.saveDialogOverlay}
                     onMouseDown={(event) => event.stopPropagation()}>
@@ -1180,6 +1194,7 @@ const ClientWorldSaveDialog = ({ onClose }: { onClose: () => void }) => {
                         </div>
                     </div>
                 </div>
+                </BackConsumer>
                 </AutoNavigationScope>
             </InputActionBarrier>
         </Portal>
@@ -1202,12 +1217,27 @@ const SessionView = ({ entries, players }: { entries: ChatEntry[]; players: Play
     const [typing, setTyping] = useState(false);
     const [saveDialogOpen, setSaveDialogOpen] = useState(false);
     const listRef = useRef<HTMLDivElement | null>(null);
+    // The panel unmounts this view when it closes, so "first pass after mount" is
+    // exactly "the player just opened the chat".
+    const openedRef = useRef(true);
 
     // Keep the newest line in view (only auto-stick when already near the bottom,
     // so scrolling back through history is not yanked away by new messages).
+    // Opening the panel always lands on the newest line, not on the oldest one.
     useEffect(() => {
         const el = listRef.current;
         if (!el) return;
+        if (openedRef.current) {
+            openedRef.current = false;
+            el.scrollTop = el.scrollHeight;
+            // The list is measured again on the next frame: the panel's own layout
+            // can still be settling on this one, which would cap scrollTop short.
+            const frame = requestAnimationFrame(() => {
+                const list = listRef.current;
+                if (list) list.scrollTop = list.scrollHeight;
+            });
+            return () => cancelAnimationFrame(frame);
+        }
         const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 60;
         if (nearBottom) el.scrollTop = el.scrollHeight;
     }, [entries.length]);

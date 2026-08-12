@@ -75,6 +75,9 @@ namespace CS2MultiplayerMod
             // when Steam is absent the mod simply keeps to direct connections.
             SteamRelayBootstrap.Register(coreLog, modFolder);
 
+            // Needs the backend above: it is what knows the platform account's name.
+            Setting.ApplyPlatformNamePreset();
+
             Service = new MultiplayerService(coreLog);
             FlightRecorder.Note("startup-stage service-created");
             log.Info("Multiplayer core initialised. Protocol v" +

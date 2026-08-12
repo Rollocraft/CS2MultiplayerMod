@@ -45,6 +45,10 @@ namespace CS2MultiplayerMod.Game
 
             _createdAt = UnityEngine.Time.realtimeSinceStartup;
 
+            // Second chance at the platform name: the mod can load before the platform
+            // backend is signed in, and this runs once per world, well after that.
+            if (Mod.Setting != null) Mod.Setting.ApplyPlatformNamePreset();
+
             // Fired once from the UI module's register() — proves the .mjs made it
             // through the game's sequential UI-module load chain. A broken module
             // from another mod (e.g. Gooee) can abort that chain, in which case
@@ -255,6 +259,11 @@ namespace CS2MultiplayerMod.Game
             AddBinding(new TriggerBinding(Group, "disconnect", () =>
             {
                 if (Mod.Service != null) Mod.Service.Disconnect();
+            }));
+            // Sent alongside "disconnect" when the player closes an error screen.
+            AddBinding(new TriggerBinding(Group, "dismissStatusFault", () =>
+            {
+                if (Mod.Service != null) Mod.Service.DismissFault();
             }));
             AddBinding(new TriggerBinding(Group, "dismissClientExitNotice", () =>
             {

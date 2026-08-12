@@ -1,8 +1,9 @@
 import { bindValue, trigger, useValue } from "cs2/api";
-import { AutoNavigationScope, InputActionBarrier, NavigationDirection } from "cs2/input";
+import { AutoNavigationScope, BackConsumer, InputActionBarrier, NavigationDirection } from "cs2/input";
 import { useLocalization } from "cs2/l10n";
 import { Button, Portal } from "cs2/ui";
 import { CSSProperties } from "react";
+import { useBackKey } from "mods/back-action";
 
 // Binding group shared with MultiplayerUISystem on the C# side.
 const GROUP = "cs2mp";
@@ -80,6 +81,9 @@ export const DisclaimerModal = ({ onAccept, onDecline }: {
     onDecline: () => void;
 }) => {
     const t = useT();
+    // Escape backs out of the gate, exactly like its Cancel button.
+    useBackKey(onDecline);
+
     return (
         <Portal>
             <InputActionBarrier>
@@ -88,6 +92,7 @@ export const DisclaimerModal = ({ onAccept, onDecline }: {
                     direction={NavigationDirection.Horizontal}
                     initialFocused="continue"
                     allowLooping>
+                    <BackConsumer onAction={onDecline}>
                     <div style={styles.overlay} onMouseDown={(e) => e.stopPropagation()}>
                         <div style={styles.panel}>
                             <div style={styles.title}>{t(LOC.title, "Before You Continue")}</div>
@@ -116,6 +121,7 @@ export const DisclaimerModal = ({ onAccept, onDecline }: {
                             </div>
                         </div>
                     </div>
+                    </BackConsumer>
                 </AutoNavigationScope>
             </InputActionBarrier>
         </Portal>

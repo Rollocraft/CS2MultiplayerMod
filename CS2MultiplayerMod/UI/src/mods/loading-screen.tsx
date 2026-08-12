@@ -1,9 +1,10 @@
 import { bindValue, trigger, useValue } from "cs2/api";
-import { InputActionBarrier } from "cs2/input";
+import { AutoNavigationScope, BackConsumer, InputActionBarrier, NavigationDirection } from "cs2/input";
 import { useLocalization } from "cs2/l10n";
 import { getModule } from "cs2/modding";
 import { Button, Portal } from "cs2/ui";
 import { CSSProperties, useEffect, useState } from "react";
+import { useBackKey } from "mods/back-action";
 import { MULTIPLAYER_BLUE } from "mods/multiplayer-theme";
 
 // Binding group shared with MultiplayerUISystem on the C# side.
@@ -359,20 +360,46 @@ export const JoinLoadingScreen = ({ surface }: { surface: LoadingScreenSurface }
         return releaseBackdropImage;
     }, [overlayVisible]);
 
-    if (!ownsSurface || !overlayVisible) return null;
-
     const failed = statusKind === "error";
     const synchronizing = statusKind === "syncing";
     const dismiss = () => {
         setActive(false);
-        // Clear the faulted session so the next attempt starts clean.
+        // Clear the faulted session so the next attempt starts clean, and drop the
+        // remembered fault with it: the status is re-read on every mount, so a fault
+        // left standing puts this same screen back up on the next visit.
         trigger(GROUP, "disconnect");
+        trigger(GROUP, "dismissStatusFault");
     };
     const dismissClientExit = () => {
         setActive(false);
         trigger(GROUP, "dismissClientExitNotice");
     };
     const retryClientExit = () => trigger(GROUP, "retryClientWorldExit");
+
+    // What Escape (and the gamepad's Back) does here is whatever the screen's own
+    // button does. While it is mid-work there is nothing to go back to: a return to
+    // the menu runs to completion, and a failed exit only offers its retry.
+    const returningToMenu = clientExitNoticeActive && clientExitReturning;
+    const cancellable = !failed && !clientExitNoticeActive && (!synchronizing || !isHost);
+    const backAction = failed
+        ? dismiss
+        : clientExitNoticeActive
+            ? (!returningToMenu && !clientExitFailed ? dismissClientExit : null)
+            : (cancellable ? dismiss : null);
+    // Focus is what puts this overlay's input barrier and Back handler into the input
+    // stack; without it the game keeps every shortcut while the screen blocks it.
+    const focusedButton = failed
+        ? "dismiss"
+        : clientExitNoticeActive
+            ? (returningToMenu ? undefined : "exit-notice")
+            : (cancellable ? "cancel" : undefined);
+
+    useBackKey(
+        backAction ?? (() => {}),
+        ownsSurface && overlayVisible && backAction !== null,
+    );
+
+    if (!ownsSurface || !overlayVisible) return null;
 
     const phaseTitle = statusTitle || t(LOC.joiningTitle, "Joining Multiplayer Game");
     const clamped = Math.max(0, Math.min(100, Math.floor(percent)));
@@ -381,6 +408,14 @@ export const JoinLoadingScreen = ({ surface }: { surface: LoadingScreenSurface }
     return (
         <Portal>
             <InputActionBarrier>
+                <AutoNavigationScope
+                    debugName="CS2MP Connection Screen"
+                    direction={NavigationDirection.Both}
+                    initialFocused={focusedButton}
+                    allowLooping>
+                <BackConsumer
+                    disabled={backAction === null}
+                    onAction={() => { if (backAction !== null) backAction(); }}>
                 <div style={styles.overlay}>
                     {backdropImage ? (
                         <>
@@ -443,6 +478,7 @@ export const JoinLoadingScreen = ({ surface }: { surface: LoadingScreenSurface }
                                     </div>
                                     <Button
                                         variant="primary"
+                                        focusKey="exit-notice"
                                         style={styles.cancel}
                                         onSelect={clientExitFailed ? retryClientExit : dismissClientExit}
                                     >
@@ -466,7 +502,11 @@ export const JoinLoadingScreen = ({ surface }: { surface: LoadingScreenSurface }
                                         </>
                                     ) : null}
                                 </div>
-                                <Button variant="primary" style={styles.cancel} onSelect={dismiss}>
+                                <Button
+                                    variant="primary"
+                                    focusKey="dismiss"
+                                    style={styles.cancel}
+                                    onSelect={dismiss}>
                                     {t(LOC.close, "Close")}
                                 </Button>
                             </>
@@ -491,8 +531,12 @@ export const JoinLoadingScreen = ({ surface }: { surface: LoadingScreenSurface }
                                             : t(LOC.loadingHint, "Keep this window open while the host's city is transferred.")}
                                     </div>
                                 </div>
-                                {!synchronizing || !isHost ? (
-                                    <Button variant="flat" style={styles.cancel} onSelect={dismiss}>
+                                {cancellable ? (
+                                    <Button
+                                        variant="flat"
+                                        focusKey="cancel"
+                                        style={styles.cancel}
+                                        onSelect={dismiss}>
                                         {t(LOC.cancel, "Cancel")}
                                     </Button>
                                 ) : null}
@@ -500,6 +544,8 @@ export const JoinLoadingScreen = ({ surface }: { surface: LoadingScreenSurface }
                         )}
                     </div>
                 </div>
+                </BackConsumer>
+                </AutoNavigationScope>
             </InputActionBarrier>
         </Portal>
     );
