@@ -333,15 +333,15 @@ const styles: Record<string, CSSProperties> = {
         bottom: 0,
         overflow: "hidden",
     },
-    // Natural height at the panel's top edge.
+    // Natural height at the panel's top edge. No "overflow: hidden" here: it reads
+    // back as a zero height, which put the chat on top of the player list. The
+    // padding is what keeps a last child's bottom margin inside the measured box.
     bodyTop: {
         position: "absolute",
         top: "12rem",
         left: "14rem",
         right: "14rem",
-        // Own block formatting context, so a last child's bottom margin counts
-        // towards the measured height instead of collapsing out of it.
-        overflow: "hidden",
+        paddingBottom: "1rem",
     },
     // Everything between the two blocks; its insets are computed from them.
     bodyMiddle: {
@@ -716,6 +716,13 @@ const styles: Record<string, CSSProperties> = {
 
 // ---- Panel body layout ----------------------------------------------------------
 
+const blockHeight = (element: HTMLDivElement | null): number => {
+    if (element === null) return 0;
+    const box = element.offsetHeight;
+    const content = element.scrollHeight;
+    return box > content ? box : content;
+};
+
 /**
  * A panel view laid out against the panel's own edges: the top and bottom blocks
  * keep their natural height where they are pinned, and the middle block takes
@@ -735,10 +742,12 @@ const PanelBody = ({ top, middle, bottom }: {
     const [bottomHeight, setBottomHeight] = useState(0);
 
     // After every render: re-measure and only re-render when a height actually
-    // moved, so this settles in one extra pass instead of looping.
+    // moved, so this settles in one extra pass instead of looping. Both box
+    // metrics are read because they do not always agree in this runtime, and a
+    // height that reads back as zero collapses the block it is meant to reserve.
     useLayoutEffect(() => {
-        const measuredTop = topRef.current !== null ? topRef.current.offsetHeight : 0;
-        const measuredBottom = bottomRef.current !== null ? bottomRef.current.offsetHeight : 0;
+        const measuredTop = blockHeight(topRef.current);
+        const measuredBottom = blockHeight(bottomRef.current);
         if (measuredTop !== topHeight) setTopHeight(measuredTop);
         if (measuredBottom !== bottomHeight) setBottomHeight(measuredBottom);
     });
