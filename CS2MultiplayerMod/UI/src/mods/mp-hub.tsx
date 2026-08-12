@@ -10,7 +10,16 @@ import {
     ConnectionSegmented,
     JoinCodeDisplay,
 } from "mods/connection-picker";
-import { CSSProperties, MouseEvent as ReactMouseEvent, useEffect, useMemo, useRef, useState } from "react";
+import {
+    CSSProperties,
+    MouseEvent as ReactMouseEvent,
+    ReactNode,
+    useEffect,
+    useLayoutEffect,
+    useMemo,
+    useRef,
+    useState,
+} from "react";
 import { useBackKey } from "mods/back-action";
 import { DisclaimerModal, disclaimerAccepted$ } from "mods/disclaimer";
 import { TransferProgress } from "mods/transfer-progress";
@@ -267,17 +276,15 @@ const styles: Record<string, CSSProperties> = {
     panel: {
         position: "fixed",
         right: "64rem",
+        // Centred by a negative margin, not translateY: a transform moves the panel
+        // without moving its layout box, and the drag code reads that box - starting
+        // a drag then dropped the panel half its own height down the screen.
         top: "50%",
-        transform: "translateY(-50%)",
+        marginTop: "-330rem",
         width: "460rem",
-        // Definite height: the flex chain below (body → chat list) can only
-        // distribute space the panel actually has, so "auto" would re-introduce
-        // the buttons-in-the-middle look. Tall by default because the chat is what
-        // grows into the leftover space; capped so it still fits a short screen.
+        // Definite height: everything inside anchors to the panel's edges, so this
+        // is the one number that decides how much room the chat gets.
         height: "660rem",
-        maxHeight: "86%",
-        display: "flex",
-        flexDirection: "column",
         backgroundColor: "rgba(24, 33, 51, 0.97)",
         borderRadius: "4rem",
         boxShadow: "0 16rem 48rem rgba(0, 0, 0, 0.45)",
@@ -287,7 +294,11 @@ const styles: Record<string, CSSProperties> = {
         // resizes below the natural content height, the inner areas scroll instead.
         overflow: "hidden",
     },
+    // Fixed height, matching styles.body's top inset: 12rem padding + a 32rem icon
+    // button + 12rem padding + the 1rem rule.
     header: {
+        height: "57rem",
+        boxSizing: "border-box",
         display: "flex",
         alignItems: "center",
         padding: "12rem 14rem",
@@ -310,25 +321,45 @@ const styles: Record<string, CSSProperties> = {
         borderRadius: "50%",
         transition: "background-color 120ms ease, opacity 120ms ease",
     },
-    // flexGrow/flexBasis spelled out instead of the "flex" shorthand: the game's
-    // Gameface runtime does not reliably expand column children from the shorthand.
+    // Anchored, not distributed: a column flex child does not reliably take the
+    // panel's leftover height in the game's UI runtime, which left the action
+    // buttons floating with dead space under them. Both insets are definite, so
+    // this box is exactly the panel minus its header (see PanelBody).
     body: {
-        display: "flex",
-        flexDirection: "column",
-        padding: "12rem 14rem",
-        flexGrow: 1,
-        flexShrink: 1,
-        flexBasis: "0%",
-        minHeight: 0,
+        position: "absolute",
+        top: "57rem",
+        left: 0,
+        right: 0,
+        bottom: 0,
         overflow: "hidden",
+    },
+    // Natural height at the panel's top edge.
+    bodyTop: {
+        position: "absolute",
+        top: "12rem",
+        left: "14rem",
+        right: "14rem",
+        // Own block formatting context, so a last child's bottom margin counts
+        // towards the measured height instead of collapsing out of it.
+        overflow: "hidden",
+    },
+    // Everything between the two blocks; its insets are computed from them.
+    bodyMiddle: {
+        position: "absolute",
+        left: "14rem",
+        right: "14rem",
+    },
+    // Natural height at the panel's bottom edge - where the buttons live.
+    bodyBottom: {
+        position: "absolute",
+        bottom: "12rem",
+        left: "14rem",
+        right: "14rem",
     },
     // Fields live in here so a small panel scrolls them while the footer
     // (action buttons) stays pinned to the panel bottom.
     scrollArea: {
-        flexGrow: 1,
-        flexShrink: 1,
-        flexBasis: "0rem",
-        minHeight: 0,
+        height: "100%",
         overflowY: "auto",
     },
     playerCountRow: {
@@ -338,21 +369,16 @@ const styles: Record<string, CSSProperties> = {
         color: "#9dc1de",
         textTransform: "uppercase",
     },
-    // The one element that takes the panel's leftover height. A length basis, not
-    // "0%": a percentage resolves against a container whose own height comes from
-    // the flex chain, which leaves the list at content height and the rest of the
-    // panel empty below the buttons.
+    // Fills the whole middle block, which is what is left of the panel once the
+    // player list and the buttons have taken their own height.
     chatList: {
-        flexGrow: 1,
-        flexShrink: 1,
-        flexBasis: "0rem",
-        minHeight: "120rem",
+        height: "100%",
+        boxSizing: "border-box",
         overflowY: "auto",
         backgroundColor: "rgba(0, 0, 0, 0.3)",
         border: "1rem solid rgba(157, 193, 222, 0.2)",
         borderRadius: "3rem",
         padding: "8rem 10rem",
-        marginBottom: "10rem",
     },
     chatEmpty: {
         fontSize: "13rem",
@@ -383,12 +409,9 @@ const styles: Record<string, CSSProperties> = {
         textAlign: "center",
         wordBreak: "break-word",
     },
-    // "auto" top margin pins this row and the footer under it to the panel bottom
-    // even if the chat list above them ever fails to take the free space.
     inputRow: {
         display: "flex",
         alignItems: "center",
-        marginTop: "auto",
         marginBottom: "10rem",
         flexShrink: 0,
     },
@@ -691,6 +714,51 @@ const styles: Record<string, CSSProperties> = {
     },
 };
 
+// ---- Panel body layout ----------------------------------------------------------
+
+/**
+ * A panel view laid out against the panel's own edges: the top and bottom blocks
+ * keep their natural height where they are pinned, and the middle block takes
+ * exactly what is left. The blocks are measured because their height is content
+ * (a player list grows, a transfer bar comes and goes) - nothing here relies on
+ * the runtime handing a flex child the container's leftover space, which is what
+ * previously stranded the buttons mid-panel.
+ */
+const PanelBody = ({ top, middle, bottom }: {
+    top?: ReactNode;
+    middle: ReactNode;
+    bottom?: ReactNode;
+}) => {
+    const topRef = useRef<HTMLDivElement | null>(null);
+    const bottomRef = useRef<HTMLDivElement | null>(null);
+    const [topHeight, setTopHeight] = useState(0);
+    const [bottomHeight, setBottomHeight] = useState(0);
+
+    // After every render: re-measure and only re-render when a height actually
+    // moved, so this settles in one extra pass instead of looping.
+    useLayoutEffect(() => {
+        const measuredTop = topRef.current !== null ? topRef.current.offsetHeight : 0;
+        const measuredBottom = bottomRef.current !== null ? bottomRef.current.offsetHeight : 0;
+        if (measuredTop !== topHeight) setTopHeight(measuredTop);
+        if (measuredBottom !== bottomHeight) setBottomHeight(measuredBottom);
+    });
+
+    const middleStyle: CSSProperties = {
+        ...styles.bodyMiddle,
+        // 12rem is the panel's own inset; the extra 10rem is the gap to the buttons.
+        top: top ? `calc(12rem + ${topHeight}px)` : "12rem",
+        bottom: bottom ? `calc(22rem + ${bottomHeight}px)` : "12rem",
+    };
+
+    return (
+        <div style={styles.body}>
+            {top ? <div ref={topRef} style={styles.bodyTop}>{top}</div> : null}
+            <div style={middleStyle}>{middle}</div>
+            {bottom ? <div ref={bottomRef} style={styles.bodyBottom}>{bottom}</div> : null}
+        </div>
+    );
+};
+
 // ---- Form building blocks -----------------------------------------------------
 
 interface HubFieldProps {
@@ -909,35 +977,39 @@ const HostSetupView = () => {
     const statusHelp = useValue(statusHelp$);
 
     return (
-        <div style={styles.body}>
-            <div style={styles.scrollArea}>
-                <VersionWarningBanner />
-                <SettingsFields />
-                {statusKind === "error" ? (
-                    <div style={styles.errorLine}>
-                        <div style={styles.errorTitle}>{statusTitle}</div>
-                        {statusDetail ? <div>{statusDetail}</div> : null}
-                        {statusHelp ? (
-                            <>
-                                <div style={styles.errorHelpTitle}>{t(LOC.tryThis, "Try this")}</div>
-                                <div style={styles.errorHelp}>{statusHelp}</div>
-                            </>
-                        ) : null}
-                    </div>
-                ) : null}
-            </div>
-            <div style={styles.footer}>
-                <Button
-                    variant="primary"
-                    style={styles.footerButton}
-                    disabled={!canHost}
-                    onSelect={() => {
-                        if (canHost) trigger(GROUP, "hostStart");
-                    }}>
-                    {t(LOC.hostSession, "Host Session")}
-                </Button>
-            </div>
-        </div>
+        <PanelBody
+            middle={
+                <div style={styles.scrollArea}>
+                    <VersionWarningBanner />
+                    <SettingsFields />
+                    {statusKind === "error" ? (
+                        <div style={styles.errorLine}>
+                            <div style={styles.errorTitle}>{statusTitle}</div>
+                            {statusDetail ? <div>{statusDetail}</div> : null}
+                            {statusHelp ? (
+                                <>
+                                    <div style={styles.errorHelpTitle}>{t(LOC.tryThis, "Try this")}</div>
+                                    <div style={styles.errorHelp}>{statusHelp}</div>
+                                </>
+                            ) : null}
+                        </div>
+                    ) : null}
+                </div>
+            }
+            bottom={
+                <div style={styles.footer}>
+                    <Button
+                        variant="primary"
+                        style={styles.footerButton}
+                        disabled={!canHost}
+                        onSelect={() => {
+                            if (canHost) trigger(GROUP, "hostStart");
+                        }}>
+                        {t(LOC.hostSession, "Host Session")}
+                    </Button>
+                </div>
+            }
+        />
     );
 };
 
@@ -945,12 +1017,14 @@ const HostSetupView = () => {
 const SettingsView = () => {
     const t = useT();
     return (
-        <div style={styles.body}>
-            <div style={styles.lockedNote}>{t(LOC.lockedInSession, "Locked while a session is running.")}</div>
-            <div style={styles.scrollArea}>
-                <SettingsFields />
-            </div>
-        </div>
+        <PanelBody
+            top={<div style={styles.lockedNote}>{t(LOC.lockedInSession, "Locked while a session is running.")}</div>}
+            middle={
+                <div style={styles.scrollArea}>
+                    <SettingsFields />
+                </div>
+            }
+        />
     );
 };
 
@@ -1252,11 +1326,8 @@ const SessionView = ({ entries, players }: { entries: ChatEntry[]; players: Play
     const activityPercent = isHost ? worldSendPercent : mapTransferPercent;
     const showActivity = progressMode !== "none";
 
-    return (
-        <div style={styles.body}>
-            {saveDialogOpen ? (
-                <ClientWorldSaveDialog onClose={() => setSaveDialogOpen(false)} />
-            ) : null}
+    const topBlock = (
+        <>
             {/* Single string child: Gameface puts each adjacent bare text node on
                 its own line, which split "Players: 3" into three lines. */}
             {isHost
@@ -1272,23 +1343,31 @@ const SessionView = ({ entries, players }: { entries: ChatEntry[]; players: Play
                     {statusDetail ? <div style={styles.activityDetail}>{statusDetail}</div> : null}
                 </>
             ) : null}
-            <div ref={listRef} style={styles.chatList}>
-                {entries.length === 0 ? (
-                    <div style={styles.chatEmpty}>{t(LOC.noMessages, "No messages yet.")}</div>
-                ) : (
-                    entries.map((entry) =>
-                        entry.sender === null ? (
-                            <div key={entry.id} style={styles.systemLine}>{entry.text}</div>
-                        ) : (
-                            <div key={entry.id} style={styles.chatLine}>
-                                <span style={styles.chatTime}>{entry.time + " "}</span>
-                                <span style={styles.chatSender}>{entry.sender + ": "}</span>
-                                <span>{entry.text}</span>
-                            </div>
-                        )
+        </>
+    );
+
+    const chatFeed = (
+        <div ref={listRef} style={styles.chatList}>
+            {entries.length === 0 ? (
+                <div style={styles.chatEmpty}>{t(LOC.noMessages, "No messages yet.")}</div>
+            ) : (
+                entries.map((entry) =>
+                    entry.sender === null ? (
+                        <div key={entry.id} style={styles.systemLine}>{entry.text}</div>
+                    ) : (
+                        <div key={entry.id} style={styles.chatLine}>
+                            <span style={styles.chatTime}>{entry.time + " "}</span>
+                            <span style={styles.chatSender}>{entry.sender + ": "}</span>
+                            <span>{entry.text}</span>
+                        </div>
                     )
-                )}
-            </div>
+                )
+            )}
+        </div>
+    );
+
+    const bottomBlock = (
+        <>
             <div style={styles.inputRow}>
                 <InputActionBarrier disabled={!typing}>
                     <input
@@ -1332,7 +1411,16 @@ const SessionView = ({ entries, players }: { entries: ChatEntry[]; players: Play
                     {t(LOC.disconnect, "Disconnect")}
                 </Button>
             </div>
-        </div>
+        </>
+    );
+
+    return (
+        <>
+            {saveDialogOpen ? (
+                <ClientWorldSaveDialog onClose={() => setSaveDialogOpen(false)} />
+            ) : null}
+            <PanelBody top={topBlock} middle={chatFeed} bottom={bottomBlock} />
+        </>
     );
 };
 
@@ -1427,12 +1515,13 @@ export const MultiplayerPanel = ({ entries, players, geometry, onGeometry, onClo
         panelStyle.left = geometry.pos.x + "px";
         panelStyle.top = geometry.pos.y + "px";
         panelStyle.right = "auto";
-        panelStyle.transform = "none";
+        // The default position centres itself with a negative margin; an explicit
+        // one must drop it or the panel sits half its height too high.
+        panelStyle.marginTop = 0;
     }
     if (geometry.size) {
         panelStyle.width = geometry.size.w + "px";
         panelStyle.height = geometry.size.h + "px";
-        panelStyle.maxHeight = "none";
     }
 
     const titleText = showSettings
