@@ -392,11 +392,11 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         /// see <see cref="NetAttachment"/>.
         /// </summary>
         private void RealizeObject(Entity prefab, float3 position, quaternion rotation, Entity attachParent,
-            int randomSeed, float age)
+            int randomSeed, float age, CreationFlags extraFlags = default(CreationFlags))
         {
             var random = new Unity.Mathematics.Random((uint)math.max(1, randomSeed));
 
-            CreationFlags flags = CreationFlags.Permanent;
+            CreationFlags flags = CreationFlags.Permanent | extraFlags;
             if (attachParent != Entity.Null) flags |= CreationFlags.Attach;
 
             // 1) The building itself.
@@ -441,6 +441,23 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             // (M1) creates the object, AttachSystem (M3) files it under the parent, and
             // CompositionSelect reads it immediately after - all downstream of this ToolUpdate call.
             if (attachParent != Entity.Null) NetAttachment.TagParentUpdated(EntityManager, attachParent);
+        }
+
+        /// <summary>
+        /// Builds a building the sending machine's zoning simulation grew, using the same recipe as
+        /// a replicated placement. The spawner emits exactly this pair of definitions, so a zoned
+        /// building needs no separate construction path - only the Construction flag, which is what
+        /// puts it behind scaffolding instead of standing it up finished.
+        ///
+        /// <paramref name="randomSeed"/> is the sender's variant seed and reaches the built entity
+        /// as its PseudoRandomSeed, which is what makes the same house look the same on both
+        /// machines. Called from ToolUpdate by <see cref="GrowableSyncSystem"/>.
+        /// </summary>
+        internal void RealizeSimulationBuilding(Entity prefab, float3 position, quaternion rotation,
+            int randomSeed, bool underConstruction)
+        {
+            RealizeObject(prefab, position, rotation, Entity.Null, randomSeed, 0f,
+                underConstruction ? CreationFlags.Construction : default(CreationFlags));
         }
 
         /// <summary>

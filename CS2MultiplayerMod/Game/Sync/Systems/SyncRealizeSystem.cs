@@ -24,6 +24,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         private RouteSyncSystem _routeSync;
         private TilePurchaseSyncSystem _tileSync;
         private DisasterSyncSystem _disasterSync;
+        private GrowableSyncSystem _growableSync;
 
         protected override void OnCreate()
         {
@@ -41,6 +42,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             _routeSync = World.GetOrCreateSystemManaged<RouteSyncSystem>();
             _tileSync = World.GetOrCreateSystemManaged<TilePurchaseSyncSystem>();
             _disasterSync = World.GetOrCreateSystemManaged<DisasterSyncSystem>();
+            _growableSync = World.GetOrCreateSystemManaged<GrowableSyncSystem>();
         }
 
         private bool _wasDeferringTerrain;
@@ -124,6 +126,11 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             bool deferNetworkDependents = deferTerrain || _netSync.HasPlacementBacklog;
             if (!deferNetworkDependents) Step("ZoneSync", _zoneSync.RealizePending);
             Step("TerrainSync", _terrainSync.RealizePending);
+            // After ZoneSync and behind the same network gate: a zoned building is grown on a lot
+            // that a road and its zoning produced, so realizing one before those arrive would put
+            // it on ground the receiver does not yet consider buildable.
+            _growableSync.DeferForTerrain = deferTerrain;
+            if (!deferNetworkDependents) Step("GrowableSync", _growableSync.RealizePending);
             Step("UpgradeSync", _upgradeSync.RealizePending);
             Step("MoveSync", _moveSync.RealizePending);
             if (!deferNetworkDependents) Step("NetUpgradeSync", _netUpgradeSync.RealizePending);

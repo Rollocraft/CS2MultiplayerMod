@@ -118,6 +118,10 @@ namespace CS2MultiplayerMod
             updateSystem.UpdateAt<Game.Sync.Systems.BuildSyncSystem>(SystemUpdatePhase.ModificationEnd);
             updateSystem.UpdateAt<Game.Sync.Systems.Net.NetSyncSystem>(SystemUpdatePhase.ModificationEnd);
             updateSystem.UpdateAt<Game.Sync.Systems.DeleteSyncSystem>(SystemUpdatePhase.ModificationEnd);
+            // After DeleteSyncSystem, which collects this frame's tool-originated removals first:
+            // a bulldozed zoned building is a player action and already travels as a delete, so
+            // GrowableSync has to be able to tell it apart from the simulation retiring one.
+            updateSystem.UpdateAt<Game.Sync.Systems.GrowableSyncSystem>(SystemUpdatePhase.ModificationEnd);
             // In-place road-type replacement (a different net prefab drawn over an existing edge):
             // detected as an Updated-not-Created edge whose PrefabRef changed - see NetReplaceSyncSystem.
             updateSystem.UpdateAt<Game.Sync.Systems.NetReplaceSyncSystem>(SystemUpdatePhase.ModificationEnd);
