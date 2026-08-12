@@ -47,8 +47,6 @@ namespace CS2MultiplayerMod.Game.Diagnostics
         private static int _mirroredErrors;
         private static string _lastUnityKey;
         private static int _lastUnityRepeats;
-        private static string _userDataPath;
-        private static string _userProfilePath;
         private static UnityEngine.Application.LogCallback _logHook;
         private static UnityEngine.Application.LowMemoryCallback _lowMemoryHook;
         private static Action _quittingHook;
@@ -85,9 +83,6 @@ namespace CS2MultiplayerMod.Game.Diagnostics
                     _mirroredErrors = 0;
                     _lastUnityKey = null;
                     _lastUnityRepeats = 0;
-                    _userDataPath = Directory.GetParent(dir)?.FullName;
-                    try { _userProfilePath = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile); }
-                    catch { _userProfilePath = null; }
                 }
                 catch
                 {
@@ -561,8 +556,7 @@ namespace CS2MultiplayerMod.Game.Diagnostics
 
             try
             {
-                if (!string.IsNullOrEmpty(_userDataPath)) text = text.Replace(_userDataPath, "%CS2_USERDATA%");
-                if (!string.IsNullOrEmpty(_userProfilePath)) text = text.Replace(_userProfilePath, "%USERPROFILE%");
+                text = LogPaths.Redact(text);
 
                 var result = new StringBuilder(Math.Min(text.Length, maxChars));
                 bool lastWasSeparator = false;

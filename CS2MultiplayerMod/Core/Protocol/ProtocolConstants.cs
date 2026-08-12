@@ -4,7 +4,12 @@ namespace CS2MultiplayerMod.Core.Protocol
     {
         /// <summary>
         /// Wire-format version. Bump when message layout changes to refuse handshake on mismatch.
-        /// Current v35 carries the host of an owned relocation. Relocating an installed upgrade or
+        /// Current v36 adds names: command id 26 carries what a street, district, transport line or
+        /// building is called, and city-state channel 17 carries the city's own name. A typed name is
+        /// replicated as text; an untouched entity's name is a draw from its prefab's name list, made
+        /// from a per-machine seed, so the draw itself has to travel or the same new road ends up
+        /// with a different name on each machine. v35 carries
+        /// the host of an owned relocation. Relocating an installed upgrade or
         /// sub-building from a building's upgrade list moves an owned entity, which no peer can
         /// look up as a free-standing object; the host's prefab and position identify it the same
         /// way an upgrade placement does. v34 normalizes the sender-local Permanent creation flag out of native object
@@ -59,7 +64,7 @@ namespace CS2MultiplayerMod.Core.Protocol
         /// islands) reattach on the receiver.
         /// See <see cref="Messages.HandshakeRequest"/> and version notes in doc/internals.
         /// </summary>
-        public const int ProtocolVersion = 35;
+        public const int ProtocolVersion = 36;
 
         /// <summary>
         /// Hard cap on a single payload, guarding against corrupt length prefixes.

@@ -76,6 +76,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             RegisterEditable(new ServiceBudgetStateChannel());
             RegisterEditable(new SimulationSpeedStateChannel());
             RegisterEditable(new LoanStateChannel());
+            RegisterEditable(new CityNameStateChannel());
 
             Mod.log.Info(nameof(CityStateSyncSystem) + " ready with " + _channels.Count +
                          " state channel(s), " + _editable.Count + " player-editable.");

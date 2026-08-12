@@ -87,7 +87,8 @@ namespace CS2MultiplayerMod.Game
                 RouteCreateCommand.Id, RouteUpdateCommand.Id, RouteDeleteCommand.Id,
                 TilePurchaseCommand.Id, EntityPolicyCommand.Id, DevTreePurchaseCommand.Id,
                 NetReplaceCommand.Id, ObjectToolOperationCommand.Id, AssetStampCommand.Id,
-                VisualCustomizationCommand.Id, ColorPaletteCommand.Id);
+                VisualCustomizationCommand.Id, ColorPaletteCommand.Id,
+                DisasterEventCommand.Id, EntityNameCommand.Id);
         }
 
         public MultiplayerSession Session => _session;
@@ -201,6 +202,8 @@ namespace CS2MultiplayerMod.Game
                 case NetReplaceCommand.Id: return "net-replace";
                 case VisualCustomizationCommand.Id: return "visual-customization";
                 case ColorPaletteCommand.Id: return "color-palette";
+                case DisasterEventCommand.Id: return "disaster-event";
+                case EntityNameCommand.Id: return "entity-name";
                 default: return "unknown";
             }
         }

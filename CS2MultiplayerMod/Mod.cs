@@ -46,7 +46,7 @@ namespace CS2MultiplayerMod
             Game.Sync.Infrastructure.SyncInbox.LogWarn = log.Warn;
 
             if (GameManager.instance.modManager.TryGetExecutableAsset(this, out var asset))
-                log.Info($"Current mod asset at {asset.path}");
+                log.Info($"Current mod asset at {Game.Diagnostics.LogPaths.Redact(asset.path)}");
 
             // Register settings and the locale sources backing them (and all runtime
             // strings). The game picks the source matching the language the player
@@ -126,6 +126,13 @@ namespace CS2MultiplayerMod
             // the Created tag it keys on is gone by the next frame. Capturing here reads the
             // resolved disaster, not an empty shell.
             updateSystem.UpdateAt<Game.Sync.Systems.DisasterSyncSystem>(SystemUpdatePhase.ModificationEnd);
+            // After the game's own auto-name initialization, which runs late in ModificationEnd and
+            // is what fills in a new street's or district's name draw. Capturing before it would
+            // read the draw one frame stale. ModificationEnd also keeps working while the game is
+            // paused (unlike GameSimulation), so a rename made in a paused city still replicates,
+            // and the one-frame Created tag the auto-name capture keys on is still alive here.
+            updateSystem.UpdateAfter<Game.Sync.Systems.NameSyncSystem,
+                global::Game.Common.RandomLocalizationInitializeSystem>(SystemUpdatePhase.ModificationEnd);
             // UIUpdate, NOT GameSimulation: dev-tree nodes can be purchased while the game
             // is paused (the progression panel works paused, and a node's Locked clears
             // outside the simulation loop), but GameSimulation freezes at selectedSpeed 0.
