@@ -741,15 +741,26 @@ const PanelBody = ({ top, middle, bottom }: {
     const [topHeight, setTopHeight] = useState(0);
     const [bottomHeight, setBottomHeight] = useState(0);
 
-    // After every render: re-measure and only re-render when a height actually
-    // moved, so this settles in one extra pass instead of looping. Both box
-    // metrics are read because they do not always agree in this runtime, and a
-    // height that reads back as zero collapses the block it is meant to reserve.
+    // Re-measured after every render AND on the following frames: this runtime
+    // lays out asynchronously, so the read right after the commit still answers 0
+    // on a freshly opened panel — which is what put the chat over the player list
+    // until some unrelated re-render happened to measure again. A zero for a block
+    // that has content is kept out, and identical values do not re-render, so this
+    // settles within a frame or two of opening.
     useLayoutEffect(() => {
-        const measuredTop = blockHeight(topRef.current);
-        const measuredBottom = blockHeight(bottomRef.current);
-        if (measuredTop !== topHeight) setTopHeight(measuredTop);
-        if (measuredBottom !== bottomHeight) setBottomHeight(measuredBottom);
+        const measure = () => {
+            const measuredTop = blockHeight(topRef.current);
+            const measuredBottom = blockHeight(bottomRef.current);
+            if (measuredTop > 0 || !top) setTopHeight(measuredTop);
+            if (measuredBottom > 0 || !bottom) setBottomHeight(measuredBottom);
+        };
+
+        measure();
+        let frame = requestAnimationFrame(function settle() {
+            measure();
+            frame = requestAnimationFrame(measure);
+        });
+        return () => cancelAnimationFrame(frame);
     });
 
     const middleStyle: CSSProperties = {
@@ -1313,13 +1324,19 @@ const SessionView = ({ entries, players }: { entries: ChatEntry[]; players: Play
         if (openedRef.current) {
             openedRef.current = false;
             el.scrollTop = el.scrollHeight;
-            // The list is measured again on the next frame: the panel's own layout
-            // can still be settling on this one, which would cap scrollTop short.
-            const frame = requestAnimationFrame(() => {
+            // Repeated over the next frames: the panel's own geometry is still
+            // settling on this one, and the list shrinking afterwards would leave
+            // this first jump short of the newest line.
+            let frame = requestAnimationFrame(function toNewest() {
                 const list = listRef.current;
                 if (list) list.scrollTop = list.scrollHeight;
+                frame = requestAnimationFrame(toNewest);
             });
-            return () => cancelAnimationFrame(frame);
+            const stop = window.setTimeout(() => cancelAnimationFrame(frame), 300);
+            return () => {
+                cancelAnimationFrame(frame);
+                window.clearTimeout(stop);
+            };
         }
         const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 60;
         if (nearBottom) el.scrollTop = el.scrollHeight;
