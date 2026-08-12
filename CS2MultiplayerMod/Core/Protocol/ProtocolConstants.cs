@@ -4,7 +4,13 @@ namespace CS2MultiplayerMod.Core.Protocol
     {
         /// <summary>
         /// Wire-format version. Bump when message layout changes to refuse handshake on mismatch.
-        /// Current v36 adds names: command id 26 carries what a street, district, transport line or
+        /// Current v37 adds zone-grown buildings: command id 27 carries the appearance, level
+        /// change, condition and removal of a building the zoning simulation grew, and city-state
+        /// channel 18 carries the host's zone demand and occupancy counts for comparison. The
+        /// spawner picks its building, its visual variant and its level-up target from a stream
+        /// seeded by the machine's own clock, so two cities with identical roads, zoning and demand
+        /// still grow different buildings: the host's choices have to travel, and a client holds
+        /// its own spawner while they do. v36 adds names: command id 26 carries what a street, district, transport line or
         /// building is called, and city-state channel 17 carries the city's own name. A typed name is
         /// replicated as text; an untouched entity's name is a draw from its prefab's name list, made
         /// from a per-machine seed, so the draw itself has to travel or the same new road ends up
@@ -64,7 +70,7 @@ namespace CS2MultiplayerMod.Core.Protocol
         /// islands) reattach on the receiver.
         /// See <see cref="Messages.HandshakeRequest"/> and version notes in doc/internals.
         /// </summary>
-        public const int ProtocolVersion = 36;
+        public const int ProtocolVersion = 37;
 
         /// <summary>
         /// Hard cap on a single payload, guarding against corrupt length prefixes.

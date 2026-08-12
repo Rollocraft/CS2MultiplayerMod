@@ -68,6 +68,10 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             Register(new GameClockStateChannel());
             _treeStateChannel = new TreeStateChannel();
             Register(_treeStateChannel);
+            // Reports rather than writes: zone demand is recomputed locally from the city's own
+            // state several times a second, so this carries the host's figures for comparison and
+            // logs the gap. See ZoneDemandChannel.
+            Register(new ZoneDemandChannel());
 
             // Player-editable settings: every player may change them; the host arbitrates.
             RegisterEditable(new TaxStateChannel());

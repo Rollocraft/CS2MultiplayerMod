@@ -55,6 +55,14 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         // player bulldozing something and the simulation retiring it on its own.
         private readonly HashSet<Entity> _toolDeleteOriginals = new HashSet<Entity>();
 
+        /// <summary>
+        /// Whether a player's tool is what removed this entity in the frame being captured. The two
+        /// removal paths travel on different commands, and <see cref="GrowableSyncSystem"/> asks so
+        /// that a bulldozed zoned building is not also announced as a simulation removal.
+        /// Only meaningful during the same ModificationEnd pass that collected it.
+        /// </summary>
+        internal bool IsToolDeleteOriginal(Entity entity) => _toolDeleteOriginals.Contains(entity);
+
         private PrefabSystem _prefabSystem;
         private PrefabIndex _prefabIndex;
         private NetSyncSystem _netSync;
