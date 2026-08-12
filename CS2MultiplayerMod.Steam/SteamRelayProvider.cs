@@ -5,9 +5,12 @@ using Steamworks;
 namespace CS2MultiplayerMod.Core.Networking.Steam
 {
     /// <summary>
-    /// Registers Steam as the relay backend. The game already runs the Steam API and
-    /// pumps its callbacks every frame, so this only has to report whether that is
-    /// true right now and hand out transports when it is.
+    /// The relay backend. The game already runs the Steam API and pumps its callbacks
+    /// every frame, so this only has to report whether that is true right now and hand
+    /// out transports when it is.
+    ///
+    /// Instantiated by name from the mod assembly, which never links this one - see
+    /// SteamRelayBootstrap for why the Steam code has to sit on its own.
     /// </summary>
     public sealed class SteamRelayProvider : IRelayProvider
     {
@@ -17,34 +20,6 @@ namespace CS2MultiplayerMod.Core.Networking.Steam
         /// a constant rather than a setting.
         /// </summary>
         public const int VirtualPort = 25001;
-
-        /// <summary>
-        /// Probe Steam and register only if it answered. The probe has to run before the
-        /// assignment: a copy of the game that ships no Steam library at all (Game Pass,
-        /// Epic) fails when the first Steam-touching method body is compiled, not inside
-        /// it, so a provider registered up front would keep throwing from every later
-        /// call. Leaving <see cref="RelayProvider.Current"/> null instead reads as
-        /// "relay unavailable" and the direct path carries on untouched.
-        /// </summary>
-        public static void Register(IModLogger log)
-        {
-            try
-            {
-                var provider = new SteamRelayProvider();
-                string reason = provider.UnavailableReason;
-                RelayProvider.Current = provider;
-
-                if (reason == null)
-                    log.Info("Steam relay available; the join code for this machine is " + LocalSteamId() + ".");
-                else
-                    log.Info("Steam relay not usable yet (" + reason + "). Hosting can still use a direct connection.");
-            }
-            catch (Exception ex)
-            {
-                log.Info("Steam is not present in this build (" + ex.Message +
-                         "); multiplayer will use direct connections only.");
-            }
-        }
 
         public string UnavailableReason
         {

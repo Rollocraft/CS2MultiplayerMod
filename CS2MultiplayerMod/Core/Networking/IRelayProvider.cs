@@ -29,6 +29,17 @@ namespace CS2MultiplayerMod.Core.Networking
 
         public static IRelayProvider Current;
 
+        /// <summary>
+        /// Whether relay sessions exist as a choice on this machine at all. False on
+        /// copies of the game that ship no Steam library (Microsoft Store / Game Pass):
+        /// there is nothing to be signed in to and nothing to wait for, so the option is
+        /// not offered rather than shown as unavailable.
+        /// </summary>
+        public static bool IsSupported
+        {
+            get { return Current != null; }
+        }
+
         public static bool IsAvailable
         {
             get { return Current != null && Current.UnavailableReason == null; }
@@ -39,7 +50,7 @@ namespace CS2MultiplayerMod.Core.Networking
             get
             {
                 return Current == null
-                    ? "Steam is not available in this build."
+                    ? "This copy of the game has no Steam support."
                     : Current.UnavailableReason;
             }
         }

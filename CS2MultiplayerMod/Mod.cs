@@ -45,8 +45,13 @@ namespace CS2MultiplayerMod
             // Route the sync inbox's rare backpressure/drain warnings to the mod log.
             Game.Sync.Infrastructure.SyncInbox.LogWarn = log.Warn;
 
+            // Also where the Steam relay backend sits, when this copy of the game has one.
+            string modFolder = null;
             if (GameManager.instance.modManager.TryGetExecutableAsset(this, out var asset))
+            {
                 log.Info($"Current mod asset at {Game.Diagnostics.LogPaths.Redact(asset.path)}");
+                modFolder = System.IO.Path.GetDirectoryName(asset.path);
+            }
 
             // Register settings and the locale sources backing them (and all runtime
             // strings). The game picks the source matching the language the player
@@ -68,7 +73,7 @@ namespace CS2MultiplayerMod
 
             // Offer Steam's relay as a hosting backend. Availability is decided here once;
             // when Steam is absent the mod simply keeps to direct connections.
-            Core.Networking.Steam.SteamRelayProvider.Register(coreLog);
+            SteamRelayBootstrap.Register(coreLog, modFolder);
 
             Service = new MultiplayerService(coreLog);
             FlightRecorder.Note("startup-stage service-created");

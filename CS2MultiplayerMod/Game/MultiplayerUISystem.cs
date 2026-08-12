@@ -151,6 +151,11 @@ namespace CS2MultiplayerMod.Game
                 () => RelayProvider.LocalJoinCode));
             AddUpdateBinding(new GetterValueBinding<bool>(Group, "relayAvailable",
                 () => RelayProvider.IsAvailable));
+            // Whether the relay exists as a choice at all. False on copies of the game
+            // without Steam (Microsoft Store / Game Pass), where the screens drop the
+            // connection picker entirely instead of offering a mode that cannot run.
+            AddUpdateBinding(new GetterValueBinding<bool>(Group, "relaySupported",
+                () => RelayProvider.IsSupported));
             // What the running session actually uses, as opposed to what is configured
             // for the next one.
             AddUpdateBinding(new GetterValueBinding<bool>(Group, "sessionUsesRelay",
