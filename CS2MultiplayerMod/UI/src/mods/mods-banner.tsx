@@ -29,15 +29,24 @@ const styles: Record<string, CSSProperties> = {
         padding: "10rem 12rem",
         marginBottom: "12rem",
         borderRadius: "3rem",
-        backgroundColor: "rgba(255, 96, 88, 0.12)",
-        border: "1rem solid rgba(255, 96, 88, 0.50)",
+        // On the main menu this sits straight over the animated scene, so the tint
+        // needs an opaque ground of its own or the text reads through to it.
+        backgroundColor: "rgba(38, 12, 11, 0.94)",
+        border: "1rem solid rgba(255, 96, 88, 0.60)",
     },
     icon: {
-        fontSize: "16rem",
-        lineHeight: "1",
+        width: "16rem",
+        height: "16rem",
+        marginTop: "1rem",
         marginRight: "10rem",
         flexShrink: 0,
-        color: "#ff6058",
+        // The UI font has no glyph for the emoji symbols, so tint the game's own
+        // warning glyph the way its tinted-icon component does.
+        maskImage: "url(Media/Glyphs/Warning.svg)",
+        maskSize: "contain",
+        maskPosition: "center",
+        maskRepeat: "no-repeat",
+        backgroundColor: "#ff6058",
     },
     textWrap: {
         flex: 1,
@@ -52,7 +61,7 @@ const styles: Record<string, CSSProperties> = {
     body: {
         fontSize: "12.5rem",
         lineHeight: "1.4",
-        color: "rgba(255, 255, 255, 0.85)",
+        color: "rgba(255, 255, 255, 0.92)",
         wordBreak: "break-word",
     },
 };
@@ -70,7 +79,7 @@ export const OtherModsBanner = ({ style }: { style?: CSSProperties }) => {
 
     return (
         <div style={style ? { ...styles.banner, ...style } : styles.banner}>
-            <div style={styles.icon}>⛔</div>
+            <div style={styles.icon} />
             <div style={styles.textWrap}>
                 <div style={styles.title}>{t(LOC.title, "Other Mods Enabled")}</div>
                 <div style={styles.body}>{blocked}</div>
