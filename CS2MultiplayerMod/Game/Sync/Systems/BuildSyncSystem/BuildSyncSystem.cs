@@ -260,6 +260,17 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             ClearRecentLocalObjectOperations();
             ClearPlayerPlacedSpawnables();
             _selectedAssetStampPrefabName = null;
+            // A world sync tears this down mid-handoff. Say so: the held graph is a committed local
+            // building that no peer has been told about, and losing it without a trace is how a
+            // specialized placement went missing on one machine with nothing in the log.
+            if (_pendingSpecializedObjectOperation != null)
+            {
+                Mod.log.Warn("[MP] BuildSync: discarding a held specialized placement (" +
+                             _pendingSpecializedObjectOperation.Definitions.Length +
+                             " definitions) that was still waiting for its polygon.");
+                Diagnostics.FlightRecorder.Note("specialized handoff discarded by reset defs=" +
+                    _pendingSpecializedObjectOperation.Definitions.Length);
+            }
             ClearSpecializedAreaCapture();
             _nativeLifecycleCapturedThisFrame = false;
             _localObjectToolRanThisFrame = false;

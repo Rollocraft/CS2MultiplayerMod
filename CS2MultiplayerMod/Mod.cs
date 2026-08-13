@@ -183,6 +183,11 @@ namespace CS2MultiplayerMod
             // not been consumed - the gate keeps them out of an armed net commit (see there).
             updateSystem.UpdateAfter<Game.Sync.Systems.DefinitionGateSystem, global::Game.Tools.ToolOutputBarrier>(
                 SystemUpdatePhase.ToolUpdate);
+            // Immediately before the game's owner resolution: a generated sub-element's owner
+            // description is removed by that pass whether or not it resolved, so this is the only
+            // slot where an unresolved sub-element can still be traced to its owner.
+            updateSystem.UpdateBefore<Game.Sync.Systems.OwnerDefinitionSnapshotSystem,
+                global::Game.Tools.FindOwnersSystem2>(SystemUpdatePhase.Modification2B);
             // UIUpdate, not GameSimulation, for the same reason as the session pump:
             // hosting starts from the options screen, which pauses the simulation -
             // at GameSimulation the queued initial world stream for a joining client

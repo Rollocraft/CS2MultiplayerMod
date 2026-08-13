@@ -1,4 +1,4 @@
-using System.Collections.Concurrent;
+﻿using System.Collections.Concurrent;
 using System.Collections.Generic;
 using Game;
 using Game.Common;
@@ -302,13 +302,18 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
 
         // Owner descriptions of the armed object batch, kept so the validator can re-link a
         // sub-element whose one-shot resolution missed instead of discarding the whole graph.
+        private ObjectSearch _ownerSearch;
+        // Which owner each described sub-element named, captured before the game's resolution pass
+        // consumes the descriptions. Keyed by the generated entity, so a batch naming several owners
+        // is still unambiguous.
+        private readonly Dictionary<Entity, ArmedOwnerDefinition> _describedOwners =
+            new Dictionary<Entity, ArmedOwnerDefinition>();
         private readonly List<ArmedOwnerDefinition> _pendingOwnerDefinitions =
             new List<ArmedOwnerDefinition>();
         // Previous rejection of the batch currently being replayed. A replay re-runs the identical
         // command against an unchanged world, so an unchanged reason and member count prove the
         // remaining attempts cannot succeed.
         private string _lastInvalidReason;
-        private int _lastInvalidCount = -1;
         // Memo for the owner description the current transaction is re-linking against.
         private Entity _lastDescribedOwnerPrefab;
         private Unity.Mathematics.float3 _lastDescribedOwnerPosition;
@@ -402,6 +407,11 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
             base.OnCreate();
 
             Mod.log.Info(nameof(NetSyncSystem) + " ready.");
+            // An owned connector re-cut beside an already-standing building names an owner that is
+            // live, not part of the transaction. Owner resolution only ever matches a Temp to a
+            // Temp, so that link has to be found by asking what stands at the described point.
+            _ownerSearch = new ObjectSearch(
+                World.GetOrCreateSystemManaged<global::Game.Objects.SearchSystem>());
             _prefabSystem = World.GetOrCreateSystemManaged<PrefabSystem>();
             _prefabIndex = new PrefabIndex(_prefabSystem, GetEntityQuery(ComponentType.ReadOnly<PrefabData>()));
 
@@ -716,9 +726,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
             }
             _applyReplayBudget.Reset();
             _pendingOwnerDefinitions.Clear();
+            _describedOwners.Clear();
             _lastDescribedOwner = Entity.Null;
             _lastInvalidReason = null;
-            _lastInvalidCount = -1;
             _suppressCaptureThisFrame = false;
             _prepDoneThisFrame = false;
             DeferForTerrain = false;

@@ -36,6 +36,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         private long _lastEditScanMs;
 
         private PrefabSystem _prefabSystem;
+        private BuildSyncSystem _buildSync;
         private PrefabIndex _prefabIndex;
         private EntityQuery _createdAreas;
         private EntityQuery _deletedAreas;
@@ -49,6 +50,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             base.OnCreate();
 
             Mod.log.Info(nameof(AreaSyncSystem) + " ready.");
+            // A specialized placement's lot must not be published ahead of its building, which
+            // BuildSync holds until the polygon closes (see the redraw scan).
+            _buildSync = World.GetOrCreateSystemManaged<BuildSyncSystem>();
             _prefabSystem = World.GetOrCreateSystemManaged<PrefabSystem>();
             _prefabIndex = new PrefabIndex(_prefabSystem, GetEntityQuery(ComponentType.ReadOnly<PrefabData>()));
 

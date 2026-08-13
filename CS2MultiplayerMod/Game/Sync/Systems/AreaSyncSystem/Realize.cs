@@ -30,13 +30,18 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 }
 
                 _ownedAreaRetry.RemoveAt(i);
+                // Dropping this snapshot is not a divergence worth reloading the world for. The
+                // atomic object graph already carried the building and its declared lot, this
+                // channel only refines the polygon, and the sender's periodic redraw scan keeps
+                // offering another snapshot. Escalating instead cost a full save-stream-reload for
+                // a lot outline, and did so on a fixed ten-second timer after any placement whose
+                // owner this machine could not match.
                 Mod.log.Warn("[MP] AreaSync: owner '" +
                              pending.command.OwnerPrefabName +
-                             "' did not appear in time for its owned area; requesting world " +
-                             "recovery instead of silently losing the lot.");
-                Diagnostics.FlightRecorder.Note(
-                    "owned area owner expired; recovery requested");
-                SyncInbox.RequestResync("owned area owner did not resolve");
+                             "' did not appear in time for its owned area " +
+                             DescribeOwnedAreaOwnerSearch(pending.command) +
+                             "; dropping this snapshot - a later redraw will carry the polygon.");
+                Diagnostics.FlightRecorder.Note("owned area owner expired; snapshot dropped");
             }
         }
 
@@ -122,6 +127,49 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             return true;
         }
 
+        /// <summary>
+        /// Vertical slack for the owner match. Wide enough to absorb a building conformed to this
+        /// machine's own ground, narrow enough that a genuinely different level cannot match.
+        /// </summary>
+        private const float MaxOwnedAreaOwnerHeightGap = 40f;
+
+        /// <summary>
+        /// What the owner search actually saw, for a snapshot that never bound. Separates "this
+        /// machine has no such building" from "it has one but outside the accepted distance".
+        /// </summary>
+        private string DescribeOwnedAreaOwnerSearch(OwnedAreaSnapshotCommand command)
+        {
+            Entity ownerPrefab;
+            if (!_prefabIndex.TryResolve(command.OwnerPrefabName, out ownerPrefab))
+                return "(owner prefab unavailable)";
+
+            var wanted = new float3(command.OwnerX, command.OwnerY, command.OwnerZ);
+            int candidates = 0;
+            float nearestSq = float.MaxValue;
+            NativeArray<Entity> owners = _ownedAreaOwners.ToEntityArray(Allocator.Temp);
+            try
+            {
+                for (int i = 0; i < owners.Length; i++)
+                {
+                    if (EntityManager.GetComponentData<PrefabRef>(owners[i]).m_Prefab !=
+                        ownerPrefab) continue;
+                    candidates++;
+                    float distanceSq = math.distancesq(
+                        EntityManager.GetComponentData<global::Game.Objects.Transform>(owners[i])
+                            .m_Position.xz, wanted.xz);
+                    if (distanceSq < nearestSq) nearestSq = distanceSq;
+                }
+            }
+            finally
+            {
+                owners.Dispose();
+            }
+            return candidates == 0
+                ? "(no local building of that prefab)"
+                : "(candidates=" + candidates + " nearestM=" +
+                  math.sqrt(nearestSq).ToString("0.##") + ")";
+        }
+
         private Entity FindOwnedAreaOwner(Entity ownerPrefab, float3 position,
             float4 rotation)
         {
@@ -142,8 +190,14 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     global::Game.Objects.Transform transform =
                         EntityManager.GetComponentData<global::Game.Objects.Transform>(
                             candidate);
-                    float distance = math.distancesq(transform.m_Position, position);
+                    // Horizontal only: the wire Y is the sender's, while this machine conforms the
+                    // building to its own ground, so on sloped terrain the vertical difference can
+                    // exceed the whole budget on its own and reject the right owner. Nothing stacks
+                    // two lot owners over one point, so the plane is the discriminator; the loose
+                    // vertical bound below only rules out a different level entirely.
+                    float distance = math.distancesq(transform.m_Position.xz, position.xz);
                     if (distance >= bestDistance ||
+                        math.abs(transform.m_Position.y - position.y) > MaxOwnedAreaOwnerHeightGap ||
                         math.abs(math.dot(transform.m_Rotation.value, rotation)) < 0.98f)
                         continue;
                     best = candidate;

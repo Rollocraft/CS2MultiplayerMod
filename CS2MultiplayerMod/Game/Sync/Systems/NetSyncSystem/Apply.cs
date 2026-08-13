@@ -1,4 +1,4 @@
-using System.Collections.Generic;
+﻿using System.Collections.Generic;
 using Colossal.Mathematics;
 using Game.Common;
 using Game.Net;
@@ -536,7 +536,6 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
             _onCommitLost = null;
             _applyReplayBudget.Reset();
             _lastInvalidReason = null;
-            _lastInvalidCount = -1;
             _awaitingDrain = true;
             _drainArmTick = System.Environment.TickCount;
             _drainFrames = 0;
@@ -641,13 +640,14 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
             ReleaseTrackedTemps(_isolatedLocalTemps);
 
             // A replay rebuilds the identical command against an unchanged world. Once an attempt
-            // has already been spent and the rejection repeats verbatim, the remaining attempts are
-            // latency in front of an unavoidable recovery, not another chance.
+            // has already been spent and the rejection repeats, the remaining attempts are latency
+            // in front of an unavoidable recovery, not another chance. Compare the reason alone:
+            // the member count comes from a world-wide Temp query, so unrelated concurrent work
+            // (a growable spawning, another peer's edit) moves it between two identical rejections.
             string identity = RejectionIdentity(reason);
             bool repeatsPreviousAttempt = _applyReplayBudget.AttemptsUsed > 0 &&
-                                          identity == _lastInvalidReason && count == _lastInvalidCount;
+                                          identity == _lastInvalidReason;
             _lastInvalidReason = identity;
-            _lastInvalidCount = count;
 
             System.Action replay = _onCommitLost;
             _onCommitLost = null;
@@ -1442,7 +1442,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                 EntityManager.HasComponent<Deleted>(owner))
             {
                 reason = "a generated net entity has a missing owner " +
-                         DescribeOwnerFailure(entity, owner);
+                         DescribeOwnerFailure(entity, owner, members);
                 return false;
             }
             if (EntityManager.HasComponent<Temp>(owner) &&
@@ -1469,26 +1469,64 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
         }
 
         /// <summary>
-        /// Recover the owner of a sub-element the native resolution pass left unset. Prefer the
-        /// entity's own surviving description; otherwise use the one this batch created, which every
-        /// sub-element of a single placement shares. Ambiguity is never guessed away.
+        /// Replace the per-frame record of which owner each described sub-element named. Written by
+        /// <see cref="OwnerDefinitionSnapshotSystem"/> in the phase before the game consumes those
+        /// descriptions; an empty pass leaves the previous record intact, because the batch being
+        /// validated has already had its descriptions taken.
+        /// </summary>
+        public void BeginOwnerDescriptionSnapshot(int expected)
+        {
+            if (expected <= 0) return;
+            _describedOwners.Clear();
+        }
+
+        public void RecordOwnerDescription(Entity entity, Entity ownerPrefab,
+            Unity.Mathematics.float3 ownerPosition)
+        {
+            _describedOwners[entity] = new ArmedOwnerDefinition
+            {
+                Prefab = ownerPrefab,
+                Position = ownerPosition,
+            };
+        }
+
+        /// <summary>
+        /// Recover the owner of a sub-element the native resolution pass left unset, in descending
+        /// order of certainty: the entity's own surviving description, the description recorded for
+        /// exactly this entity before the pass consumed it, and finally the batch's own description
+        /// when it names a single owner. Ambiguity is never guessed away.
         /// </summary>
         private bool TryRelinkGeneratedOwner(Entity entity, HashSet<Entity> members, out Entity owner)
         {
             owner = Entity.Null;
-            if (members == null) return false;
+            ArmedOwnerDefinition described;
+            if (members == null || !TryResolveOwnerDescription(entity, out described)) return false;
+            return TryFindDescribedOwner(entity, described.Prefab, described.Position, members,
+                out owner);
+        }
 
+        private bool TryResolveOwnerDescription(Entity entity, out ArmedOwnerDefinition described)
+        {
             if (EntityManager.HasComponent<OwnerDefinition>(entity))
             {
-                OwnerDefinition described = EntityManager.GetComponentData<OwnerDefinition>(entity);
-                return TryFindDescribedOwner(entity, described.m_Prefab, described.m_Position,
-                    members, out owner);
+                OwnerDefinition live = EntityManager.GetComponentData<OwnerDefinition>(entity);
+                described = new ArmedOwnerDefinition
+                {
+                    Prefab = live.m_Prefab,
+                    Position = live.m_Position,
+                };
+                return described.Prefab != Entity.Null;
             }
-            // Two different owners in one batch cannot be told apart once the descriptions are
-            // consumed. Re-parenting to the wrong building is worse than rejecting the batch.
-            if (_pendingOwnerDefinitions.Count != 1) return false;
-            ArmedOwnerDefinition armed = _pendingOwnerDefinitions[0];
-            return TryFindDescribedOwner(entity, armed.Prefab, armed.Position, members, out owner);
+            if (_describedOwners.TryGetValue(entity, out described)) return true;
+            // Two different owners in one batch cannot be told apart with no record of this entity.
+            // Re-parenting to the wrong building is worse than rejecting the batch.
+            if (_pendingOwnerDefinitions.Count == 1)
+            {
+                described = _pendingOwnerDefinitions[0];
+                return true;
+            }
+            described = default(ArmedOwnerDefinition);
+            return false;
         }
 
         /// <summary>
@@ -1550,6 +1588,11 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                 bestDistanceSq = distanceSq;
                 owner = candidate;
             }
+            // A connector re-cut beside a building that already stands names a live owner. Owner
+            // resolution only matches a Temp to a Temp, so it can never bind that pair and the
+            // transaction alone cannot supply it either. Ask what is standing at the described
+            // point instead; attaching to a live owner is the ordinary form the apply passes read.
+            if (candidates == 0) return TryFindLiveDescribedOwner(prefab, position, out owner);
             if (candidates != 1)
             {
                 owner = Entity.Null;
@@ -1562,11 +1605,71 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
         }
 
         /// <summary>
+        /// How many live objects of the described prefab stand where the description says. Zero
+        /// means the description names something this machine does not have; more than one means
+        /// the point is ambiguous and re-linking deliberately refused.
+        /// </summary>
+        private int LiveOwnerCandidates(Entity prefab, Unity.Mathematics.float3 position)
+        {
+            Entity ignored;
+            if (TryFindLiveDescribedOwner(prefab, position, out ignored)) return 1;
+            return _lastLiveOwnerCandidates;
+        }
+
+        private int _lastLiveOwnerCandidates;
+
+        private bool TryFindLiveDescribedOwner(Entity prefab, Unity.Mathematics.float3 position,
+            out Entity owner)
+        {
+            owner = Entity.Null;
+            _lastLiveOwnerCandidates = 0;
+            if (_ownerSearch == null) return false;
+
+            const float searchRadius = 2f;
+            const float maxHorizontalDistanceSq = 1f;
+            var candidates = new NativeList<Entity>(Allocator.Temp);
+            try
+            {
+                _ownerSearch.CollectNear(position, searchRadius, candidates);
+                float bestDistanceSq = float.MaxValue;
+                int matches = 0;
+                for (int i = 0; i < candidates.Length; i++)
+                {
+                    Entity candidate = candidates[i];
+                    if (!EntityManager.Exists(candidate) ||
+                        EntityManager.HasComponent<Deleted>(candidate) ||
+                        EntityManager.HasComponent<Temp>(candidate) ||
+                        !EntityManager.HasComponent<global::Game.Objects.Transform>(candidate) ||
+                        !EntityManager.HasComponent<global::Game.Prefabs.PrefabRef>(candidate) ||
+                        EntityManager.GetComponentData<global::Game.Prefabs.PrefabRef>(candidate)
+                            .m_Prefab != prefab) continue;
+
+                    float distanceSq = Unity.Mathematics.math.distancesq(
+                        EntityManager.GetComponentData<global::Game.Objects.Transform>(candidate)
+                            .m_Position.xz, position.xz);
+                    if (distanceSq > maxHorizontalDistanceSq) continue;
+                    matches++;
+                    if (distanceSq >= bestDistanceSq) continue;
+                    bestDistanceSq = distanceSq;
+                    owner = candidate;
+                }
+                _lastLiveOwnerCandidates = matches;
+                if (matches == 1) return true;
+                owner = Entity.Null;
+                return false;
+            }
+            finally
+            {
+                candidates.Dispose();
+            }
+        }
+
+        /// <summary>
         /// Name the entity a validation rule rejected. The reason string alone cannot distinguish an
         /// owner that never resolved from one deleted mid-transaction, which left several recorded
         /// sessions undiagnosable.
         /// </summary>
-        private string DescribeOwnerFailure(Entity entity, Entity owner)
+        private string DescribeOwnerFailure(Entity entity, Entity owner, HashSet<Entity> members)
         {
             var detail = new System.Text.StringBuilder("(");
             detail.Append(DescribeTransactionEntity(entity));
@@ -1577,7 +1680,46 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
             else if (!EntityManager.Exists(owner))
                 detail.Append(" owner=#").Append(owner.Index).Append("=gone");
             else detail.Append(" owner=#").Append(owner.Index).Append("=deleted");
-            detail.Append(" armedOwners=").Append(_pendingOwnerDefinitions.Count);
+
+            ArmedOwnerDefinition described;
+            if (!TryResolveOwnerDescription(entity, out described))
+            {
+                detail.Append(" wantedOwner=unknown armedOwners=")
+                      .Append(_pendingOwnerDefinitions.Count);
+            }
+            else
+            {
+                detail.Append(" wantedOwner=")
+                      .Append(PrefabIndex.SafeName(_prefabSystem, described.Prefab));
+                // Distinguish the two ways the search can come up empty: no such owner is in the
+                // transaction at all, or one is but sits outside the accepted distance. Only the
+                // second is a tolerance question.
+                int samePrefab = 0;
+                float nearestSq = float.MaxValue;
+                if (members != null)
+                {
+                    foreach (Entity candidate in members)
+                    {
+                        if (!EntityManager.Exists(candidate) ||
+                            !EntityManager.HasComponent<global::Game.Objects.Transform>(candidate) ||
+                            !EntityManager.HasComponent<global::Game.Prefabs.PrefabRef>(candidate) ||
+                            EntityManager.GetComponentData<global::Game.Prefabs.PrefabRef>(candidate)
+                                .m_Prefab != described.Prefab) continue;
+                        samePrefab++;
+                        float distanceSq = Unity.Mathematics.math.distancesq(
+                            EntityManager.GetComponentData<global::Game.Objects.Transform>(candidate)
+                                .m_Position.xz, described.Position.xz);
+                        if (distanceSq < nearestSq) nearestSq = distanceSq;
+                    }
+                }
+                detail.Append(" memberCandidates=").Append(samePrefab);
+                if (samePrefab > 0)
+                    detail.Append(" nearestM=")
+                          .Append(Unity.Mathematics.math.sqrt(nearestSq).ToString("0.##"));
+                else
+                    detail.Append(" liveCandidates=")
+                          .Append(LiveOwnerCandidates(described.Prefab, described.Position));
+            }
             // Owner resolution ignores Disabled entities, and the isolation this commit path applies
             // uses exactly that tag. Say so when an isolated candidate exists: it separates our own
             // interference from a description the batch genuinely cannot satisfy.
@@ -1613,12 +1755,14 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
 
         /// <summary>
         /// Owners this commit path is currently hiding that could have satisfied the rejected
-        /// entity's description. Only meaningful while the description still exists.
+        /// entity's description. Owner resolution skips Disabled entities, so a non-zero count means
+        /// our own isolation, not the world, is what the description could not reach.
         /// </summary>
         private int IsolatedOwnerCandidates(Entity entity)
         {
-            if (!EntityManager.HasComponent<OwnerDefinition>(entity)) return 0;
-            Entity prefab = EntityManager.GetComponentData<OwnerDefinition>(entity).m_Prefab;
+            ArmedOwnerDefinition described;
+            if (!TryResolveOwnerDescription(entity, out described)) return 0;
+            Entity prefab = described.Prefab;
             if (prefab == Entity.Null) return 0;
 
             int isolated = 0;
@@ -1893,6 +2037,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
             _pendingApply = true;
             _pendingTransactionKind = RemoteToolTransactionKind.Net;
             _pendingOwnerDefinitions.Clear();
+            _describedOwners.Clear();
             _lastDescribedOwner = Entity.Null;
             _armTick = System.Environment.TickCount;
             _pendingNetConstructionCharge = 0;
@@ -1916,6 +2061,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
             _pendingApply = true;
             _pendingTransactionKind = RemoteToolTransactionKind.Route;
             _pendingOwnerDefinitions.Clear();
+            _describedOwners.Clear();
             _lastDescribedOwner = Entity.Null;
             _armTick = System.Environment.TickCount;
             _pendingNetConstructionCharge = 0;
@@ -1940,6 +2086,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                 ? RemoteToolTransactionKind.AssetStampGraph
                 : RemoteToolTransactionKind.ObjectGraph;
             _pendingOwnerDefinitions.Clear();
+            _describedOwners.Clear();
             _lastDescribedOwner = Entity.Null;
             if (ownerDefinitions != null) _pendingOwnerDefinitions.AddRange(ownerDefinitions);
             _armTick = System.Environment.TickCount;

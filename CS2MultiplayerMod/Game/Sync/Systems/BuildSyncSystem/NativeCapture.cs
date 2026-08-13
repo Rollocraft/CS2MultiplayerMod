@@ -1002,6 +1002,17 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         }
 
         /// <summary>
+        /// True while this lot belongs to a placement whose building has not been published yet.
+        /// The periodic owned-area scan must leave such a lot alone: sending the polygon first
+        /// gives every receiver an owner-less snapshot it can only wait on and then give up.
+        /// </summary>
+        internal bool IsSpecializedAreaHeld(Entity area)
+        {
+            return area != Entity.Null && area == _pendingSpecializedArea &&
+                   _pendingSpecializedObjectOperation != null;
+        }
+
+        /// <summary>
         /// Publish the held object half when the area tool hands a specialized-industry building
         /// back without a drawn polygon. Cancelling the polygon, or leaving the tool, keeps the
         /// committed building and the lot it was placed with - a complete local change that

@@ -69,6 +69,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
             string rejection = null;
             int rejected = 0;
             int mutations = 0;
+            int hiddenSubNets = 0;
             var rejectedOriginalEdges = new List<Entity>();
             for (int i = 0; i < definitions.Length; i++)
             {
@@ -76,14 +77,24 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                 if (!EntityManager.Exists(entity) || !EntityManager.HasComponent<NetCourse>(entity) ||
                     !EntityManager.HasComponent<CreationDefinition>(entity)) continue;
 
+                CreationDefinition definition = EntityManager.GetComponentData<CreationDefinition>(entity);
                 if (EntityManager.HasComponent<OwnerDefinition>(entity))
                 {
+                    // Editing a road re-cuts the hidden connector of every building beside it, and
+                    // those re-cuts join this operation as owned courses. They are a consequence of
+                    // the edit, not part of it: the receiver rebuilds them from the visible net it
+                    // is about to commit, exactly as it does for an unowned hidden sub-net. Only a
+                    // VISIBLE owned course is real content, and BuildSyncSystem captures that batch.
+                    if (IsGeneratedHiddenSubNet(definition))
+                    {
+                        hiddenSubNets++;
+                        continue;
+                    }
                     rejected++;
                     rejection = rejection ?? "carry an owner definition";
                     continue;
                 }
 
-                CreationDefinition definition = EntityManager.GetComponentData<CreationDefinition>(entity);
                 NetCourse course = EntityManager.GetComponentData<NetCourse>(entity);
                 // Point-mode network prefabs intentionally commit a zero-length course (for example
                 // a circular junction). Other modes' zero-length definitions are only cursor markers.
@@ -183,7 +194,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                 _cachedNeedsFinalEdgeFallback = false;
                 _cachedLocalMixedOperation.AddRange(mixed);
                 Diagnostics.FlightRecorder.Note("net atomic mixed capture cached items=" +
-                    mixed.Count + " placements=" + next.Count + " mutations=" + mutations);
+                    mixed.Count + " placements=" + next.Count + " mutations=" + mutations +
+                    (hiddenSubNets > 0 ? " hiddenSubNets=" + hiddenSubNets : string.Empty));
                 return;
             }
 
@@ -196,10 +208,12 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
 
             Mod.log.Warn("[MP] NetSync: local mixed net operation cannot be encoded atomically (" +
                          rejected + " of " + (rejected + next.Count) + " courses " + rejection +
-                         "); the legacy fragmented fallback is disabled and world recovery will be " +
-                         "requested after Apply.");
+                         "; " + hiddenSubNets + " generated connector(s) skipped); the legacy " +
+                         "fragmented fallback is disabled and world recovery will be requested " +
+                         "after Apply.");
             Diagnostics.FlightRecorder.Note("net native capture voided rejected=" + rejected + "/" +
-                                              (rejected + next.Count));
+                                              (rejected + next.Count) +
+                                              " hiddenSubNets=" + hiddenSubNets);
         }
 
         /// <summary>
@@ -461,6 +475,30 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
             return expires >= now;
         }
 
+        /// <summary>
+        /// A course the game generated as the hidden connector of some owner - a building driveway,
+        /// a lot path - rather than something the player drew. Both the new prefab and the original
+        /// it re-cuts are checked, because an edit beside a building produces one definition per
+        /// affected connector in either form. The receiver regenerates these from the visible net,
+        /// so they are skipped rather than transmitted or treated as unrepresentable.
+        /// </summary>
+        private bool IsGeneratedHiddenSubNet(CreationDefinition definition)
+        {
+            if (IsHiddenNetPrefab(definition.m_Prefab)) return true;
+
+            Entity original = definition.m_Original;
+            if (original == Entity.Null || !EntityManager.Exists(original) ||
+                !EntityManager.HasComponent<PrefabRef>(original)) return false;
+            return IsHiddenNetPrefab(EntityManager.GetComponentData<PrefabRef>(original).m_Prefab);
+        }
+
+        private bool IsHiddenNetPrefab(Entity prefab)
+        {
+            if (prefab == Entity.Null) return false;
+            string name = PrefabNameOf(prefab);
+            return !string.IsNullOrEmpty(name) && name.StartsWith("Invisible");
+        }
+
         private static bool IsPlainLocalNetDefinition(CreationDefinition definition)
         {
             const CreationFlags incompatible = CreationFlags.Permanent | CreationFlags.Delete |
@@ -480,6 +518,11 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
             CreationDefinition definition, NetCourse course, out string unrepresentable)
         {
             unrepresentable = null;
+            // Test this before the owner rule below. A building's connector is both owned and
+            // hidden; deciding it on ownership first made the operation unrepresentable and voided
+            // it, even though the hidden-sub-net rule further down already declares that exact
+            // course the receiver's job to rebuild.
+            if (IsGeneratedHiddenSubNet(definition)) return null;
             if (definition.m_Owner != Entity.Null || definition.m_Attached != Entity.Null)
             {
                 unrepresentable = "reference an owner or attachment";

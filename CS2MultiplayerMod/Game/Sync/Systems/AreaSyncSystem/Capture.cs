@@ -87,6 +87,20 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
                     if (ownedSpecialized)
                     {
+                        // A specialized placement holds its building until the polygon closes, so
+                        // that it and the finished lot publish as one operation. This scan runs
+                        // once a second and would otherwise ship the lot first - the receiver then
+                        // holds a polygon for an owner it has never been told about, and gives up
+                        // ten seconds later. Leave this lot to the atomic publish.
+                        if (_buildSync != null && _buildSync.IsSpecializedAreaHeld(entity))
+                        {
+                            // Keep the old baseline rather than accepting this ring. If the
+                            // handoff is abandoned the building publishes without its polygon,
+                            // and the next scan after the hold releases still owes that redraw.
+                            _nextRings[entity] = old;
+                            continue;
+                        }
+
                         string ownerName = _prefabSystem.GetPrefabName(ownerPrefab);
                         if (string.IsNullOrEmpty(ownerName)) continue;
                         string key = OwnedAreaUpdateKey(name, ownerName,
