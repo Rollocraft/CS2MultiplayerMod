@@ -172,6 +172,13 @@ namespace CS2MultiplayerMod
         public bool VerboseLogging { get; set; } = false;
 
         /// <summary>
+        /// The partner markers are the only thing this mod draws every rendered frame, so they are
+        /// the one part of it whose cost scales with screen resolution rather than with city size.
+        /// </summary>
+        [SettingsUISection(GeneralTab, GeneralGroup)]
+        public bool ShowPartnerMarkers { get; set; } = true;
+
+        /// <summary>
         /// Set once the player accepts the in-game disclaimer gate (shown before the
         /// first host/join). Persisted so it only appears once; intentionally hidden
         /// from the options screen and left out of <see cref="SetDefaults"/> so that
@@ -428,6 +435,7 @@ namespace CS2MultiplayerMod
         {
             EnableMod = true;
             VerboseLogging = false;
+            ShowPartnerMarkers = true;
             PlayerName = DefaultPlayerName;
             // Resetting the name asks for the default name again, which on a signed-in
             // copy of the game is the account name, not the literal "Player".
