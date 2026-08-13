@@ -20,18 +20,35 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             public long ObservedAtMs;
         }
 
+        private struct PlayerPlacedSpawnableCreation
+        {
+            public Entity Prefab;
+            public float3 Position;
+            public float4 Rotation;
+            public ushort RandomSeed;
+            public long ExpiryMs;
+        }
+
         private const int MaxRecentLocalObjectOperations = 32;
         private const long RecentLocalObjectOperationLifetimeMs = 5000;
         private const float StrictCommittedRootMatchDistanceSq = 0.0001f;
         private const float AttachedCommittedRootMatchRadiusSq = 64f;
         private const float AttachedCommittedRootMatchHeight = 20f;
         private const float StrictCommittedRootRotationDot = 0.99999f;
+        private const int MaxPlayerPlacedSpawnableCreations = 128;
+        private const long PlayerPlacedSpawnableLifetimeMs = 15000;
+        private const float PlayerPlacedSpawnableMatchDistanceSq = 0.01f;
+        private const float PlayerPlacedSpawnableMatchRotationDot = 0.9999f;
+        private const float AttachedPlayerPlacedSpawnableMatchRadiusSq = 64f;
+        private const float AttachedPlayerPlacedSpawnableMatchHeight = 20f;
 
         private ObjectToolOperationCommand _cachedLocalObjectOperation;
         // Why the last committed root failed to bind to a preview graph; read by the escalation path.
         private string _lastObjectGraphMissDetail;
         private readonly List<RecentLocalObjectOperation> _recentLocalObjectOperations =
             new List<RecentLocalObjectOperation>(MaxRecentLocalObjectOperations);
+        private readonly List<PlayerPlacedSpawnableCreation> _playerPlacedSpawnableCreations =
+            new List<PlayerPlacedSpawnableCreation>(8);
         // Sampled before ToolOutputSystem runs. A one-shot stamp can switch active tools while its
         // rootless definition graph is being emitted, so the graph itself cannot tell us which
         // AssetStampPrefab owns the construction cost/contract.
@@ -365,6 +382,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 AssetStampPrefabName = stampPrefabName,
                 Definitions = captured.ToArray(),
             };
+            AttachPlacementInput(operation);
 
             // A net built from repeating fixed elements - a dam - reaches the standing graph already
             // divided into those elements, one course each. Publishing that division makes the peer
@@ -374,6 +392,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             ObjectToolOperationCommand undivided;
             if (hasFixedElementCut && TryFindUndividedFixedNetOperation(operation, out undivided))
             {
+                AttachPlacementInput(undivided);
                 _cachedLocalObjectOperation = undivided;
                 RememberRecentLocalObjectOperation(undivided);
                 Diagnostics.FlightRecorder.Note("fixed-element net kept undivided defs=" +
@@ -682,6 +701,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                                      ex.Message);
                         Diagnostics.FlightRecorder.Note("committed object graph rejected=" +
                                                           ex.GetType().Name);
+                        if (Mod.Service != null)
+                            Mod.Service.RequestAutomaticWorldRecovery(
+                                "committed building graph could not be sent");
                         return false;
                     }
                 }
@@ -801,6 +823,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         {
             if (!SpecializedAreaOwnerStillMatches(recreate, _cachedLocalObjectOperation))
                 return false;
+            RememberPlayerPlacedSpawnables(_cachedLocalObjectOperation,
+                Mod.Service != null ? Mod.Service.NowMs : 0);
             ForgetRecentLocalObjectOperation(_cachedLocalObjectOperation);
             _pendingSpecializedObjectOperation = _cachedLocalObjectOperation;
             _pendingSpecializedArea = recreate;
@@ -882,6 +906,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             if (rootIndex < 0 || definitions.Count > ObjectToolOperationCommand.MaxDefinitions)
             {
                 Mod.log.Warn("[MP] BuildSync: specialized object/area operation was incomplete; not sent.");
+                if (Mod.Service != null)
+                    Mod.Service.RequestAutomaticWorldRecovery(
+                        "specialized building capture was incomplete");
                 ClearSpecializedAreaCapture();
                 return;
             }
@@ -889,6 +916,12 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             var operation = new ObjectToolOperationCommand
             {
                 RootIndex = rootIndex,
+                // Keep the compact placement input captured before AreaToolSystem took over.
+                // Without it, landfills/extractors fall back to resolving every sender-local owner
+                // and road definition after the polygon closes and can disappear on the receiver.
+                HasPlacementInput = source.HasPlacementInput,
+                ToolRandomSeed = source.ToolRandomSeed,
+                PlacementTarget = source.PlacementTarget,
                 Definitions = definitions.ToArray(),
             };
             try
@@ -907,6 +940,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                              ex.Message);
                 Diagnostics.FlightRecorder.Note("specialized object/area capture rejected=" +
                                                   ex.GetType().Name);
+                if (Mod.Service != null)
+                    Mod.Service.RequestAutomaticWorldRecovery(
+                        "specialized building capture failed");
             }
             finally
             {
@@ -959,6 +995,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             {
                 Mod.log.Warn("[MP] BuildSync: owned-area safeguard was not sent: " +
                              ex.Message);
+                if (Mod.Service != null)
+                    Mod.Service.RequestAutomaticWorldRecovery(
+                        "specialized owned-area safeguard failed");
             }
         }
 
@@ -999,6 +1038,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                              ex.Message);
                 Diagnostics.FlightRecorder.Note("specialized object without area rejected=" +
                                                   ex.GetType().Name);
+                if (Mod.Service != null)
+                    Mod.Service.RequestAutomaticWorldRecovery(
+                        "specialized building capture failed");
             }
             finally
             {
@@ -1154,6 +1196,72 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             // Relocation is a single-point mode and CreateDefinitions consumes index zero.
             _lastObjectToolControlPoint = points[0];
             _hasLastObjectToolControlPoint = true;
+        }
+
+        private void RememberPlacementControlPoint(ObjectToolSystem tool)
+        {
+            Unity.Jobs.JobHandle dependencies;
+            NativeList<ControlPoint> points = tool.GetControlPoints(out dependencies);
+            dependencies.Complete();
+            if (!points.IsCreated || points.Length == 0)
+            {
+                _hasLastPlacementControlPoint = false;
+                return;
+            }
+
+            // CreateDefinitions consumes index zero for an ordinary single-object placement.
+            _lastPlacementControlPoint = points[0];
+            _hasLastPlacementControlPoint = true;
+        }
+
+        /// <summary>
+        /// Preserve the semantic input that a finished building graph cannot safely express: which
+        /// local road/node the placement snapped to. This applies to ordinary service buildings and
+        /// specialized-industry roots alike. The latter publish later, after their area polygon
+        /// closes, but must retain the original point and seed through that hand-off.
+        /// </summary>
+        private void AttachPlacementInput(ObjectToolOperationCommand operation)
+        {
+            if (!_hasLastPlacementControlPoint || operation == null || operation.IsAssetStamp ||
+                operation.Definitions == null || operation.RootIndex < 0 ||
+                operation.RootIndex >= operation.Definitions.Length ||
+                !CanDeriveNativeTransactions) return;
+
+            ObjectToolDefinitionIntent root = operation.Definitions[operation.RootIndex];
+            if (root == null || root.Kind != ObjectToolDefinitionKind.Object || root.PrefabIsNull ||
+                string.IsNullOrEmpty(root.PrefabName) ||
+                root.Original.Kind != PortableEntityKind.None ||
+                root.Owner.Kind != PortableEntityKind.None || root.HasOwnerDefinition) return;
+
+            CreationFlags flags = (CreationFlags)root.CreationFlags;
+            if ((flags & (CreationFlags.Delete | CreationFlags.Relocate |
+                          CreationFlags.Recreate | CreationFlags.Upgrade |
+                          CreationFlags.Permanent)) != 0) return;
+
+            ControlPoint point = _lastPlacementControlPoint;
+            float3 rootPosition = new float3(root.Object.PosX, root.Object.PosY, root.Object.PosZ);
+            float4 rootRotation = math.normalizesafe(new float4(root.Object.RotX,
+                    root.Object.RotY, root.Object.RotZ, root.Object.RotW),
+                new float4(0f, 0f, 0f, 1f));
+            float4 pointRotation = math.normalizesafe(point.m_Rotation.value,
+                new float4(0f, 0f, 0f, 1f));
+            // A standing definition may survive while the cursor moves to a new preview. Never
+            // pair that old graph with the new point merely because both use ObjectTool.Create.
+            if (math.distancesq(rootPosition, point.m_Position) > 0.25f ||
+                math.abs(math.dot(rootRotation, pointRotation)) < 0.995f) return;
+
+            PortableEntityRef target;
+            if (!TryCapturePortableRef(point.m_OriginalEntity, out target))
+            {
+                Diagnostics.FlightRecorder.Note("building placement snap target was not portable");
+                return;
+            }
+
+            operation.HasPlacementInput = true;
+            operation.ToolRandomSeed = AppliedLifecycleToolSeed;
+            operation.PlacementTarget = target;
+            Diagnostics.FlightRecorder.Note("building placement inputs captured prefab=" +
+                                              root.PrefabName + " target=" + target.Kind);
         }
 
         private void RememberStampControlPoint(ObjectToolSystem tool)
@@ -1340,6 +1448,12 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 ObjectToolOperationCommand operation = _cachedLocalObjectOperation;
                 if (operation == null || operation.Definitions == null) return;
 
+                // Register the exact spawnable definition before ToolOutput applies it. The
+                // specialized-industry object half becomes Created immediately, while its native
+                // command is intentionally held until the area-tool polygon is finished.
+                RememberPlayerPlacedSpawnables(operation,
+                    Mod.Service != null ? Mod.Service.NowMs : 0);
+
                 if (operation.IsAssetStamp)
                 {
                     string selectedStamp = GetSelectedAssetStampPrefabName(_toolSystem.activeTool) ??
@@ -1405,6 +1519,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 Mod.log.Warn("[MP] BuildSync: native object operation was not sent: " + ex.Message);
                 Diagnostics.FlightRecorder.Note("object operation capture rejected=" +
                                                   ex.GetType().Name);
+                if (Mod.Service != null)
+                    Mod.Service.RequestAutomaticWorldRecovery(
+                        "native object operation could not be sent");
             }
             finally
             {
@@ -1416,12 +1533,141 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         {
             MultiplayerService service = Mod.Service;
             if (service == null || !service.GameplaySyncReady) return false;
+            RememberPlayerPlacedSpawnables(operation, service.NowMs);
             operation.OperationId = _nextLocalObjectOperationId++;
             byte[] body = operation.Encode();
             service.Session.SendCommand(0, ObjectToolOperationCommand.Id, body);
             ForgetRecentLocalObjectOperation(operation);
             _nativeLifecycleCapturedThisFrame = true;
             return true;
+        }
+
+        /// <summary>
+        /// Consume the one-shot identity of a spawnable building produced by an explicitly applied
+        /// object-tool graph. A fixed root requires the same prefab and 16-bit variant seed,
+        /// position within 10 cm, and the captured orientation; attached visible buildings use a
+        /// bounded snap envelope because attachment resolution changes their definition transform.
+        /// The live specialized owner/attachment graph is also accepted as a durable fallback.
+        /// </summary>
+        internal bool ConsumePlayerPlacedSpawnable(Entity entity, long now)
+        {
+            if (entity == Entity.Null || !EntityManager.Exists(entity) ||
+                !EntityManager.HasComponent<PrefabRef>(entity) ||
+                !EntityManager.HasComponent<global::Game.Objects.Transform>(entity)) return false;
+
+            Entity prefab = EntityManager.GetComponentData<PrefabRef>(entity).m_Prefab;
+            if (prefab == Entity.Null || !EntityManager.Exists(prefab) ||
+                !EntityManager.HasComponent<SpawnableBuildingData>(prefab)) return false;
+
+            PrunePlayerPlacedSpawnables(now);
+            global::Game.Objects.Transform transform =
+                EntityManager.GetComponentData<global::Game.Objects.Transform>(entity);
+            float4 rotation = math.normalizesafe(transform.m_Rotation.value,
+                new float4(0f, 0f, 0f, 1f));
+            bool hasSeed = EntityManager.HasComponent<PseudoRandomSeed>(entity);
+            ushort seed = hasSeed
+                ? EntityManager.GetComponentData<PseudoRandomSeed>(entity).m_Seed
+                : (ushort)0;
+
+            for (int i = _playerPlacedSpawnableCreations.Count - 1; i >= 0; i--)
+            {
+                PlayerPlacedSpawnableCreation candidate =
+                    _playerPlacedSpawnableCreations[i];
+                if (candidate.Prefab != prefab ||
+                    !hasSeed || candidate.RandomSeed != seed) continue;
+
+                // Attachment resolution can snap and rotate the committed visible building away
+                // from its prefab-local definition. Seed + prefab remain exact; use the same
+                // bounded transform envelope as committed-root correlation for an attached live
+                // instance, while ordinary roots retain the strict 10 cm/orientation match.
+                bool attached = EntityManager.HasComponent<global::Game.Objects.Attached>(entity);
+                bool transformMatches = attached
+                    ? math.distancesq(candidate.Position.xz, transform.m_Position.xz) <=
+                          AttachedPlayerPlacedSpawnableMatchRadiusSq &&
+                      math.abs(candidate.Position.y - transform.m_Position.y) <=
+                          AttachedPlayerPlacedSpawnableMatchHeight
+                    : math.distancesq(candidate.Position, transform.m_Position) <=
+                          PlayerPlacedSpawnableMatchDistanceSq &&
+                      math.abs(math.dot(candidate.Rotation, rotation)) >=
+                          PlayerPlacedSpawnableMatchRotationDot;
+                if (!transformMatches) continue;
+
+                _playerPlacedSpawnableCreations.RemoveAt(i);
+                Diagnostics.FlightRecorder.Note("player-placed spawnable guard consumed");
+                return true;
+            }
+
+            return IsLiveSpecializedIndustrySpawnable(entity, prefab);
+        }
+
+        private void RememberPlayerPlacedSpawnables(ObjectToolOperationCommand operation, long now)
+        {
+            if (!IsSpecializedIndustryPlacement(operation)) return;
+            PrunePlayerPlacedSpawnables(now);
+
+            int remembered = 0;
+            for (int i = 0; i < operation.Definitions.Length; i++)
+            {
+                ObjectToolDefinitionIntent definition = operation.Definitions[i];
+                Entity prefab;
+                if (definition == null || definition.Kind != ObjectToolDefinitionKind.Object ||
+                    definition.PrefabIsNull ||
+                    !_prefabIndex.TryResolve(definition.PrefabName, out prefab) ||
+                    !IsAllowedSpecializedSpawnable(operation, i, prefab)) continue;
+
+                var candidate = new PlayerPlacedSpawnableCreation
+                {
+                    Prefab = prefab,
+                    Position = new float3(definition.Object.PosX, definition.Object.PosY,
+                        definition.Object.PosZ),
+                    Rotation = math.normalizesafe(new float4(definition.Object.RotX,
+                            definition.Object.RotY, definition.Object.RotZ,
+                            definition.Object.RotW),
+                        new float4(0f, 0f, 0f, 1f)),
+                    RandomSeed = unchecked((ushort)definition.RandomSeed),
+                    ExpiryMs = now > 0 ? now + PlayerPlacedSpawnableLifetimeMs : long.MaxValue,
+                };
+
+                bool duplicate = false;
+                for (int j = _playerPlacedSpawnableCreations.Count - 1; j >= 0; j--)
+                {
+                    PlayerPlacedSpawnableCreation existing =
+                        _playerPlacedSpawnableCreations[j];
+                    if (existing.Prefab != candidate.Prefab ||
+                        existing.RandomSeed != candidate.RandomSeed ||
+                        math.distancesq(existing.Position, candidate.Position) >
+                        PlayerPlacedSpawnableMatchDistanceSq ||
+                        math.abs(math.dot(existing.Rotation, candidate.Rotation)) <
+                        PlayerPlacedSpawnableMatchRotationDot) continue;
+                    _playerPlacedSpawnableCreations[j] = candidate;
+                    duplicate = true;
+                    break;
+                }
+                if (duplicate) continue;
+
+                if (_playerPlacedSpawnableCreations.Count >=
+                    MaxPlayerPlacedSpawnableCreations)
+                    _playerPlacedSpawnableCreations.RemoveAt(0);
+                _playerPlacedSpawnableCreations.Add(candidate);
+                remembered++;
+            }
+
+            if (remembered > 0)
+                Diagnostics.FlightRecorder.Note("player-placed spawnable guard armed=" +
+                                                  remembered);
+        }
+
+        private void PrunePlayerPlacedSpawnables(long now)
+        {
+            if (now <= 0) return;
+            for (int i = _playerPlacedSpawnableCreations.Count - 1; i >= 0; i--)
+                if (_playerPlacedSpawnableCreations[i].ExpiryMs <= now)
+                    _playerPlacedSpawnableCreations.RemoveAt(i);
+        }
+
+        private void ClearPlayerPlacedSpawnables()
+        {
+            _playerPlacedSpawnableCreations.Clear();
         }
 
         private bool TryCaptureObjectToolDefinition(Entity entity,

@@ -27,7 +27,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 {
                     Entity entity = entities[i];
                     Entity prefab = EntityManager.GetComponentData<PrefabRef>(entity).m_Prefab;
-                    if (!IsGrowablePrefab(prefab)) continue;
+                    if (!IsAutonomousGrowable(entity, now)) continue;
 
                     string name = PrefabIndexSafeName(prefab);
                     if (string.IsNullOrEmpty(name)) continue;
@@ -92,7 +92,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 {
                     Entity entity = entities[i];
                     Entity prefab = EntityManager.GetComponentData<PrefabRef>(entity).m_Prefab;
-                    if (!IsGrowablePrefab(prefab)) continue;
+                    if (!IsAutonomousGrowable(entity, now)) continue;
                     if (_deleteSync != null && _deleteSync.IsToolDeleteOriginal(entity)) continue;
 
                     string name = PrefabIndexSafeName(prefab);
@@ -148,6 +148,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     // A freshly grown building is also under construction, but with no replacement
                     // prefab. Its spawn command already carried everything the peer needs.
                     if (newPrefab == Entity.Null) continue;
+                    if (!IsAutonomousGrowable(entity, now)) continue;
                     if (!IsGrowablePrefab(newPrefab)) continue;
 
                     Entity announced;

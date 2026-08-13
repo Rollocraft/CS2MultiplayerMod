@@ -129,7 +129,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 // Already standing, same building, same lot: a redelivery whose sequence has aged
                 // out of the replay window. Rebuilding it would be the duplicate this whole path
                 // exists to prevent.
-                if (AlreadySatisfied(blockers, prefab, position))
+                if (AlreadySatisfied(blockers, prefab, position, now))
                 {
                     _duplicates++;
                     _applied.Remember(command.Sequence, now, ReplayWindowMs);
@@ -138,7 +138,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     return true;
                 }
 
-                Entity placedBlocker = FirstPlayerPlaced(blockers);
+                Entity placedBlocker = FirstPlayerPlaced(blockers, now);
                 if (placedBlocker != Entity.Null)
                 {
                     // A building a player put here by hand outranks a grown one: the host's own
@@ -147,7 +147,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     _conflicts++;
                     _applied.Remember(command.Sequence, now, ReplayWindowMs);
                     Mod.log.Warn("[MP] GrowableSync conflict: '" + command.PrefabName + "' at " +
-                                 Format(position) + " overlaps " + DescribeBlocker(placedBlocker) +
+                                 Format(position) + " overlaps " +
+                                 DescribeBlocker(placedBlocker, now) +
                                  "; spawn refused (seq=" + command.Sequence + ").");
                     Diagnostics.FlightRecorder.Note("growable spawn refused (placed building)");
                     return true;
@@ -160,7 +161,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 {
                     _conflicts++;
                     Mod.log.Warn("[MP] GrowableSync conflict: evicting locally grown " +
-                                 DescribeBlocker(blockers[i]) + " for the host's '" +
+                                 DescribeBlocker(blockers[i], now) + " for the host's '" +
                                  command.PrefabName + "' at " + Format(position) + ".");
                     EntityManager.AddComponent<Deleted>(blockers[i]);
                     Diagnostics.FlightRecorder.Note("growable evicted for host spawn");
@@ -203,7 +204,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 return true;
             }
 
-            Entity building = FindGrowableAt(position, Entity.Null);
+            Entity building = FindGrowableAt(position, Entity.Null, now);
             if (building == Entity.Null)
             {
                 _unmatched++;
@@ -256,7 +257,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
             Entity prefab;
             _prefabIndex.TryResolve(command.PrefabName, out prefab);
-            Entity building = FindGrowableAt(position, prefab);
+            Entity building = FindGrowableAt(position, prefab, now);
             if (building == Entity.Null)
             {
                 // Nothing to remove. Convergent either way: the building this refers to was never
@@ -282,7 +283,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             Entity prefab;
             _prefabIndex.TryResolve(command.PrefabName, out prefab);
 
-            Entity building = FindGrowableAt(position, prefab);
+            Entity building = FindGrowableAt(position, prefab, now);
             if (building == Entity.Null)
             {
                 _unmatched++;
@@ -334,7 +335,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         /// geometry on both machines, so the tolerance only absorbs float noise and a terrain
         /// height that was sampled independently.
         /// </summary>
-        private Entity FindGrowableAt(float3 position, Entity prefab)
+        private Entity FindGrowableAt(float3 position, Entity prefab, long now)
         {
             var candidates = new NativeList<Entity>(16, Allocator.Temp);
             try
@@ -348,7 +349,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 for (int i = 0; i < candidates.Length; i++)
                 {
                     Entity candidate = candidates[i];
-                    if (!IsLiveGrowable(candidate)) continue;
+                    if (!IsLiveGrowable(candidate, now)) continue;
 
                     float distance = math.distancesq(
                         EntityManager.GetComponentData<global::Game.Objects.Transform>(candidate)
@@ -433,11 +434,13 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         /// lot is the redelivery case; a different prefab at the same anchor is a real level
         /// difference and has to be resolved, not ignored.
         /// </summary>
-        private bool AlreadySatisfied(NativeList<Entity> blockers, Entity prefab, float3 position)
+        private bool AlreadySatisfied(NativeList<Entity> blockers, Entity prefab, float3 position,
+            long now)
         {
             for (int i = 0; i < blockers.Length; i++)
             {
                 Entity blocker = blockers[i];
+                if (!IsAutonomousGrowable(blocker, now)) continue;
                 if (EntityManager.GetComponentData<PrefabRef>(blocker).m_Prefab != prefab) continue;
                 float distance = math.distancesq(
                     EntityManager.GetComponentData<global::Game.Objects.Transform>(blocker)
@@ -448,12 +451,11 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         }
 
         /// <summary>A building a player placed, as opposed to one a simulation grew.</summary>
-        private Entity FirstPlayerPlaced(NativeList<Entity> blockers)
+        private Entity FirstPlayerPlaced(NativeList<Entity> blockers, long now)
         {
             for (int i = 0; i < blockers.Length; i++)
             {
-                Entity prefab = EntityManager.GetComponentData<PrefabRef>(blockers[i]).m_Prefab;
-                if (!IsGrowablePrefab(prefab)) return blockers[i];
+                if (!IsAutonomousGrowable(blockers[i], now)) return blockers[i];
             }
             return Entity.Null;
         }
@@ -497,7 +499,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             return math.abs(math.dot(delta, axis)) > reachA + reachB;
         }
 
-        private bool IsLiveGrowable(Entity entity) =>
+        private bool IsLiveGrowable(Entity entity, long now) =>
             EntityManager.Exists(entity) &&
             EntityManager.HasComponent<Building>(entity) &&
             EntityManager.HasComponent<PrefabRef>(entity) &&
@@ -505,13 +507,13 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             !EntityManager.HasComponent<Temp>(entity) &&
             !EntityManager.HasComponent<Deleted>(entity) &&
             !EntityManager.HasComponent<Owner>(entity) &&
-            IsGrowablePrefab(EntityManager.GetComponentData<PrefabRef>(entity).m_Prefab);
+            IsAutonomousGrowable(entity, now);
 
-        private string DescribeBlocker(Entity blocker)
+        private string DescribeBlocker(Entity blocker, long now)
         {
             Entity prefab = EntityManager.GetComponentData<PrefabRef>(blocker).m_Prefab;
             string name = PrefabIndexSafeName(prefab);
-            bool grown = IsGrowablePrefab(prefab);
+            bool grown = IsAutonomousGrowable(blocker, now);
             return (grown ? "a grown '" : "a placed '") + (name ?? "?") + "'";
         }
 
@@ -567,7 +569,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 {
                     Entity entity = entities[i];
                     Entity prefab = EntityManager.GetComponentData<PrefabRef>(entity).m_Prefab;
-                    if (!IsGrowablePrefab(prefab)) continue;
+                    if (!IsAutonomousGrowable(entity, now)) continue;
 
                     float3 position = EntityManager
                         .GetComponentData<global::Game.Objects.Transform>(entity).m_Position;

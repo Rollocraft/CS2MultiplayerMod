@@ -318,10 +318,12 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         {
             BuildSyncSystem buildSync = World.GetExistingSystemManaged<BuildSyncSystem>();
             if ((buildSync != null && buildSync.NativeLifecycleCapturedThisFrame) ||
-                (_netSync != null && _netSync.DidCommitObjectGraphThisFrame))
+                (_netSync != null && (_netSync.DidCommitObjectGraphThisFrame ||
+                                      _netSync.LocalAtomicNetApplyCapturedThisFrame)))
             {
-                // The native object graph already carries these mutations. Advance the baseline so
-                // a later unrelated Updated tag cannot rediscover them as a delayed replacement.
+                // A native object graph or atomic mixed net-tool envelope already carries these
+                // mutations. Advance the baseline so a later unrelated Updated tag cannot
+                // rediscover them as a delayed replacement.
                 AdoptUpdatedEdges();
                 _expectedMixedGeometryChanges.Clear();
                 return;

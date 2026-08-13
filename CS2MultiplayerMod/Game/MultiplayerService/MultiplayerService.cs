@@ -4,7 +4,6 @@ using System.Diagnostics;
 using CS2MultiplayerMod.Core.Diagnostics;
 using CS2MultiplayerMod.Core.Protocol.Messages;
 using CS2MultiplayerMod.Core.Session;
-using CS2MultiplayerMod.Game.Sync.Commands;
 
 namespace CS2MultiplayerMod.Game
 {
@@ -77,18 +76,7 @@ namespace CS2MultiplayerMod.Game
             // a client may receive, and the complete set of gameplay command ids. A peer
             // sending anything outside these is disconnected.
             _session.AllowBlobChannel(MapChannel, MaxSaveBlobBytes);
-            _session.AllowCommands(
-                ObjectPlacementCommand.Id, NetPlacementCommand.Id,
-                ObjectDeleteCommand.Id, NetDeleteCommand.Id,
-                ZonePaintCommand.Id, TerrainBrushCommand.Id,
-                UpgradePlacementCommand.Id, ObjectMoveCommand.Id, NetUpgradeCommand.Id,
-                AreaCreateCommand.Id, AreaUpdateCommand.Id, AreaDeleteCommand.Id,
-                OwnedAreaSnapshotCommand.Id,
-                RouteCreateCommand.Id, RouteUpdateCommand.Id, RouteDeleteCommand.Id,
-                TilePurchaseCommand.Id, EntityPolicyCommand.Id, DevTreePurchaseCommand.Id,
-                NetReplaceCommand.Id, ObjectToolOperationCommand.Id, AssetStampCommand.Id,
-                VisualCustomizationCommand.Id, ColorPaletteCommand.Id,
-                DisasterEventCommand.Id, EntityNameCommand.Id);
+            GameplayCommandRegistry.Register(_session);
         }
 
         public MultiplayerSession Session => _session;
@@ -176,36 +164,7 @@ namespace CS2MultiplayerMod.Game
 
         private static string CommandName(ushort id)
         {
-            switch (id)
-            {
-                case ObjectPlacementCommand.Id: return "object-place";
-                case NetPlacementCommand.Id: return "net-place";
-                case ObjectDeleteCommand.Id: return "object-delete";
-                case NetDeleteCommand.Id: return "net-delete";
-                case ZonePaintCommand.Id: return "zone-paint";
-                case TerrainBrushCommand.Id: return "terrain-brush";
-                case UpgradePlacementCommand.Id: return "building-upgrade";
-                case ObjectMoveCommand.Id: return "object-move";
-                case ObjectToolOperationCommand.Id: return "object-native-operation";
-                case AssetStampCommand.Id: return "asset-stamp";
-                case NetUpgradeCommand.Id: return "net-upgrade";
-                case AreaCreateCommand.Id: return "area-create";
-                case AreaDeleteCommand.Id: return "area-delete";
-                case RouteCreateCommand.Id: return "route-create";
-                case RouteDeleteCommand.Id: return "route-delete";
-                case TilePurchaseCommand.Id: return "tile-purchase";
-                case EntityPolicyCommand.Id: return "policy-edit";
-                case AreaUpdateCommand.Id: return "area-update";
-                case OwnedAreaSnapshotCommand.Id: return "owned-area-snapshot";
-                case RouteUpdateCommand.Id: return "route-update";
-                case DevTreePurchaseCommand.Id: return "dev-tree-purchase";
-                case NetReplaceCommand.Id: return "net-replace";
-                case VisualCustomizationCommand.Id: return "visual-customization";
-                case ColorPaletteCommand.Id: return "color-palette";
-                case DisasterEventCommand.Id: return "disaster-event";
-                case EntityNameCommand.Id: return "entity-name";
-                default: return "unknown";
-            }
+            return GameplayCommandRegistry.Name(id);
         }
 
         // All Status*/UiStatus* texts are re-read every UI frame by the options screen
@@ -445,12 +404,15 @@ namespace CS2MultiplayerMod.Game
                 if (status == SessionStatus.Connected && _service._session.Role == SessionRole.Host)
                 {
                     _service.AppendChatEntry(null, "Session started - players can join now.");
-                    if (_service._session.PublicExposure)
-                        _service.AppendChatEntry(null, "Friends from another network can only join if you forward TCP port " +
-                            _service._session.Port + " to this PC on your router and allow it through your firewall.");
-                    else
-                        _service.AppendChatEntry(null, "LAN-only is enabled - only players on your local network can join. " +
-                            "If they cannot connect, allow TCP port " + _service._session.Port + " through your firewall.");
+                    if (!_service._session.UsesRelay)
+                    {
+                        if (_service._session.PublicExposure)
+                            _service.AppendChatEntry(null, "Friends from another network can only join if you forward TCP port " +
+                                _service._session.Port + " to this PC on your router and allow it through your firewall.");
+                        else
+                            _service.AppendChatEntry(null, "LAN-only is enabled - only players on your local network can join. " +
+                                "If they cannot connect, allow TCP port " + _service._session.Port + " through your firewall.");
+                    }
                 }
                 else if (status == SessionStatus.Connected && _service._session.Role == SessionRole.Client)
                 {

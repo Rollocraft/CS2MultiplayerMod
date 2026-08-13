@@ -170,6 +170,15 @@ namespace CS2MultiplayerMod.Game.Sync.Commands
 
         public long OperationId;
         public short RootIndex;
+        /// <summary>
+        /// The compact input for a rooted object placement. The exact definition graph remains in
+        /// <see cref="Definitions"/> as a compatibility fallback, while receivers that can reach
+        /// the native generator rebuild ordinary and specialized-industry buildings against their
+        /// own road subdivision.
+        /// </summary>
+        public bool HasPlacementInput;
+        public uint ToolRandomSeed;
+        public PortableEntityRef PlacementTarget;
         public string AssetStampPrefabName;
         public ObjectToolDefinitionIntent[] Definitions;
 
@@ -185,6 +194,12 @@ namespace CS2MultiplayerMod.Game.Sync.Commands
             writer.WriteLong(OperationId);
             writer.WriteShort(RootIndex);
             writer.WriteShort((short)Definitions.Length);
+            writer.WriteBool(HasPlacementInput);
+            if (HasPlacementInput)
+            {
+                writer.WriteInt(unchecked((int)ToolRandomSeed));
+                WriteEntityRef(writer, PlacementTarget);
+            }
             if (IsAssetStamp) writer.WriteString(AssetStampPrefabName);
             for (int i = 0; i < Definitions.Length; i++) WriteDefinition(writer, Definitions[i]);
         }
@@ -198,6 +213,12 @@ namespace CS2MultiplayerMod.Game.Sync.Commands
             int count = WireGuard.ReadCount(reader, 2, MaxDefinitions);
             if (count == 0 || RootIndex < AssetStampRootIndex || RootIndex >= count)
                 throw new ProtocolException("Invalid object-tool root/count " + RootIndex + "/" + count + ".");
+            HasPlacementInput = reader.ReadBool();
+            if (HasPlacementInput)
+            {
+                ToolRandomSeed = unchecked((uint)reader.ReadInt());
+                PlacementTarget = ReadEntityRef(reader);
+            }
             if (IsAssetStamp) AssetStampPrefabName = WireGuard.ReadName(reader);
 
             Definitions = new ObjectToolDefinitionIntent[count];
@@ -221,9 +242,23 @@ namespace CS2MultiplayerMod.Game.Sync.Commands
                     throw new ProtocolException("Object-tool root must be an object definition.");
                 if (!string.IsNullOrEmpty(AssetStampPrefabName))
                     throw new ProtocolException("A rooted object operation may not name an asset stamp.");
+                if (HasPlacementInput)
+                {
+                    ObjectToolDefinitionIntent root = Definitions[RootIndex];
+                    // The game's tool seed is opaque; zero is a valid 32-bit generator input.
+                    if (root.PrefabIsNull ||
+                        string.IsNullOrEmpty(root.PrefabName) ||
+                        root.Original.Kind != PortableEntityKind.None ||
+                        root.Owner.Kind != PortableEntityKind.None ||
+                        root.HasOwnerDefinition)
+                        throw new ProtocolException(
+                            "Compact placement input requires one new named top-level object.");
+                }
                 return;
             }
 
+            if (HasPlacementInput)
+                throw new ProtocolException("A rootless asset stamp may not carry placement input.");
             if (string.IsNullOrEmpty(AssetStampPrefabName))
                 throw new ProtocolException("A rootless asset-stamp operation has no stamp prefab.");
 

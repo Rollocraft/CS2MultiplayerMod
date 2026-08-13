@@ -384,8 +384,25 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         /// </summary>
         private bool CreateEdgeDeleteDef(Entity edge)
         {
-            if (!EntityManager.Exists(edge) || EntityManager.HasComponent<Deleted>(edge)) return false;
-            if (!EntityManager.HasComponent<Curve>(edge) || !EntityManager.HasComponent<Edge>(edge)) return false;
+            return CreateEdgeDeleteDefEntity(edge) != Entity.Null;
+        }
+
+        /// <summary>Add a bulldoze definition to a caller-owned atomic net transaction.</summary>
+        internal Entity CreateAtomicEdgeDeleteDef(Entity edge, string prefabName,
+            Bezier4x3 liveCurve, long now)
+        {
+            return CreateEdgeDeleteDefEntity(edge);
+        }
+
+        internal void MarkAtomicEdgeDelete(string prefabName, Bezier4x3 liveCurve, long now) =>
+            _guard.Mark(DeleteKey(prefabName, liveCurve.a), now);
+
+        private Entity CreateEdgeDeleteDefEntity(Entity edge)
+        {
+            if (!EntityManager.Exists(edge) || EntityManager.HasComponent<Deleted>(edge)) return Entity.Null;
+            if (!EntityManager.HasComponent<Curve>(edge) || !EntityManager.HasComponent<Edge>(edge)) return Entity.Null;
+            Entity def = Entity.Null;
+            bool completed = false;
             try
             {
                 Bezier4x3 curve = EntityManager.GetComponentData<Curve>(edge).m_Bezier;
@@ -395,7 +412,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 int fixedIndex = EntityManager.HasComponent<global::Game.Net.Fixed>(edge)
                     ? EntityManager.GetComponentData<global::Game.Net.Fixed>(edge).m_Index
                     : -1;
-                Entity def = EntityManager.CreateEntity();
+                def = EntityManager.CreateEntity();
                 EntityManager.AddComponentData(def, new CreationDefinition
                 {
                     m_Original = edge,
@@ -426,12 +443,18 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 // end (Deleted) — same recipe as the build path's courses. Without it stale
                 // definitions linger until a build tool's own destroy pass happens to run.
                 EntityManager.AddComponent<Deleted>(def);
-                return true;
+                completed = true;
+                return def;
             }
             catch (System.Exception ex)
             {
                 Mod.log.Warn("[MP] DeleteSync: failed to build edge delete-definition: " + ex.Message);
-                return false;
+                return Entity.Null;
+            }
+            finally
+            {
+                if (!completed && def != Entity.Null && EntityManager.Exists(def))
+                    EntityManager.DestroyEntity(def);
             }
         }
 

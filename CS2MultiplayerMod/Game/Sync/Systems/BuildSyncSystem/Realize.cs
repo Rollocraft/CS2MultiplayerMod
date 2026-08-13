@@ -33,22 +33,28 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         /// </summary>
         private const int MaxRealizePerFrame = 8;
 
-        /// <summary>A same-prefab object standing this close is the same placement arriving twice —
-        /// the sender's own overlap validation keeps distinct placements further apart.</summary>
+        /// <summary>Broad search radius for replay candidates. Nearness alone is not identity.</summary>
         private const float DuplicateRadiusSq = 1.5f * 1.5f;
         private const float DuplicateMaxDy = 3f;
+        /// <summary>One centimetre squared: an exact overlap is a real simultaneous conflict.</summary>
+        private const float ExactDuplicateDistanceSq = 0.0001f;
 
         private int _rzFrameSpawned;
         private int _rzFrameDuplicates;
-        private readonly System.Collections.Generic.List<(Entity prefab, float3 position)> _rzRealizedThisFrame =
-            new System.Collections.Generic.List<(Entity, float3)>();
+        private readonly System.Collections.Generic.List<
+            (Entity prefab, float3 position, int randomSeed, quaternion rotation,
+                ObjectAttachKind attachKind)> _rzRealizedThisFrame =
+            new System.Collections.Generic.List<
+                (Entity, float3, int, quaternion, ObjectAttachKind)>();
+        private NativeArray<Entity> _dupEntities;
         private NativeArray<global::Game.Objects.Transform> _dupTransforms;
         private NativeArray<PrefabRef> _dupPrefabs;
         private bool _dupSnapshotTaken;
 
         private void RealizeIncoming(MultiplayerSession session, long now)
         {
-            if (_incoming.IsEmpty && _attachRetry.Count == 0 && !_hasBlockedNativeObject) return;
+            if (_incoming.IsEmpty && _nativeObjectReplayPrefix.Count == 0 &&
+                _attachRetry.Count == 0 && !_hasBlockedNativeObject) return;
 
             PruneNativeObjectOperations(now);
             if (_nativeNetCoordinator.IsCommitBusy) return;
@@ -69,7 +75,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 {
                     var note = new StringBuilder("build realize n=").Append(_rzFrameSpawned);
                     if (_rzFrameDuplicates > 0) note.Append(" dup=").Append(_rzFrameDuplicates);
-                    int held = _incoming.Count;
+                    int held = _incoming.Count + _nativeObjectReplayPrefix.Count;
                     if (held > 0) note.Append(" held=").Append(held);
                     AppendRealizedNames(note);
                     Diagnostics.FlightRecorder.Note(note.ToString());
@@ -79,6 +85,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             {
                 if (_dupSnapshotTaken)
                 {
+                    _dupEntities.Dispose();
                     _dupTransforms.Dispose();
                     _dupPrefabs.Dispose();
                     _dupSnapshotTaken = false;
@@ -89,7 +96,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         private void DrainIncoming(MultiplayerSession session, long now)
         {
             SimulationCommandMessage message;
-            while (_rzFrameSpawned < MaxRealizePerFrame && _incoming.TryDequeue(out message))
+            while (_rzFrameSpawned < MaxRealizePerFrame && TryTakeNextObjectMessage(out message))
             {
                 // Our own placement coming back to us — already built locally.
                 if (message.OriginPlayerId == session.LocalPlayerId) continue;
@@ -134,10 +141,12 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 if (RequiresCompleteObjectLifecycle(prefab))
                 {
                     // A reduced command can't represent a building's owned graph; the native
-                    // object-tool path owns those. Drop this stray reduced command rather than
-                    // freeze the world for it.
+                    // object-tool path owns those. This should not be emitted by v38 senders; if it
+                    // arrives, recover rather than silently accepting a missing building.
                     Mod.log.Warn("[MP] BuildSync realize: reduced placement for spatial object '" +
-                                 command.PrefabName + "' was dropped (handled by the native path).");
+                                 command.PrefabName +
+                                 "' was rejected; requesting world recovery.");
+                    SyncInbox.RequestResync("reduced spatial object placement rejected");
                     continue;
                 }
 
@@ -149,8 +158,10 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     {
                         _attachRetry.Clear();
                         Mod.log.Warn("[MP] BuildSync: attachment retry queue overflowed; dropping the " +
-                                     "backlog of unattached net objects rather than freezing the world.");
-                        Diagnostics.FlightRecorder.Note("attachment retry queue overflow dropped");
+                                     "incomplete backlog and requesting world recovery.");
+                        Diagnostics.FlightRecorder.Note(
+                            "attachment retry queue overflow; recovery requested");
+                        SyncInbox.RequestResync("object attachment retry queue overflow");
                         return;
                     }
                     _attachRetry.Add((command, prefab, message.OriginPlayerId, now + AttachRetryWindowMs));
@@ -159,6 +170,17 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
                 RealizeCommand(command, prefab, message.OriginPlayerId, now);
             }
+        }
+
+        private bool TryTakeNextObjectMessage(out SimulationCommandMessage message)
+        {
+            if (_nativeObjectReplayPrefix.Count > 0)
+            {
+                message = _nativeObjectReplayPrefix[0];
+                _nativeObjectReplayPrefix.RemoveAt(0);
+                return true;
+            }
+            return _incoming.TryDequeue(out message);
         }
 
         /// <summary>Re-attempt net objects whose parent node was missing; give up after the window.</summary>
@@ -176,13 +198,15 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 }
                 else if (now >= pending.deadline)
                 {
-                    // The parent road never reached us. Drop the net object (it would only strand as
-                    // an inert prop anyway) instead of looping the world through recovery.
+                    // The parent road never reached us. The prop cannot safely be created without
+                    // it, but silently dropping it leaves known divergence.
                     _attachRetry.RemoveAt(i);
                     Mod.log.Warn("[MP] BuildSync realize: no local road for '" + pending.command.PrefabName +
                                  "' after " + (AttachRetryWindowMs / 1000) +
-                                 " s; dropping this attachment (use /sync if the city drifts).");
-                    Diagnostics.FlightRecorder.Note("attachment target dropped after retry window");
+                                 " s; requesting world recovery.");
+                    Diagnostics.FlightRecorder.Note(
+                        "attachment target expired; recovery requested");
+                    SyncInbox.RequestResync("object attachment target did not resolve");
                 }
             }
         }
@@ -197,7 +221,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             // The same placement arriving twice (a replayed message, a lagged echo) would stack a
             // second building exactly inside the first — geometry the sender's own validation can
             // never produce, and native systems don't tolerate what the tools forbid.
-            if (AlreadyStandsAt(prefab, position))
+            if (AlreadyStandsAt(command, prefab, position, rotation))
             {
                 _rzFrameDuplicates++;
                 return;
@@ -213,7 +237,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     command.RandomSeed, command.Age);
                 ConstructionCharger.ChargeObject(EntityManager, prefab, command.PrefabName);
                 _rzFrameSpawned++;
-                _rzRealizedThisFrame.Add((prefab, position));
+                _rzRealizedThisFrame.Add((prefab, position, command.RandomSeed, rotation,
+                    command.AttachKind));
                 Mod.Verbose("[MP] BuildSync realize: spawned '" + command.PrefabName + "' from player " +
                             originPlayerId + " at (" + position.x.ToString("F1") + "," +
                             position.z.ToString("F1") + ").");
@@ -222,27 +247,42 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             {
                 Mod.log.Error("[MP] BuildSync realize FAILED for '" + command.PrefabName + "': " + ex);
                 Diagnostics.FlightRecorder.Note("build realize FAILED '" + command.PrefabName + "': "
-                    + ex.GetType().Name);
+                    + ex.GetType().Name + "; recovery requested");
+                SyncInbox.RequestResync("object placement realization failed");
             }
         }
 
         /// <summary>
-        /// True when a live same-prefab object (or one spawned earlier this frame) stands within
-        /// <see cref="DuplicateRadiusSq"/> of <paramref name="position"/>. The world snapshot is
-        /// taken once per frame, only on frames that realize something.
+        /// True when a live same-prefab object (or one spawned earlier this frame) has the same
+        /// replay identity inside <see cref="DuplicateRadiusSq"/>, or occupies the exact transform.
+        /// The world snapshot is taken once per frame, only on frames that realize something.
         /// </summary>
-        private bool AlreadyStandsAt(Entity prefab, float3 position)
+        private bool AlreadyStandsAt(ObjectPlacementCommand command, Entity prefab,
+            float3 position, quaternion rotation)
         {
             for (int i = 0; i < _rzRealizedThisFrame.Count; i++)
             {
-                if (_rzRealizedThisFrame[i].prefab != prefab) continue;
+                if (_rzRealizedThisFrame[i].prefab != prefab ||
+                    _rzRealizedThisFrame[i].attachKind != command.AttachKind) continue;
                 float3 p = _rzRealizedThisFrame[i].position;
-                if (math.distancesq(p.xz, position.xz) < DuplicateRadiusSq
-                    && math.abs(p.y - position.y) <= DuplicateMaxDy) return true;
+                float rotationDot = math.abs(math.dot(
+                    _rzRealizedThisFrame[i].rotation.value, rotation.value));
+                // If both players chose the identical transform before seeing one another, keeping
+                // one object is safer than bypassing the game's overlap validation and stacking two.
+                if (math.distancesq(p, position) <= ExactDuplicateDistanceSq &&
+                    (command.AttachKind != ObjectAttachKind.None || rotationDot >= 0.99999f))
+                    return true;
+                if (math.distancesq(p.xz, position.xz) >= DuplicateRadiusSq ||
+                    math.abs(p.y - position.y) > DuplicateMaxDy ||
+                    unchecked((ushort)_rzRealizedThisFrame[i].randomSeed) !=
+                    unchecked((ushort)command.RandomSeed)) continue;
+                if (command.AttachKind == ObjectAttachKind.None && rotationDot < 0.9999f) continue;
+                return true;
             }
 
             if (!_dupSnapshotTaken)
             {
+                _dupEntities = _liveStaticObjects.ToEntityArray(Allocator.Temp);
                 _dupTransforms = _liveStaticObjects.ToComponentDataArray<global::Game.Objects.Transform>(Allocator.Temp);
                 _dupPrefabs = _liveStaticObjects.ToComponentDataArray<PrefabRef>(Allocator.Temp);
                 _dupSnapshotTaken = true;
@@ -251,8 +291,42 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             {
                 if (_dupPrefabs[i].m_Prefab != prefab) continue;
                 float3 p = _dupTransforms[i].m_Position;
-                if (math.distancesq(p.xz, position.xz) < DuplicateRadiusSq
-                    && math.abs(p.y - position.y) <= DuplicateMaxDy) return true;
+                if (math.distancesq(p.xz, position.xz) >= DuplicateRadiusSq ||
+                    math.abs(p.y - position.y) > DuplicateMaxDy) continue;
+
+                Entity candidate = _dupEntities[i];
+                bool attached = EntityManager.HasComponent<global::Game.Objects.Attached>(candidate);
+                if ((command.AttachKind != ObjectAttachKind.None) != attached) continue;
+                if (attached)
+                {
+                    Entity parent = EntityManager
+                        .GetComponentData<global::Game.Objects.Attached>(candidate).m_Parent;
+                    bool parentMatchesKind = parent != Entity.Null && EntityManager.Exists(parent) &&
+                        (command.AttachKind == ObjectAttachKind.NetNode
+                            ? EntityManager.HasComponent<global::Game.Net.Node>(parent)
+                            : EntityManager.HasComponent<global::Game.Net.Edge>(parent));
+                    if (!parentMatchesKind) continue;
+                }
+
+                float rotationDot = attached ? 1f : math.abs(math.dot(
+                    math.normalizesafe(_dupTransforms[i].m_Rotation.value,
+                        new float4(0f, 0f, 0f, 1f)), rotation.value));
+                if (math.distancesq(p, position) <= ExactDuplicateDistanceSq &&
+                    rotationDot >= 0.99999f) return true;
+
+                // Proximity is not enough to prove a replay. If the standing entity has no variant
+                // identity, keep the new command instead of suppressing a legitimate close build.
+                if (!EntityManager.HasComponent<PseudoRandomSeed>(candidate) ||
+                    unchecked((ushort)EntityManager
+                        .GetComponentData<PseudoRandomSeed>(candidate).m_Seed) !=
+                    unchecked((ushort)command.RandomSeed)) continue;
+
+                // Attached props can be rotated by the attachment pass after placement. Their
+                // prefab, variant seed and bounded position still form the replay identity. For
+                // free-standing props, require the original orientation as well so two intentional
+                // close placements are not mistaken for one another.
+                if (!attached && rotationDot < 0.9999f) continue;
+                return true;
             }
             return false;
         }

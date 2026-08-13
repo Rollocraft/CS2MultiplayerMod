@@ -17,6 +17,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
     {
         private const long NativeObjectTargetRetryMs = 10000;
         private const long NativeObjectReplayRememberMs = 60000;
+        private const int MaxNativeObjectReplayPrefix = 32;
 
         private struct NativeObjectOperationKey : System.IEquatable<NativeObjectOperationKey>
         {
@@ -58,6 +59,11 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         private long _blockedNativeObjectDeadline;
         private long _blockedNativeObjectNextAttemptMs;
         private string _lastUnresolvedObjectReason;
+        // Commit validation can reject an operation after it left the network inbox. Replays must
+        // return ahead of later commands, and more than one can become ready while another ordered
+        // target is retrying. A bounded prefix avoids the former single-slot collision/drop.
+        private readonly List<SimulationCommandMessage> _nativeObjectReplayPrefix =
+            new List<SimulationCommandMessage>(MaxNativeObjectReplayPrefix);
         private readonly CS2MultiplayerMod.Core.Sync.OperationReplayWindow<NativeObjectOperationKey>
             _recentNativeObjectOperations =
                 new CS2MultiplayerMod.Core.Sync.OperationReplayWindow<NativeObjectOperationKey>();
@@ -205,6 +211,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             _blockedNativeObjectDeadline = 0;
             _blockedNativeObjectNextAttemptMs = 0;
             _lastUnresolvedObjectReason = null;
+            _nativeObjectReplayPrefix.Clear();
             _recentNativeObjectOperations.Clear();
         }
 
@@ -224,15 +231,37 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             if (result == NativeObjectResult.Retry)
             {
                 if (now < _blockedNativeObjectDeadline) return false;
-                // The road/building/area this edit references never arrived on this machine.
-                // Dropping the one edit leaves a visible local gap; looping the whole world through
-                // recovery for it froze both players and simply re-failed after each reload. Drop it.
-                Mod.log.Warn("[MP] BuildSync: native object operation target did not resolve within " +
-                             "the retry window; dropping this edit (use /sync if the city drifts).");
-                Diagnostics.FlightRecorder.Note("object operation dropped after bounded retry");
+                string placementPrefab;
+                bool compactPlacement = TryDescribeBlockedPlacement(out placementPrefab);
+                // The road/building/area this edit references never arrived on this machine. A
+                // placement should normally take the compact local-regeneration path; reaching this
+                // deadline means either its one snapped target is absent or a legacy/edit graph is
+                // incompatible. In both cases silently dropping it leaves known world divergence.
+                if (compactPlacement)
+                {
+                    Mod.log.Warn("[MP] BuildSync: building placement '" + placementPrefab +
+                                 "' could not resolve its snapped target within the retry window (" +
+                                 (_lastUnresolvedObjectReason ?? "unknown target") +
+                                 "); requesting an automatic world sync.");
+                    Diagnostics.FlightRecorder.Note(
+                        "building placement target expired; world sync requested");
+                }
+                else
+                {
+                    Mod.log.Warn("[MP] BuildSync: native object operation target did not resolve " +
+                                 "within the retry window (" +
+                                 (_lastUnresolvedObjectReason ?? "unknown target") +
+                                 "); requesting an automatic world sync.");
+                    Diagnostics.FlightRecorder.Note(
+                        "object operation target expired; world sync requested");
+                }
                 _hasBlockedNativeObject = false;
                 _blockedNativeObject = null;
                 _blockedNativeObjectDeadline = 0;
+                _lastUnresolvedObjectReason = null;
+                SyncInbox.RequestResync(compactPlacement
+                    ? "building placement target did not resolve"
+                    : "native object operation target did not resolve");
                 return false;
             }
 
@@ -240,6 +269,25 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             _blockedNativeObject = null;
             _blockedNativeObjectDeadline = 0;
             return result == NativeObjectResult.Completed;
+        }
+
+        private bool TryDescribeBlockedPlacement(out string prefabName)
+        {
+            prefabName = null;
+            if (_blockedNativeObject == null ||
+                _blockedNativeObject.CommandId != ObjectToolOperationCommand.Id) return false;
+            try
+            {
+                ObjectToolOperationCommand command =
+                    ObjectToolOperationCommand.Decode(_blockedNativeObject.Body);
+                if (!command.HasPlacementInput || command.IsAssetStamp) return false;
+                prefabName = command.Definitions[command.RootIndex].PrefabName;
+                return true;
+            }
+            catch (System.Exception)
+            {
+                return false;
+            }
         }
 
         private void BlockNativeObject(SimulationCommandMessage message, long now)
@@ -328,10 +376,16 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     return NativeObjectResult.Retry;
                 case NativeDeriveResult.Unsupported:
                     // This build cannot reach the generator, and a stamp has no reduced form that
-                    // preserves its topology. Dropping one placement beats building a broken one.
+                    // preserves its topology. A world reload is the only complete fallback.
                     Mod.log.Warn("[MP] BuildSync: the game's definition generator is not reachable; " +
-                                 "the remote stamp '" + prefabName + "' was skipped.");
-                    Diagnostics.FlightRecorder.Note("asset stamp unsupported");
+                                 "the remote stamp '" + prefabName +
+                                 "' was skipped and world recovery was requested.");
+                    Diagnostics.FlightRecorder.Note("asset stamp unsupported; recovery requested");
+                    SyncInbox.RequestResync("asset stamp generator unavailable");
+                    return NativeObjectResult.Rejected;
+                case NativeDeriveResult.Failed:
+                    Diagnostics.FlightRecorder.Note("asset stamp derive failed; recovery requested");
+                    SyncInbox.RequestResync("asset stamp generation failed");
                     return NativeObjectResult.Rejected;
                 default:
                     return NativeObjectResult.Rejected;
@@ -397,6 +451,10 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 return NativeObjectResult.Completed;
             }
 
+            NativeObjectResult placementResult;
+            if (TryRealizePlacementInput(message, command, key, now, out placementResult))
+                return placementResult;
+
             ResolvedObjectDefinition[] resolved;
             string reason;
             bool equivalentExists;
@@ -443,11 +501,13 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             catch (System.Exception ex)
             {
                 // The partial definitions are torn down here, so nothing inconsistent was committed.
-                // Drop the edit rather than freeze the world; the placer can /sync if it matters.
+                // The operation nevertheless exists on the sender, so repair the known divergence.
                 DestroyDefinitions(created);
                 Mod.log.Warn("[MP] BuildSync: native object definitions could not be generated; " +
-                             "dropping this edit: " + ex.Message);
-                Diagnostics.FlightRecorder.Note("object definitions dropped=" + ex.GetType().Name);
+                             "requesting world recovery: " + ex.Message);
+                Diagnostics.FlightRecorder.Note("object definitions failed=" + ex.GetType().Name +
+                                                  "; recovery requested");
+                SyncInbox.RequestResync("native object definitions could not be generated");
                 return NativeObjectResult.Rejected;
             }
 
@@ -456,12 +516,14 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 () => ReplayNativeObject(retained),
                 () => CompleteNativeObject(key, command, resolved, now),
                 "native op=" + command.OperationId + " defs=" + command.Definitions.Length,
-                command.IsAssetStamp);
+                command.IsAssetStamp,
+                CollectOwnerDefinitions(command, resolved));
             if (!armed)
             {
                 DestroyDefinitions(created);
                 return NativeObjectResult.Retry;
             }
+            RememberPlayerPlacedSpawnables(command, now);
 
             // Per-phase cost of one native operation. A big relocation is inherently a large
             // transaction; these numbers say which phase is actually spiking rather than leaving it
@@ -472,6 +534,132 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 " isolateMS=" + (generateStartTick - isolateStartTick) +
                 " generateMS=" + (System.Environment.TickCount - generateStartTick));
             return NativeObjectResult.Armed;
+        }
+
+        /// <summary>
+        /// The distinct owners this batch describes by prefab and transform instead of by entity.
+        /// Native generation leaves such a sub-element's owner unset for a later spatial pass to
+        /// fill in; retaining the descriptions lets the commit validator repair a link that pass
+        /// missed. A batch normally describes exactly one owner - all of one placement's sub-nets,
+        /// sub-areas and sub-objects name the same root.
+        /// </summary>
+        private List<Net.NetSyncSystem.ArmedOwnerDefinition> CollectOwnerDefinitions(
+            ObjectToolOperationCommand command, ResolvedObjectDefinition[] resolved)
+        {
+            List<Net.NetSyncSystem.ArmedOwnerDefinition> owners = null;
+            for (int i = 0; i < command.Definitions.Length; i++)
+            {
+                ObjectToolDefinitionIntent definition = command.Definitions[i];
+                if (!definition.HasOwnerDefinition) continue;
+                Entity prefab = resolved[i].OwnerDefinitionPrefab;
+                if (prefab == Entity.Null) continue;
+
+                var described = new Net.NetSyncSystem.ArmedOwnerDefinition
+                {
+                    Prefab = prefab,
+                    Position = new float3(definition.OwnerDefinitionX,
+                        definition.OwnerDefinitionY, definition.OwnerDefinitionZ),
+                };
+                if (owners == null) owners = new List<Net.NetSyncSystem.ArmedOwnerDefinition>();
+                bool known = false;
+                for (int j = 0; j < owners.Count && !known; j++)
+                    known = owners[j].Prefab == described.Prefab &&
+                            owners[j].Position.Equals(described.Position);
+                if (!known) owners.Add(described);
+            }
+            return owners;
+        }
+
+        /// <summary>
+        /// Re-run a rooted placement from the object tool's inputs. A finished service-building or
+        /// specialized-industry
+        /// batch also contains road-alignment and driveway definitions which identify the sender's
+        /// exact edge subdivision. Resolving those definitions one-for-one is impossible when the
+        /// receiver has an equivalent road split into different entities; regenerating the batch
+        /// from the snapped local edge avoids that accidental dependency.
+        /// </summary>
+        private bool TryRealizePlacementInput(SimulationCommandMessage message,
+            ObjectToolOperationCommand command, NativeObjectOperationKey key, long now,
+            out NativeObjectResult result)
+        {
+            result = NativeObjectResult.Rejected;
+            if (!command.HasPlacementInput) return false;
+
+            ObjectToolDefinitionIntent root = command.Definitions[command.RootIndex];
+            Entity prefab;
+            if (!_prefabIndex.TryResolve(root.PrefabName,
+                    candidate => ValidateDefinitionPrefab(ObjectToolDefinitionKind.Object, candidate),
+                    out prefab))
+            {
+                _lastUnresolvedObjectReason = "placement prefab '" + root.PrefabName +
+                                              "' is unavailable or incompatible";
+                result = NativeObjectResult.Retry;
+                return true;
+            }
+
+            Entity attachmentTarget;
+            BeginPortableResolve();
+            try
+            {
+                if (!TryResolvePortableRef(command.PlacementTarget, out attachmentTarget))
+                {
+                    _lastUnresolvedObjectReason = "placement snap target is not present";
+                    result = NativeObjectResult.Retry;
+                    return true;
+                }
+            }
+            finally { EndPortableResolve(); }
+            _lastUnresolvedObjectReason = null;
+
+            var resolved = new ResolvedObjectDefinition[command.Definitions.Length];
+            for (int i = 0; i < resolved.Length; i++) resolved[i] = new ResolvedObjectDefinition();
+            resolved[command.RootIndex].Prefab = prefab;
+            resolved[command.RootIndex].Attached = attachmentTarget;
+            if (EquivalentObjectOperationAlreadyExists(command, resolved))
+            {
+                _recentNativeObjectOperations.Remember(key, now, NativeObjectReplayRememberMs);
+                Diagnostics.FlightRecorder.Note("derived placement equivalent suppressed op=" +
+                                                  command.OperationId);
+                result = NativeObjectResult.Completed;
+                return true;
+            }
+
+            ObjectDefinitionIntent placement = root.Object;
+            var position = new float3(placement.PosX, placement.PosY, placement.PosZ);
+            var rotation = new quaternion(math.normalizesafe(
+                new float4(placement.RotX, placement.RotY, placement.RotZ, placement.RotW),
+                new float4(0f, 0f, 0f, 1f)));
+            SimulationCommandMessage retained = message;
+            NativeDeriveResult derived = TryDeriveObjectTransaction(prefab, Entity.Null,
+                Entity.Null, attachmentTarget, position, rotation, placement.Elevation,
+                command.ToolRandomSeed,
+                "building placement " + root.PrefabName + " op=" + command.OperationId,
+                () => ReplayNativeObject(retained),
+                () => CompleteNativeObject(key, command, resolved, now));
+            switch (derived)
+            {
+                case NativeDeriveResult.Armed:
+                    Diagnostics.FlightRecorder.Note("building placement regenerated op=" +
+                                                      command.OperationId + " prefab=" +
+                                                      root.PrefabName);
+                    result = NativeObjectResult.Armed;
+                    return true;
+                case NativeDeriveResult.Busy:
+                    result = NativeObjectResult.Retry;
+                    return true;
+                case NativeDeriveResult.Unsupported:
+                    Diagnostics.FlightRecorder.Note(
+                        "building placement generator unavailable; using exact graph fallback");
+                    return false;
+                case NativeDeriveResult.Failed:
+                    // The complete captured graph is still present in the command. A transient
+                    // local generator rejection must not discard the building before trying it.
+                    Diagnostics.FlightRecorder.Note(
+                        "building placement regeneration failed; using exact graph fallback");
+                    return false;
+                default:
+                    return false;
+            }
         }
 
         private static int NormalizeRemoteObjectCreationFlags(ObjectToolOperationCommand command)
@@ -689,8 +877,22 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             if (definition == null ||
                 definition.Kind != ObjectToolDefinitionKind.Object ||
                 ((CreationFlags)definition.CreationFlags &
-                 CreationFlags.Attach) == 0 ||
-                attachmentPrefab == Entity.Null ||
+                 CreationFlags.Attach) == 0)
+                return false;
+
+            return IsCompatiblePlaceholderAttachmentPrefab(attachmentPrefab,
+                placeholderPrefab);
+        }
+
+        /// <summary>
+        /// The prefab relationship used by a specialized-industry placeholder and its visible
+        /// level-one building. Kept separate from the transient definition checks above so the
+        /// same relationship can identify the committed live graph at ModificationEnd.
+        /// </summary>
+        private bool IsCompatiblePlaceholderAttachmentPrefab(Entity attachmentPrefab,
+            Entity placeholderPrefab)
+        {
+            if (attachmentPrefab == Entity.Null ||
                 placeholderPrefab == Entity.Null ||
                 !EntityManager.HasComponent<PrefabData>(attachmentPrefab) ||
                 !EntityManager.HasComponent<ObjectData>(attachmentPrefab) ||
@@ -731,6 +933,64 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                             placeholderBuilding.m_LotSize);
         }
 
+        /// <summary>
+        /// True for a committed spawnable building that belongs to a player-placed specialized
+        /// industry graph. Placeholder variants attach their visible level-one building to the
+        /// placeholder; direct variants declare the extractor/storage area on the spawnable root.
+        /// </summary>
+        private bool IsLiveSpecializedIndustrySpawnable(Entity entity, Entity prefab)
+        {
+            if (entity == Entity.Null || prefab == Entity.Null ||
+                !EntityManager.Exists(entity) || !EntityManager.Exists(prefab) ||
+                !EntityManager.HasComponent<SpawnableBuildingData>(prefab)) return false;
+
+            // The prefab declaration alone is not origin evidence: a future simulation spawner
+            // could legitimately choose a spawnable which also declares an area. Direct variants
+            // count as placed only when this live instance actually owns the specialized area
+            // graph produced by the object tool.
+            if (PrefabDeclaresSpecializedArea(prefab) &&
+                HasLiveOwnedSpecializedArea(entity)) return true;
+            if (!EntityManager.HasComponent<global::Game.Objects.Attached>(entity)) return false;
+
+            Entity parent = EntityManager
+                .GetComponentData<global::Game.Objects.Attached>(entity).m_Parent;
+            if (parent == Entity.Null || parent == entity || !EntityManager.Exists(parent))
+                return false;
+
+            // Prefab-local attachment definitions initially name the placeholder prefab itself;
+            // after owner resolution the same relationship may name its live instance.
+            Entity parentPrefab = Entity.Null;
+            if (EntityManager.HasComponent<PrefabData>(parent))
+                parentPrefab = parent;
+            else if (EntityManager.HasComponent<PrefabRef>(parent))
+                parentPrefab = EntityManager.GetComponentData<PrefabRef>(parent).m_Prefab;
+
+            return parentPrefab != Entity.Null &&
+                   IsCompatiblePlaceholderAttachmentPrefab(prefab, parentPrefab) &&
+                   PrefabDeclaresSpecializedArea(parentPrefab);
+        }
+
+        private bool HasLiveOwnedSpecializedArea(Entity owner)
+        {
+            if (owner == Entity.Null || !EntityManager.Exists(owner) ||
+                !EntityManager.HasBuffer<global::Game.Areas.SubArea>(owner)) return false;
+
+            DynamicBuffer<global::Game.Areas.SubArea> areas =
+                EntityManager.GetBuffer<global::Game.Areas.SubArea>(owner, isReadOnly: true);
+            for (int i = 0; i < areas.Length; i++)
+            {
+                Entity area = areas[i].m_Area;
+                if (area == Entity.Null || !EntityManager.Exists(area) ||
+                    !EntityManager.HasComponent<PrefabRef>(area)) continue;
+                Entity areaPrefab = EntityManager.GetComponentData<PrefabRef>(area).m_Prefab;
+                if (!IsSpecializedAreaPrefab(areaPrefab)) continue;
+
+                Entity topOwner;
+                if (TryFindTopOwner(area, out topOwner) && topOwner == owner) return true;
+            }
+            return false;
+        }
+
         private static bool IsClosedAreaNodeRing(ObjectAreaNodeIntent[] nodes)
         {
             if (nodes == null || nodes.Length < 4 ||
@@ -755,6 +1015,28 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     EntityManager.GetBuffer<PlaceholderObjectElement>(declared, isReadOnly: true);
                 for (int j = 0; j < candidates.Length; j++)
                     if (candidates[j].m_Object == areaPrefab) return true;
+            }
+            return false;
+        }
+
+        private bool PrefabDeclaresSpecializedArea(Entity objectPrefab)
+        {
+            if (objectPrefab == Entity.Null || !EntityManager.Exists(objectPrefab) ||
+                !EntityManager.HasBuffer<SubArea>(objectPrefab)) return false;
+
+            DynamicBuffer<SubArea> subAreas =
+                EntityManager.GetBuffer<SubArea>(objectPrefab, isReadOnly: true);
+            for (int i = 0; i < subAreas.Length; i++)
+            {
+                Entity declared = subAreas[i].m_Prefab;
+                if (IsSpecializedAreaPrefab(declared)) return true;
+                if (declared == Entity.Null || !EntityManager.Exists(declared) ||
+                    !EntityManager.HasBuffer<PlaceholderObjectElement>(declared)) continue;
+
+                DynamicBuffer<PlaceholderObjectElement> candidates =
+                    EntityManager.GetBuffer<PlaceholderObjectElement>(declared, isReadOnly: true);
+                for (int j = 0; j < candidates.Length; j++)
+                    if (IsSpecializedAreaPrefab(candidates[j].m_Object)) return true;
             }
             return false;
         }
@@ -784,19 +1066,16 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
         private void ReplayNativeObject(SimulationCommandMessage message)
         {
-            if (_hasBlockedNativeObject)
+            if (_nativeObjectReplayPrefix.Count >= MaxNativeObjectReplayPrefix)
             {
-                // Another operation is already waiting its turn. Dropping this rejected replay is
-                // safer than looping the world through recovery; the ordered op still resolves or
-                // drops on its own deadline.
-                Diagnostics.FlightRecorder.Note("object replay dropped (collided with ordered op)");
+                Mod.log.Warn("[MP] BuildSync: native object replay prefix overflowed; requesting " +
+                             "world recovery instead of losing an operation.");
+                Diagnostics.FlightRecorder.Note("object replay prefix overflow; recovery requested");
+                SyncInbox.RequestResync("native object replay prefix overflow");
                 return;
             }
-            _blockedNativeObject = message;
-            _blockedNativeObjectDeadline = (Mod.Service != null ? Mod.Service.NowMs : 0) +
-                                           NativeObjectTargetRetryMs;
-            _hasBlockedNativeObject = true;
-            Diagnostics.FlightRecorder.Note("object transaction rejected/replayed");
+            _nativeObjectReplayPrefix.Add(message);
+            Diagnostics.FlightRecorder.Note("object transaction rejected; replay prioritized");
         }
 
         private void CompleteNativeObject(NativeObjectOperationKey key,
@@ -1169,8 +1448,56 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 wantedIdentity.OwnerY = root.OwnerDefinitionY;
                 wantedIdentity.OwnerZ = root.OwnerDefinitionZ;
             }
-            return FindPortableObject(resolved[command.RootIndex].Prefab,
-                new float3(data.PosX, data.PosY, data.PosZ), wantedIdentity) != Entity.Null;
+            return FindEquivalentPlacedObject(resolved[command.RootIndex].Prefab, data,
+                root.RandomSeed, wantedIdentity) != Entity.Null;
+        }
+
+        /// <summary>
+        /// Geometry alone is not a placement identity. Two players can legitimately place the same
+        /// prefab close together, especially small roadside buildings and props. Require the
+        /// generated variant seed as well, plus orientation for a free-standing object, before
+        /// treating a different operation as an already-committed replay.
+        /// </summary>
+        private Entity FindEquivalentPlacedObject(Entity prefab, ObjectDefinitionIntent source,
+            int randomSeed, PortableEntityRef identity)
+        {
+            List<Entity> candidates = Candidates(_objectCandidates, _portableObjects, prefab);
+            float3 position = new float3(source.PosX, source.PosY, source.PosZ);
+            float4 rotation = math.normalizesafe(new float4(source.RotX, source.RotY,
+                    source.RotZ, source.RotW),
+                new float4(0f, 0f, 0f, 1f));
+            Entity best = Entity.Null;
+            float bestDistance = 4f;
+            for (int i = 0; i < candidates.Count; i++)
+            {
+                Entity candidate = candidates[i];
+                if (!MatchesPortableOwner(candidate, identity)) continue;
+
+                global::Game.Objects.Transform transform = EntityManager
+                    .GetComponentData<global::Game.Objects.Transform>(candidate);
+                float distance = math.distancesq(transform.m_Position, position);
+                if (distance >= bestDistance) continue;
+
+                // Attachment resolution may rotate the committed instance relative to its source
+                // definition. For unattached objects, orientation is stable and distinguishes two
+                // intentional close placements that happen to share a variant seed.
+                bool attached = EntityManager.HasComponent<global::Game.Objects.Attached>(candidate);
+                float rotationDot = attached ? 1f : math.abs(math.dot(
+                    math.normalizesafe(transform.m_Rotation.value,
+                        new float4(0f, 0f, 0f, 1f)), rotation));
+                // Exact overlap can happen when two players click before receiving one another's
+                // edit. It is a genuine collision even though their independently advanced seeds
+                // differ; do not feed an impossible stacked graph into the native apply pipeline.
+                if (distance <= ExactDuplicateDistanceSq && rotationDot >= 0.99999f)
+                    return candidate;
+                if (!EntityManager.HasComponent<PseudoRandomSeed>(candidate) ||
+                    unchecked((ushort)EntityManager
+                        .GetComponentData<PseudoRandomSeed>(candidate).m_Seed) !=
+                    unchecked((ushort)randomSeed) || (!attached && rotationDot < 0.9999f)) continue;
+                best = candidate;
+                bestDistance = distance;
+            }
+            return best;
         }
 
         private bool TryResolvePortableRef(PortableEntityRef source, out Entity result)

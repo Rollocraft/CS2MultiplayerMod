@@ -33,10 +33,16 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
             if (!(active is global::Game.Tools.NetToolSystem))
             {
                 _cachedLocalCourses.Clear();
+                _cachedLocalMixedOperation.Clear();
                 _cachedFallbackOriginalEdges.Clear();
                 _cachedNeedsFinalEdgeFallback = false;
                 return;
             }
+
+            // CaptureLocalNetApply can run before DefinitionGate observes this frame's buffered
+            // definitions. Once that Apply has been published, those definitions are the same
+            // gesture and must not seed a stale cache for the next click.
+            if (_nativeApplyCapturedFrame == _realizeFrame) return;
 
             // A network prefab may create a top-level object as the owner of its course graph.
             // Owner-linked courses cannot be replayed as independent network placements; the
@@ -45,6 +51,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                 .HasNewTopLevelObjectRoot(EntityManager, definitions))
             {
                 _cachedLocalCourses.Clear();
+                _cachedLocalMixedOperation.Clear();
                 _cachedFallbackOriginalEdges.Clear();
                 _cachedNeedsFinalEdgeFallback = false;
                 return;
@@ -54,35 +61,29 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
             bool pointOperation = netTool.actualMode == global::Game.Tools.NetToolSystem.Mode.Point;
 
             var next = new List<NetPlacementCommand>();
+            var mixed = new List<LocalNetToolOperationItem>();
             // A course of this operation that cannot be expressed on the wire voids the whole native
             // envelope. Publishing the rest would ship a self-consistent but INCOMPLETE operation
             // (CourseCount counts only what survived) and would then suppress final-edge capture too,
             // so the missing courses would never reach the other machines at all.
             string rejection = null;
             int rejected = 0;
+            int mutations = 0;
             var rejectedOriginalEdges = new List<Entity>();
             for (int i = 0; i < definitions.Length; i++)
             {
                 Entity entity = definitions[i];
                 if (!EntityManager.Exists(entity) || !EntityManager.HasComponent<NetCourse>(entity) ||
-                    !EntityManager.HasComponent<CreationDefinition>(entity) ||
-                    EntityManager.HasComponent<OwnerDefinition>(entity)) continue;
+                    !EntityManager.HasComponent<CreationDefinition>(entity)) continue;
 
-                CreationDefinition definition = EntityManager.GetComponentData<CreationDefinition>(entity);
-                if (!IsPlainLocalNetDefinition(definition))
+                if (EntityManager.HasComponent<OwnerDefinition>(entity))
                 {
                     rejected++;
-                    rejection = rejection ?? "reference an original/owner or use a non-placement mode";
-                    Entity original = definition.m_Original;
-                    if (original != Entity.Null && EntityManager.Exists(original) &&
-                        EntityManager.HasComponent<Edge>(original) &&
-                        EntityManager.HasComponent<Curve>(original) &&
-                        EntityManager.HasComponent<PrefabRef>(original) &&
-                        !rejectedOriginalEdges.Contains(original))
-                        rejectedOriginalEdges.Add(original);
+                    rejection = rejection ?? "carry an owner definition";
                     continue;
                 }
 
+                CreationDefinition definition = EntityManager.GetComponentData<CreationDefinition>(entity);
                 NetCourse course = EntityManager.GetComponentData<NetCourse>(entity);
                 // Point-mode network prefabs intentionally commit a zero-length course (for example
                 // a circular junction). Other modes' zero-length definitions are only cursor markers.
@@ -92,36 +93,81 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                 // operation to a chain with a gap the receiver cannot bridge.
                 if (course.m_Length < NetPlacementCommand.MinCourseLength && !pointOperation) continue;
 
-                string unrepresentable;
-                NetPlacementCommand command = CaptureDefinitionCommand(definition, course,
-                    out unrepresentable);
-                if (command == null)
+                if (!IsPlainLocalNetDefinition(definition))
                 {
-                    if (unrepresentable == null) continue;
-                    rejected++;
-                    rejection = rejection ?? unrepresentable;
-                    continue;
+                    string unrepresentable;
+                    LocalNetToolOperationItem mutation =
+                        CaptureMixedMutationCommand(definition, course, out unrepresentable);
+                    if (mutation != null)
+                    {
+                        mixed.Add(mutation);
+                        mutations++;
+                    }
+                    else if (unrepresentable != null)
+                    {
+                        rejected++;
+                        rejection = rejection ?? unrepresentable;
+                    }
+
+                    Entity original = definition.m_Original;
+                    // Retain every usable original while classifying. If any OTHER member later
+                    // voids the envelope, all original-backed geometry must participate in the
+                    // legacy fallback, including members which were individually representable.
+                    if (original != Entity.Null && EntityManager.Exists(original) &&
+                        EntityManager.HasComponent<Edge>(original) &&
+                        EntityManager.HasComponent<Curve>(original) &&
+                        EntityManager.HasComponent<PrefabRef>(original) &&
+                        !rejectedOriginalEdges.Contains(original))
+                        rejectedOriginalEdges.Add(original);
                 }
-                if (next.Count >= NetPlacementCommand.MaxCoursesPerOperation)
+                else
+                {
+                    string unrepresentable;
+                    NetPlacementCommand command = CaptureDefinitionCommand(definition, course,
+                        out unrepresentable);
+                    if (command == null)
+                    {
+                        if (unrepresentable == null) continue;
+                        rejected++;
+                        rejection = rejection ?? unrepresentable;
+                        continue;
+                    }
+                    next.Add(command);
+                    mixed.Add(new LocalNetToolOperationItem
+                    {
+                        CommandId = NetPlacementCommand.Id,
+                        Placement = command,
+                    });
+                }
+
+                if (next.Count > NetPlacementCommand.MaxCoursesPerOperation ||
+                    mixed.Count > NetToolOperationCommand.MaxItems)
                 {
                     rejected++;
-                    rejection = "exceed the " + NetPlacementCommand.MaxCoursesPerOperation +
-                                "-course cap";
+                    rejection = "exceed the atomic net-operation item cap";
                     break;
                 }
-                next.Add(command);
             }
 
             if (next.Count == 0)
             {
-                // Nothing plain to publish. An apply made up entirely of upgrades, replaces or
-                // deletes belongs to another sync system and never had a native envelope to void,
-                // so leave the cache and stay quiet - the steady-state frame rule above applies.
+                // A genuinely empty steady frame keeps the last preview, but a visible graph made
+                // entirely of mutations is a new operation owned by the standalone delete/replace
+                // systems. Clear any older placement preview so its later Apply cannot publish a
+                // stale course envelope in place of this mutation-only gesture.
+                if (mutations > 0 || rejected > 0)
+                {
+                    _cachedLocalCourses.Clear();
+                    _cachedLocalMixedOperation.Clear();
+                    _cachedFallbackOriginalEdges.Clear();
+                    _cachedNeedsFinalEdgeFallback = false;
+                }
                 return;
             }
 
             _cachedLocalCourses.Clear();
-            if (rejection == null)
+            _cachedLocalMixedOperation.Clear();
+            if (rejection == null && mutations == 0)
             {
                 _cachedFallbackOriginalEdges.Clear();
                 _cachedNeedsFinalEdgeFallback = false;
@@ -129,18 +175,29 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                 return;
             }
 
+            if (rejection == null)
+            {
+                // This is one native Apply, not a delete followed by replacements followed by
+                // placements. Retain the exact definition order and send it through one envelope.
+                _cachedFallbackOriginalEdges.Clear();
+                _cachedNeedsFinalEdgeFallback = false;
+                _cachedLocalMixedOperation.AddRange(mixed);
+                Diagnostics.FlightRecorder.Note("net atomic mixed capture cached items=" +
+                    mixed.Count + " placements=" + next.Count + " mutations=" + mutations);
+                return;
+            }
+
+            // Never resurrect the fragmented delete/replace/final-edge path. It is exactly the path
+            // that can remove an original before its sibling replacement resolves on another peer.
+            // Suppress all legacy echoes for this Apply and repair from an authoritative snapshot.
             _cachedFallbackOriginalEdges.Clear();
             _cachedFallbackOriginalEdges.AddRange(rejectedOriginalEdges);
             _cachedNeedsFinalEdgeFallback = true;
 
-            Mod.log.Warn("[MP] NetSync: local net operation cannot be replayed as one atomic apply (" +
+            Mod.log.Warn("[MP] NetSync: local mixed net operation cannot be encoded atomically (" +
                          rejected + " of " + (rejected + next.Count) + " courses " + rejection +
-                         "); falling back to final-edge capture, which rebuilds it segment by segment " +
-                         "on the other machines" +
-                         (_cachedFallbackOriginalEdges.Count > 0
-                             ? "; " + _cachedFallbackOriginalEdges.Count +
-                               " Updated-only original edge(s) will use replacement capture."
-                             : "."));
+                         "); the legacy fragmented fallback is disabled and world recovery will be " +
+                         "requested after Apply.");
             Diagnostics.FlightRecorder.Note("net native capture voided rejected=" + rejected + "/" +
                                               (rejected + next.Count));
         }
@@ -170,8 +227,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
         {
             MultiplayerService service = Mod.Service;
             if (service == null || !service.GameplaySyncReady ||
-                _nativeApplyCapturedFrame == _realizeFrame ||
-                _finalEdgeFallbackCapturedFrame == _realizeFrame)
+                _nativeApplyCapturedFrame == _realizeFrame)
                 return;
 
             global::Game.Tools.ToolBaseSystem active = _toolSystem != null ? _toolSystem.activeTool : null;
@@ -197,22 +253,28 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                     definitions.Dispose();
                 }
             }
+
+            if (_cachedLocalMixedOperation.Count > 0)
+            {
+                CaptureAtomicMixedNetApply(service, barrierRecovery);
+                return;
+            }
             if (_cachedLocalCourses.Count == 0)
             {
                 if (!_cachedNeedsFinalEdgeFallback) return;
-
-                global::CS2MultiplayerMod.Game.Sync.Systems.NetReplaceSyncSystem replaceSync =
-                    World.GetOrCreateSystemManaged<
-                        global::CS2MultiplayerMod.Game.Sync.Systems.NetReplaceSyncSystem>();
+                RecordPlacementOriginals(service.NowMs);
+                _atomicMixedOriginals.Clear();
+                _atomicMixedOriginalsFrame = _realizeFrame;
                 for (int i = 0; i < _cachedFallbackOriginalEdges.Count; i++)
-                    replaceSync.ExpectMixedLocalGeometryChange(_cachedFallbackOriginalEdges[i]);
-
-                Diagnostics.FlightRecorder.Note("net mixed fallback armed originals=" +
-                                                  _cachedFallbackOriginalEdges.Count +
-                                                  (barrierRecovery ? " source=barrier" : string.Empty));
+                    _atomicMixedOriginals.Add(_cachedFallbackOriginalEdges[i]);
+                service.RequestAutomaticWorldRecovery(
+                    "mixed road operation could not be encoded atomically");
+                Diagnostics.FlightRecorder.Note("net mixed capture rejected; recovery requested" +
+                    (barrierRecovery ? " source=barrier" : string.Empty));
                 _cachedFallbackOriginalEdges.Clear();
                 _cachedNeedsFinalEdgeFallback = false;
-                _finalEdgeFallbackCapturedFrame = _realizeFrame;
+                _nativeApplyCapturedFrame = _realizeFrame;
+                _atomicMixedApplyCapturedFrame = _realizeFrame;
                 return;
             }
 
@@ -278,12 +340,121 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
         }
 
         /// <summary>
+        /// Publish every native definition from one heterogeneous net-tool Apply as one command.
+        /// The receiver can then resolve deletes/replacements against its original topology and arm
+        /// all generated Temps together; no independent capture stream is allowed to echo members.
+        /// </summary>
+        private void CaptureAtomicMixedNetApply(MultiplayerService service, bool barrierRecovery)
+        {
+            long now = service.NowMs;
+            RecordPlacementOriginals(now);
+            long sideEffectExpiry = now + CommittedSideEffectWindowMs;
+            _atomicMixedOriginals.Clear();
+            _atomicMixedOriginalsFrame = _realizeFrame;
+            for (int i = 0; i < _cachedLocalMixedOperation.Count; i++)
+            {
+                LocalNetToolOperationItem local = _cachedLocalMixedOperation[i];
+                Entity original = local.Original;
+                if (original != Entity.Null && EntityManager.Exists(original) &&
+                    EntityManager.HasComponent<Edge>(original))
+                {
+                    _atomicMixedOriginals.Add(original);
+                    if (local.CommandId == NetDeleteCommand.Id)
+                        _committedNetSideEffects[original] = sideEffectExpiry;
+                }
+            }
+
+            long operationId = _nextLocalNetOperationId++;
+            if (_nextLocalNetOperationId <= 0) _nextLocalNetOperationId = 1;
+
+            int itemCount = _cachedLocalMixedOperation.Count;
+            int placementCount = 0;
+            for (int i = 0; i < itemCount; i++)
+                if (_cachedLocalMixedOperation[i].CommandId == NetPlacementCommand.Id)
+                    placementCount++;
+
+            bool sent = false;
+            try
+            {
+                var items = new NetToolOperationItem[itemCount];
+                int placementIndex = 0;
+                for (int i = 0; i < itemCount; i++)
+                {
+                    LocalNetToolOperationItem local = _cachedLocalMixedOperation[i];
+                    byte[] body;
+                    switch (local.CommandId)
+                    {
+                        case NetPlacementCommand.Id:
+                            local.Placement.OperationId = operationId;
+                            local.Placement.CourseIndex = (short)placementIndex++;
+                            local.Placement.CourseCount = (short)placementCount;
+                            body = local.Placement.Encode();
+                            break;
+                        case NetDeleteCommand.Id:
+                            body = local.Delete.Encode();
+                            break;
+                        case NetReplaceCommand.Id:
+                            body = local.Replace.Encode();
+                            break;
+                        default:
+                            throw new System.InvalidOperationException(
+                                "Unsupported cached atomic net command " + local.CommandId + ".");
+                    }
+                    items[i] = new NetToolOperationItem
+                    {
+                        CommandId = local.CommandId,
+                        Body = body,
+                    };
+                }
+
+                var operation = new NetToolOperationCommand
+                {
+                    OperationId = operationId,
+                    Items = items,
+                };
+                service.Session.SendCommand(0, NetToolOperationCommand.Id, operation.Encode());
+                sent = true;
+
+                for (int i = 0; i < itemCount; i++)
+                {
+                    NetPlacementCommand placement = _cachedLocalMixedOperation[i].Placement;
+                    if (placement != null) RecordDiagnostic(placement.PrefabName);
+                }
+            }
+            catch (System.Exception ex)
+            {
+                // A fragmented fallback is exactly the failure this envelope prevents. Suppress
+                // every legacy echo even when encoding/sending fails, and repair the peer from a
+                // world snapshot instead of racing delete/replace/place streams again.
+                Mod.log.Warn("[MP] NetSync atomic mixed apply could not be sent: " + ex.Message);
+                service.RequestAutomaticWorldRecovery("atomic mixed road operation could not be sent");
+            }
+            finally
+            {
+                _cachedLocalMixedOperation.Clear();
+                _cachedLocalCourses.Clear();
+                _cachedFallbackOriginalEdges.Clear();
+                _cachedNeedsFinalEdgeFallback = false;
+                _nativeApplyCapturedFrame = _realizeFrame;
+                _atomicMixedApplyCapturedFrame = _realizeFrame;
+            }
+
+            Diagnostics.FlightRecorder.Note("net atomic mixed apply op=" + operationId +
+                                              " items=" + itemCount +
+                                              " status=" + (sent ? "sent" : "recovery") +
+                                              (barrierRecovery ? " source=barrier" : string.Empty));
+        }
+
+        /// <summary>
         /// Consume an exact original edge recorded from a committing Temp transaction. DeleteSync
         /// calls this before its geometry heuristics; a match has already been represented by the
         /// placement/delete/replace command that caused it and must not become a second command.
         /// </summary>
         public bool ConsumeCommittedNetSideEffect(Entity edge, long now)
         {
+            if (_atomicMixedOriginalsFrame == _realizeFrame &&
+                _atomicMixedOriginals.Remove(edge)) return true;
+
             long expires;
             if (!_committedNetSideEffects.TryGetValue(edge, out expires)) return false;
             _committedNetSideEffects.Remove(edge);
@@ -297,6 +468,116 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                 CreationFlags.Repair | CreationFlags.Duplicate;
             return definition.m_Original == Entity.Null && definition.m_Owner == Entity.Null &&
                    definition.m_Attached == Entity.Null && (definition.m_Flags & incompatible) == 0;
+        }
+
+        /// <summary>
+        /// Convert an original-backed member of a mixed net-tool graph to the existing portable
+        /// delete/replace representation. The complete set is only published inside a
+        /// <see cref="NetToolOperationCommand"/>; returning a reason rejects that whole envelope.
+        /// A null item with no reason is a generated invisible sub-net which the receiver recreates.
+        /// </summary>
+        private LocalNetToolOperationItem CaptureMixedMutationCommand(
+            CreationDefinition definition, NetCourse course, out string unrepresentable)
+        {
+            unrepresentable = null;
+            if (definition.m_Owner != Entity.Null || definition.m_Attached != Entity.Null)
+            {
+                unrepresentable = "reference an owner or attachment";
+                return null;
+            }
+
+            Entity original = definition.m_Original;
+            if (original == Entity.Null || !EntityManager.Exists(original) ||
+                EntityManager.HasComponent<Deleted>(original) ||
+                EntityManager.HasComponent<Temp>(original) ||
+                EntityManager.HasComponent<Owner>(original) ||
+                !EntityManager.HasComponent<Edge>(original) ||
+                !EntityManager.HasComponent<Curve>(original) ||
+                !EntityManager.HasComponent<PrefabRef>(original))
+            {
+                unrepresentable = "reference an unavailable or owned original edge";
+                return null;
+            }
+
+            Entity originalPrefab = EntityManager.GetComponentData<PrefabRef>(original).m_Prefab;
+            string originalName = PrefabNameOf(originalPrefab);
+            if (string.IsNullOrEmpty(originalName))
+            {
+                unrepresentable = "reference an original edge whose prefab cannot be named";
+                return null;
+            }
+            if (originalName.StartsWith("Invisible")) return null;
+
+            CreationFlags flags = definition.m_Flags;
+            const CreationFlags unsupportedLifecycle = CreationFlags.Permanent |
+                CreationFlags.Select | CreationFlags.Attach | CreationFlags.Upgrade |
+                CreationFlags.Relocate | CreationFlags.Parent | CreationFlags.Dragging |
+                CreationFlags.Recreate | CreationFlags.Duplicate | CreationFlags.Repair |
+                CreationFlags.Stamping;
+            if ((flags & unsupportedLifecycle) != 0)
+            {
+                unrepresentable = "use an unsupported original-backed creation mode";
+                return null;
+            }
+            const CreationFlags representedMutationFlags = CreationFlags.Delete |
+                CreationFlags.Invert | CreationFlags.Align | CreationFlags.SubElevation;
+            if ((flags & ~representedMutationFlags) != 0)
+            {
+                unrepresentable = "carry original-backed creation flags the mutation codec cannot preserve";
+                return null;
+            }
+
+            Bezier4x3 oldCurve = EntityManager.GetComponentData<Curve>(original).m_Bezier;
+            if ((flags & CreationFlags.Delete) != 0)
+            {
+                var deletion = new NetDeleteCommand
+                {
+                    PrefabName = originalName,
+                    Ax = oldCurve.a.x, Ay = oldCurve.a.y, Az = oldCurve.a.z,
+                    Bx = oldCurve.b.x, By = oldCurve.b.y, Bz = oldCurve.b.z,
+                    Cx = oldCurve.c.x, Cy = oldCurve.c.y, Cz = oldCurve.c.z,
+                    Dx = oldCurve.d.x, Dy = oldCurve.d.y, Dz = oldCurve.d.z,
+                };
+                return new LocalNetToolOperationItem
+                {
+                    CommandId = NetDeleteCommand.Id,
+                    Original = original,
+                    Delete = deletion,
+                };
+            }
+
+            string newName = PrefabNameOf(definition.m_Prefab);
+            if (string.IsNullOrEmpty(newName))
+            {
+                unrepresentable = "modify an original edge without a named target prefab";
+                return null;
+            }
+            if (definition.m_SubPrefab != Entity.Null)
+            {
+                unrepresentable = "replace an edge with a lane sub-prefab";
+                return null;
+            }
+            if (newName.StartsWith("Invisible")) return null;
+
+            Bezier4x3 newCurve = course.m_Curve;
+            var replacement = new NetReplaceCommand
+            {
+                PrefabName = newName,
+                Ax = newCurve.a.x, Ay = newCurve.a.y, Az = newCurve.a.z,
+                Bx = newCurve.b.x, By = newCurve.b.y, Bz = newCurve.b.z,
+                Cx = newCurve.c.x, Cy = newCurve.c.y, Cz = newCurve.c.z,
+                Dx = newCurve.d.x, Dy = newCurve.d.y, Dz = newCurve.d.z,
+                OldAx = oldCurve.a.x, OldAy = oldCurve.a.y, OldAz = oldCurve.a.z,
+                OldBx = oldCurve.b.x, OldBy = oldCurve.b.y, OldBz = oldCurve.b.z,
+                OldCx = oldCurve.c.x, OldCy = oldCurve.c.y, OldCz = oldCurve.c.z,
+                OldDx = oldCurve.d.x, OldDy = oldCurve.d.y, OldDz = oldCurve.d.z,
+            };
+            return new LocalNetToolOperationItem
+            {
+                CommandId = NetReplaceCommand.Id,
+                Original = original,
+                Replace = replacement,
+            };
         }
 
         /// <summary>

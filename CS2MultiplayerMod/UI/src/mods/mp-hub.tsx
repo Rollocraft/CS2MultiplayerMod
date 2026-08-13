@@ -1412,7 +1412,12 @@ const SessionView = ({ entries, players }: { entries: ChatEntry[]; players: Play
                         onMouseDown={(e) => e.stopPropagation()}
                         onKeyDown={(e) => {
                             e.stopPropagation();
-                            if (e.key === "Enter") send();
+                            if (e.key === "Enter") {
+                                send();
+                            } else if (e.key === "Escape") {
+                                e.preventDefault();
+                                e.currentTarget.blur();
+                            }
                         }}
                         onChange={(e) => setDraft((e.target as HTMLInputElement).value)}
                     />

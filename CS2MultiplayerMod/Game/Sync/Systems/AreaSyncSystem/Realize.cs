@@ -32,10 +32,11 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 _ownedAreaRetry.RemoveAt(i);
                 Mod.log.Warn("[MP] AreaSync: owner '" +
                              pending.command.OwnerPrefabName +
-                             "' did not appear in time for its owned area; dropping this " +
-                             "snapshot without interrupting gameplay.");
+                             "' did not appear in time for its owned area; requesting world " +
+                             "recovery instead of silently losing the lot.");
                 Diagnostics.FlightRecorder.Note(
-                    "owned area snapshot dropped after owner retry");
+                    "owned area owner expired; recovery requested");
+                SyncInbox.RequestResync("owned area owner did not resolve");
             }
         }
 
@@ -43,7 +44,12 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             int originPlayerId, long deadline)
         {
             if (_ownedAreaRetry.Count >= MaxPendingOwnedAreas)
-                _ownedAreaRetry.RemoveAt(0);
+            {
+                _ownedAreaRetry.Clear();
+                Diagnostics.FlightRecorder.Note(
+                    "owned area retry queue overflow; recovery requested");
+                SyncInbox.RequestResync("owned area retry queue overflow");
+            }
             _ownedAreaRetry.Add((command, originPlayerId, deadline));
         }
 

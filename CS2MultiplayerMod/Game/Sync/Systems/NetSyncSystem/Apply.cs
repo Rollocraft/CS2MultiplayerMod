@@ -29,12 +29,22 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
         private const int MinimumDrainFramesBeforeRecovery = 8;
 
         /// <summary>
+        /// Seeing no tracked Temp once is not enough to start another native transaction: deferred
+        /// structural work from the completed apply can still play later in that update. Keep the
+        /// coordinator closed until two consecutive ToolUpdate observations see a clean graph.
+        /// </summary>
+        private const int RequiredCleanDrainFrames = 2;
+
+        /// <summary>
         /// Called by <see cref="SyncRealizeSystem"/> once per frame BEFORE any net-pipeline feeder
         /// (delete/replace/build) runs, so per-frame state is reset exactly once regardless of which
         /// feeder acts first.
         /// </summary>
         public void BeginRealizeFrame()
         {
+            // A drain released during the prior ToolUpdate has now been separated from all new
+            // native work by the rest of that frame. Re-open the coordinator before feeders run.
+            _drainReleasedThisFrame = false;
             _prepDoneThisFrame = false;
             _realizeFrame++;
             // Last frame's commit-frame capture skip has served its purpose (the one-frame
@@ -118,19 +128,32 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
             else if (_awaitingDrain)
             {
                 _drainFrames++;
-                if (!CommittedRemoteTempsRemain())
+                bool committedTempsRemain = CommittedRemoteTempsRemain();
+                if (!committedTempsRemain)
                 {
-                    ChargeCommittedNetConstruction();
-                    _committingRemoteNetTemps.Clear();
-                    _awaitingDrain = false;
-                    _committingTransactionKind = RemoteToolTransactionKind.None;
-                    System.Action completed = _onCommitComplete;
-                    _onCommitComplete = null;
-                    if (completed != null) completed();
-                    Diagnostics.FlightRecorder.Note("remote transaction drain completed");
+                    if (++_drainCleanFrames >= RequiredCleanDrainFrames)
+                    {
+                        ChargeCommittedNetConstruction();
+                        _committingRemoteNetTemps.Clear();
+                        _awaitingDrain = false;
+                        _drainCleanFrames = 0;
+                        _committingTransactionKind = RemoteToolTransactionKind.None;
+                        _drainReleasedThisFrame = true;
+                        System.Action completed = _onCommitComplete;
+                        _onCommitComplete = null;
+                        if (completed != null) completed();
+                        Diagnostics.FlightRecorder.Note(
+                            "remote transaction drain completed after clean-frame fence");
+                    }
                 }
-                else if (_drainFrames >= MinimumDrainFramesBeforeRecovery &&
-                         System.Environment.TickCount - _drainArmTick > DrainWindowMs)
+                else
+                {
+                    _drainCleanFrames = 0;
+                }
+
+                if (committedTempsRemain &&
+                    _drainFrames >= MinimumDrainFramesBeforeRecovery &&
+                    System.Environment.TickCount - _drainArmTick > DrainWindowMs)
                 {
                     TrackInvalidatedTemps(_committingRemoteNetTemps);
                     int quarantinedCount = _committingRemoteNetTemps.Count;
@@ -143,6 +166,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                     _committingNetConstructionCharge = 0;
                     _committingNetConstructionChargeCourses = 0;
                     _awaitingDrain = false;
+                    _drainCleanFrames = 0;
                     _committingTransactionKind = RemoteToolTransactionKind.None;
                     _onCommitComplete = null;
                     _replayAfterInvalidatedDrain = null;
@@ -163,7 +187,10 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
 
             PruneRecentRealizedSpans();
 
-            if (_invalidatedBatchDraining) return;
+            // Even the observation which releases a drain is a fence frame. RealizeIncoming and
+            // sibling systems later in ToolUpdate must wait until BeginRealizeFrame re-opens the
+            // coordinator on the following frame.
+            if (IsCommitBusy) return;
 
             MultiplayerSession session = service.Session;
             long startTicks = System.Diagnostics.Stopwatch.GetTimestamp();
@@ -195,19 +222,19 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
         }
 
         /// <summary>
-        /// True while a net-Temp commit is armed or draining. Only one batch (build OR delete OR
-        /// replace) enters any one net-domain pass - a split course and a delete of the same edge in
-        /// the same commit can make ApplyNetSystem dereference a stale edge and native-crash.
+        /// True while a net-Temp commit is armed, draining, or held through its release ToolUpdate.
+        /// Only one batch (build OR delete OR replace) enters any one net-domain pass - a split
+        /// course and a delete of the same edge in the same commit can make ApplyNetSystem
+        /// dereference a stale edge and native-crash.
         /// </summary>
-        public bool IsCommitBusy => _pendingApply || _awaitingDrain || _invalidatedBatchDraining;
+        public bool IsCommitBusy => _pendingApply || _awaitingDrain || _invalidatedBatchDraining ||
+                                    _drainReleasedThisFrame;
 
         /// <summary>
         /// Host recovery may take its save only after no armed/committing/quarantined remote native
         /// graph remains. Deleted-but-not-destroyed Temps are intentionally still considered live.
         /// </summary>
-        public bool IsRecoveryQuiescent =>
-            !_pendingApply && !_awaitingDrain && !_invalidatedBatchDraining &&
-            !TrackedInvalidatedTempsRemain();
+        public bool IsRecoveryQuiescent => !IsCommitBusy && !TrackedInvalidatedTempsRemain();
 
         /// <summary>
         /// True until queued placement courses and their commit/drain have become queryable network
@@ -223,7 +250,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
         {
             get
             {
-                if (_pendingApply || _awaitingDrain || _invalidatedBatchDraining) return false;
+                if (IsCommitBusy) return false;
                 global::Game.Tools.ToolBaseSystem tool = _toolSystem != null ? _toolSystem.activeTool : null;
                 // Clear is preview maintenance/cancellation, not a permanent city edit. Net tools
                 // use it repeatedly while the cursor moves, so blocking here would starve remote
@@ -256,7 +283,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
         /// </summary>
         public void CancelPreparedDefinitionFrame()
         {
-            if (_pendingApply || _awaitingDrain || _invalidatedBatchDraining) return;
+            if (IsCommitBusy) return;
             if (_isolatedLocalTemps.Count > 0)
             {
                 ReleaseTrackedTemps(_isolatedLocalTemps);
@@ -508,9 +535,12 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
             _pendingNetConstructionChargeCourses = 0;
             _onCommitLost = null;
             _applyReplayBudget.Reset();
+            _lastInvalidReason = null;
+            _lastInvalidCount = -1;
             _awaitingDrain = true;
             _drainArmTick = System.Environment.TickCount;
             _drainFrames = 0;
+            _drainCleanFrames = 0;
             _suppressCaptureThisFrame = true;
             _clearLocalNetIsolationAfterBarrier = true;
             Diagnostics.FlightRecorder.Note("remote " +
@@ -601,6 +631,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
             TrackInvalidatedTemps(_committingRemoteNetTemps);
             _pendingApply = false;
             _awaitingDrain = false;
+            _drainCleanFrames = 0;
             _pendingNetConstructionCharge = 0;
             _pendingNetConstructionChargeCourses = 0;
             if (count > 0) DiscardStaleTransactionTemps(reason);
@@ -609,10 +640,19 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
             _committingRemoteNetTemps.Clear();
             ReleaseTrackedTemps(_isolatedLocalTemps);
 
+            // A replay rebuilds the identical command against an unchanged world. Once an attempt
+            // has already been spent and the rejection repeats verbatim, the remaining attempts are
+            // latency in front of an unavoidable recovery, not another chance.
+            string identity = RejectionIdentity(reason);
+            bool repeatsPreviousAttempt = _applyReplayBudget.AttemptsUsed > 0 &&
+                                          identity == _lastInvalidReason && count == _lastInvalidCount;
+            _lastInvalidReason = identity;
+            _lastInvalidCount = count;
+
             System.Action replay = _onCommitLost;
             _onCommitLost = null;
             _onCommitComplete = null;
-            if (replay != null && _applyReplayBudget.TryConsume())
+            if (replay != null && !repeatsPreviousAttempt && _applyReplayBudget.TryConsume())
             {
                 _replayAfterInvalidatedDrain = replay;
                 Mod.log.Warn("[MP] NetApply: " + reason + "; draining rejected Temps before " +
@@ -626,16 +666,34 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
             {
                 _replayAfterInvalidatedDrain = null;
                 Mod.log.Warn("[MP] NetApply: " + reason + "; batch dropped" +
-                             (replay != null ? " after " + _applyReplayBudget.AttemptsUsed +
-                                               " replays." : "."));
-                Diagnostics.FlightRecorder.Note("net batch invalidated; dropped");
-                SyncInbox.RequestResync("remote transaction exhausted bounded replays");
+                             (repeatsPreviousAttempt
+                                 ? " - the rejection repeated unchanged, so further replays cannot " +
+                                   "succeed."
+                                 : replay != null
+                                     ? " after " + _applyReplayBudget.AttemptsUsed + " replays."
+                                     : "."));
+                Diagnostics.FlightRecorder.Note("net batch invalidated; dropped" +
+                    (repeatsPreviousAttempt ? " (rejection is deterministic)" : string.Empty));
+                SyncInbox.RequestResync(repeatsPreviousAttempt
+                    ? "remote transaction rejected deterministically"
+                    : "remote transaction exhausted bounded replays");
             }
 
             _invalidatedBatchDraining = true;
             _invalidatedDrainArmTick = System.Environment.TickCount;
             _invalidatedCleanFrames = 0;
             _invalidatedDrainTimedOut = false;
+        }
+
+        /// <summary>
+        /// The comparable part of a rejection. A replay regenerates the graph, so the appended
+        /// entity detail can differ between two attempts that failed for exactly the same reason.
+        /// </summary>
+        private static string RejectionIdentity(string reason)
+        {
+            if (string.IsNullOrEmpty(reason)) return reason;
+            int detail = reason.IndexOf(" (", System.StringComparison.Ordinal);
+            return detail < 0 ? reason : reason.Substring(0, detail);
         }
 
         private void TrackInvalidatedTemps(EntityQuery query)
@@ -708,7 +766,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
 
             // Require two observations with no surviving Temp. This keeps the cleanup structural
             // changes and the new definition graph in different native update frames.
-            if (++_invalidatedCleanFrames < 2) return;
+            if (++_invalidatedCleanFrames < RequiredCleanDrainFrames) return;
 
             System.Action replay = allowReplay ? _replayAfterInvalidatedDrain : null;
             _replayAfterInvalidatedDrain = null;
@@ -716,6 +774,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
             _invalidatedBatchDraining = false;
             _invalidatedCleanFrames = 0;
             _invalidatedDrainTimedOut = false;
+            _drainReleasedThisFrame = true;
             Diagnostics.FlightRecorder.Note("invalidated net transaction fully drained");
             if (replay != null) replay();
         }
@@ -754,7 +813,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
         {
             get
             {
-                if (_pendingApply || _awaitingDrain || _invalidatedBatchDraining) return false;
+                if (IsCommitBusy) return false;
                 // Match ToolOutputSystem's own dispatch source. Clear only cleans Temp previews and
                 // is safe after the isolated brush pass; Apply would run ApplyBrushesSystem again.
                 return _toolSystem == null ||
@@ -939,6 +998,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
         /// </summary>
         private bool ValidateArmedObjectTransaction(out string reason)
         {
+            _relinkedOwners = 0;
             NativeArray<Entity> temps = _objectTransactionTemps.ToEntityArray(Allocator.Temp);
             try
             {
@@ -1034,7 +1094,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                 }
 
                 reason = null;
-                Diagnostics.FlightRecorder.Note("object transaction validated temps=" + temps.Length);
+                Diagnostics.FlightRecorder.Note("object transaction validated temps=" + temps.Length +
+                    (_relinkedOwners > 0 ? " ownersRelinked=" + _relinkedOwners : string.Empty));
                 return true;
             }
             finally
@@ -1176,6 +1237,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
         /// </summary>
         private bool ValidateArmedNetTransaction(out string reason)
         {
+            _relinkedOwners = 0;
             NativeArray<Entity> temps = _netOperationTemps.ToEntityArray(Allocator.Temp);
             try
             {
@@ -1266,10 +1328,11 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                 }
 
                 reason = null;
-                if (attachedObjectRoots > 0 || areaEntities > 0)
+                if (attachedObjectRoots > 0 || areaEntities > 0 || _relinkedOwners > 0)
                     Diagnostics.FlightRecorder.Note("net side-effect graph validated temps=" +
                         temps.Length + " attachedRoots=" + attachedObjectRoots +
-                        " areas=" + areaEntities);
+                        " areas=" + areaEntities +
+                        (_relinkedOwners > 0 ? " ownersRelinked=" + _relinkedOwners : string.Empty));
                 return true;
             }
             finally
@@ -1356,10 +1419,30 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
             if (!EntityManager.HasComponent<Owner>(entity)) return true;
 
             Entity owner = EntityManager.GetComponentData<Owner>(entity).m_Owner;
+            // An unset owner is a normal intermediate state, not corruption. Native generation
+            // leaves it unset on a sub-element whose owner is described by prefab + transform, and
+            // the resolution pass a phase later fills it in by an exact transform match. That match
+            // is one-shot - the description is consumed whether or not it hit - so a single miss is
+            // permanent. Re-link from the description this batch still holds rather than discarding
+            // a graph whose ownership the batch itself can state.
+            Entity relinked;
+            if (owner == Entity.Null && TryRelinkGeneratedOwner(entity, members, out relinked))
+            {
+                // Owner is already present, so this writes a value without changing the archetype:
+                // the enclosing member array and set stay valid.
+                EntityManager.SetComponentData(entity, new Owner { m_Owner = relinked });
+                // One line per orphan would be hundreds on a large placement; the pass reports a
+                // total, and the first member is enough to identify which graph needed repair.
+                if (_relinkedOwners++ == 0)
+                    Diagnostics.FlightRecorder.Note("transaction owner re-linked " +
+                        DescribeTransactionEntity(entity) + " owner=#" + relinked.Index);
+                owner = relinked;
+            }
             if (owner == Entity.Null || !EntityManager.Exists(owner) ||
                 EntityManager.HasComponent<Deleted>(owner))
             {
-                reason = "a generated net entity has a missing owner";
+                reason = "a generated net entity has a missing owner " +
+                         DescribeOwnerFailure(entity, owner);
                 return false;
             }
             if (EntityManager.HasComponent<Temp>(owner) &&
@@ -1383,6 +1466,171 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                 }
             }
             return true;
+        }
+
+        /// <summary>
+        /// Recover the owner of a sub-element the native resolution pass left unset. Prefer the
+        /// entity's own surviving description; otherwise use the one this batch created, which every
+        /// sub-element of a single placement shares. Ambiguity is never guessed away.
+        /// </summary>
+        private bool TryRelinkGeneratedOwner(Entity entity, HashSet<Entity> members, out Entity owner)
+        {
+            owner = Entity.Null;
+            if (members == null) return false;
+
+            if (EntityManager.HasComponent<OwnerDefinition>(entity))
+            {
+                OwnerDefinition described = EntityManager.GetComponentData<OwnerDefinition>(entity);
+                return TryFindDescribedOwner(entity, described.m_Prefab, described.m_Position,
+                    members, out owner);
+            }
+            // Two different owners in one batch cannot be told apart once the descriptions are
+            // consumed. Re-parenting to the wrong building is worse than rejecting the batch.
+            if (_pendingOwnerDefinitions.Count != 1) return false;
+            ArmedOwnerDefinition armed = _pendingOwnerDefinitions[0];
+            return TryFindDescribedOwner(entity, armed.Prefab, armed.Position, members, out owner);
+        }
+
+        /// <summary>
+        /// A candidate owner must be something the apply passes can already resolve. An entity whose
+        /// own owner is still unset is another orphan: parenting one to the other would build a
+        /// chain that no pass can follow, and an entity may never own itself.
+        /// </summary>
+        private bool IsResolvedOwnerCandidate(Entity candidate, Entity child)
+        {
+            if (candidate == child) return false;
+            if (!EntityManager.HasComponent<Owner>(candidate)) return true;
+            return EntityManager.GetComponentData<Owner>(candidate).m_Owner != Entity.Null;
+        }
+
+        /// <summary>
+        /// Match an owner description against the armed transaction. The native pass compares the
+        /// live transform bit-exactly, which a ground-conforming or attachment pass between
+        /// generation and resolution can defeat; compare on the horizontal plane instead, where a
+        /// placement does not move, and only accept a single candidate.
+        /// </summary>
+        private bool TryFindDescribedOwner(Entity child, Entity prefab,
+            Unity.Mathematics.float3 position, HashSet<Entity> members, out Entity owner)
+        {
+            owner = Entity.Null;
+            if (prefab == Entity.Null) return false;
+
+            // Every sub-element of one placement names the same owner, so a single-entry memo turns
+            // a per-orphan scan of the whole transaction into one scan for the batch.
+            if (prefab == _lastDescribedOwnerPrefab && position.Equals(_lastDescribedOwnerPosition) &&
+                _lastDescribedOwner != Entity.Null && _lastDescribedOwner != child &&
+                members.Contains(_lastDescribedOwner))
+            {
+                owner = _lastDescribedOwner;
+                return true;
+            }
+
+            const float maxHorizontalDistanceSq = 1f;
+            float bestDistanceSq = float.MaxValue;
+            int candidates = 0;
+            foreach (Entity candidate in members)
+            {
+                if (!EntityManager.Exists(candidate) ||
+                    !IsResolvedOwnerCandidate(candidate, child) ||
+                    EntityManager.HasComponent<Deleted>(candidate) ||
+                    !EntityManager.HasComponent<global::Game.Objects.Object>(candidate) ||
+                    !EntityManager.HasComponent<global::Game.Objects.Transform>(candidate) ||
+                    !EntityManager.HasComponent<global::Game.Prefabs.PrefabRef>(candidate)) continue;
+                if (EntityManager.GetComponentData<global::Game.Prefabs.PrefabRef>(candidate)
+                        .m_Prefab != prefab) continue;
+
+                Unity.Mathematics.float3 candidatePosition =
+                    EntityManager.GetComponentData<global::Game.Objects.Transform>(candidate)
+                        .m_Position;
+                float distanceSq = Unity.Mathematics.math.distancesq(
+                    candidatePosition.xz, position.xz);
+                if (distanceSq > maxHorizontalDistanceSq) continue;
+                candidates++;
+                if (distanceSq >= bestDistanceSq) continue;
+                bestDistanceSq = distanceSq;
+                owner = candidate;
+            }
+            if (candidates != 1)
+            {
+                owner = Entity.Null;
+                return false;
+            }
+            _lastDescribedOwnerPrefab = prefab;
+            _lastDescribedOwnerPosition = position;
+            _lastDescribedOwner = owner;
+            return true;
+        }
+
+        /// <summary>
+        /// Name the entity a validation rule rejected. The reason string alone cannot distinguish an
+        /// owner that never resolved from one deleted mid-transaction, which left several recorded
+        /// sessions undiagnosable.
+        /// </summary>
+        private string DescribeOwnerFailure(Entity entity, Entity owner)
+        {
+            var detail = new System.Text.StringBuilder("(");
+            detail.Append(DescribeTransactionEntity(entity));
+            detail.Append(EntityManager.HasComponent<OwnerDefinition>(entity)
+                ? " ownerDefinition=present"
+                : " ownerDefinition=consumed");
+            if (owner == Entity.Null) detail.Append(" owner=unset");
+            else if (!EntityManager.Exists(owner))
+                detail.Append(" owner=#").Append(owner.Index).Append("=gone");
+            else detail.Append(" owner=#").Append(owner.Index).Append("=deleted");
+            detail.Append(" armedOwners=").Append(_pendingOwnerDefinitions.Count);
+            // Owner resolution ignores Disabled entities, and the isolation this commit path applies
+            // uses exactly that tag. Say so when an isolated candidate exists: it separates our own
+            // interference from a description the batch genuinely cannot satisfy.
+            int isolated = IsolatedOwnerCandidates(entity);
+            if (isolated > 0) detail.Append(" isolatedCandidates=").Append(isolated);
+            detail.Append(')');
+            return detail.ToString();
+        }
+
+        private string DescribeTransactionEntity(Entity entity)
+        {
+            var detail = new System.Text.StringBuilder();
+            if (EntityManager.HasComponent<Edge>(entity)) detail.Append("edge");
+            else if (EntityManager.HasComponent<Node>(entity)) detail.Append("node");
+            else if (EntityManager.HasComponent<Lane>(entity)) detail.Append("lane");
+            else if (EntityManager.HasComponent<Aggregate>(entity)) detail.Append("aggr");
+            else if (EntityManager.HasComponent<global::Game.Objects.Object>(entity)) detail.Append("obj");
+            else if (EntityManager.HasComponent<global::Game.Areas.Area>(entity)) detail.Append("area");
+            else detail.Append("other");
+            detail.Append('#').Append(entity.Index);
+
+            if (EntityManager.HasComponent<global::Game.Prefabs.PrefabRef>(entity))
+            {
+                Entity prefab =
+                    EntityManager.GetComponentData<global::Game.Prefabs.PrefabRef>(entity).m_Prefab;
+                detail.Append(" prefab=").Append(PrefabIndex.SafeName(_prefabSystem, prefab));
+            }
+            if (EntityManager.HasComponent<Temp>(entity))
+                detail.Append(" flags=").Append(EntityManager.GetComponentData<Temp>(entity)
+                    .m_Flags.ToString().Replace(", ", "|"));
+            return detail.ToString();
+        }
+
+        /// <summary>
+        /// Owners this commit path is currently hiding that could have satisfied the rejected
+        /// entity's description. Only meaningful while the description still exists.
+        /// </summary>
+        private int IsolatedOwnerCandidates(Entity entity)
+        {
+            if (!EntityManager.HasComponent<OwnerDefinition>(entity)) return 0;
+            Entity prefab = EntityManager.GetComponentData<OwnerDefinition>(entity).m_Prefab;
+            if (prefab == Entity.Null) return 0;
+
+            int isolated = 0;
+            for (int i = 0; i < _isolatedLocalTemps.Count; i++)
+            {
+                Entity candidate = _isolatedLocalTemps[i];
+                if (!EntityManager.Exists(candidate) ||
+                    !EntityManager.HasComponent<global::Game.Prefabs.PrefabRef>(candidate)) continue;
+                if (EntityManager.GetComponentData<global::Game.Prefabs.PrefabRef>(candidate)
+                        .m_Prefab == prefab) isolated++;
+            }
+            return isolated;
         }
 
         private bool ValidateTransactionOriginal(Entity entity, Temp temp, bool isNode, bool isEdge,
@@ -1631,15 +1879,28 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
         /// </summary>
         public void ArmNetCommit(System.Action onCommitLost, string source)
         {
-            if (_pendingApply || _awaitingDrain || _invalidatedBatchDraining) return;
+            ArmNetCommit(onCommitLost, null, source);
+        }
+
+        /// <summary>
+        /// Arm one correlated net mutation graph and retain its completion callback until the
+        /// committed Temp graph has fully drained.
+        /// </summary>
+        public bool ArmNetCommit(System.Action onCommitLost,
+            System.Action onCommitComplete, string source)
+        {
+            if (IsCommitBusy) return false;
             _pendingApply = true;
             _pendingTransactionKind = RemoteToolTransactionKind.Net;
+            _pendingOwnerDefinitions.Clear();
+            _lastDescribedOwner = Entity.Null;
             _armTick = System.Environment.TickCount;
             _pendingNetConstructionCharge = 0;
             _pendingNetConstructionChargeCourses = 0;
             _onCommitLost = onCommitLost;
-            _onCommitComplete = null;
+            _onCommitComplete = onCommitComplete;
             Diagnostics.FlightRecorder.Note("net " + source + " batch armed");
+            return true;
         }
 
         /// <summary>
@@ -1650,11 +1911,12 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
         public bool ArmRouteCommit(System.Action onCommitLost,
             System.Action onCommitComplete, string source)
         {
-            if (_pendingApply || _awaitingDrain || _invalidatedBatchDraining ||
-                _applyRoutesSystem == null)
+            if (IsCommitBusy || _applyRoutesSystem == null)
                 return false;
             _pendingApply = true;
             _pendingTransactionKind = RemoteToolTransactionKind.Route;
+            _pendingOwnerDefinitions.Clear();
+            _lastDescribedOwner = Entity.Null;
             _armTick = System.Environment.TickCount;
             _pendingNetConstructionCharge = 0;
             _pendingNetConstructionChargeCourses = 0;
@@ -1669,13 +1931,17 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
         /// validated and consumed together. The source callback is retained until drain completes.
         /// </summary>
         public bool ArmObjectCommit(System.Action onCommitLost, System.Action onCommitComplete,
-            string source, bool rootlessAssetStamp = false)
+            string source, bool rootlessAssetStamp = false,
+            List<ArmedOwnerDefinition> ownerDefinitions = null)
         {
-            if (_pendingApply || _awaitingDrain || _invalidatedBatchDraining) return false;
+            if (IsCommitBusy) return false;
             _pendingApply = true;
             _pendingTransactionKind = rootlessAssetStamp
                 ? RemoteToolTransactionKind.AssetStampGraph
                 : RemoteToolTransactionKind.ObjectGraph;
+            _pendingOwnerDefinitions.Clear();
+            _lastDescribedOwner = Entity.Null;
+            if (ownerDefinitions != null) _pendingOwnerDefinitions.AddRange(ownerDefinitions);
             _armTick = System.Environment.TickCount;
             _pendingNetConstructionCharge = 0;
             _pendingNetConstructionChargeCourses = 0;

@@ -57,6 +57,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
         private const int MaxSelfRealized = 256;
 
+        private const long PlayerPlacedPruneIntervalMs = 30000;
+
         /// <summary>Cap on the host's level-change memory, so a long session cannot grow it without bound.</summary>
         private const int MaxTrackedLevelChanges = 4096;
 
@@ -73,6 +75,14 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         private readonly List<(float3 position, long expiry)> _selfRealized =
             new List<(float3, long)>();
 
+        /// <summary>
+        /// Spawnable-prefab entities proven to have come from a player's object tool. The prefab
+        /// alone cannot make that distinction: specialized-industry facilities deliberately use a
+        /// level-one SpawnableBuildingData building inside their placed object/area graph.
+        /// </summary>
+        private readonly HashSet<Entity> _playerPlacedGrowables = new HashSet<Entity>();
+        private readonly List<Entity> _stalePlayerPlacedGrowables = new List<Entity>();
+
         /// <summary>Host-side: the level-up target already announced per building.</summary>
         private readonly Dictionary<Entity, Entity> _announcedLevelChange = new Dictionary<Entity, Entity>();
         private readonly List<Entity> _staleLevelChanges = new List<Entity>();
@@ -80,6 +90,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         private uint _sequence;
         private long _lastLevelScanMs;
         private long _lastStatsMs;
+        private long _lastPlayerPlacedPruneMs;
 
         // Counters behind the periodic summary. Individual events are logged at verbose level; the
         // summary is what a normal log carries, so a desync report always shows the shape of the
@@ -185,6 +196,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         {
             if (!_incoming.IsEmpty) SyncInbox.Clear(_incoming);
             _selfRealized.Clear();
+            _playerPlacedGrowables.Clear();
+            _stalePlayerPlacedGrowables.Clear();
+            _lastPlayerPlacedPruneMs = 0;
             // A replaced world arrives complete. Anything still queued for the old one refers to
             // buildings that no longer exist, and every sequence number belongs to a city that is
             // gone: keeping either would apply a stale decision to a fresh world.
@@ -210,6 +224,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
             MultiplayerSession session = service.Session;
             long now = service.NowMs;
+            PrunePlayerPlacedGrowables(now);
             ApplyLocalAuthority(session);
 
             if (session.Role != SessionRole.Host)
@@ -232,13 +247,53 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         }
 
         /// <summary>
-        /// True for a building the zoning simulation owns end to end. Signature buildings share the
-        /// spawnable data but are placed by a player, so they travel as ordinary placements.
+        /// True for a prefab eligible for simulation growth. This is only the prefab half of the
+        /// decision: specialized-industry placements can use the same data, so their live entity
+        /// origin is resolved by <see cref="IsAutonomousGrowable"/>.
         /// </summary>
         private bool IsGrowablePrefab(Entity prefab) =>
             prefab != Entity.Null && EntityManager.Exists(prefab) &&
             EntityManager.HasComponent<SpawnableBuildingData>(prefab) &&
             !EntityManager.HasComponent<SignatureBuildingData>(prefab);
+
+        /// <summary>
+        /// True only for a simulation-authored zoned building. A specialized-industry placement
+        /// can use the same SpawnableBuildingData as a growable, so origin and the committed
+        /// attachment/area graph decide before either capture or client-side rejection runs.
+        /// </summary>
+        private bool IsAutonomousGrowable(Entity entity, long now)
+        {
+            if (entity == Entity.Null || !EntityManager.Exists(entity) ||
+                !EntityManager.HasComponent<PrefabRef>(entity)) return false;
+            Entity prefab = EntityManager.GetComponentData<PrefabRef>(entity).m_Prefab;
+            if (!IsGrowablePrefab(prefab)) return false;
+            if (_playerPlacedGrowables.Contains(entity)) return false;
+
+            if (_buildSync != null && _buildSync.ConsumePlayerPlacedSpawnable(entity, now))
+            {
+                _playerPlacedGrowables.Add(entity);
+                Mod.Verbose("[MP] GrowableSync: excluded player-placed spawnable '" +
+                            PrefabIndexSafeName(prefab) + "' from autonomous lifecycle sync.");
+                Diagnostics.FlightRecorder.Note("player-placed spawnable excluded from growables");
+                return false;
+            }
+            return true;
+        }
+
+        private void PrunePlayerPlacedGrowables(long now)
+        {
+            if (_playerPlacedGrowables.Count == 0 ||
+                (_lastPlayerPlacedPruneMs != 0 &&
+                 now - _lastPlayerPlacedPruneMs < PlayerPlacedPruneIntervalMs)) return;
+            _lastPlayerPlacedPruneMs = now;
+
+            _stalePlayerPlacedGrowables.Clear();
+            foreach (Entity entity in _playerPlacedGrowables)
+                if (!EntityManager.Exists(entity)) _stalePlayerPlacedGrowables.Add(entity);
+            for (int i = 0; i < _stalePlayerPlacedGrowables.Count; i++)
+                _playerPlacedGrowables.Remove(_stalePlayerPlacedGrowables[i]);
+            _stalePlayerPlacedGrowables.Clear();
+        }
 
         private byte CaptureStateFlags(Entity entity)
         {

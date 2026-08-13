@@ -4,7 +4,16 @@ namespace CS2MultiplayerMod.Core.Protocol
     {
         /// <summary>
         /// Wire-format version. Bump when message layout changes to refuse handshake on mismatch.
-        /// Current v37 adds zone-grown buildings: command id 27 carries the appearance, level
+        /// Current v39 adds command id 28, an atomic net-tool operation carrying the complete set
+        /// of placement, deletion, and replacement commands produced by one mixed road gesture.
+        /// Receivers can now validate and commit that heterogeneous set against one topology rather
+        /// than applying three independently ordered streams. v38 adds compact placement inputs to
+        /// native object operations. Ordinary and
+        /// specialized-industry buildings now carry the object tool's random seed and snapped
+        /// target so a receiver can regenerate the complete building/lot/driveway graph against its
+        /// own road subdivision, instead of dropping the building when the sender's finished
+        /// road-alignment definitions cannot be mapped one-for-one. v37 adds zone-grown buildings:
+        /// command id 27 carries the appearance, level
         /// change, condition and removal of a building the zoning simulation grew, and city-state
         /// channel 18 carries the host's zone demand and occupancy counts for comparison. The
         /// spawner picks its building, its visual variant and its level-up target from a stream
@@ -70,7 +79,7 @@ namespace CS2MultiplayerMod.Core.Protocol
         /// islands) reattach on the receiver.
         /// See <see cref="Messages.HandshakeRequest"/> and version notes in doc/internals.
         /// </summary>
-        public const int ProtocolVersion = 37;
+        public const int ProtocolVersion = 39;
 
         /// <summary>
         /// Hard cap on a single payload, guarding against corrupt length prefixes.

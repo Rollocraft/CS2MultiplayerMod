@@ -18,7 +18,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             Busy,
             /// <summary>This build of the game does not expose the generator; use the fallback path.</summary>
             Unsupported,
-            /// <summary>The generator produced nothing usable; the edit must be dropped.</summary>
+            /// <summary>The generator produced nothing usable; the caller must use its fallback.</summary>
             Failed,
         }
 

@@ -77,6 +77,11 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         // point on preview frames so the apply capture can still recover its destination net parent.
         private ControlPoint _lastObjectToolControlPoint;
         private bool _hasLastObjectToolControlPoint;
+        // Ordinary one-point building placement is regenerated remotely from this snapped point.
+        // Keep it separately from relocation because both modes use the same native control-point
+        // type but have different command lifecycles.
+        private ControlPoint _lastPlacementControlPoint;
+        private bool _hasLastPlacementControlPoint;
         // The stamp placement the standing definitions were generated from. An asset stamp travels
         // as this one point plus its prefab and tool seed, so the peer regenerates the graph rather
         // than rebuilding it from transmitted definitions.
@@ -253,6 +258,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             DrainNativeObjectOperations();
             _cachedLocalObjectOperation = null;
             ClearRecentLocalObjectOperations();
+            ClearPlayerPlacedSpawnables();
             _selectedAssetStampPrefabName = null;
             ClearSpecializedAreaCapture();
             _nativeLifecycleCapturedThisFrame = false;
@@ -261,6 +267,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             _localObjectApplyThisFrame = false;
             _switchedAwayObjectTool = null;
             _hasLastObjectToolControlPoint = false;
+            _hasLastPlacementControlPoint = false;
             _hasLastStampControlPoint = false;
             _localLifecycleApplyThisFrame = false;
             _partialPlacementRecoveryRequested = false;
@@ -339,6 +346,11 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     RememberObjectToolControlPoint(activeObjectTool);
                 else
                     _hasLastObjectToolControlPoint = false;
+
+                if (activeObjectTool.actualMode == ObjectToolSystem.Mode.Create)
+                    RememberPlacementControlPoint(activeObjectTool);
+                else
+                    _hasLastPlacementControlPoint = false;
 
                 // The apply frame's capture runs at ToolUpdate, before this sample, so it reads the
                 // preview point that actually produced the definitions now committing.

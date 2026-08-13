@@ -10,6 +10,7 @@ using Unity.Mathematics;
 using CS2MultiplayerMod.Core.Protocol.Messages;
 using CS2MultiplayerMod.Core.Session;
 using CS2MultiplayerMod.Game.Sync.Commands;
+using CS2MultiplayerMod.Game.Sync.Infrastructure;
 
 namespace CS2MultiplayerMod.Game.Sync.Systems
 {
@@ -55,12 +56,24 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             // and an unmatchable replacement would rescan all live edges every frame for good.
             if (_retry.Count > 0)
             {
+                int expired = 0;
                 if (work == null) work = new List<(NetReplaceCommand, long)>();
                 for (int i = 0; i < _retry.Count; i++)
                 {
                     if (_retry[i].deadline > now) work.Add((_retry[i].command, _retry[i].deadline));
+                    else expired++;
                 }
                 _retry.Clear();
+                if (expired > 0)
+                {
+                    Mod.log.Warn("[MP] NetReplaceSync: " + expired +
+                                 " road replacement target(s) did not resolve within " +
+                                 (RetryWindowMs / 1000) +
+                                 " s; dropping them and requesting authoritative world recovery.");
+                    // One request for this expiry pass, not one per command. The expired entries were
+                    // removed above, so they cannot request recovery again on later frames.
+                    SyncInbox.RequestResync("road replacement target did not resolve");
+                }
             }
 
             SimulationCommandMessage message;
@@ -229,8 +242,26 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         /// </summary>
         private bool CreateReplaceDef(Entity edge, Entity newPrefab, bool invert, Bezier4x3 curve)
         {
-            if (!EntityManager.Exists(edge) || EntityManager.HasComponent<Deleted>(edge)) return false;
-            if (!EntityManager.HasComponent<Curve>(edge) || !EntityManager.HasComponent<Edge>(edge)) return false;
+            return CreateReplaceDefEntity(edge, newPrefab, invert, curve) != Entity.Null;
+        }
+
+        /// <summary>Add a replacement definition to a caller-owned atomic net transaction.</summary>
+        internal Entity CreateAtomicReplaceDef(Entity edge, Entity newPrefab, bool invert,
+            Bezier4x3 curve)
+        {
+            return CreateReplaceDefEntity(edge, newPrefab, invert, curve);
+        }
+
+        internal void AdoptAtomicReplacement(Entity edge, Entity newPrefab, Bezier4x3 curve) =>
+            _edgeBaseline[edge] = new EdgeBaseline { Prefab = newPrefab, Curve = curve };
+
+        private Entity CreateReplaceDefEntity(Entity edge, Entity newPrefab, bool invert,
+            Bezier4x3 curve)
+        {
+            if (!EntityManager.Exists(edge) || EntityManager.HasComponent<Deleted>(edge)) return Entity.Null;
+            if (!EntityManager.HasComponent<Curve>(edge) || !EntityManager.HasComponent<Edge>(edge)) return Entity.Null;
+            Entity def = Entity.Null;
+            bool completed = false;
             try
             {
                 Edge ends = EntityManager.GetComponentData<Edge>(edge);
@@ -248,7 +279,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 // bridge) would commit as a GROUND net at that Y and terraform the ground to meet it.
                 float2 startElevation = NodeElevation(startNode);
                 float2 endElevation = NodeElevation(endNode);
-                Entity def = EntityManager.CreateEntity();
+                def = EntityManager.CreateEntity();
                 EntityManager.AddComponentData(def, new CreationDefinition
                 {
                     m_Original = edge,
@@ -283,12 +314,18 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 // Self-cleanup: consumed this frame (Updated), swept at frame end (Deleted) — same
                 // recipe as the build path's courses; stale definitions must not linger.
                 EntityManager.AddComponent<Deleted>(def);
-                return true;
+                completed = true;
+                return def;
             }
             catch (System.Exception ex)
             {
                 Mod.log.Warn("[MP] NetReplaceSync: failed to build replacement definition: " + ex.Message);
-                return false;
+                return Entity.Null;
+            }
+            finally
+            {
+                if (!completed && def != Entity.Null && EntityManager.Exists(def))
+                    EntityManager.DestroyEntity(def);
             }
         }
 

@@ -145,7 +145,14 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
             // clicks, and applying only a prefix lets intermediate node reduction deform the rest.
             List<SimulationCommandMessage> work;
             bool nativeOperation;
-            if (!TryTakeCompleteOperation(session, now, out work, out nativeOperation)) return;
+            NetToolOperationCommand mixedOperation;
+            if (!TryTakeCompleteOperation(session, now, out work, out nativeOperation,
+                    out mixedOperation)) return;
+            if (mixedOperation != null)
+            {
+                RealizeMixedNetOperation(session, work[0], mixedOperation, now);
+                return;
+            }
 
             NetOperationKey completedKey = default(NetOperationKey);
             bool hasCompletedKey = false;
@@ -918,10 +925,12 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
         /// waits briefly and is then dropped as a whole, never realized as broken geometry.
         /// </summary>
         private bool TryTakeCompleteOperation(MultiplayerSession session, long now,
-            out List<SimulationCommandMessage> operation, out bool nativeOperation)
+            out List<SimulationCommandMessage> operation, out bool nativeOperation,
+            out NetToolOperationCommand mixedOperation)
         {
             operation = null;
             nativeOperation = false;
+            mixedOperation = null;
 
             const int MaxScan = NetInboxCap;
             var scanned = new List<SimulationCommandMessage>();
@@ -936,6 +945,35 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                 SimulationCommandMessage message;
                 if (!TryTakeNextPlacementMessage(out message)) break;
                 if (message.OriginPlayerId == session.LocalPlayerId) continue;
+
+                if (message.CommandId == NetToolOperationCommand.Id)
+                {
+                    if (expected == 0)
+                    {
+                        try { mixedOperation = NetToolOperationCommand.Decode(message.Body); }
+                        catch (System.Exception ex)
+                        {
+                            Mod.log.Warn("[MP] NetSync: dropping malformed mixed net operation: " +
+                                         ex.Message);
+                            SyncInbox.RequestResync("malformed mixed net operation");
+                            return false;
+                        }
+                        operation = new List<SimulationCommandMessage>(1) { message };
+                        return true;
+                    }
+
+                    // It arrived after the first fragment of an older placement operation. Keep it
+                    // in the ordered prefix while scanning for that older operation's remaining
+                    // fragments; it will be the next operation realized, never overtaken.
+                    scanned.Add(message);
+                    continue;
+                }
+                if (message.CommandId != NetPlacementCommand.Id)
+                {
+                    Mod.log.Warn("[MP] NetSync: dropping unsupported queued command " +
+                                 message.CommandId + ".");
+                    continue;
+                }
 
                 NetPlacementCommand command;
                 try { command = NetPlacementCommand.Decode(message.Body); }
@@ -995,6 +1033,11 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                 var later = new List<SimulationCommandMessage>();
                 for (int i = 0; i < scanned.Count; i++)
                 {
+                    if (scanned[i].CommandId != NetPlacementCommand.Id)
+                    {
+                        later.Add(scanned[i]);
+                        continue;
+                    }
                     NetPlacementCommand command;
                     try { command = NetPlacementCommand.Decode(scanned[i].Body); }
                     catch { continue; }
@@ -1028,6 +1071,11 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
             var deferred = new List<SimulationCommandMessage>();
             for (int i = 0; i < scanned.Count; i++)
             {
+                if (scanned[i].CommandId != NetPlacementCommand.Id)
+                {
+                    deferred.Add(scanned[i]);
+                    continue;
+                }
                 NetPlacementCommand command;
                 try { command = NetPlacementCommand.Decode(scanned[i].Body); }
                 catch { continue; }
