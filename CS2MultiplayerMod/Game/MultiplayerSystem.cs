@@ -81,6 +81,12 @@ namespace CS2MultiplayerMod.Game
 
             service.Update(World);
             PumpHealth(service);
+
+            // This system runs at UIUpdate, which the game drives once per rendered frame, so it
+            // is the honest place to time one. Only while gameplay is live: a world load would
+            // otherwise report its own multi-second frames as the session's.
+            if (service.GameplaySyncReady) FrameProbe.Sample();
+            else FrameProbe.Reset();
         }
 
         /// <summary>
