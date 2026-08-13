@@ -29,7 +29,12 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         private const long EditPendingTimeoutMs = 5000;
 
         private readonly Dictionary<byte, IStateChannel> _channels = new Dictionary<byte, IStateChannel>();
+        private readonly List<IPumpedStateChannel> _pumped = new List<IPumpedStateChannel>();
         private readonly HashSet<byte> _editable = new HashSet<byte>();
+        // Newest queued snapshot per channel, rebuilt per drain.
+        private readonly Dictionary<byte, StateSnapshotMessage> _newestSnapshot =
+            new Dictionary<byte, StateSnapshotMessage>();
+        private readonly List<byte> _newestOrder = new List<byte>();
         private readonly ConcurrentQueue<StateSnapshotMessage> _incoming = new ConcurrentQueue<StateSnapshotMessage>();
         private readonly ConcurrentQueue<StateEditMessage> _incomingEdits = new ConcurrentQueue<StateEditMessage>();
         private readonly Stopwatch _clock = Stopwatch.StartNew();
@@ -45,6 +50,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         private long _lastEditScanMs;
         private long _lastLogMs;
         private int _applied;
+        private int _superseded;
 
         private struct PendingEdit
         {
@@ -106,7 +112,12 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             if (_treeStateChannel != null) _treeStateChannel.Prioritize(entity);
         }
 
-        private void Register(IStateChannel channel) => _channels[channel.ChannelId] = channel;
+        private void Register(IStateChannel channel)
+        {
+            _channels[channel.ChannelId] = channel;
+            var pumped = channel as IPumpedStateChannel;
+            if (pumped != null) _pumped.Add(pumped);
+        }
 
         private void RegisterEditable(IStateChannel channel)
         {
@@ -124,6 +135,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             {
                 // Leaving a session invalidates everything we knew about the host's state.
                 if (_lastHostPayload.Count > 0) { _lastHostPayload.Clear(); _pendingEdits.Clear(); }
+                for (int i = 0; i < _pumped.Count; i++) _pumped[i].ResetPending();
                 return;
             }
 
@@ -136,6 +148,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             {
                 DetectLocalEdits(session);
                 ApplyIncoming();
+                PumpChannels();
             }
         }
 

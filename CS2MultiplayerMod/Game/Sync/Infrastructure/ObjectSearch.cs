@@ -35,21 +35,46 @@ namespace CS2MultiplayerMod.Game.Sync.Infrastructure
         /// </summary>
         public void CollectNear(float3 position, float radius, NativeList<Entity> results)
         {
-            results.Clear();
+            BeginBatch().CollectNear(position, radius, results);
+        }
 
+        /// <summary>
+        /// Holds the tree across a run of queries. Acquiring it per query re-enters the job system
+        /// for every point, which for a batch of thousands is thousands of round trips to answer
+        /// one question. Valid for the rest of the calling system's update: component writes are
+        /// fine in between, structural changes are not.
+        /// </summary>
+        public Batch BeginBatch()
+        {
             JobHandle dependencies;
             NativeQuadTree<Entity, QuadTreeBoundsXZ> tree =
                 _search.GetStaticSearchTree(readOnly: true, out dependencies);
             // Read on the main thread: the callers make structural changes straight afterwards,
             // which would sync these jobs anyway.
             dependencies.Complete();
+            return new Batch(tree);
+        }
 
-            var iterator = new NearbyIterator
+        public struct Batch
+        {
+            private NativeQuadTree<Entity, QuadTreeBoundsXZ> _tree;
+
+            internal Batch(NativeQuadTree<Entity, QuadTreeBoundsXZ> tree)
             {
-                m_Bounds = new Bounds3(position - radius, position + radius),
-                m_Results = results,
-            };
-            tree.Iterate(ref iterator);
+                _tree = tree;
+            }
+
+            /// <summary>See <see cref="ObjectSearch.CollectNear"/>.</summary>
+            public void CollectNear(float3 position, float radius, NativeList<Entity> results)
+            {
+                results.Clear();
+                var iterator = new NearbyIterator
+                {
+                    m_Bounds = new Bounds3(position - radius, position + radius),
+                    m_Results = results,
+                };
+                _tree.Iterate(ref iterator);
+            }
         }
 
         private struct NearbyIterator :

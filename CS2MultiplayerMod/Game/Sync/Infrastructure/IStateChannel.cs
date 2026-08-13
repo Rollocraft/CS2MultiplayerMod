@@ -21,4 +21,17 @@ namespace CS2MultiplayerMod.Game.Sync.Infrastructure
         /// <summary>Client: apply a received snapshot to the world.</summary>
         void Apply(EntityManager entityManager, NetworkReader reader);
     }
+
+    /// <summary>
+    /// A channel whose snapshot costs too much to resolve in the frame it lands in.
+    /// <see cref="IStateChannel.Apply"/> takes the payload and returns; the client then calls
+    /// <see cref="Pump"/> every frame until that payload is consumed.
+    /// </summary>
+    public interface IPumpedStateChannel
+    {
+        void Pump(EntityManager entityManager);
+
+        /// <summary>Drop the standing payload: it describes a world that is no longer loaded.</summary>
+        void ResetPending();
+    }
 }

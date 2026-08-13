@@ -42,31 +42,65 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
         private void ApplyIncoming()
         {
+            // A snapshot is absolute state, so of everything queued for one channel only the
+            // newest can matter. Applying them all in the frame that drains them turned any
+            // hitch into a spiral: the queue that built up during a long frame made the next
+            // frame longer still, which is how one stutter became a stall.
+            _newestSnapshot.Clear();
+            _newestOrder.Clear();
+            int queued = 0;
             StateSnapshotMessage snapshot;
             while (_incoming.TryDequeue(out snapshot))
             {
-                IStateChannel channel;
-                if (!_channels.TryGetValue(snapshot.ChannelId, out channel)) continue;
+                queued++;
+                if (!_channels.ContainsKey(snapshot.ChannelId)) continue;
 
+                // Every snapshot of an editable channel is still inspected, superseded or not:
+                // one of them may be the host echoing our own edit back, which is what retires it.
                 if (_editable.Contains(snapshot.ChannelId) && !ShouldApplyEditable(snapshot)) continue;
 
+                if (!_newestSnapshot.ContainsKey(snapshot.ChannelId))
+                    _newestOrder.Add(snapshot.ChannelId);
+                _newestSnapshot[snapshot.ChannelId] = snapshot;
+            }
+
+            for (int i = 0; i < _newestOrder.Count; i++)
+            {
+                StateSnapshotMessage newest = _newestSnapshot[_newestOrder[i]];
                 try
                 {
-                    channel.Apply(EntityManager, new NetworkReader(snapshot.Data));
+                    _channels[newest.ChannelId].Apply(EntityManager, new NetworkReader(newest.Data));
                     _applied++;
                 }
                 catch (System.Exception ex)
                 {
-                    Mod.log.Warn("[MP] CityState: dropping bad state on channel " + snapshot.ChannelId + ": " + ex.Message);
+                    Mod.log.Warn("[MP] CityState: dropping bad state on channel " + newest.ChannelId + ": " + ex.Message);
                 }
             }
+
+            _superseded += queued - _newestOrder.Count;
 
             long now = _clock.ElapsedMilliseconds;
             if (_applied > 0 && now - _lastLogMs >= 30000)
             {
                 _lastLogMs = now;
-                Mod.Verbose("[MP] CityState: applied " + _applied + " state snapshot(s) from host in last 30s.");
+                Mod.Verbose("[MP] CityState: applied " + _applied + " state snapshot(s) from host in last 30s" +
+                            (_superseded > 0 ? ", " + _superseded + " superseded before apply." : "."));
                 _applied = 0;
+                _superseded = 0;
+            }
+        }
+
+        /// <summary>Advance the channels that spread one snapshot over several frames.</summary>
+        private void PumpChannels()
+        {
+            for (int i = 0; i < _pumped.Count; i++)
+            {
+                try { _pumped[i].Pump(EntityManager); }
+                catch (System.Exception ex)
+                {
+                    Mod.log.Warn("[MP] CityState: channel pump failed: " + ex.Message);
+                }
             }
         }
 
