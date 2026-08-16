@@ -50,6 +50,7 @@ namespace CS2MultiplayerMod.Game
         private readonly ConcurrentDictionary<int, RemotePlayer> _remotePlayers =
             new ConcurrentDictionary<int, RemotePlayer>();
         private ClientWorldPhase _phase = ClientWorldPhase.None;
+        private long _worldInstallGeneration;
         private long _phaseChangedMs;
         private bool _sawLoading;
         private string _lastFault;
@@ -89,6 +90,13 @@ namespace CS2MultiplayerMod.Game
 
         /// <summary>The joining client's place in the world-handover flow.</summary>
         public ClientWorldPhase WorldPhase => _phase;
+
+        /// <summary>
+        /// Client-local generation of successfully installed authoritative worlds. It advances
+        /// only when a Resume is accepted after WaitingForResume; aborting back to the old world
+        /// deliberately leaves it unchanged.
+        /// </summary>
+        public long WorldInstallGeneration => _worldInstallGeneration;
 
         /// <summary>Master switch from the settings screen.</summary>
         public static bool ModEnabled => Mod.Setting == null || Mod.Setting.EnableMod;

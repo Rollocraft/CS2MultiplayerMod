@@ -4,7 +4,25 @@ namespace CS2MultiplayerMod.Core.Protocol
     {
         /// <summary>
         /// Wire-format version. Bump when message layout changes to refuse handshake on mismatch.
-        /// Current v39 adds command id 28, an atomic net-tool operation carrying the complete set
+        /// Current v44 extends channel 21 with the three things that made two cities disagree about
+        /// the same house even while the occupancy numbers matched: the random name slots behind a
+        /// family's surname and each resident's first name, and the building site's construction
+        /// rate. All three are drawn from each machine's own clock, so a house given a slow rate on
+        /// one peer and a fast one on the other finished minutes apart, and its residents were
+        /// never called the same thing. v43 adds city-state channel 21: bounded rolling,
+        /// host-authoritative residential
+        /// occupancy. Each page is an absolute roster for the properties it names - the households
+        /// living there and the residents in them - and a client reconciles its own building
+        /// against it, moving households in through the game's own renter pipeline. Identity is
+        /// (property, slot), so nothing has to be agreed at join and a lost, late or repeated page
+        /// converges to the same state; a miss is never a reason to reload the world.
+        /// The channel 19 wire format added in v40 and withdrawn in v41 is gone: it captured only
+        /// brand-new households, so the common case - a family that already existed moving into a
+        /// newly grown building - never reached the wire, while the client's spawner was already
+        /// held. v42 adds channel 20, bounded rolling numeric rent for properties that already
+        /// exist on every peer, applied between the game's rent-adjust and rent-payment systems.
+        /// v39 adds
+        /// command id 28, an atomic net-tool operation carrying the complete set
         /// of placement, deletion, and replacement commands produced by one mixed road gesture.
         /// Receivers can now validate and commit that heterogeneous set against one topology rather
         /// than applying three independently ordered streams. v38 adds compact placement inputs to
@@ -79,7 +97,7 @@ namespace CS2MultiplayerMod.Core.Protocol
         /// islands) reattach on the receiver.
         /// See <see cref="Messages.HandshakeRequest"/> and version notes in doc/internals.
         /// </summary>
-        public const int ProtocolVersion = 39;
+        public const int ProtocolVersion = 44;
 
         /// <summary>
         /// Hard cap on a single payload, guarding against corrupt length prefixes.

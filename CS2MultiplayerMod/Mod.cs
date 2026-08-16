@@ -99,6 +99,20 @@ namespace CS2MultiplayerMod
             // state) now stays in sync even while a player is paused. Channel capture is
             // gated to ~1 Hz internally, so the render-rate phase adds no extra traffic.
             updateSystem.UpdateAt<Game.Sync.Systems.CityStateSyncSystem>(SystemUpdatePhase.UIUpdate);
+            // RentAdjustSystem writes one of sixteen property buckets. Insert the host correction
+            // directly after RentAdjust; the game's existing phase order also leaves it before
+            // PropertyRenterSystem, whose later payment pass consumes the corrected value.
+            // PropertyRentSyncSystem has the same 1024-frame interval, so this does not scan the
+            // whole cache every simulation tick.
+            updateSystem.UpdateAfter<Game.Sync.Systems.PropertyRentSyncSystem,
+                global::Game.Simulation.RentAdjustSystem>(SystemUpdatePhase.GameSimulation);
+            // Before PropertyProcessingSystem: that system drains the rent-action queue this one
+            // fills. The queue is persistent, so an action always survives to the next drain; the
+            // ordering is what lets a move-in land in the same tick it was decided in whenever the
+            // two updates coincide. Their intervals differ, so the game assigns them independent
+            // offsets and that is not every time - worst case the move-in waits a few frames.
+            updateSystem.UpdateBefore<Game.Sync.Systems.ResidentialOccupancySyncSystem,
+                global::Game.Simulation.PropertyProcessingSystem>(SystemUpdatePhase.GameSimulation);
             // Also UIUpdate: publishing the local camera focus must keep going while a
             // player is paused (so partners still see where they are), and GameSimulation
             // barely ticked it - the live log showed ~1 position sent per 30 s.
@@ -142,7 +156,7 @@ namespace CS2MultiplayerMod
             // is what fills in a new street's or district's name draw. Capturing before it would
             // read the draw one frame stale. ModificationEnd also keeps working while the game is
             // paused (unlike GameSimulation), so a rename made in a paused city still replicates,
-            // and the one-frame Created tag the auto-name capture keys on is still alive here.
+            // and the one-frame Created/Updated tags the auto-name capture keys on are alive here.
             updateSystem.UpdateAfter<Game.Sync.Systems.NameSyncSystem,
                 global::Game.Common.RandomLocalizationInitializeSystem>(SystemUpdatePhase.ModificationEnd);
             // UIUpdate, NOT GameSimulation: dev-tree nodes can be purchased while the game
