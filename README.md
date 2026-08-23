@@ -26,24 +26,19 @@ The easiest way is through **Paradox Mods**: find the mod, add it to an **empty*
 
 1. In the mod settings, set your player name and choose the host port, password, max players, LAN-only mode, and world re-sync interval.
 2. Click **Multiplayer** on the main menu, then **Host Game**.
+
+There is two ways to host: **Steam Relay**, which is suited for everyone who owns the game on Steam - and **Direct Connection**, which offers faster Sync times at the cost of setup time and can be used on XBox App, Microsoft Store and Game Pass versions of the game.
+
+3. If you selected **Steam Relay**, copy the join code and send it to your friends. [Instructions for using **Direct Connection**](help/direct_connection.md).
 3. Choose **Load World** for an existing city or **Create World** for a new one. If you use an existing save, **make a backup first**.
 4. Finish the game's normal world selection. The multiplayer session starts automatically once the city is fully loaded.
 5. If a city is already open, you can still start hosting from the in-game Multiplayer panel or the mod settings.
 
-### Playing through the Internet
-For playing with friends that are not connected to your local network, you need to setup TCP port forwarding. Only do this with people you **absolutely trust**.
+--- 
 
-- [Written Tutorial](help/forwarding.md) (recommended)
-- [Video Tutorial](https://www.youtube.com/watch?v=WOZQppVNGvA)
+### Direct Connection
 
----
-
-1. Set up port forwarding (Default port: `25001`) like described in the tutorial above.
-2. Find out your IP Address ([Link](https://api.ipify.org/))
-3. Share the IP Address and the port you forwarded with your friends.
-
-
-**Issues? Check [Troubleshooting](help/forwarding_troubleshoot.md).**
+[Learn how to play via Direct Connection](help/direct_connection.md) (recommended for local play and best performance)
 
 ## Joining a game
 

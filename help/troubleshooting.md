@@ -1,10 +1,11 @@
-Updated `2026-08-06` for version `v0.1.3`. [Current mod version](./CS2MultiplayerMod/Properties/PublishConfiguration.xml#L23).
+Updated `2026-08-11` for version `v0.1.5`. [Current mod version](/CS2MultiplayerMod/Properties/PublishConfiguration.xml#L30).
 # Troubleshooting Guide
 Having Issues? This is a comprehensive troubleshooting guide for the CS2MultiplayerMod. This guide will try to solve common issues with port forwarding, connection issues, CGNAT and mismatching DLC. 
 
 ## Contents & Quicklinks
 
-- [Connection Issues](#connection-issues)
+- [Connection Issues (Steam Relay)](#connection-issues-using-steam-relay)
+- [Connection Issues (Direct)](#connection-issues-using-direct-connection)
 - [Mod Version Issues](#mod-version-issues)
 - [Game Version Issues](#game-version-issues)
 - [DLC Mismatch Issues](#dlc-mismatch-issues)
@@ -22,11 +23,21 @@ Having Issues? This is a comprehensive troubleshooting guide for the CS2Multipla
 
 ---
 
-## Connection Issues
+## Connection Issues using Steam Relay
+
+Make sure that Steam is running. If you are on XBox Version or Microsoft Store version, Steam Relay does not work.
+
+Further troubleshooting:
+
+- Restart your PC
+- Make sure that you have an internet connection and that Steam does too
+- Make sure to correctly copy and paste the connection code.
+
+## Connection Issues using Direct Connection
 
 ### Host
 
-Make sure that you have set up port forwarding. [Learn how to set up port forwarding.](/help/forwarding.md).
+Make sure that you have set up port forwarding. [Learn how to set up port forwarding](/help/forwarding.md).
 
 [Issues with Port Forwarding?](/help/forwarding_troubleshoot.md)
 

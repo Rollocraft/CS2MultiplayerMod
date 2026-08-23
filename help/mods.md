@@ -12,7 +12,7 @@ It is planned to add proper mod compatibility with SOME mods in future versions 
 
 Nonetheless, some mods that only show  might work with CS2MultiplayerMod. This is a non-comprehensive list of mod compatibility.
 
-Updated `2026-08-06` for version `v0.1.3`. [Current mod version](./CS2MultiplayerMod/Properties/PublishConfiguration.xml#L23). Contributions & testing welcome.
+Updated `2026-08-06` for version `v0.1.3`. [Current mod version](./CS2MultiplayerMod/Properties/PublishConfiguration.xml#L30). Contributions & testing welcome.
 
 --- 
 
