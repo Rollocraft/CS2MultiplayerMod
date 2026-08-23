@@ -5,6 +5,7 @@ import { getModule } from "cs2/modding";
 import { Button, Portal } from "cs2/ui";
 import { CSSProperties, useEffect, useState } from "react";
 import { useBackKey } from "mods/back-action";
+import { HELP_PAGE, OpenHelpButton } from "mods/help-link";
 import { MULTIPLAYER_BLUE } from "mods/multiplayer-theme";
 
 // Binding group shared with MultiplayerUISystem on the C# side.
@@ -38,6 +39,7 @@ const statusKind$ = bindValue<string>(GROUP, "statusKind", "offline");
 const statusTitle$ = bindValue<string>(GROUP, "statusTitle", "");
 const statusDetail$ = bindValue<string>(GROUP, "statusDetail", "");
 const statusHelp$ = bindValue<string>(GROUP, "statusHelp", "");
+const statusHelpPage$ = bindValue<string>(GROUP, "statusHelpPage", "");
 const progressMode$ = bindValue<string>(GROUP, "progressMode", "none");
 const mapTransferPercent$ = bindValue<number>(GROUP, "mapTransferPercent", -1);
 const worldSendPercent$ = bindValue<number>(GROUP, "worldSendPercent", -1);
@@ -274,6 +276,16 @@ const styles: Record<string, CSSProperties> = {
         marginTop: "40rem",
         padding: "9rem 28rem",
     },
+    actions: {
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        marginTop: "30rem",
+    },
+    actionButton: {
+        margin: "0 6rem",
+        padding: "9rem 24rem",
+    },
 };
 
 // Animated indeterminate bar (connecting / loading, before a byte count exists).
@@ -309,6 +321,7 @@ export const JoinLoadingScreen = ({ surface }: { surface: LoadingScreenSurface }
     const statusTitle = useValue(statusTitle$);
     const statusDetail = useValue(statusDetail$);
     const statusHelp = useValue(statusHelp$);
+    const statusHelpPage = useValue(statusHelpPage$);
     const progressMode = useValue(progressMode$);
     const mapTransferPercent = useValue(mapTransferPercent$);
     const worldSendPercent = useValue(worldSendPercent$);
@@ -476,16 +489,25 @@ export const JoinLoadingScreen = ({ surface }: { surface: LoadingScreenSurface }
                                                 )}
                                         </div>
                                     </div>
-                                    <Button
-                                        variant="primary"
-                                        focusKey="exit-notice"
-                                        style={styles.cancel}
-                                        onSelect={clientExitFailed ? retryClientExit : dismissClientExit}
-                                    >
-                                        {clientExitFailed
-                                            ? t(LOC.tryAgain, "Try again")
-                                            : t(LOC.close, "Close")}
-                                    </Button>
+                                    <div style={styles.actions}>
+                                        {clientExitFailed ? (
+                                            <OpenHelpButton
+                                                page={HELP_PAGE.sharedWorldExit}
+                                                focusKey="exit-help"
+                                                style={styles.actionButton}
+                                            />
+                                        ) : null}
+                                        <Button
+                                            variant="primary"
+                                            focusKey="exit-notice"
+                                            style={styles.actionButton}
+                                            onSelect={clientExitFailed ? retryClientExit : dismissClientExit}
+                                        >
+                                            {clientExitFailed
+                                                ? t(LOC.tryAgain, "Try again")
+                                                : t(LOC.close, "Close")}
+                                        </Button>
+                                    </div>
                                 </>
                             )
                         ) : failed ? (
@@ -502,13 +524,20 @@ export const JoinLoadingScreen = ({ surface }: { surface: LoadingScreenSurface }
                                         </>
                                     ) : null}
                                 </div>
-                                <Button
-                                    variant="primary"
-                                    focusKey="dismiss"
-                                    style={styles.cancel}
-                                    onSelect={dismiss}>
-                                    {t(LOC.close, "Close")}
-                                </Button>
+                                <div style={styles.actions}>
+                                    <OpenHelpButton
+                                        page={statusHelpPage || HELP_PAGE.errors}
+                                        focusKey="error-help"
+                                        style={styles.actionButton}
+                                    />
+                                    <Button
+                                        variant="primary"
+                                        focusKey="dismiss"
+                                        style={styles.actionButton}
+                                        onSelect={dismiss}>
+                                        {t(LOC.close, "Close")}
+                                    </Button>
+                                </div>
                             </>
                         ) : (
                             <>

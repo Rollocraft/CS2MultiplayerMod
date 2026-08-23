@@ -76,13 +76,19 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
             MultiplayerService service = Mod.Service;
             if (service == null) return;
 
-            // Begin closes GameplaySyncReady before the save is taken. Never let an already armed
-            // graph slip through merely because it was created one ToolUpdate earlier.
-            if (!service.GameplaySyncReady)
+            bool gameplayReady = service.GameplaySyncReady;
+            if (!gameplayReady)
             {
+                // Begin closes admission synchronously, but a graph armed by the preceding
+                // ToolUpdate already belongs to the world. Keep advancing only that graph until it
+                // has committed and left Temp state; cancelling it here races native generation and
+                // cleanup, while returning early strands it forever behind the barrier.
                 DrainNetQueues();
-                PruneRecentRealizedSpans();
-                return;
+                if (!service.WorldSyncBarrierActive || !IsCommitBusy)
+                {
+                    PruneRecentRealizedSpans();
+                    return;
+                }
             }
 
             // A rejected uncommitted graph may only be tagged Deleted, while a committed graph that
@@ -91,7 +97,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
             // can make the apply pipeline consume stale ownership/connectivity state.
             if (_invalidatedBatchDraining)
             {
-                PumpInvalidatedBatchDrain(allowReplay: true);
+                // A replay is new native work. Recovery only waits for the old quarantined graph;
+                // the authoritative snapshot makes replaying it unnecessary once the barrier opens.
+                PumpInvalidatedBatchDrain(allowReplay: gameplayReady);
                 PruneRecentRealizedSpans();
                 return;
             }
@@ -190,7 +198,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
             // Even the observation which releases a drain is a fence frame. RealizeIncoming and
             // sibling systems later in ToolUpdate must wait until BeginRealizeFrame re-opens the
             // coordinator on the following frame.
-            if (IsCommitBusy) return;
+            if (!gameplayReady || IsCommitBusy) return;
 
             MultiplayerSession session = service.Session;
             long startTicks = System.Diagnostics.Stopwatch.GetTimestamp();

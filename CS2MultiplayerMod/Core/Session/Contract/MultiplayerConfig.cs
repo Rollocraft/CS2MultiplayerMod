@@ -48,8 +48,16 @@ namespace CS2MultiplayerMod.Core.Session
         /// </summary>
         public readonly bool RequireJoinApproval;
 
-        /// <summary>Mod build identifier, compared strictly during the handshake.</summary>
+        /// <summary>Mod build identifier, normally compared strictly during the handshake.</summary>
         public readonly string ModVersion;
+
+        /// <summary>
+        /// Host only. Allows a different multiplayer-mod build through the handshake.
+        /// Protocol compatibility remains mandatory and is checked before this flag is
+        /// considered. This is deliberately opt-in because command behavior can still
+        /// differ even when both builds use the same wire format.
+        /// </summary>
+        public readonly bool IgnoreModCompatibilityChecks;
 
         /// <summary>Game build identifier, compared strictly during the handshake.</summary>
         public readonly string GameVersion;
@@ -65,7 +73,8 @@ namespace CS2MultiplayerMod.Core.Session
                                  bool lanOnly = true, bool useEncryption = true, int maxPlayers = 8,
                                  string modVersion = "", string gameVersion = "", string[] dlcList = null,
                                  bool requireJoinApproval = false,
-                                 TransportMode transport = TransportMode.Direct, string joinCode = "")
+                                 TransportMode transport = TransportMode.Direct, string joinCode = "",
+                                 bool ignoreModCompatibilityChecks = false)
         {
             Transport = transport;
             JoinCode = joinCode ?? string.Empty;
@@ -77,6 +86,7 @@ namespace CS2MultiplayerMod.Core.Session
             UseEncryption = useEncryption;
             MaxPlayers = maxPlayers < 2 ? 2 : maxPlayers;
             ModVersion = modVersion ?? string.Empty;
+            IgnoreModCompatibilityChecks = ignoreModCompatibilityChecks;
             GameVersion = gameVersion ?? string.Empty;
             DlcList = dlcList ?? System.Array.Empty<string>();
             RequireJoinApproval = requireJoinApproval;

@@ -11,7 +11,7 @@ The mod is **experimental**. Back up your saves before hosting or joining, and e
 ## Requirements
 
 - Cities: Skylines II (PC Version: Steam, XBox, Gamepass)
-- **All players must run the same version of the mod.** Players will not be able to connect with mismatched versions. 
+- **All players should run the same version of the mod.** A host can allow a different build with the own-risk compatibility override, but incompatible network protocols are always rejected and mixed builds can desync or crash.
 - Players should also have **matching gameplay DLC**. Radio Station DLC are unaffected. Learn how to disable DLC: [Disabling DLC](help/disable_dlc.md)
 - There are **no** mods currently working.
 - (Internet play only: Set up TCP Port Forwarding)
@@ -57,7 +57,7 @@ For playing with friends that are not connected to your local network, you need 
 - **City looks out of sync?** Run `/sync` in chat, or click **Sync World Now** in the mod settings. Clients pull a fresh save from the host; the host refreshes every connected player.
 - **Can't join (protocol mismatch)?** You and the host are on different mod versions. Update to the same build.
 
-Check out **[Troubleshooting](help/troubleshooting.md)** for more issues.
+Check out **[Troubleshooting](help/troubleshooting.md)** or the complete **[Error and Warning Reference](help/errors-and-warnings.md)** for more issues.
 
 ## Technical Details
 

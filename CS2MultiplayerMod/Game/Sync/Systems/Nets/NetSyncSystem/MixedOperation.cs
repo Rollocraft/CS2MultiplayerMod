@@ -620,10 +620,12 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                     float2 startElevation = EndElevation(prepared.Prefab, startSnap, startKind,
                         prepared.Curve.a,
                         new float2(command.Start.ElevationLeft, command.Start.ElevationRight),
+                        command.Start.Flags,
                         ref heightData, ref waterData, out startCorrection);
                     float2 endElevation = EndElevation(prepared.Prefab, endSnap, endKind,
                         prepared.Curve.d,
                         new float2(command.End.ElevationLeft, command.End.ElevationRight),
+                        command.End.Flags,
                         ref heightData, ref waterData, out endCorrection);
                     TallySurfaceCorrection(startCorrection, endCorrection);
 

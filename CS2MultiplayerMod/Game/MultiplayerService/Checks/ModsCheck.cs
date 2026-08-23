@@ -97,12 +97,15 @@ namespace CS2MultiplayerMod.Game
         /// Localized sentence naming the offending mods for the blocking banner, or "" when
         /// nothing else is running (which hides the banner).
         /// </summary>
-        public static string BlockText()
+        public static string BlockText(bool ignored = false)
         {
             string[] names = OtherModNames;
             if (names.Length == 0) return "";
 
             // Reading the names is what refreshes _restartRequired, so the order matters.
+            if (ignored)
+                return L10n.F(L10n.Key.UiModsIgnored, NamesText(names));
+
             return L10n.F(_restartRequired ? L10n.Key.UiModsBlockedRestart : L10n.Key.UiModsBlocked,
                 NamesText(names));
         }

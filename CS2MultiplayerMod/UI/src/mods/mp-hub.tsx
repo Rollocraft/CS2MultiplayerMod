@@ -22,6 +22,7 @@ import {
 } from "react";
 import { useBackKey } from "mods/back-action";
 import { DisclaimerModal, disclaimerAccepted$ } from "mods/disclaimer";
+import { HELP_PAGE, OpenHelpButton } from "mods/help-link";
 import { OtherModsBanner } from "mods/mods-banner";
 import { TransferProgress } from "mods/transfer-progress";
 import { VersionWarningBanner } from "mods/version-banner";
@@ -79,6 +80,7 @@ const LOC = {
     port: "CS2MP.UI.Port",
     password: "CS2MP.UI.Password",
     disconnect: "CS2MP.UI.Disconnect",
+    closeSession: "CS2MP.UI.CloseSession",
 };
 
 const useT = () => {
@@ -103,6 +105,7 @@ const statusKind$ = bindValue<string>(GROUP, "statusKind", "offline");
 const statusTitle$ = bindValue<string>(GROUP, "statusTitle", "Offline");
 const statusDetail$ = bindValue<string>(GROUP, "statusDetail", "");
 const statusHelp$ = bindValue<string>(GROUP, "statusHelp", "");
+const statusHelpPage$ = bindValue<string>(GROUP, "statusHelpPage", "");
 const progressMode$ = bindValue<string>(GROUP, "progressMode", "none");
 const mapTransferPercent$ = bindValue<number>(GROUP, "mapTransferPercent", -1);
 const worldSendPercent$ = bindValue<number>(GROUP, "worldSendPercent", -1);
@@ -468,6 +471,11 @@ const styles: Record<string, CSSProperties> = {
         marginTop: "3rem",
         color: "#d6e2eb",
         lineHeight: "1.35",
+    },
+    errorHelpButton: {
+        marginTop: "7rem",
+        padding: "4rem 10rem",
+        fontSize: "11.5rem",
     },
     lockedNote: {
         fontSize: "12rem",
@@ -996,6 +1004,7 @@ const HostSetupView = () => {
     const statusTitle = useValue(statusTitle$);
     const statusDetail = useValue(statusDetail$);
     const statusHelp = useValue(statusHelp$);
+    const statusHelpPage = useValue(statusHelpPage$);
 
     return (
         <PanelBody
@@ -1016,6 +1025,10 @@ const HostSetupView = () => {
                                     <div style={styles.errorHelp}>{statusHelp}</div>
                                 </>
                             ) : null}
+                            <OpenHelpButton
+                                page={statusHelpPage || HELP_PAGE.errors}
+                                style={styles.errorHelpButton}
+                            />
                         </div>
                     ) : null}
                 </div>
@@ -1212,6 +1225,7 @@ const ClientWorldSaveDialog = ({ onClose }: { onClose: () => void }) => {
         statusText = t(LOC.saveCopyUnavailable,
             "Wait until the host world has fully loaded before saving a copy.");
     }
+    const showProblemHelp = Boolean(statusText) && !saving && !saved;
 
     return (
         <Portal>
@@ -1269,6 +1283,13 @@ const ClientWorldSaveDialog = ({ onClose }: { onClose: () => void }) => {
                                 </Button>
                             ) : (
                                 <>
+                                    {showProblemHelp ? (
+                                        <OpenHelpButton
+                                            page={HELP_PAGE.worldCopy}
+                                            focusKey="save-help"
+                                            style={styles.saveDialogButton}
+                                        />
+                                    ) : null}
                                     <Button
                                         variant="primary"
                                         focusKey="save-copy"
@@ -1442,8 +1463,13 @@ const SessionView = ({ entries, players }: { entries: ChatEntry[]; players: Play
                         {t(LOC.saveCopy, "Save Copy")}
                     </Button>
                 ) : null}
-                <Button variant="flat" style={styles.footerButton} onSelect={() => trigger(GROUP, "disconnect")}>
-                    {t(LOC.disconnect, "Disconnect")}
+                <Button
+                    variant="flat"
+                    style={styles.footerButton}
+                    onSelect={() => trigger(GROUP, "requestDisconnect")}>
+                    {isHost
+                        ? t(LOC.closeSession, "Close Session")
+                        : t(LOC.disconnect, "Disconnect")}
                 </Button>
             </div>
         </>

@@ -11,6 +11,16 @@ namespace CS2MultiplayerMod.Game
 {
     public sealed partial class MultiplayerService
     {
+        private bool _disconnectConfirmationRequested;
+
+        /// <summary>True while an explicit UI disconnect is waiting for confirmation.</summary>
+        public bool DisconnectConfirmationRequested =>
+            _disconnectConfirmationRequested && _session.Role != SessionRole.None;
+
+        /// <summary>Chooses host-specific copy for the confirmation dialog.</summary>
+        public bool DisconnectConfirmationIsHost =>
+            DisconnectConfirmationRequested && _session.Role == SessionRole.Host;
+
         private int HandshakedPeerCount()
         {
             int peers = 0;
@@ -145,6 +155,13 @@ namespace CS2MultiplayerMod.Game
             string detail = ModsCheck.FaultDetail();
             if (detail.Length == 0) return false;
 
+            if (Mod.Setting != null && Mod.Setting.IgnoreModCompatibilityChecks)
+            {
+                _log.Warn("[MP] Ignoring the other-mod compatibility check while trying to " +
+                          action + " at the player's own risk: " + detail + ".");
+                return false;
+            }
+
             _lastFault = detail;
             _log.Warn("[MP] Cannot " + action + ": " + detail +
                       ". Multiplayer runs only with CS2 Multiplayer Mod alone - disable the " +
@@ -157,6 +174,7 @@ namespace CS2MultiplayerMod.Game
             if (!ModEnabled) { _log.Warn("Cannot host: the mod is disabled in settings."); return; }
             if (_session.Role != SessionRole.None) { _log.Warn("Cannot host: a session is already active."); return; }
             if (RefuseForOtherMods("host")) return;
+            _disconnectConfirmationRequested = false;
             ClearClientExitNotice();
             ResetCommandDiagnostics();
             _lastFault = null;
@@ -179,6 +197,7 @@ namespace CS2MultiplayerMod.Game
             if (!ModEnabled) { _log.Warn("Cannot join: the mod is disabled in settings."); return; }
             if (_session.Role != SessionRole.None) { _log.Warn("Cannot join: a session is already active."); return; }
             if (RefuseForOtherMods("join")) return;
+            _disconnectConfirmationRequested = false;
             ClearClientExitNotice();
             ResetCommandDiagnostics();
             _lastFault = null;
@@ -195,8 +214,37 @@ namespace CS2MultiplayerMod.Game
             _session.Join(config);
         }
 
+        /// <summary>
+        /// Ask the UI to confirm a deliberate disconnect. Automatic cleanup paths call
+        /// <see cref="Disconnect"/> directly because the game is already leaving or the
+        /// mod has been disabled and cannot wait for a dialog.
+        /// </summary>
+        public void RequestDisconnect()
+        {
+            if (_session.Role == SessionRole.None) return;
+            if (_disconnectConfirmationRequested) return;
+            _disconnectConfirmationRequested = true;
+            _log.Info("[MP] Waiting for confirmation before " +
+                      (_session.Role == SessionRole.Host
+                          ? "closing the hosted session."
+                          : "disconnecting from the session."));
+        }
+
+        public void CancelDisconnectRequest()
+        {
+            _disconnectConfirmationRequested = false;
+        }
+
+        public void ConfirmDisconnect()
+        {
+            if (!DisconnectConfirmationRequested) return;
+            _disconnectConfirmationRequested = false;
+            Disconnect();
+        }
+
         public void Disconnect()
         {
+            _disconnectConfirmationRequested = false;
             if (_session.Role == SessionRole.Client && _clientHostWorldActive)
                 QueueClientMainMenu("You disconnected from the multiplayer session.");
 
@@ -226,6 +274,7 @@ namespace CS2MultiplayerMod.Game
 
         public void Shutdown()
         {
+            _disconnectConfirmationRequested = false;
             ResetWorldSyncState(restoreSpeed: false); // the world is going away with the process
             _session.StopWithNotice("The host closed the game, so this session has ended.");
             SetPhase(ClientWorldPhase.None);
@@ -289,7 +338,8 @@ namespace CS2MultiplayerMod.Game
                 dlcList: dlcs,
                 requireJoinApproval: hosting && settings.RequireJoinApproval,
                 transport: transport,
-                joinCode: relay && !hosting ? joinCode : "");
+                joinCode: relay && !hosting ? joinCode : "",
+                ignoreModCompatibilityChecks: settings.IgnoreModCompatibilityChecks);
         }
 
     }

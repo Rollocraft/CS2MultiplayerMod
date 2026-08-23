@@ -82,7 +82,8 @@ namespace CS2MultiplayerMod
         /// </summary>
         public bool CannotStartHost()
         {
-            return IsNotInGame() || !IsNotInSession() || CS2MultiplayerMod.Game.ModsCheck.AnyOtherMods;
+            return IsNotInGame() || !IsNotInSession() ||
+                   (CS2MultiplayerMod.Game.ModsCheck.AnyOtherMods && !IgnoreModCompatibilityChecks);
         }
 
         /// <summary>
@@ -179,6 +180,16 @@ namespace CS2MultiplayerMod
         public bool ShowPartnerMarkers { get; set; } = true;
 
         /// <summary>
+        /// Expert escape hatch for mod-specific compatibility checks. This permits other
+        /// active mods locally and lets a host admit a different CS2 Multiplayer Mod build.
+        /// Wire-protocol, game-version and DLC checks remain mandatory because bypassing
+        /// those can make the peers unable to interpret one another's data at all.
+        /// </summary>
+        [SettingsUISection(GeneralTab, GeneralGroup)]
+        [SettingsUIDisableByCondition(typeof(Setting), nameof(IsInSession))]
+        public bool IgnoreModCompatibilityChecks { get; set; } = false;
+
+        /// <summary>
         /// Set once the player accepts the in-game disclaimer gate (shown before the
         /// first host/join). Persisted so it only appears once; intentionally hidden
         /// from the options screen and left out of <see cref="SetDefaults"/> so that
@@ -210,7 +221,7 @@ namespace CS2MultiplayerMod
         [SettingsUISection(GeneralTab, SessionGroup)]
         public bool DisconnectButton
         {
-            set { if (Mod.Service != null) Mod.Service.Disconnect(); }
+            set { if (Mod.Service != null) Mod.Service.RequestDisconnect(); }
         }
 
         // ---- Host tab -----------------------------------------------------------
@@ -428,7 +439,7 @@ namespace CS2MultiplayerMod
         [SettingsUISection(JoinTab, JoinActionGroup)]
         public bool JoinDisconnectButton
         {
-            set { if (Mod.Service != null) Mod.Service.Disconnect(); }
+            set { if (Mod.Service != null) Mod.Service.RequestDisconnect(); }
         }
 
         public override void SetDefaults()
@@ -436,6 +447,7 @@ namespace CS2MultiplayerMod
             EnableMod = true;
             VerboseLogging = false;
             ShowPartnerMarkers = true;
+            IgnoreModCompatibilityChecks = false;
             PlayerName = DefaultPlayerName;
             // Resetting the name asks for the default name again, which on a signed-in
             // copy of the game is the account name, not the literal "Player".

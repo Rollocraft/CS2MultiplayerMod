@@ -1,12 +1,14 @@
 import { bindValue, useValue } from "cs2/api";
 import { useLocalization } from "cs2/l10n";
 import { CSSProperties } from "react";
+import { HELP_PAGE, OpenHelpButton } from "mods/help-link";
 
 // Binding group shared with MultiplayerUISystem on the C# side.
 const GROUP = "cs2mp";
 
 const LOC = {
     title: "CS2MP.UI.ModsBlockedTitle",
+    ignoredTitle: "CS2MP.UI.ModsIgnoredTitle",
 };
 
 const useT = () => {
@@ -14,13 +16,18 @@ const useT = () => {
     return (id: string, fallback: string) => translate(id, fallback) ?? fallback;
 };
 
-// Localized sentence built C#-side (it names the offending mods). Empty when this mod
-// is the only one live, which hides the banner and re-enables the host/join controls.
+// Localized sentence built C#-side (it names the other mods). Empty when this mod
+// is the only one live. With the own-risk override it remains visible as a warning.
 export const modsBlocked$ = bindValue<string>(GROUP, "modsBlocked", "");
+const modsCheckIgnored$ = bindValue<boolean>(GROUP, "modsCheckIgnored", false);
 
-/** Whether other mods are blocking multiplayer. Drives the disabled state of every
- *  control that would start a session. */
-export const useModsBlocked = () => useValue(modsBlocked$).length > 0;
+/** Whether other mods are blocking multiplayer. The own-risk override turns the same
+ *  detection into an advisory notice instead. */
+export const useModsBlocked = () => {
+    const notice = useValue(modsBlocked$);
+    const ignored = useValue(modsCheckIgnored$);
+    return notice.length > 0 && !ignored;
+};
 
 const styles: Record<string, CSSProperties> = {
     banner: {
@@ -64,25 +71,35 @@ const styles: Record<string, CSSProperties> = {
         color: "rgba(255, 255, 255, 0.92)",
         wordBreak: "break-word",
     },
+    helpButton: {
+        marginTop: "7rem",
+        padding: "4rem 10rem",
+        fontSize: "11.5rem",
+    },
 };
 
 /**
- * Blocking notice shown on the Join dialog, the Host world picker and the in-game hub
- * whenever any mod other than this one is live in the active playset. Unlike the
- * untested-version banner this one is not advisory: the same binding disables the
- * controls beside it. Renders nothing when nothing else is running.
+ * Notice shown on the Join dialog, Host world picker and in-game hub whenever any mod
+ * other than this one is live. It blocks by default and becomes an explicit own-risk
+ * warning when the compatibility override is enabled.
  */
 export const OtherModsBanner = ({ style }: { style?: CSSProperties }) => {
     const t = useT();
     const blocked = useValue(modsBlocked$);
+    const ignored = useValue(modsCheckIgnored$);
     if (!blocked) return null;
 
     return (
         <div style={style ? { ...styles.banner, ...style } : styles.banner}>
             <div style={styles.icon} />
             <div style={styles.textWrap}>
-                <div style={styles.title}>{t(LOC.title, "Other Mods Enabled")}</div>
+                <div style={styles.title}>
+                    {ignored
+                        ? t(LOC.ignoredTitle, "Compatibility Check Ignored")
+                        : t(LOC.title, "Other Mods Enabled")}
+                </div>
                 <div style={styles.body}>{blocked}</div>
+                <OpenHelpButton page={HELP_PAGE.mods} style={styles.helpButton} />
             </div>
         </div>
     );

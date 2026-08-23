@@ -10,6 +10,7 @@ Having Issues? This is a comprehensive troubleshooting guide for the CS2Multipla
 - [DLC Mismatch Issues](#dlc-mismatch-issues)
 - ["Join Game" does not show up in Menu](#menu-issues)
 - [Troubleshooting by Error Message](#troubleshooting-by-error-message)
+- [Complete Error and Warning Reference](/help/errors-and-warnings.md)
 
 --- 
 
@@ -61,4 +62,5 @@ Remove the mod on PDXMods. Restart the game. Reinstall the mod on PDXMods. Resta
 Check that you do not have any [launch options](https://cs2.paradoxwikis.com/Launch_Parameters) preventing the mod from working. Check that the mod is in your active playset on PDXMods.
 
 ## Troubleshooting by Error message
-*WIP*
+
+Every in-game multiplayer error now includes an **Open Help** action that targets the relevant guide. For a searchable list of every player-facing error, warning banner, save/exit failure, and multiplayer log-warning family, see the **[Error and Warning Reference](/help/errors-and-warnings.md)**.

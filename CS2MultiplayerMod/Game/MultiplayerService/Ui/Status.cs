@@ -251,6 +251,12 @@ namespace CS2MultiplayerMod.Game
                 ? FriendlyFaultHelp(_lastFault)
                 : "";
 
+        /// <summary>Allow-listed GitHub help page for the current fault, or empty.</summary>
+        public string UiStatusHelpPage =>
+            UiStatusKind == "error" && !string.IsNullOrEmpty(_lastFault)
+                ? FriendlyFaultHelpPage(_lastFault)
+                : "";
+
         /// <summary>
         /// Progress presentation shared by the full-screen loader and in-game panel.
         /// Determinate is used only while bytes move. Saving and map loading use an
@@ -437,6 +443,47 @@ namespace CS2MultiplayerMod.Game
             if (FaultContains(fault, "AddressAlreadyInUse"))
                 return L10n.T(L10n.Key.ErrorPortInUseHelp);
             return L10n.T(L10n.Key.ErrorGenericHelp);
+        }
+
+        /// <summary>
+        /// Keep the link classification beside the friendly text classification above so
+        /// every error surfaced by the UI always has a concrete troubleshooting target.
+        /// </summary>
+        private static string FriendlyFaultHelpPage(string fault)
+        {
+            if (FaultContains(fault, "removed you") || FaultContains(fault, "kicked"))
+                return HelpLinks.Removed;
+            if (FaultContains(fault, "declined") || FaultContains(fault, "did not respond to your join"))
+                return HelpLinks.Declined;
+            if (FaultContains(fault, "Incorrect password") ||
+                FaultContains(fault, "requires a password"))
+                return HelpLinks.Password;
+            if (FaultContains(fault, "Protocol mismatch") ||
+                FaultContains(fault, "Mod version mismatch"))
+                return HelpLinks.ModVersion;
+            if (FaultContains(fault, "Game version mismatch"))
+                return HelpLinks.GameVersion;
+            if (FaultContains(fault, "DLC mismatch"))
+                return HelpLinks.Dlc;
+            if (FaultContains(fault, ModsCheck.FaultMarker))
+                return HelpLinks.Mods;
+            if (FaultContains(fault, "Server is full"))
+                return HelpLinks.SessionFull;
+            if (FaultContains(fault, "Steam relay") ||
+                FaultContains(fault, "join code"))
+                return HelpLinks.Relay;
+            if (FaultContains(fault, "HostNotFound") ||
+                FaultContains(fault, "NoData") ||
+                FaultContains(fault, "could not be resolved"))
+                return HelpLinks.Address;
+            if (FaultContains(fault, "ConnectionRefused") ||
+                FaultContains(fault, "TimedOut") ||
+                FaultContains(fault, "timed out") ||
+                FaultContains(fault, "NetworkUnreachable") ||
+                FaultContains(fault, "HostUnreachable") ||
+                FaultContains(fault, "AddressAlreadyInUse"))
+                return HelpLinks.DirectConnection;
+            return HelpLinks.Generic;
         }
 
         /// <summary>

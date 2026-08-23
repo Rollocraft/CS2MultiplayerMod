@@ -170,10 +170,10 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
         }
 
         /// <summary>
-        /// The height a course endpoint's elevation is measured from, reproduced exactly as course
-        /// splitting does it: the terrain, or - where the water is deep enough to bridge - the water
-        /// surface plus the prefab's bridge clearance. A tunnel end (elevation below -1) ignores
-        /// water entirely.
+        /// The height a free-height course endpoint's elevation is measured from, reproduced exactly
+        /// as course splitting does it: the terrain, or - where the water is deep enough to bridge -
+        /// the water surface plus the prefab's bridge clearance. A tunnel end (elevation below -1)
+        /// ignores water entirely.
         /// </summary>
         private static float SurfaceHeightAt(float3 p, float elevation, float elevationLimit,
             ref TerrainHeightData heightData, ref WaterSurfaceData<SurfaceWater> waterData)
@@ -212,22 +212,20 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
         }
 
         /// <summary>
-        /// The elevation a course endpoint must carry to land at the height the source committed it
-        /// at. A reused node's own elevation wins - a pylon or building connector keeps the height it
-        /// already has.
+        /// The elevation a course endpoint must carry while reproducing the source course. A reused
+        /// node's own elevation wins - a pylon or building connector keeps the height it already has.
         /// <para>
-        /// The transmitted Y is NOT what the endpoint ends up at. Unless it is a full elevation step
-        /// up or down, course splitting recomputes the endpoint as <c>local surface + elevation</c>,
-        /// so the elevation - not the height - is what the receiver actually controls. Where the two
-        /// machines' surfaces agree the source value is used untouched (a ground net stays at exactly
-        /// 0, so the terrain still grades to it). Where they disagree the value is corrected by the
-        /// difference, which is what preserves the absolute height: over water the surface is a live,
-        /// unreplicated simulation field, and measuring against the local one lands the span metres
-        /// off - or, at elevation 0, on the lakebed.
+        /// A fixed-height endpoint keeps its transmitted Y. Its elevation must therefore remain
+        /// untouched: besides describing the node, it selects whether the span's sampled profile
+        /// follows terrain or water. Re-solving that value against the water clearance can turn a
+        /// level-0 placement into a terrain-only span, pulling its middle down while its fixed ends
+        /// stay in place. Only <see cref="CoursePosFlags.FreeHeight"/> endpoints are recomputed as
+        /// <c>local surface + elevation</c>; those are corrected when the local sampled surface differs
+        /// from the sender's, without crossing the terrain/water profile boundary.
         /// </para>
         /// </summary>
         private float2 EndElevation(Entity prefab, Entity snap, int kind, float3 sourcePoint,
-            float2 sourceElevation, ref TerrainHeightData heightData,
+            float2 sourceElevation, uint sourceFlags, ref TerrainHeightData heightData,
             ref WaterSurfaceData<SurfaceWater> waterData, out float correction)
         {
             correction = 0f;
@@ -235,13 +233,15 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                 EntityManager.HasComponent<global::Game.Net.Elevation>(snap))
                 return EntityManager.GetComponentData<global::Game.Net.Elevation>(snap).m_Elevation;
 
-            float surface = SurfaceHeightAt(sourcePoint, sourceElevation.x,
-                NetInfoOf(prefab).ElevationLimit, ref heightData, ref waterData);
-            float local = sourcePoint.y - surface;
-            if (!math.isfinite(local) || math.abs(local - sourceElevation.x) <= SurfaceAgreementTol)
+            bool freeHeight = (((CoursePosFlags)sourceFlags & CoursePosFlags.FreeHeight) != 0);
+            if (!freeHeight)
                 return sourceElevation;
 
-            correction = local - sourceElevation.x;
+            float surface = SurfaceHeightAt(sourcePoint, sourceElevation.x,
+                NetInfoOf(prefab).ElevationLimit, ref heightData, ref waterData);
+            float projected = sourcePoint.y - surface;
+            correction = NetEndpointElevationPolicy.Correction(sourceElevation.x, projected,
+                freeHeight, SurfaceAgreementTol);
             return sourceElevation + correction;
         }
 

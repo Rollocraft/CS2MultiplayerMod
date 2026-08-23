@@ -39,6 +39,7 @@ const LOC = {
     password: "CS2MP.UI.Password",
     join: "CS2MP.UI.Join",
     disconnect: "CS2MP.UI.Disconnect",
+    closeSession: "CS2MP.UI.CloseSession",
     ...CONNECTION_LOC,
 };
 
@@ -55,6 +56,7 @@ const port$ = bindValue<string>(GROUP, "joinPort", "25001");
 const password$ = bindValue<string>(GROUP, "joinPassword", "");
 const statusKind$ = bindValue<string>(GROUP, "statusKind", "offline");
 const inSession$ = bindValue<boolean>(GROUP, "inSession", false);
+const isHost$ = bindValue<boolean>(GROUP, "isHost", false);
 // The same native save-list binding that enables/disables the game's Load Game
 // menu item. Using it keeps our Load World choice in exact lockstep with vanilla.
 const savedGames$ = bindValue<unknown[]>("menu", "saves", []);
@@ -527,11 +529,12 @@ export const MultiplayerScreenRenderer = ({ focusKey, className, onClose }: Nati
     const password = useValue(password$);
     const statusKind = useValue(statusKind$);
     const inSession = useValue(inSession$);
+    const isHost = useValue(isHost$);
     const joinConnection = useValue(joinConnection$);
     const joinCodeInput = useValue(joinCodeInput$);
     const hasSavedGame = useValue(savedGames$).length > 0;
-    // Any other live mod blocks a session outright: the banner explains it and every
-    // control that would start one is disabled while it is set.
+    // Any other live mod blocks a session by default. The own-risk setting turns the
+    // banner into a warning and this hook re-enables the controls.
     const modsBlocked = useModsBlocked();
     const relaySupported = useValue(relaySupported$);
     const joinIsRelay = relaySupported && joinConnection !== CONNECTION_DIRECT;
@@ -644,8 +647,10 @@ export const MultiplayerScreenRenderer = ({ focusKey, className, onClose }: Nati
                                 variant="primary"
                                 style={styles.button}
                                 focusKey="disconnect"
-                                onSelect={() => trigger(GROUP, "disconnect")}>
-                                {t(LOC.disconnect, "Disconnect")}
+                                onSelect={() => trigger(GROUP, "requestDisconnect")}>
+                                {isHost
+                                    ? t(LOC.closeSession, "Close Session")
+                                    : t(LOC.disconnect, "Disconnect")}
                             </Button>
                         ) : (
                             <Button

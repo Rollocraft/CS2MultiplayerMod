@@ -60,10 +60,10 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
 
         private global::Game.Net.SearchSystem _netSearchSystem;
 
-        // Surface samplers. A course endpoint's committed height is NOT the Y on the wire: unless the
-        // endpoint is a full elevation step up or down, the game recomputes it as local surface +
-        // elevation. Reproducing the source height therefore means measuring this machine's surface
-        // and solving for the elevation that lands on it (see SurfaceHeightAt / EndElevation).
+        // Surface samplers. FreeHeight course endpoints are recomputed as local surface + elevation,
+        // so reproducing their source height means solving against this machine's surface. Other
+        // endpoints keep their captured Y and must not be reprojected (see SurfaceHeightAt /
+        // EndElevation).
         private global::Game.Simulation.TerrainSystem _terrainSystem;
         private global::Game.Simulation.WaterSystem _waterSystem;
 
@@ -649,6 +649,24 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
 
         private void DrainNetQueues()
         {
+            MultiplayerService service = Mod.Service;
+            if (service != null && service.WorldSyncBarrierActive && IsCommitBusy)
+            {
+                // A world-sync Begin is an admission barrier, not permission to tear down work that
+                // the native pipeline already owns. Drop commands which have not started, but retain
+                // the armed/committing/quarantined graph and its validation/callback state so
+                // RealizePending can drive it to a clean boundary before the snapshot is taken.
+                SyncInbox.Clear(_incoming);
+                _remoteDeferred.Clear();
+                _deferredSpanPieces.Clear();
+                _cachedLocalCourses.Clear();
+                _cachedLocalMixedOperation.Clear();
+                _cachedFallbackOriginalEdges.Clear();
+                _cachedNeedsFinalEdgeFallback = false;
+                _atomicMixedApplyCapturedFrame = -1;
+                return;
+            }
+
             // Never leave an isolated remote Temp transaction behind for a later local click. Which
             // side is enabled depends on whether this frame had protected the remote batch.
             // Uncommitted work is safe to clear. Once an apply pass has been scheduled, however,

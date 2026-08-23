@@ -3,6 +3,10 @@ import { ModRegistrar } from "cs2/modding";
 import { extendCreditsScreen, MultiplayerMenuButton } from "mods/join-game";
 import { MultiplayerRightMenuButton } from "mods/mp-hub";
 import { GameJoinLoadingScreen, MenuJoinLoadingScreen } from "mods/loading-screen";
+import {
+    GameSessionDisconnectConfirmation,
+    MenuSessionDisconnectConfirmation,
+} from "mods/session-confirmation";
 
 // Vanilla-internal module hosting the main-menu button column. Game updates can
 // rename it, so registration falls back to the official "Menu" append hook.
@@ -25,11 +29,13 @@ const register: ModRegistrar = (moduleRegistry) => {
     // Each renders only a Portal while connecting/syncing.
     try {
         moduleRegistry.append("Menu", MenuJoinLoadingScreen);
+        moduleRegistry.append("Menu", MenuSessionDisconnectConfirmation);
     } catch (e) {
         console.warn("[cs2mp] menu connection view could not be registered.", e);
     }
     try {
         moduleRegistry.append("Game", GameJoinLoadingScreen);
+        moduleRegistry.append("Game", GameSessionDisconnectConfirmation);
     } catch (e) {
         console.warn("[cs2mp] in-game connection view could not be registered.", e);
     }

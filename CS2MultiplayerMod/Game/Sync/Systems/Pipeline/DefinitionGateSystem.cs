@@ -54,12 +54,16 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         protected override void OnUpdate()
         {
             MultiplayerService service = Mod.Service;
-            if (service == null || !service.GameplaySyncReady) return;
+            if (service == null) return;
             if (_netSync == null) return;
 
             // ToolOutputBarrier has consumed this frame. Restore whichever side of the net/brush
             // transaction was temporarily Disabled before inspecting newly buffered definitions.
+            // This release must also run during a world-sync barrier: an admitted native graph is
+            // allowed to finish draining there, and leaving its commit shield Disabled would keep
+            // recovery waiting forever.
             _netSync.FinishIsolationAfterToolOutput();
+            if (!service.GameplaySyncReady) return;
 
             // Object/upgrade previews no longer need their regenerated definition graph here. They
             // are captured once from the standing graph immediately before ToolOutputSystem applies

@@ -660,14 +660,14 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                             out endT, out endKind);
                     }
 
-                    // The elevation each course end must carry so it lands at the source's height on
-                    // this machine's surface (see EndElevation).
+                    // Fixed-height ends retain the captured elevation/profile choice. Free-height
+                    // ends are adjusted against this machine's surface (see EndElevation).
                     float startCorrection, endCorrection;
                     float2 startElevation = EndElevation(prefab, startSnap, startKind, a,
-                        sourceStartElevation,
+                        sourceStartElevation, command.Start.Flags,
                         ref heightData, ref waterData, out startCorrection);
                     float2 endElevation = EndElevation(prefab, endSnap, endKind, d,
-                        sourceEndElevation,
+                        sourceEndElevation, command.End.Flags,
                         ref heightData, ref waterData, out endCorrection);
                     TallySurfaceCorrection(startCorrection, endCorrection);
 
