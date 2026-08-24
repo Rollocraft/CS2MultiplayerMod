@@ -11,16 +11,13 @@ This update focuses on synchronization, chat and general stability.
 ### Synchronization
 
 - Renamed streets, buildings, districts and other entities now sync.
-- Normally spawned buildings sync, including households, rent, income and more.
-
+- Normally spawned Residential buildings sync, including households, rent, income and more.
 ### Bug fixes
 
 - The same error message could appear twice, even after being closed.
 - Several chat layout issues.
 - Redundant messages in certain situations.
 - Multiple unnecessary resync triggers.
-- A session could not continue because of a milestone screen.
-- Client saves ignored the chosen difficulty level.
 
 ### Quality of life
 

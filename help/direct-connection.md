@@ -14,25 +14,19 @@ router rule all have to use the same port.
 ## Hosting
 
 1. Open Multiplayer and click Host Game.
-2. Set the connection type to Direct Connection.
-3. Load or create your world as usual. The session starts once the city has loaded.
-4. Share your address and port with the other players.
-
 ![](assets/img/ui-menu-multiplayer.png)
-
 ![](assets/img/ui-menu-choice-host.png)
-
+2. Set the connection type to Direct Connection.
 ![](assets/img/ui-host-world.png)
-
-At the top of this screen you pick the connection type. At the bottom you choose whether to
-load an existing world or create a new one.
+3. Load or create your world as usual. The session starts once the city has loaded.
+4. Share your IP address and port with the other players.
 
 Which address you share depends on where the other players are:
 
-| Players | Address to share |
-| --- | --- |
-| Same network (LAN) | Your local IP address, shown in the log when hosting starts |
-| Over the internet | Your public IP, from [api.ipify.org](https://api.ipify.org/) |
+| Players | Address to share                                                                               |
+| --- |------------------------------------------------------------------------------------------------|
+| Same network (LAN) | Your local IP address, shown in the log when hosting starts or via a Terminal with the command `ipconfig` |
+| Over the internet | Your public IPV4, from [api.ipify.org](https://api.ipify.org/)                                 |
 
 Session settings live in the multiplayer panel while you play, and in the mod options
 before you start: port, password, player limit, LAN Only, player approval and the world
@@ -43,13 +37,11 @@ re-sync interval.
 ## Joining
 
 1. Open Multiplayer and click Join Game.
+![](assets/img/ui-menu-choice-join.png)
 2. Set the connection type to Direct Connection.
 3. Enter the host's address and port, your player name, and the password if there is one.
-4. Click Join and wait while the host's city downloads.
-
-![](assets/img/ui-menu-choice-join.png)
-
 ![](assets/img/ui-join-direct.png)
+4. Click Join and wait while the host's city downloads.
 
 !!! warning "Set a password"
 
