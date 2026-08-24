@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using CS2MultiplayerMod.Core.Session;
+using CS2MultiplayerMod.Game.Diagnostics;
 using CS2MultiplayerMod.Game.Sync.Commands;
 using CS2MultiplayerMod.Game.Sync.Infrastructure;
 using Game.Agents;
@@ -931,7 +933,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 if (!IsHouseholdAtProperty(household, property)) continue;
                 CancelUnauthorizedDeparture(household);
                 ApplyHousehold(household, property, desired);
-                TracePlacedHousehold(cached, desired, household);
+                NotePlacedHousehold(cached, desired, household);
             }
 
             bool settling = IsSettling(property);
@@ -1051,7 +1053,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     {
                         CancelUnauthorizedDeparture(existing);
                         ApplyHousehold(existing, property, desired);
-                        TracePlacedHousehold(cached, desired, existing);
+                        NotePlacedHousehold(cached, desired, existing);
                         continue;
                     }
                     if (free <= 0)
@@ -1686,6 +1688,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             owned.Add(new OwnedVehicle(vehicle));
         }
 
+        [Conditional(DevTrace.Symbol)]
         private void TraceVehicleSpawn(ulong householdId, string prefabName, Entity vehicle,
             Entity property, Entity source, bool initial)
         {
@@ -1700,10 +1703,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         {
             string warningKey = householdId.ToString("X16") + "|" + prefabName;
             if (!_vehicleSpawnWarnings.Add(warningKey)) return;
-            Mod.log.Warn("[MP][OCC-DEV] CAR-SPAWN-FAILED family=0x" +
-                         householdId.ToString("X16") + " vehicle='" + prefabName +
-                         "' house='" + SafePrefabName(property) + "' origin='" +
-                         SafePrefabName(source) + "'.");
+            Mod.Verbose("[MP] Occupancy: could not spawn owned vehicle '" + prefabName +
+                        "' for family 0x" + householdId.ToString("X16") + " at '" +
+                        SafePrefabName(property) + "' (from '" + SafePrefabName(source) + "').");
         }
 
         /// <summary>
@@ -2159,8 +2161,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 if (!_arrivalSourceWarned)
                 {
                     _arrivalSourceWarned = true;
-                    Mod.log.Warn("[MP][OCC-DEV] ARRIVAL-ORIGIN-FAILED no live road outside " +
-                                 "connection was available; new families will start at home.");
+                    Mod.Verbose("[MP] Occupancy: no live road outside connection was " +
+                                "available; new families will start at home.");
                 }
             }
 
@@ -2360,7 +2362,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     pending.Revision = newestRevision;
                     CachedProperty cached;
                     if (_cache.TryGetValue(pending.Property, out cached))
-                        TracePlacedHousehold(cached, newest, pending.Household);
+                        NotePlacedHousehold(cached, newest, pending.Household);
                 }
                 CancelUnauthorizedDeparture(pending.Household);
                 PropertyRenter rented =
@@ -2378,24 +2380,36 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             }
         }
 
-        private void TracePlacedHousehold(CachedProperty property, OccupancyHousehold household,
+        /// <summary>
+        /// Every person and vehicle the host listed for this family is linked here now, so it no
+        /// longer counts as arriving: a car it buys later has to leave from the house rather than
+        /// from the outside connection it came in by.
+        /// </summary>
+        private void NotePlacedHousehold(CachedProperty property, OccupancyHousehold household,
             Entity localHousehold)
         {
             int localPeople = CountRealizedCitizens(localHousehold, household);
             int wantedPeople = household.Citizens != null ? household.Citizens.Length : 0;
-            // PLACED is a completion statement, not merely an attempted rent action. Keeping it
-            // silent until every exact citizen identity is linked makes missing family members
-            // visible as RECEIVED-without-PLACED in a host/client log comparison.
             if (localPeople != wantedPeople) return;
             int localVehicles = CountLiveOwnedVehicles(localHousehold);
             int wantedVehicles = household.OwnedVehicles != null
                 ? household.OwnedVehicles.Length : 0;
             if (localVehicles < wantedVehicles) return;
+            _arrivalSources.Remove(localHousehold);
+            TracePlacedHousehold(property, household, localPeople, wantedPeople, localVehicles,
+                wantedVehicles);
+        }
+
+        // Reached only once every exact citizen identity is linked, so a missing family member
+        // shows up as RECEIVED-without-PLACED in a host/client log comparison.
+        [Conditional(DevTrace.Symbol)]
+        private void TracePlacedHousehold(CachedProperty property, OccupancyHousehold household,
+            int localPeople, int wantedPeople, int localVehicles, int wantedVehicles)
+        {
             PropertyRentIdentity previous;
             if (_tracePlacedHouseholds.TryGetValue(household.HouseholdId, out previous) &&
                 previous.Equals(property.Identity)) return;
             _tracePlacedHouseholds[household.HouseholdId] = property.Identity;
-            _arrivalSources.Remove(localHousehold);
             Mod.log.Info("[MP][OCC-DEV] PLACED house='" + property.Identity.PrefabName +
                          "' anchor=(" + property.Identity.AnchorX.ToString("F2") + ", " +
                          property.Identity.AnchorY.ToString("F2") + ", " +

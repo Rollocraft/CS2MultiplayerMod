@@ -16,6 +16,12 @@
         <DebugType>portable</DebugType>
     </PropertyGroup>
 
+    <!--The per-entity occupancy/household trace lines (see Game/Diagnostics/DevTrace.cs).
+    Off in a shipped build; turn them on with: dotnet build -p:MpDevTrace=true-->
+    <PropertyGroup Condition="'$(MpDevTrace)' == 'true'">
+        <DefineConstants>$(DefineConstants);MP_DEV_TRACE</DefineConstants>
+    </PropertyGroup>
+
     <!--Imports must be after PropertyGroup block-->
     <Import Project="$([System.Environment]::GetEnvironmentVariable('CSII_TOOLPATH', 'EnvironmentVariableTarget.User'))\Mod.props"/>
     <Import Project="$([System.Environment]::GetEnvironmentVariable('CSII_TOOLPATH', 'EnvironmentVariableTarget.User'))\Mod.targets"/>

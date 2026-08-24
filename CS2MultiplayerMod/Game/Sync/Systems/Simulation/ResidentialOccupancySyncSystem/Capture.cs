@@ -1,7 +1,9 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Text;
 using CS2MultiplayerMod.Core.Protocol;
+using CS2MultiplayerMod.Game.Diagnostics;
 using CS2MultiplayerMod.Game.Sync.Commands;
 using CS2MultiplayerMod.Game.Sync.Infrastructure;
 using Game.Buildings;
@@ -1166,6 +1168,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             }
         }
 
+        [Conditional(DevTrace.Symbol)]
         private void TraceSentRoster(Entity propertyEntity, OccupancyProperty property)
         {
             int hash = TraceRosterHash(property);
@@ -1178,6 +1181,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             LogRosterTrace("SENT", property);
         }
 
+        [Conditional(DevTrace.Symbol)]
         private void TraceReceivedRoster(OccupancyProperty property)
         {
             int hash = TraceRosterHash(property);
