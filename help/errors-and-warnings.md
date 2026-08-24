@@ -1,3 +1,7 @@
+---
+title: Errors and warnings
+---
+
 # Error and Warning Reference
 
 This page lists the errors and warnings a player can encounter in CS2 Multiplayer Mod. It covers the messages shown in the multiplayer UI and the warning families written to the game log. Dynamic details such as addresses, player names, prefab names, ports, and exception text are shown in angle brackets.
@@ -22,7 +26,7 @@ Possible internal details:
 - `Protocol mismatch: host v<version>, this build v<version>.`
 - `Mod version mismatch: host <version>, client <version>.`
 
-Update CS2 Multiplayer Mod on both computers and restart both games. A host can enable **Ignore Mod Compatibility Checks (Own Risk)** to admit a different multiplayer-mod build when both builds still use the same network protocol. A protocol mismatch cannot be ignored because the builds may encode network data differently.
+Update CS2 Multiplayer Mod on both computers and restart both games. A host can enable Ignore Mod Compatibility Checks (Own Risk) to admit a different multiplayer-mod build when both builds still use the same network protocol. A protocol mismatch cannot be ignored because the builds may encode network data differently.
 
 See [Mod Version Issues](troubleshooting.md#mod-version-issues).
 
@@ -44,7 +48,7 @@ See [Disabling DLC](disable_dlc.md).
 
 The detail lists the other active mods that were detected. By default, hosting and joining are blocked because additional mods can change simulation behavior, tools, or prefab catalogs.
 
-Disable every other mod in the active playset and restart if the message says those mods are still loaded. Advanced users can enable **Ignore Mod Compatibility Checks (Own Risk)** while offline, but that can cause desyncs, broken cities, or crashes.
+Disable every other mod in the active playset and restart if the message says those mods are still loaded. Advanced users can enable Ignore Mod Compatibility Checks (Own Risk) while offline, but that can cause desyncs, broken cities, or crashes.
 
 See [Mod Support and Compatibility](mods.md).
 
@@ -52,7 +56,7 @@ See [Mod Support and Compatibility](mods.md).
 
 Possible internal detail: `Server is full (<count> players).`
 
-Wait for another player to leave or ask the host to increase **Max Players** before starting the next session. A join that waited for approval can also receive this error if the final seat was taken before the host clicked Accept.
+Wait for another player to leave or ask the host to increase Max Players before starting the next session. A join that waited for approval can also receive this error if the final seat was taken before the host clicked Accept.
 
 ### The host address could not be found
 
@@ -107,7 +111,7 @@ Possible internal details:
 - `The host declined your request to join.`
 - `The host did not respond to your join request in time.`
 
-When **Approve Joining Players** is enabled, the host must accept the request. Ask the host to keep the multiplayer panel open and retry.
+When Approve Joining Players is enabled, the host must accept the request. Ask the host to keep the multiplayer panel open and retry.
 
 ### Steam Relay is unavailable or the join code is invalid
 
@@ -119,7 +123,7 @@ Possible internal details:
 - `'<code>' is not a valid join code.`
 - `Failed to host over the Steam relay: <reason>`
 
-Launch the Steam copy of the game through Steam and confirm Steam is online. A join code has 17 digits. If Relay remains unavailable, both players can select **Direct Connection** and use an address and port instead.
+Launch the Steam copy of the game through Steam and confirm Steam is online. A join code has 17 digits. If Relay remains unavailable, both players can select Direct Connection and use an address and port instead.
 
 ### Multiplayer could not complete the connection
 
@@ -133,7 +137,7 @@ Retry once. If it repeats, restart both games, verify the target, update the mod
 
 The game rejected all automatic attempts to return a disconnected client to the main menu. The mod deliberately keeps the temporary host-world copy while it is open instead of deleting data underneath the loaded world.
 
-Click **Try Again**. If it continues to fail, close the game rather than continuing to edit the disconnected temporary copy. Restarting lets the mod clean up safely.
+Click Try Again. If it continues to fail, close the game rather than continuing to edit the disconnected temporary copy. Restarting lets the mod clean up safely.
 
 ### Host world did not start loading
 
@@ -144,22 +148,22 @@ Recognizable log text:
 - `Failed to stage host map.`
 - `Host world staged but could not be registered with the save index.`
 
-The connection can remain alive while world loading fails. Ask the host to use **Sync World** or use `/sync` in chat. If it repeats, verify game files and check free disk space and write access to the Cities: Skylines II saves folder.
+The connection can remain alive while world loading fails. Ask the host to use Sync World or use `/sync` in chat. If it repeats, verify game files and check free disk space and write access to the Cities: Skylines II saves folder.
 
 ### World transfer stopped or was rejected
 
 Recognizable log text includes `Abandoning stalled blob`, `Dropping blob`, `Replacing incomplete blob`, `Ignoring map transfer`, or `world-sync epoch ... aborted`.
 
-The mod rejects malformed, oversized, stale, or stalled transfers to protect the session. Retry **Sync World**. Repeated failures usually indicate an unstable connection, incompatible content, or a mod defect.
+The mod rejects malformed, oversized, stale, or stalled transfers to protect the session. Retry Sync World. Repeated failures usually indicate an unstable connection, incompatible content, or a mod defect.
 
 ### World copy errors
 
-The **Save Copy** dialog can report:
+The Save Copy dialog can report:
 
-- **A saved world with this name already exists** — choose another name.
-- **Enter a name between 1 and 85 characters** — shorten or correct the name.
-- **Wait until the host world has fully loaded** — retry after joining finishes.
-- **The copy could not be saved** — try another name, check free disk space, and verify write access.
+- A saved world with this name already exists — choose another name.
+- Enter a name between 1 and 85 characters — shorten or correct the name.
+- Wait until the host world has fully loaded — retry after joining finishes.
+- The copy could not be saved — try another name, check free disk space, and verify write access.
 - `Could not capture a preview` in the log — the save can still succeed, but its thumbnail may be absent.
 
 ### Autosave could not be paused or restored
@@ -178,7 +182,7 @@ In normal mode this warning blocks Host and Join. Disable the listed mods in the
 
 ### Compatibility check ignored
 
-**Ignore Mod Compatibility Checks (Own Risk)** is enabled while other mods are active, or a host admitted a different CS2 Multiplayer Mod build. This is advisory but serious: desyncs, missing prefabs, broken saves, and crashes are possible. The network protocol, game version, and DLC set are still checked.
+Ignore Mod Compatibility Checks (Own Risk) is enabled while other mods are active, or a host admitted a different CS2 Multiplayer Mod build. This is advisory but serious: desyncs, missing prefabs, broken saves, and crashes are possible. The network protocol, game version, and DLC set are still checked.
 
 ### Invalid port, player limit, or re-sync interval
 
@@ -212,7 +216,7 @@ Recognizable messages include:
 - `menu connection view could not be registered`
 - `in-game connection view could not be registered`
 
-Another UI mod can stop the game's UI-module chain, or the multiplayer `.mjs` file may be missing. Remove or update the UI mod named near the first JavaScript exception. Joining remains available through **Options > CS2 Multiplayer Mod > Join Game** when the generated options UI is working.
+Another UI mod can stop the game's UI-module chain, or the multiplayer `.mjs` file may be missing. Remove or update the UI mod named near the first JavaScript exception. Joining remains available through Options > CS2 Multiplayer Mod > Join Game when the generated options UI is working.
 
 ### Steam Relay transport warnings
 
@@ -245,28 +249,28 @@ Recognizable text includes `Session close on world transition failed`, `Failed t
 
 ## Synchronization and security log warnings
 
-These messages normally appear only in logs. A single recovered warning does not always mean the session is unusable. Repeated warnings, visible divergence, or any `FAILED`/`aborted` error should be followed by **Sync World**. If it returns, stop the session and preserve the logs.
+These messages normally appear only in logs. A single recovered warning does not always mean the session is unusable. Repeated warnings, visible divergence, or any `FAILED`/`aborted` error should be followed by Sync World. If it returns, stop the session and preserve the logs.
 
 | Prefix or family | Meaning and response |
 | --- | --- |
 | `[security] Auth failure`, `Refused`, `Dropping`, `Disconnecting` | A password attempt, rate limit, message direction, size, channel, origin, or protocol rule was rejected. Expected for unwanted traffic; investigate if it names a trusted player repeatedly. |
 | `Peer timed out`, `Handshake timed out`, transport send/receive queue warnings | A peer stopped responding or local networking could not keep up. Check connection stability and retry. |
-| `Blob`, `map transfer`, `World sync`, `world recovery`, `resync barrier` | Full-world transfer or recovery was stale, malformed, stalled, or could not complete. Use **Sync World** and inspect both peers' logs. |
+| `Blob`, `map transfer`, `World sync`, `world recovery`, `resync barrier` | Full-world transfer or recovery was stale, malformed, stalled, or could not complete. Use Sync World and inspect both peers' logs. |
 | `PrefabIndex`, `unknown prefab`, `unavailable prefab`, `no local match` | One machine could not resolve content named by another. Match DLC/mod content; if the own-risk setting is enabled, disable it and retry with identical playsets. |
-| `BuildSync`, `ObjectTool`, `MoveSync`, `UpgradeSync`, `VisualCustomizationSync` | A building/object operation was malformed, unsupported, missed, or could not be applied atomically. Stop building that item, then **Sync World**. |
-| `NetSync`, `NetApply`, `NetReplaceSync`, `NetUpgradeSync` | A road/network operation was incomplete, inconsistent, unsupported, rolled back, quarantined, or failed realization. **Sync World**; avoid repeating the exact road operation until the issue is reported. |
-| `DeleteSync` | A remote deletion was stale, unmatched, malformed, or could not build its delete definition. **Sync World** if the object differs between players. |
-| `AreaSync`, `ZoneSync`, `TerrainSync`, `TilePurchaseSync` | An area, zoning, terrain, or map-tile edit could not be captured/applied or exceeded a bounded queue. Pause edits, let the queue settle, then **Sync World**. |
-| `RouteSync` | A route create/update/delete could not resolve or apply. Recreate the route after **Sync World**. |
-| `GrowableSync`, `Occupancy`, `PropertyRent`, `ZoneDemand` | Simulation state drifted or a population/economy correction could not be captured/applied. Let the host run briefly and **Sync World** if visible values remain different. |
-| `CityState`, `Statistics`, `PolicySync`, `NameSync`, `DevTree` | A city-state page or edit was malformed, deferred, skipped, or failed. Retry the action once; **Sync World** if the result differs. |
-| `DisasterSync`, `TreeState`, weather/clock/speed channel warnings | A world-simulation event or state page could not be resolved. **Sync World** and avoid retriggering the same event if it repeats. |
+| `BuildSync`, `ObjectTool`, `MoveSync`, `UpgradeSync`, `VisualCustomizationSync` | A building/object operation was malformed, unsupported, missed, or could not be applied atomically. Stop building that item, then Sync World. |
+| `NetSync`, `NetApply`, `NetReplaceSync`, `NetUpgradeSync` | A road/network operation was incomplete, inconsistent, unsupported, rolled back, quarantined, or failed realization. Sync World; avoid repeating the exact road operation until the issue is reported. |
+| `DeleteSync` | A remote deletion was stale, unmatched, malformed, or could not build its delete definition. Sync World if the object differs between players. |
+| `AreaSync`, `ZoneSync`, `TerrainSync`, `TilePurchaseSync` | An area, zoning, terrain, or map-tile edit could not be captured/applied or exceeded a bounded queue. Pause edits, let the queue settle, then Sync World. |
+| `RouteSync` | A route create/update/delete could not resolve or apply. Recreate the route after Sync World. |
+| `GrowableSync`, `Occupancy`, `PropertyRent`, `ZoneDemand` | Simulation state drifted or a population/economy correction could not be captured/applied. Let the host run briefly and Sync World if visible values remain different. |
+| `CityState`, `Statistics`, `PolicySync`, `NameSync`, `DevTree` | A city-state page or edit was malformed, deferred, skipped, or failed. Retry the action once; Sync World if the result differs. |
+| `DisasterSync`, `TreeState`, weather/clock/speed channel warnings | A world-simulation event or state page could not be resolved. Sync World and avoid retriggering the same event if it repeats. |
 | `realize FAILED`, `channel pump failed`, `queue overflowed`, `retry budget` | A bounded recovery path was exhausted. This is report-worthy, especially when repeated or visible in the city. |
 | `Observer crashed` | One multiplayer observer threw an exception; the session continues, but part of synchronization may be impaired. Preserve the complete exception and flight log. |
 
 ## Normal messages that are not errors
 
-- **Multiplayer session ended** means the host closed the session, the host left the city, or the connection ended. A client is returned to the main menu so its temporary shared-world copy cannot be mistaken for a normal local save.
+- Multiplayer session ended means the host closed the session, the host left the city, or the connection ended. A client is returned to the main menu so its temporary shared-world copy cannot be mistaken for a normal local save.
 - `Graceful close failed ... closing now` means the farewell message could not flush within the short shutdown window; sockets are still closed.
 - `Session closed`, `peer left`, and `remote closed` can be normal when someone deliberately leaves.
 - A one-time recovery message followed by a successful world sync means the safety system did its job.
@@ -277,7 +281,7 @@ Include:
 
 1. The exact UI headline and detail.
 2. Whether each player used Steam Relay or Direct Connection.
-3. Whether **Ignore Mod Compatibility Checks (Own Risk)** was enabled and which other mods were active.
+3. Whether Ignore Mod Compatibility Checks (Own Risk) was enabled and which other mods were active.
 4. The game and CS2 Multiplayer Mod versions from both computers.
 5. `%USERPROFILE%\AppData\LocalLow\Colossal Order\Cities Skylines II\Logs\Player.log` and `CS2MP-flight.log` from the affected computers. Send the files after the problem occurs and before repeatedly restarting, because later runs can rotate diagnostic history.
 

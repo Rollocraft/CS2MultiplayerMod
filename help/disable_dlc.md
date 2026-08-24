@@ -1,3 +1,7 @@
+---
+title: Disable DLC
+---
+
 # Disabling DLC
 Learn how to disable DLC on Steam and on XBox/Microsoft Store/Gamepass.
 
@@ -30,4 +34,4 @@ each other whether or not you own Cities: Skylines 1.
 
 ---
 
-**[Back to troubleshooting.](/help/troubleshooting.md)**
+[Back to troubleshooting.](troubleshooting.md)

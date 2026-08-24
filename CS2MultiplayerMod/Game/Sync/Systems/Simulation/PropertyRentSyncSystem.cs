@@ -19,16 +19,17 @@ using Unity.Mathematics;
 namespace CS2MultiplayerMod.Game.Sync.Systems
 {
     /// <summary>
-    /// Keeps the numeric rent calculated by the host on properties that already exist locally.
-    /// It deliberately has no authority over occupancy: it never creates/deletes an entity, never
-    /// edits a Renter buffer, and never adds/removes PropertyOnMarket or PropertyRenter.
+    /// Keeps the numeric asking rent calculated by the host on properties that already exist
+    /// locally, plus rents for non-household tenants. ResidentialOccupancySyncSystem owns each
+    /// identified household's actual PropertyRenter value; keeping that single-writer boundary
+    /// prevents a property-wide fallback from overwriting different household contracts during
+    /// turnover.
     ///
     /// Vanilla recalculates one of sixteen UpdateFrame partitions in RentAdjustSystem. This system
     /// is ordered after that calculation and earlier in the phase than PropertyRenterSystem, and
     /// runs at the same interval, so only the partition vanilla just touched is walked. It corrects
-    /// the numeric rent that later payments consume. High-rent warning flags and company/household
-    /// seeker decisions remain local: synchronizing those safely would require stable renter
-    /// identity and wealth, which this deliberately narrow channel does not have.
+    /// asking rent and company rent that later systems consume. Household lifecycle and household
+    /// rent use the identity-aware occupancy channel.
     /// </summary>
     public partial class PropertyRentSyncSystem : GameSystemBase
     {
@@ -78,6 +79,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         private PrefabIndex _prefabIndex;
         private ObjectSearch _objectSearch;
         private SimulationSystem _simulationSystem;
+        private ResidentialOccupancySyncSystem _occupancy;
 
         private int _captureCursor;
         private uint _captureSweepId = 1;
@@ -159,6 +161,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             _objectSearch = new ObjectSearch(
                 World.GetOrCreateSystemManaged<global::Game.Objects.SearchSystem>());
             _simulationSystem = World.GetOrCreateSystemManaged<SimulationSystem>();
+            _occupancy = World.GetOrCreateSystemManaged<ResidentialOccupancySyncSystem>();
             _properties = GetEntityQuery(new EntityQueryDesc
             {
                 All = new[]
@@ -179,7 +182,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             });
             SyncInbox.RegisterDrain(DrainForWorldChange);
             Mod.log.Info(nameof(PropertyRentSyncSystem) +
-                         " ready (numeric rent only; occupancy remains vanilla). ");
+                         " ready (market and non-household rent authority). ");
         }
 
         protected override void OnDestroy()
@@ -216,6 +219,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             // cache. Pump once more here as a harmless fallback before this bucket is consumed.
             PumpIncoming();
             ApplyBucket(bucket);
+            // RentAdjust also rewrites household contracts. Channel 20 intentionally skips them,
+            // so restore each channel-21 identity at this same pre-payment boundary.
+            if (_occupancy != null) _occupancy.CorrectHouseholdRentsAfterRentAdjust(bucket);
             ReportStats(session, service.NowMs);
         }
 
@@ -747,37 +753,47 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         {
             ambiguous = false;
             Entity prefab;
-            if (!_prefabIndex.TryResolve(entry.PrefabName,
-                    candidate => EntityManager.HasComponent<BuildingPropertyData>(candidate),
-                    out prefab)) return Entity.Null;
+            _prefabIndex.TryResolve(entry.PrefabName,
+                candidate => EntityManager.HasComponent<BuildingPropertyData>(candidate),
+                out prefab);
 
             float3 anchor = new float3(entry.AnchorX, entry.AnchorY, entry.AnchorZ);
             search.CollectNear(anchor, AnchorSearchRadius, candidates);
-            Entity best = Entity.Null;
-            float bestDistance = AnchorMatchDistance * AnchorMatchDistance;
-            bool found = false;
+            Entity exact = Entity.Null, nearest = Entity.Null;
+            float exactDistance = 0f, nearestDistance = 0f;
+            bool exactAmbiguous = false, nearestAmbiguous = false;
             for (int i = 0; i < candidates.Length; i++)
             {
                 Entity candidate = candidates[i];
                 if (!IsLiveProperty(candidate)) continue;
-                if (EntityManager.GetComponentData<PrefabRef>(candidate).m_Prefab != prefab) continue;
                 float distance = math.distancesq(
                     EntityManager.GetComponentData<global::Game.Objects.Transform>(candidate)
                         .m_Position.xz, anchor.xz);
                 if (distance > AnchorMatchDistance * AnchorMatchDistance) continue;
-                if (!found || distance < bestDistance - AmbiguousDistanceEpsilon)
-                {
-                    best = candidate;
-                    bestDistance = distance;
-                    ambiguous = false;
-                    found = true;
-                    continue;
-                }
-                if (math.abs(distance - bestDistance) <= AmbiguousDistanceEpsilon &&
-                    candidate != best)
-                    ambiguous = true;
+                if (prefab != Entity.Null &&
+                    EntityManager.GetComponentData<PrefabRef>(candidate).m_Prefab == prefab)
+                    ConsiderRentCandidate(candidate, distance, ref exact, ref exactDistance,
+                        ref exactAmbiguous);
+                ConsiderRentCandidate(candidate, distance, ref nearest, ref nearestDistance,
+                    ref nearestAmbiguous);
             }
-            return found && !ambiguous ? best : Entity.Null;
+            if (exact != Entity.Null && !exactAmbiguous) return exact;
+            ambiguous = exact != Entity.Null ? exactAmbiguous : nearestAmbiguous;
+            return nearest != Entity.Null && !nearestAmbiguous ? nearest : Entity.Null;
+        }
+
+        private static void ConsiderRentCandidate(Entity candidate, float distance, ref Entity best,
+            ref float bestDistance, ref bool ambiguous)
+        {
+            if (best == Entity.Null || distance < bestDistance - AmbiguousDistanceEpsilon)
+            {
+                best = candidate;
+                bestDistance = distance;
+                ambiguous = false;
+                return;
+            }
+            if (math.abs(distance - bestDistance) <= AmbiguousDistanceEpsilon && candidate != best)
+                ambiguous = true;
         }
 
         private void Cache(Entity property, PropertyRentEntry entry, uint sweepId)
@@ -883,6 +899,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 {
                     Entity renter = renters[j].m_Renter;
                     if (!IsValidRenter(renter, property)) continue;
+                    if (EntityManager.HasComponent<global::Game.Citizens.Household>(renter))
+                        continue;
                     PropertyRenter propertyRenter =
                         EntityManager.GetComponentData<PropertyRenter>(renter);
                     if (propertyRenter.m_Rent == cached.Rent) continue;
@@ -900,8 +918,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         private bool MatchesCachedProperty(Entity property, CachedProperty cached)
         {
             if (!IsLiveProperty(property)) return false;
-            if (EntityManager.GetComponentData<PrefabRef>(property).m_Prefab != cached.Prefab)
-                return false;
+            cached.Prefab = EntityManager.GetComponentData<PrefabRef>(property).m_Prefab;
             float3 position = EntityManager
                 .GetComponentData<global::Game.Objects.Transform>(property).m_Position;
             float2 anchor = new float2(cached.Identity.AnchorX, cached.Identity.AnchorZ);

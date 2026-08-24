@@ -5,6 +5,7 @@ using Game.Buildings;
 using Game.Common;
 using Game.Objects;
 using Game.Prefabs;
+using Game.Simulation;
 using Game.Tools;
 using Unity.Entities;
 using Unity.Mathematics;
@@ -35,6 +36,12 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
     {
         /// <summary>How often the host looks for level changes. They are rare; the query is small.</summary>
         private const long LevelScanIntervalMs = 500;
+
+        /// <summary>Maximum time for a generated building to acquire its native road link.</summary>
+        private const long RealizationValidationWindowMs = 15000;
+
+        private const int MaxPendingStateCorrections = 512;
+        private const int MaxRealizationValidations = 512;
 
         /// <summary>
         /// How long a completed sequence number is remembered. Long enough to cover a reconnect
@@ -72,8 +79,35 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         /// Positions this client has asked the build pipeline for, so the building that appears
         /// there is recognised as the host's rather than as one this machine grew.
         /// </summary>
-        private readonly List<(float3 position, long expiry)> _selfRealized =
-            new List<(float3, long)>();
+        private sealed class PendingRealizedSpawn
+        {
+            public Entity Prefab;
+            public float3 Position;
+            public long Expiry;
+            public GrowableLifecycleCommand Command;
+        }
+
+        private sealed class PendingStateCorrection
+        {
+            public GrowableLifecycleCommand Command;
+            public long Expiry;
+        }
+
+        private sealed class RealizationValidation
+        {
+            public Entity Building;
+            public Entity Prefab;
+            public float3 Position;
+            public long Expiry;
+        }
+
+        private readonly List<PendingRealizedSpawn> _selfRealized =
+            new List<PendingRealizedSpawn>();
+        private readonly List<PendingStateCorrection> _pendingStateCorrections =
+            new List<PendingStateCorrection>();
+        private readonly HashSet<uint> _pendingStateSequences = new HashSet<uint>();
+        private readonly List<RealizationValidation> _realizationValidations =
+            new List<RealizationValidation>();
 
         /// <summary>
         /// Spawnable-prefab entities proven to have come from a player's object tool. The prefab
@@ -86,6 +120,19 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         /// <summary>Host-side: the level-up target already announced per building.</summary>
         private readonly Dictionary<Entity, Entity> _announcedLevelChange = new Dictionary<Entity, Entity>();
         private readonly List<Entity> _staleLevelChanges = new List<Entity>();
+
+        private sealed class HostConstructionObservation
+        {
+            public byte Progress;
+            public byte Speed;
+        }
+
+        private readonly Dictionary<Entity, HostConstructionObservation> _hostConstruction =
+            new Dictionary<Entity, HostConstructionObservation>();
+        private readonly HashSet<Entity> _constructionSeen = new HashSet<Entity>();
+        private readonly List<Entity> _constructionScratch = new List<Entity>();
+        private readonly Dictionary<Entity, byte> _hostStateFlags = new Dictionary<Entity, byte>();
+        private int _stateScanBucket;
 
         private uint _sequence;
         private long _lastLevelScanMs;
@@ -109,6 +156,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         private EntityQuery _createdBuildings;
         private EntityQuery _deletedBuildings;
         private EntityQuery _levelChanging;
+        private EntityQuery _stateBuildings;
 
         /// <summary>Set by <see cref="SyncRealizeSystem"/> while remote terrain edits are backlogged.</summary>
         public bool DeferForTerrain;
@@ -174,6 +222,26 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 None = new[] { ComponentType.ReadOnly<Temp>(), ComponentType.ReadOnly<Deleted>() },
             });
 
+            // Building state is ordinary component data, not a Created/Deleted lifecycle edge.
+            // Scan one native UpdateFrame partition at a time and announce absolute transitions.
+            _stateBuildings = GetEntityQuery(new EntityQueryDesc
+            {
+                All = new[]
+                {
+                    ComponentType.ReadOnly<Building>(),
+                    ComponentType.ReadOnly<BuildingCondition>(),
+                    ComponentType.ReadOnly<PrefabRef>(),
+                    ComponentType.ReadOnly<global::Game.Objects.Transform>(),
+                    ComponentType.ReadOnly<UpdateFrame>(),
+                },
+                None = new[]
+                {
+                    ComponentType.ReadOnly<Temp>(),
+                    ComponentType.ReadOnly<Deleted>(),
+                    ComponentType.ReadOnly<Owner>(),
+                },
+            });
+
             if (Mod.Service != null)
             {
                 _observer = new CommandObserver(_incoming, GrowableLifecycleCommand.Id);
@@ -196,6 +264,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         {
             if (!_incoming.IsEmpty) SyncInbox.Clear(_incoming);
             _selfRealized.Clear();
+            _pendingStateCorrections.Clear();
+            _pendingStateSequences.Clear();
+            _realizationValidations.Clear();
             _playerPlacedGrowables.Clear();
             _stalePlayerPlacedGrowables.Clear();
             _lastPlayerPlacedPruneMs = 0;
@@ -204,6 +275,11 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             // gone: keeping either would apply a stale decision to a fresh world.
             _applied.Clear();
             _announcedLevelChange.Clear();
+            _hostConstruction.Clear();
+            _constructionSeen.Clear();
+            _constructionScratch.Clear();
+            _hostStateFlags.Clear();
+            _stateScanBucket = 0;
         }
 
         /// <summary>
@@ -233,6 +309,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 // written by the object pipeline during the Modification phases and is gone again
                 // by the next frame's ToolUpdate.
                 RejectLocallyGrownBuildings(now);
+                ValidateRealizedBuildings(now);
                 return;
             }
 
@@ -242,6 +319,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             {
                 _lastLevelScanMs = now;
                 CaptureLevelChanges(session, now);
+                CaptureConstructionChanges(session, now);
+                CaptureStateChanges(session, now);
             }
             ReportStats(session, now);
         }

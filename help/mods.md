@@ -1,37 +1,88 @@
-# Mod Support & Compatibility
+---
+title: Mods and compatibility
+---
 
-## Official Mod Support
+# Mods and compatibility
 
-**No Mods are officially supported. Playing with mods is experimental. Any mods adding gameplay functionality will NOT work. You might experience crashes and corruption.**
+## Official mod support
 
-By default, CS2 Multiplayer Mod blocks hosting and joining when another active mod is detected, and a host rejects players using a different CS2 Multiplayer Mod build. Advanced users can enable **Options > CS2 Multiplayer Mod > General > Ignore Mod Compatibility Checks (Own Risk)** while offline. This permits other local mods and lets a host admit a different multiplayer-mod build when the network protocol still matches.
+No mods are officially supported. Playing with mods is experimental. Any mod that adds
+gameplay functionality will not work, and you may get desyncs, crashes or a corrupted city.
 
-The switch does **not** bypass network-protocol, Cities: Skylines II version, or DLC checks. It does not make another mod multiplayer-aware. Back up the city, use the same playset on every computer where possible, and expect desyncs, missing prefabs, broken cities, or crashes. The host controls whether different multiplayer-mod builds are admitted; each player controls whether their own additional mods are allowed locally.
-
-It is planned to add proper mod compatibility with SOME mods in future versions of the multiplayer mod. To support mods both multiplayer mod and the prospective mod need to work together to expose the functionality.
+Proper compatibility with some mods is planned for later versions. It needs work on both
+sides: the multiplayer mod and the other mod have to cooperate to expose what changed.
 
 ---
 
-## Mod Compatibility
+## Other mods are blocked
 
-Nonetheless, some display-only or UI-only mods might work with CS2MultiplayerMod. This is a non-comprehensive list of mod compatibility.
+Hosting and joining are blocked while any other mod is active, and a host rejects players
+running a different CS2 Multiplayer Mod build. Nothing in the synchronization layer accounts
+for a third party changing prefabs, tools or the simulation, so one extra mod on one machine
+is enough to desync the session or crash the other player.
 
-Updated `2026-08-06` for version `v0.1.3`. [Current mod version](./CS2MultiplayerMod/Properties/PublishConfiguration.xml#L23). Contributions & testing welcome.
+The check reads your active Paradox Mods playset. That includes asset-only mods such as
+maps, prop packs and prefab packs, which load no code at all. Mods in your other playsets
+are not enabled for this run and are ignored.
 
---- 
+| Banner | Meaning |
+| --- | --- |
+| Other Mods Enabled | Host and Join are blocked; the listed mods have to be disabled |
+| Other Mods Enabled, still loaded | Already disabled in the playset, but still in memory - restart the game once |
+| Compatibility Check Ignored | Other mods are active and the own-risk override is on |
 
-### Compatible Mods
+To clear the block:
 
-- Anarchy mods that achieve the same as dev options
+1. Disable every mod except CS2 Multiplayer Mod in your active playset. A playset that
+   contains only this mod is the safest setup.
+2. Go back to the game and wait a few seconds for the banner to clear.
+3. If the banner says the mods are still loaded, restart the game.
 
 ---
 
-### Incompatible Mods
+## Turning the check off
 
-**ALL MODS ADDING FUNCTIONALITY SUCH AS:**
+Options ▸ CS2 Multiplayer Mod ▸ General ▸ Ignore Mod Compatibility Checks (Own Risk).
+Change it while offline, before hosting or joining.
+
+![](assets/img/ui-options-general.png)
+
+With it on, other active mods no longer block hosting or joining on your machine, and a
+host also admits players on a different CS2 Multiplayer Mod build as long as the network
+protocol matches.
+
+It does not bypass:
+
+- the network protocol check, because different builds can encode network data differently,
+- the Cities: Skylines II version check, or
+- the DLC check.
+
+It also does not make another mod multiplayer-aware. Back up the city, use the same playset
+on every computer where possible, and expect desyncs, missing prefabs, broken cities or
+crashes. The host decides whether different multiplayer-mod builds are admitted; each
+player decides whether their own extra mods are allowed locally.
+
+---
+
+## Mod compatibility list
+
+Some display-only or UI-only mods may work. This list is not comprehensive - contributions
+and testing are welcome.
+
+Updated `2026-08-06` for version `v0.1.3`.
+[Current mod version](https://github.com/Rollocraft/CS2MultiplayerMod/blob/master/CS2MultiplayerMod/Properties/PublishConfiguration.xml#L31).
+
+### Possibly compatible
+
+- Anarchy-style mods that do the same thing as the developer options
+
+### Incompatible
+
+Every mod that adds functionality, for example:
+
 - Road Builder
-- Traffic
+- Traffic mods
 
 ---
 
-**[Back to troubleshooting.](/help/troubleshooting.md)**
+[Back to troubleshooting.](troubleshooting.md)

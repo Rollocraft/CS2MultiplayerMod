@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using Colossal.IO.AssetDatabase;
 using Colossal.Logging;
 using CS2MultiplayerMod.Game;
@@ -16,6 +17,24 @@ namespace CS2MultiplayerMod
         public static ILog log = LogManager.GetLogger(Name).SetShowsErrorsInUI(false);
 
         public static Setting Setting;
+
+        /// <summary>
+        /// Game locale ID -> the <c>locales/&lt;lang&gt;.properties</c> file backing it.
+        /// The IDs are the ones the game ships its own dictionaries under, so they must
+        /// match exactly (Simplified Chinese is <c>zh-HANS</c>, not <c>zh-CN</c>).
+        /// </summary>
+        private static readonly KeyValuePair<string, string>[] LocaleSources =
+        {
+            new KeyValuePair<string, string>("en-US", "en"),
+            new KeyValuePair<string, string>("de-DE", "de"),
+            new KeyValuePair<string, string>("fr-FR", "fr"),
+            new KeyValuePair<string, string>("es-ES", "es"),
+            new KeyValuePair<string, string>("it-IT", "it"),
+            new KeyValuePair<string, string>("pl-PL", "pl"),
+            new KeyValuePair<string, string>("ru-RU", "ru"),
+            new KeyValuePair<string, string>("ja-JP", "ja"),
+            new KeyValuePair<string, string>("zh-HANS", "zh-HANS"),
+        };
 
         /// <summary>
         /// Log a chatty, troubleshooting-only line - the per-action sync notices and the
@@ -58,11 +77,13 @@ namespace CS2MultiplayerMod
             // set in the options — no mod-specific language setting, like vanilla.
             Setting = new Setting(this);
             Setting.RegisterInOptionsUI();
-            // Each language is one embedded locales/<lang>.properties file. EN/DE key
-            // parity is enforced by CI over those files (.github/workflows/locale.yml),
-            // not at runtime.
-            GameManager.instance.localizationManager.AddSource("en-US", new PropertiesLocaleSource(Setting, "en"));
-            GameManager.instance.localizationManager.AddSource("de-DE", new PropertiesLocaleSource(Setting, "de"));
+            // Each language is one embedded locales/<lang>.properties file, keyed by the
+            // locale ID the game itself uses. Key parity across those files is enforced by
+            // CI (.github/workflows/locale.yml), not at runtime; a language the game does
+            // not offer simply never gets asked for, and unlisted ones fall back to English.
+            foreach (var locale in LocaleSources)
+                GameManager.instance.localizationManager.AddSource(
+                    locale.Key, new PropertiesLocaleSource(Setting, locale.Value));
 
             // Persist / load settings to the standard mod settings store.
             AssetDatabase.global.LoadSettings(Name, Setting, new Setting(this));
@@ -99,6 +120,17 @@ namespace CS2MultiplayerMod
             // state) now stays in sync even while a player is paused. Channel capture is
             // gated to ~1 Hz internally, so the render-rate phase adds no extra traffic.
             updateSystem.UpdateAt<Game.Sync.Systems.CityStateSyncSystem>(SystemUpdatePhase.UIUpdate);
+            // Capture the host's short-lived MovingAway decision immediately before its native
+            // consumer. Register this proxy exactly once: ordering registrations are additive.
+            updateSystem.UpdateBefore<
+                Game.Sync.Systems.ResidentialOccupancyDepartureCaptureSystem,
+                global::Game.Simulation.HouseholdMoveAwaySystem>(
+                SystemUpdatePhase.GameSimulation);
+            // Preserve the exact household contracts installed with the downloaded world before
+            // the client's first native rent calculation can replace them. This seed is a one-shot
+            // per world; the identity-aware correction itself runs at the boundary below.
+            updateSystem.UpdateBefore<Game.Sync.Systems.ResidentialOccupancyRentSeedSystem,
+                global::Game.Simulation.RentAdjustSystem>(SystemUpdatePhase.GameSimulation);
             // RentAdjustSystem writes one of sixteen property buckets. Insert the host correction
             // directly after RentAdjust; the game's existing phase order also leaves it before
             // PropertyRenterSystem, whose later payment pass consumes the corrected value.
@@ -106,12 +138,24 @@ namespace CS2MultiplayerMod
             // whole cache every simulation tick.
             updateSystem.UpdateAfter<Game.Sync.Systems.PropertyRentSyncSystem,
                 global::Game.Simulation.RentAdjustSystem>(SystemUpdatePhase.GameSimulation);
+            // Household economy is updated in household-specific partitions, independently from
+            // the building partition used by occupancy reconciliation. Correct changed households
+            // after the final daily-economy writers so every family in a multi-unit building uses
+            // the same authoritative snapshot when the residents panel calculates its averages.
+            updateSystem.UpdateAfter<Game.Sync.Systems.ResidentialHouseholdEconomyCorrectionSystem,
+                global::Game.Simulation.RentAdjustSystem>(SystemUpdatePhase.GameSimulation);
             // Before PropertyProcessingSystem: that system drains the rent-action queue this one
             // fills. The queue is persistent, so an action always survives to the next drain; the
             // ordering is what lets a move-in land in the same tick it was decided in whenever the
             // two updates coincide. Their intervals differ, so the game assigns them independent
             // offsets and that is not every time - worst case the move-in waits a few frames.
             updateSystem.UpdateBefore<Game.Sync.Systems.ResidentialOccupancySyncSystem,
+                global::Game.Simulation.PropertyProcessingSystem>(SystemUpdatePhase.GameSimulation);
+            // Complete queued household move-ins immediately after the native transaction has
+            // established both renter links. PropertyRenterSystem is the next native stage, so a
+            // single registration puts finalization before its later payment pass without running
+            // the same managed system twice in one simulation phase.
+            updateSystem.UpdateAfter<Game.Sync.Systems.ResidentialOccupancyFinalizeSystem,
                 global::Game.Simulation.PropertyProcessingSystem>(SystemUpdatePhase.GameSimulation);
             // Also UIUpdate: publishing the local camera focus must keep going while a
             // player is paused (so partners still see where they are), and GameSimulation

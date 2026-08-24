@@ -9,6 +9,7 @@ using Unity.Mathematics;
 using CS2MultiplayerMod.Core.Protocol.Messages;
 using CS2MultiplayerMod.Core.Session;
 using CS2MultiplayerMod.Game.Sync.Commands;
+using CS2MultiplayerMod.Game.Sync.Infrastructure;
 
 namespace CS2MultiplayerMod.Game.Sync.Systems
 {
@@ -24,7 +25,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         private const float OverlapTolerance = 0.5f;
 
         /// <summary>How far from the anchor an existing building may be and still be the same one.</summary>
-        private const float AnchorMatchDistance = 4f;
+        private const float AnchorMatchDistance = 0.5f;
 
         private const float AnchorSearchRadius = 8f;
 
@@ -53,6 +54,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             if (DeferForTerrain) return;
 
             _applied.Prune(now);
+            RetryPendingStateCorrections(now);
 
             int realized = 0;
             SimulationCommandMessage message;
@@ -131,6 +133,12 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 // exists to prevent.
                 if (AlreadySatisfied(blockers, prefab, position, now))
                 {
+                    Entity existing = FindGrowableAt(position, prefab, now);
+                    if (existing != Entity.Null)
+                    {
+                        ApplyConditionAndState(existing, command);
+                        EntityManager.AddComponent<Updated>(existing);
+                    }
                     _duplicates++;
                     _applied.Remember(command.Sequence, now, ReplayWindowMs);
                     Mod.Verbose("[MP] GrowableSync: '" + command.PrefabName + "' already stands at " +
@@ -174,7 +182,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
             _buildSync.RealizeSimulationBuilding(prefab, position, rotation, SeedFor(command),
                 (command.Flags & GrowableLifecycleCommand.FlagUnderConstruction) != 0);
-            NoteSelfRealized(position, now);
+            NoteSelfRealized(prefab, position, command, now);
             _applied.Remember(command.Sequence, now, ReplayWindowMs);
             _gotSpawn++;
             Mod.Verbose("[MP] GrowableSync realize: built '" + command.PrefabName + "' at " +
@@ -222,6 +230,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 UnderConstruction current = EntityManager.GetComponentData<UnderConstruction>(building);
                 if (current.m_NewPrefab == prefab)
                 {
+                    ApplyConditionAndState(building, command);
+                    EntityManager.AddComponent<Updated>(building);
                     _applied.Remember(command.Sequence, now, ReplayWindowMs);
                     return true;
                 }
@@ -230,7 +240,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                                 "at " + Format(position) + " with the host's '" +
                                 command.PrefabName + "'.");
                 current.m_NewPrefab = prefab;
-                current.m_Progress = byte.MaxValue;
+                current.m_Progress = command.ConstructionProgress;
+                current.m_Speed = command.ConstructionSpeed;
                 EntityManager.SetComponentData(building, current);
             }
             else
@@ -238,7 +249,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 EntityManager.AddComponentData(building, new UnderConstruction
                 {
                     m_NewPrefab = prefab,
-                    m_Progress = byte.MaxValue,
+                    m_Progress = command.ConstructionProgress,
+                    m_Speed = command.ConstructionSpeed,
                 });
             }
 
@@ -279,6 +291,11 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
         private bool ApplyState(GrowableLifecycleCommand command, long now)
         {
+            return ApplyState(command, now, true);
+        }
+
+        private bool ApplyState(GrowableLifecycleCommand command, long now, bool allowPending)
+        {
             var position = new float3(command.AnchorX, command.AnchorY, command.AnchorZ);
             Entity prefab;
             _prefabIndex.TryResolve(command.PrefabName, out prefab);
@@ -286,8 +303,22 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             Entity building = FindGrowableAt(position, prefab, now);
             if (building == Entity.Null)
             {
-                _unmatched++;
-                _applied.Remember(command.Sequence, now, ReplayWindowMs);
+                if (allowPending && _pendingStateSequences.Add(command.Sequence))
+                {
+                    if (_pendingStateCorrections.Count >= MaxPendingStateCorrections)
+                    {
+                        _pendingStateSequences.Remove(command.Sequence);
+                        SyncInbox.RequestResync("growable state retry queue overflow");
+                    }
+                    else
+                    {
+                        _pendingStateCorrections.Add(new PendingStateCorrection
+                        {
+                            Command = command,
+                            Expiry = now + SelfRealizedWindowMs,
+                        });
+                    }
+                }
                 return true;
             }
 
@@ -296,6 +327,37 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             _applied.Remember(command.Sequence, now, ReplayWindowMs);
             _gotState++;
             return true;
+        }
+
+        /// <summary>
+        /// A state update can share a network burst with the spawn whose live entity is generated
+        /// later in the frame. Keep it ordered and bounded instead of terminally dropping it.
+        /// </summary>
+        private void RetryPendingStateCorrections(long now)
+        {
+            for (int i = _pendingStateCorrections.Count - 1; i >= 0; i--)
+            {
+                PendingStateCorrection pending = _pendingStateCorrections[i];
+                if (pending.Expiry <= now)
+                {
+                    _pendingStateSequences.Remove(pending.Command.Sequence);
+                    _pendingStateCorrections.RemoveAt(i);
+                    _unmatched++;
+                    _applied.Remember(pending.Command.Sequence, now, ReplayWindowMs);
+                    SyncInbox.RequestResync("growable state target did not resolve");
+                    continue;
+                }
+
+                var position = new float3(pending.Command.AnchorX,
+                    pending.Command.AnchorY, pending.Command.AnchorZ);
+                Entity prefab;
+                _prefabIndex.TryResolve(pending.Command.PrefabName, out prefab);
+                if (FindGrowableAt(position, prefab, now) == Entity.Null) continue;
+
+                _pendingStateSequences.Remove(pending.Command.Sequence);
+                _pendingStateCorrections.RemoveAt(i);
+                ApplyState(pending.Command, now, false);
+            }
         }
 
         /// <summary>
@@ -320,6 +382,29 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 (command.StateFlags & GrowableLifecycleCommand.StateCondemned) != 0);
             SetMarker<Destroyed>(building,
                 (command.StateFlags & GrowableLifecycleCommand.StateDestroyed) != 0);
+
+            bool hostConstructing =
+                (command.Flags & GrowableLifecycleCommand.FlagUnderConstruction) != 0;
+            bool localConstructing = EntityManager.HasComponent<UnderConstruction>(building);
+            if (hostConstructing)
+            {
+                UnderConstruction construction = localConstructing
+                    ? EntityManager.GetComponentData<UnderConstruction>(building)
+                    : default(UnderConstruction);
+                construction.m_Progress = command.ConstructionProgress;
+                construction.m_Speed = command.ConstructionSpeed;
+                if (localConstructing) EntityManager.SetComponentData(building, construction);
+                else EntityManager.AddComponentData(building, construction);
+            }
+            else if (localConstructing)
+            {
+                // Let BuildingConstructionSystem perform its native completion side effects on its
+                // next pass rather than removing the marker by hand.
+                UnderConstruction construction =
+                    EntityManager.GetComponentData<UnderConstruction>(building);
+                construction.m_Progress = byte.MaxValue;
+                EntityManager.SetComponentData(building, construction);
+            }
         }
 
         private void SetMarker<T>(Entity entity, bool wanted) where T : unmanaged, IComponentData
@@ -531,20 +616,33 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         /// become an entity until a later phase, so the only way to recognise our own building when
         /// it appears is the position we asked for it at.
         /// </summary>
-        private void NoteSelfRealized(float3 position, long now)
+        private void NoteSelfRealized(Entity prefab, float3 position,
+            GrowableLifecycleCommand command, long now)
         {
             if (_selfRealized.Count >= MaxSelfRealized) _selfRealized.RemoveAt(0);
-            _selfRealized.Add((position, now + SelfRealizedWindowMs));
+            _selfRealized.Add(new PendingRealizedSpawn
+            {
+                Prefab = prefab,
+                Position = position,
+                Expiry = now + SelfRealizedWindowMs,
+                Command = command,
+            });
         }
 
-        private bool WasSelfRealized(float3 position, long now)
+        private bool TryTakeSelfRealized(Entity prefab, float3 position, long now,
+            out GrowableLifecycleCommand command)
         {
+            command = null;
             for (int i = _selfRealized.Count - 1; i >= 0; i--)
             {
-                (float3 position, long expiry) entry = _selfRealized[i];
-                if (entry.expiry <= now) { _selfRealized.RemoveAt(i); continue; }
-                if (math.distancesq(entry.position.xz, position.xz) <=
-                    AnchorMatchDistance * AnchorMatchDistance) return true;
+                PendingRealizedSpawn entry = _selfRealized[i];
+                if (entry.Expiry <= now) { _selfRealized.RemoveAt(i); continue; }
+                if (entry.Prefab != prefab ||
+                    math.distancesq(entry.Position.xz, position.xz) >
+                    AnchorMatchDistance * AnchorMatchDistance) continue;
+                command = entry.Command;
+                _selfRealized.RemoveAt(i);
+                return true;
             }
             return false;
         }
@@ -573,7 +671,26 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
                     float3 position = EntityManager
                         .GetComponentData<global::Game.Objects.Transform>(entity).m_Position;
-                    if (WasSelfRealized(position, now)) continue;
+                    GrowableLifecycleCommand command;
+                    if (TryTakeSelfRealized(prefab, position, now, out command))
+                    {
+                        // The definition is now a real native building. This is the first point at
+                        // which its construction clock and state payload can be applied safely.
+                        ApplyConditionAndState(entity, command);
+                        EntityManager.AddComponent<Updated>(entity);
+                        if (_realizationValidations.Count >= MaxRealizationValidations)
+                        {
+                            SyncInbox.RequestResync("growable realization validation overflow");
+                        }
+                        else _realizationValidations.Add(new RealizationValidation
+                        {
+                            Building = entity,
+                            Prefab = prefab,
+                            Position = position,
+                            Expiry = now + RealizationValidationWindowMs,
+                        });
+                        continue;
+                    }
 
                     EntityManager.AddComponent<Deleted>(entity);
                     _rejectedLocal++;
@@ -587,6 +704,81 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             {
                 entities.Dispose();
             }
+        }
+
+        /// <summary>
+        /// A definition being accepted is not yet proof that the generated building joined the
+        /// road/service graph. Re-run native Updated initialization until the root has a road,
+        /// reciprocal road buffer, and the standard utility consumers. Persistent failure is
+        /// structural divergence and escalates to the existing world-repair path.
+        /// </summary>
+        private void ValidateRealizedBuildings(long now)
+        {
+            for (int i = _realizationValidations.Count - 1; i >= 0; i--)
+            {
+                RealizationValidation pending = _realizationValidations[i];
+                Entity building = pending.Building;
+                if (building == Entity.Null || !EntityManager.Exists(building) ||
+                    EntityManager.HasComponent<Deleted>(building))
+                {
+                    _realizationValidations.RemoveAt(i);
+                    continue;
+                }
+
+                bool connected = HasNativeRoadConnection(building, pending.Prefab);
+                bool utilities = HasExpectedUtilityConsumers(building, pending.Prefab);
+                if (connected && utilities)
+                {
+                    _realizationValidations.RemoveAt(i);
+                    continue;
+                }
+
+                if (pending.Expiry <= now)
+                {
+                    _realizationValidations.RemoveAt(i);
+                    Mod.log.Warn("[MP] GrowableSync: generated building '" +
+                                 PrefabIndexSafeName(pending.Prefab) + "' at " +
+                                 Format(pending.Position) + " did not join its road/service graph; " +
+                                 "requesting world repair.");
+                    Diagnostics.FlightRecorder.Note("growable realization invalid/resync");
+                    SyncInbox.RequestResync("growable building failed road/service realization");
+                    continue;
+                }
+
+                if (!EntityManager.HasComponent<Updated>(building))
+                    EntityManager.AddComponent<Updated>(building);
+                Building data = EntityManager.GetComponentData<Building>(building);
+                if (data.m_RoadEdge != Entity.Null && EntityManager.Exists(data.m_RoadEdge) &&
+                    !EntityManager.HasComponent<Updated>(data.m_RoadEdge))
+                    EntityManager.AddComponent<Updated>(data.m_RoadEdge);
+            }
+        }
+
+        private bool HasNativeRoadConnection(Entity building, Entity prefab)
+        {
+            if (!EntityManager.HasComponent<BuildingData>(prefab)) return true;
+            BuildingData data = EntityManager.GetComponentData<BuildingData>(prefab);
+            if ((data.m_Flags & global::Game.Prefabs.BuildingFlags.RequireRoad) == 0) return true;
+
+            Building live = EntityManager.GetComponentData<Building>(building);
+            Entity road = live.m_RoadEdge;
+            if (road == Entity.Null || !EntityManager.Exists(road) ||
+                !EntityManager.HasBuffer<ConnectedBuilding>(road)) return false;
+            DynamicBuffer<ConnectedBuilding> connected =
+                EntityManager.GetBuffer<ConnectedBuilding>(road, true);
+            for (int i = 0; i < connected.Length; i++)
+                if (connected[i].m_Building == building) return true;
+            return false;
+        }
+
+        private bool HasExpectedUtilityConsumers(Entity building, Entity prefab)
+        {
+            if (EntityManager.HasComponent<UnderConstruction>(building) ||
+                EntityManager.HasComponent<Abandoned>(building) ||
+                EntityManager.HasComponent<Destroyed>(building) ||
+                !EntityManager.HasComponent<ConsumptionData>(prefab)) return true;
+            return EntityManager.HasComponent<ElectricityConsumer>(building) &&
+                   EntityManager.HasComponent<WaterConsumer>(building);
         }
 
         /// <summary>

@@ -8,16 +8,24 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
     public partial class ResidentialOccupancySyncSystem
     {
         /// <summary>
-        /// The simulation systems a client must not run once the host owns occupancy. Each one
-        /// decides, from a draw seeded by that machine's own clock, that a household exists, that
-        /// it lives somewhere, or that it has split in two — decisions the host is now making for
-        /// everyone.
+        /// The lifecycle systems a client must not run once the host owns residential households.
+        /// Together these systems create and split households, choose their homes, and add pets.
+        /// The host's absolute roster mirrors those decisions, the
+        /// household's daily scalar state, and its pet roster, so running the writers locally would
+        /// race the next host correction and can turn one move-out into a different family locally.
         ///
         /// Not on this list, deliberately:
         ///
-        /// * <c>HouseholdMoveAwaySystem</c> stays running. It is the mechanism this system retires
-        ///   a surplus household with, and nothing else marks a household as leaving once
-        ///   HouseholdFindPropertySystem is held.
+        /// * <c>HouseholdBehaviorSystem</c> stays running. Besides proposing moves, it is the
+        ///   native producer for shopping needs and car demand. The every-frame lifecycle boundary
+        ///   strips its local move/seeker decisions before their consumers run, while leaving the
+        ///   traffic/economy work intact.
+        /// * <c>HouseholdMoveAwaySystem</c>, <c>HouseholdAndCitizenRemoveSystem</c>, and
+        ///   <c>HouseholdPetRemoveSystem</c> stay running. They execute and clean up removals that
+        ///   the host roster requests; they do not choose the authoritative roster.
+        /// * <c>PropertyProcessingSystem</c>, <c>PropertyRenterSystem</c>, and the job/wage systems
+        ///   stay running. They maintain native renter links, payments, and local employment; this
+        ///   authority boundary is limited to household lifecycle and mirrored household state.
         /// * <c>DeathCheckSystem</c> stays running. Death of old age is drawn from the citizen's own
         ///   stored pseudo-random value and their age, both of which the roster keeps identical, so
         ///   it already agrees between peers. The same job also owns illness recovery and marking a
@@ -31,6 +39,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         {
             typeof(global::Game.Simulation.HouseholdSpawnSystem),
             typeof(global::Game.Simulation.HouseholdFindPropertySystem),
+            typeof(global::Game.Simulation.HouseholdPetSpawnSystem),
             typeof(global::Game.Simulation.BirthSystem),
             typeof(global::Game.Simulation.LeaveHouseholdSystem),
         };
@@ -61,6 +70,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 if (!_suppressedWasEnabled.ContainsKey(type))
                     _suppressedWasEnabled[type] = system.Enabled;
                 if (!system.Enabled) continue;
+                // If a system that was initially off becomes enabled during the session, remember
+                // that latest native intent before holding it again so disconnect restores it on.
+                _suppressedWasEnabled[type] = true;
                 system.Enabled = false;
                 Mod.Verbose("[MP] Occupancy: " + type.Name +
                             " disabled on this client; the host decides who lives where.");

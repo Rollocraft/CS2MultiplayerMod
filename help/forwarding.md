@@ -1,6 +1,24 @@
+---
+title: Set up port forwarding
+---
+
 # Port Forwarding
 
-This guide will show you how to set up port forwarding on your router.
+This guide shows how to open a TCP port on your router so friends can join over the
+internet.
+
+!!! tip "You may not need this at all"
+
+    Port forwarding is only for [direct connections](direct-connection.md) over the
+    internet.
+
+    - [Steam Relay](steam-relay.md) needs no port and no router setup at all.
+    - On the same network nothing has to be forwarded either.
+    - When hosting starts, the mod already asks your router to open the port itself. Only
+      follow this guide if the hosting status asks you to forward it manually.
+
+    The default port is TCP `25001`. The host, every joining player, the firewall rule and
+    the router rule all have to use the same port.
 
 ## What is port forwarding?
 
@@ -24,4 +42,4 @@ Your router not among them? Search your router model on google and add "port for
 
 ---
 
-[Issues? Troubleshooting](/help/forwarding_troubleshooting.md)
+[Issues? Troubleshooting](forwarding_troubleshoot.md)

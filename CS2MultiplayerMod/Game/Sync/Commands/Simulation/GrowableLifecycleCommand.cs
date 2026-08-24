@@ -66,6 +66,15 @@ namespace CS2MultiplayerMod.Game.Sync.Commands
 
         public byte Flags;
 
+        /// <summary>
+        /// Exact native construction clock. Speed is a per-machine random draw, so carrying only
+        /// <see cref="FlagUnderConstruction"/> makes roughly half the clients finish after the
+        /// host and half before it. State updates also carry these fields so a lost/late spawn
+        /// still converges and host completion is authoritative.
+        /// </summary>
+        public byte ConstructionProgress;
+        public byte ConstructionSpeed;
+
         /// <summary>Level-up progress; carried so a corrected building does not restart at zero.</summary>
         public int Condition;
 
@@ -84,10 +93,12 @@ namespace CS2MultiplayerMod.Game.Sync.Commands
                 writer.WriteFloat(RotX); writer.WriteFloat(RotY);
                 writer.WriteFloat(RotZ); writer.WriteFloat(RotW);
                 writer.WriteShort(unchecked((short)RandomSeed));
-                writer.WriteByte(Flags);
             }
             if (Op == OpSpawn || Op == OpLevel || Op == OpState)
             {
+                writer.WriteByte(Flags);
+                writer.WriteByte(ConstructionProgress);
+                writer.WriteByte(ConstructionSpeed);
                 writer.WriteInt(Condition);
                 writer.WriteByte(StateFlags);
             }
@@ -117,12 +128,18 @@ namespace CS2MultiplayerMod.Game.Sync.Commands
                 RotZ = WireGuard.ReadFinite(reader);
                 RotW = WireGuard.ReadFinite(reader);
                 RandomSeed = unchecked((ushort)reader.ReadShort());
-                Flags = reader.ReadByte();
             }
             if (Op == OpSpawn || Op == OpLevel || Op == OpState)
             {
+                Flags = reader.ReadByte();
+                if ((Flags & ~FlagUnderConstruction) != 0)
+                    throw new ProtocolException("Unknown growable lifecycle flags: " + Flags + ".");
+                ConstructionProgress = reader.ReadByte();
+                ConstructionSpeed = reader.ReadByte();
                 Condition = reader.ReadInt();
                 StateFlags = reader.ReadByte();
+                if ((StateFlags & ~(StateAbandoned | StateCondemned | StateDestroyed)) != 0)
+                    throw new ProtocolException("Unknown growable state flags: " + StateFlags + ".");
             }
         }
 

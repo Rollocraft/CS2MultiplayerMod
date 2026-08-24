@@ -4,18 +4,24 @@ namespace CS2MultiplayerMod.Core.Protocol
     {
         /// <summary>
         /// Wire-format version. Bump when message layout changes to refuse handshake on mismatch.
-        /// Current v44 extends channel 21 with the three things that made two cities disagree about
-        /// the same house even while the occupancy numbers matched: the random name slots behind a
-        /// family's surname and each resident's first name, and the building site's construction
-        /// rate. All three are drawn from each machine's own clock, so a house given a slow rate on
-        /// one peer and a fast one on the other finished minutes apart, and its residents were
-        /// never called the same thing. v43 adds city-state channel 21: bounded rolling,
-        /// host-authoritative residential
-        /// occupancy. Each page is an absolute roster for the properties it names - the households
-        /// living there and the residents in them - and a client reconciles its own building
-        /// against it, moving households in through the game's own renter pipeline. Identity is
-        /// (property, slot), so nothing has to be agreed at join and a lost, late or repeated page
-        /// converges to the same state; a miss is never a reason to reload the world.
+        /// Current v47 adds each synchronized household's owned personal-vehicle prefabs to the
+        /// occupancy roster. Receiving peers realize missing vehicles through the normal stopped
+        /// vehicle archetype and ownership references, so synchronized residents can actually use
+        /// cars and generate traffic. v46 makes growable construction and condition host-authoritative. Lifecycle
+        /// commands carry the native construction progress/rate and live state transitions, so a
+        /// locally random build speed or upkeep result cannot finish or abandon a different house.
+        /// v45 makes channel 21 a revisioned identity and lifecycle protocol. Every
+        /// property roster, household and citizen carries a world-scoped host identity; explicit
+        /// household location records distinguish a temporary unhoused state from departure, and
+        /// exact citizen tombstones prevent a surviving family member from being confused with a
+        /// replacement. Complete-sweep watermarks make property pruning safe under late pages.
+        /// The same channel carries household rent, cash/savings, displayed last-day salary and
+        /// daily accounting, plus random name slots and construction rate. A client reconciles
+        /// moves through the native renter pipeline, with bounded retries and rollback for full
+        /// building swaps. v44 added the random name slots and construction rate; v43 introduced
+        /// the bounded rolling host-authoritative occupancy channel but still paired households by
+        /// renter-buffer position. A lost, late or repeated v45 page remains a bounded repair
+        /// problem and is never a reason to reload the world.
         /// The channel 19 wire format added in v40 and withdrawn in v41 is gone: it captured only
         /// brand-new households, so the common case - a family that already existed moving into a
         /// newly grown building - never reached the wire, while the client's spawner was already
@@ -97,7 +103,7 @@ namespace CS2MultiplayerMod.Core.Protocol
         /// islands) reattach on the receiver.
         /// See <see cref="Messages.HandshakeRequest"/> and version notes in doc/internals.
         /// </summary>
-        public const int ProtocolVersion = 44;
+        public const int ProtocolVersion = 47;
 
         /// <summary>
         /// Hard cap on a single payload, guarding against corrupt length prefixes.

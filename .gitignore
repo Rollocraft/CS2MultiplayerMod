@@ -20,3 +20,7 @@ CLAUDE.md
 Logs/
 tests/
 .mcp.json
+
+# MkDocs build output
+site/
+.venv/

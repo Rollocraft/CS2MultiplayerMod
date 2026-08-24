@@ -11,14 +11,15 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         /// whether a zoned building exists - and decides it from a per-machine random draw.
         /// Left running, a client grows and demolishes a city the host has never seen.
         ///
-        /// Deliberately limited to the systems that create or destroy a building outright. Level
-        /// changes are left running and corrected instead (see CaptureLevelChanges): the system
-        /// that makes them also collects upkeep, and taking that away would change the client's
-        /// economy for a difference the host's command already overwrites.
+        /// BuildingUpkeepSystem is also held. It does not merely collect upkeep: from locally
+        /// drifting renters/resources it can choose a random level target or irreversibly abandon
+        /// the building, removing its renter and electricity/water components. Host lifecycle and
+        /// occupancy messages mirror those decisions without allowing that destructive local race.
         /// </summary>
         private static readonly System.Type[] ClientSuppressedSystems =
         {
             typeof(global::Game.Simulation.ZoneSpawnSystem),
+            typeof(global::Game.Simulation.BuildingUpkeepSystem),
             typeof(global::Game.Simulation.CondemnedBuildingSystem),
             typeof(global::Game.Simulation.DestroyAbandonedSystem),
             typeof(global::Game.Simulation.CollapsedBuildingSystem),

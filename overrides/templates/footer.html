@@ -1,0 +1,22 @@
+{# Override: author + contributor links, and the trademark disclaimer. #}
+<footer view-transition-name="footer"
+    class="group-has-[.section-soft]/body:bg-surface/40 3xl:fixed:bg-transparent dark:bg-transparent">
+    <div class="container-wrapper px-4 xl:px-6">
+        <div class="flex min-h-(--footer-height) flex-col items-center justify-center gap-1 py-3">
+            <div class="text-muted-foreground w-full text-center text-xs leading-loose sm:text-sm">
+                {% if config.site_author %}
+                {{ _("Built by") }}<!-- -->
+                <a href="{{ config.extra.author_url }}">{{ config.site_author }}</a>
+                and <a href="{{ config.extra.contributors_url }}">contributors</a> &mdash;
+                {% endif %}
+                <a href="https://github.com/asiffer/mkdocs-shadcn">shadcn theme</a> {{ _("provided by") }}
+                <a href="https://github.com/asiffer">@asiffer</a>
+            </div>
+            <div class="text-muted-foreground w-full text-center text-[0.7rem] leading-snug opacity-80">
+                Cities: Skylines II is a trademark of Paradox Interactive AB. This project is not
+                affiliated with, endorsed by or sponsored by Colossal Order Oy, Paradox Interactive AB
+                or Iceflake Studios Oy.
+            </div>
+        </div>
+    </div>
+</footer>
