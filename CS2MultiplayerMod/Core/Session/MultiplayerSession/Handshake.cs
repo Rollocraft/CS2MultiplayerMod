@@ -90,9 +90,17 @@ namespace CS2MultiplayerMod.Core.Session
             if (!string.IsNullOrEmpty(_config.ModVersion) &&
                 !string.Equals(_config.ModVersion, request.ModVersion, StringComparison.Ordinal))
             {
-                Reject(connection, "Mod version mismatch: host " + _config.ModVersion +
-                                   ", client " + (request.ModVersion ?? "?") + ".");
-                return;
+                string mismatch = "Mod version mismatch: host " + _config.ModVersion +
+                                  ", client " + (request.ModVersion ?? "?") + ".";
+                if (!_config.IgnoreModCompatibilityChecks)
+                {
+                    Reject(connection, mismatch);
+                    return;
+                }
+
+                _log.Warn("[compatibility] " + mismatch +
+                          " The host chose to ignore this check at their own risk; " +
+                          "protocol compatibility is still enforced.");
             }
 
             if (!string.IsNullOrEmpty(_config.GameVersion) &&

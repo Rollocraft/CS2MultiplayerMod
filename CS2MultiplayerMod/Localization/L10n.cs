@@ -35,7 +35,15 @@ namespace CS2MultiplayerMod.Localization
             public const string UiWorldTransfer = "CS2MP.UI.WorldTransfer";
             public const string UiJoin = "CS2MP.UI.Join";
             public const string UiDisconnect = "CS2MP.UI.Disconnect";
+            public const string UiCloseSession = "CS2MP.UI.CloseSession";
             public const string UiClose = "CS2MP.UI.Close";
+            public const string UiOpenHelp = "CS2MP.UI.OpenHelp";
+
+            // -- Native confirmation shown before an explicit host/client disconnect --
+            public const string UiCloseSessionTitle = "CS2MP.UI.CloseSessionTitle";
+            public const string UiCloseSessionBody = "CS2MP.UI.CloseSessionBody";
+            public const string UiLeaveSessionTitle = "CS2MP.UI.LeaveSessionTitle";
+            public const string UiLeaveSessionBody = "CS2MP.UI.LeaveSessionBody";
 
             // -- In-game multiplayer hub (right-menu button + panel) --
             public const string UiMultiplayer = "CS2MP.UI.Multiplayer";
@@ -78,6 +86,16 @@ namespace CS2MultiplayerMod.Localization
             public const string UiVersionWarningTitle = "CS2MP.UI.VersionWarningTitle";
             // {0} = running build, {1} = comma-separated tested builds.
             public const string UiVersionWarning = "CS2MP.UI.VersionWarning";
+
+            // -- Other-mods block (host and join are both refused while any is live) --
+            public const string UiModsBlockedTitle = "CS2MP.UI.ModsBlockedTitle";
+            // {0} = comma-separated names of the other live mods.
+            public const string UiModsBlocked = "CS2MP.UI.ModsBlocked";
+            // Same, for a block that came from the loaded-assembly fallback: that one only
+            // clears on restart, so it must not tell the player to just toggle the mod off.
+            public const string UiModsBlockedRestart = "CS2MP.UI.ModsBlockedRestart";
+            public const string UiModsIgnoredTitle = "CS2MP.UI.ModsIgnoredTitle";
+            public const string UiModsIgnored = "CS2MP.UI.ModsIgnored";
 
             // -- Full-screen join loading overlay --
             public const string UiCancel = "CS2MP.UI.Cancel";
@@ -148,6 +166,8 @@ namespace CS2MultiplayerMod.Localization
             public const string ErrorGameVersionHelp = "CS2MP.Error.GameVersion.Help";
             public const string ErrorDlc = "CS2MP.Error.Dlc";
             public const string ErrorDlcHelp = "CS2MP.Error.Dlc.Help";
+            public const string ErrorMods = "CS2MP.Error.Mods";
+            public const string ErrorModsHelp = "CS2MP.Error.Mods.Help";
             public const string ErrorFull = "CS2MP.Error.Full";
             public const string ErrorFullHelp = "CS2MP.Error.Full.Help";
             public const string ErrorAddress = "CS2MP.Error.Address";

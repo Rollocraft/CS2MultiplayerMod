@@ -1,0 +1,17 @@
+{# Override: the stock topbar lists sections only. List top-level pages too,
+   so Home / Get started / Changelog sit next to the Troubleshooting section. #}
+<nav class="items-center gap-0.5 hidden lg:flex">
+    {% set link_class = "inline-flex items-center justify-center whitespace-nowrap text-sm font-medium transition-all disabled:pointer-events-none disabled:opacity-50 [&amp;_svg]:pointer-events-none [&amp;_svg:not([class*='size-'])]:size-4 shrink-0 [&amp;_svg]:shrink-0 outline-none focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-[3px] aria-invalid:ring-destructive/20 dark:aria-invalid:ring-destructive/40 aria-invalid:border-destructive hover:bg-accent hover:text-accent-foreground dark:hover:bg-accent/50 h-8 rounded-md gap-1.5 px-3 has-[&gt;svg]:px-2.5" %}
+    {% for item in nav %}
+    {% if item.is_page %}
+    <a class="{{ link_class }}" data-slot="button" data-active="{{ '%s' % item.active|lower }}"
+        href="{{ item.url | url }}">{{ item.title }}</a>
+    {% elif item.is_section %}
+    {% set first = item|first_page %}
+    {% if first %}
+    <a class="{{ link_class }}" data-slot="button" data-active="{{ '%s' % item.active|lower }}"
+        href="{{ first.url | url }}">{{ item.title }}</a>
+    {% endif %}
+    {% endif %}
+    {% endfor %}
+</nav>

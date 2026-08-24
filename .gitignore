@@ -17,6 +17,10 @@ tools/
 .claude/
 .idea
 CLAUDE.md
-Log/
-
+Logs/
+tests/
 .mcp.json
+
+# MkDocs build output
+site/
+.venv/

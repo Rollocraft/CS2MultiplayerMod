@@ -7,6 +7,21 @@
         <PublishConfigurationPath>Properties\PublishConfiguration.xml</PublishConfigurationPath>
     </PropertyGroup>
 
+    <!--The .pdb ships with the mod (it is what gives players' crash reports file and line
+    numbers), so the paths inside it are public. PathMap rewrites them to a repo-relative
+    prefix, and SourceLink is off because its JSON records the absolute build root.-->
+    <PropertyGroup>
+        <PathMap>$(MSBuildProjectDirectory)\=CS2MultiplayerMod\</PathMap>
+        <EnableSourceLink>false</EnableSourceLink>
+        <DebugType>portable</DebugType>
+    </PropertyGroup>
+
+    <!--The per-entity occupancy/household trace lines (see Game/Diagnostics/DevTrace.cs).
+    Off in a shipped build; turn them on with: dotnet build -p:MpDevTrace=true-->
+    <PropertyGroup Condition="'$(MpDevTrace)' == 'true'">
+        <DefineConstants>$(DefineConstants);MP_DEV_TRACE</DefineConstants>
+    </PropertyGroup>
+
     <!--Imports must be after PropertyGroup block-->
     <Import Project="$([System.Environment]::GetEnvironmentVariable('CSII_TOOLPATH', 'EnvironmentVariableTarget.User'))\Mod.props"/>
     <Import Project="$([System.Environment]::GetEnvironmentVariable('CSII_TOOLPATH', 'EnvironmentVariableTarget.User'))\Mod.targets"/>
@@ -127,6 +142,19 @@
     file imports Mod.targets above, so the ordering holds.-->
     <Target Name="BuildUI" AfterTargets="DeployWIP" Condition="'$(NeedBuild)'=='true'">
         <Exec Command="npm run build" WorkingDirectory="$(ProjectDir)UI"/>
+    </Target>
+
+    <!--The Burst stubs are compiled through the toolchain's cache directory and keep its
+    absolute path inside them; their symbol files carry it too. Both are published as-is,
+    so strip them from the deployed copy (and from bin, which is zipped by hand).-->
+    <Target Name="ScrubBuildPaths" AfterTargets="BuildUI" Condition="'$(NeedBuild)'=='true'">
+        <PropertyGroup>
+            <ScrubScript>$(MSBuildProjectDirectory)\..\build\scrub-build-paths.ps1</ScrubScript>
+        </PropertyGroup>
+        <Exec Command="powershell -NoProfile -ExecutionPolicy Bypass -File &quot;$(ScrubScript)&quot; -Directory &quot;$(DeployDir)&quot;"
+              Condition="Exists('$(DeployDir)')"/>
+        <!--OutDir keeps its trailing slash, which would escape the closing quote.-->
+        <Exec Command="powershell -NoProfile -ExecutionPolicy Bypass -File &quot;$(ScrubScript)&quot; -Directory &quot;$(MSBuildProjectDirectory)\$(OutDir.TrimEnd('\'))&quot;"/>
     </Target>
 
 </Project>

@@ -1,0 +1,84 @@
+site_name: CS2 Multiplayer Mod
+site_description: "Cooperative multiplayer for Cities: Skylines II - setup, port forwarding and troubleshooting."
+site_url: https://rollocraft.github.io/CS2MultiplayerMod/
+site_author: Rollocraft
+
+repo_url: https://github.com/Rollocraft/CS2MultiplayerMod
+repo_name: Rollocraft/CS2MultiplayerMod
+edit_uri: edit/master/help/
+
+docs_dir: help
+site_dir: site
+
+theme:
+  name: shadcn
+  custom_dir: overrides
+  icon: assets/logo.webp
+  favicon: assets/favicon.svg
+  show_title: true
+  topbar_sections: true
+  show_stargazers: true
+  hide_source_files: false
+  accent: oklch(62% 0.17 250)
+  pygments_style:
+    light: shadcn-light
+    dark: github-dark
+
+watch:
+  - overrides
+
+extra:
+  author_url: https://github.com/Rollocraft
+  contributors_url: https://github.com/Rollocraft/CS2MultiplayerMod/graphs/contributors
+
+extra_css:
+  - assets/extra.css
+
+extra_javascript:
+  - assets/search.js
+
+nav:
+  - Home: index.md
+  - Getting started: getting-started.md
+  - Connection:
+      - Steam Relay: steam-relay.md
+      - Direct connection: direct-connection.md
+      - Set up port forwarding: forwarding.md
+      - Port forwarding problems: forwarding_troubleshoot.md
+  - Changelog: changelog.md
+  - Troubleshooting:
+      - Troubleshooting guide: troubleshooting.md
+      - Errors and warnings: errors-and-warnings.md
+      - Mods and compatibility: mods.md
+      - Disable DLC: disable_dlc.md
+      - Verify game files: verify_files.md
+
+plugins:
+  - shadcn/search
+
+markdown_extensions:
+  - abbr
+  - admonition
+  - attr_list
+  - def_list
+  - footnotes
+  - md_in_html
+  - sane_lists
+  - tables
+  - toc:
+      permalink: true
+  - codehilite:
+      guess_lang: false
+  - pymdownx.details
+  - pymdownx.highlight
+  - pymdownx.inlinehilite
+  - pymdownx.keys
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+
+validation:
+  omitted_files: warn
+  absolute_links: warn
+  unrecognized_links: warn
+  anchors: warn

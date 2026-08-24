@@ -1,0 +1,387 @@
+/* CS2 Multiplayer Mod - additions on top of the shadcn theme.
+   Only design tokens the theme already defines are used, so both
+   colour schemes keep working. */
+
+:root {
+  --mp-brand: oklch(62% 0.17 250);
+  --mp-brand-soft: color-mix(in oklab, var(--mp-brand) 12%, transparent);
+}
+
+/* ---------------------------------------------------------------- hero */
+
+.hero {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.9rem;
+  text-align: center;
+  padding: 1.5rem 0 0.5rem;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 2rem;
+}
+
+.hero__title {
+  font-size: clamp(1.9rem, 4.5vw, 2.75rem);
+  font-weight: 650;
+  letter-spacing: -0.03em;
+  line-height: 1.1;
+  margin: 0;
+}
+
+.hero__lead {
+  max-width: 42rem;
+  margin: 0;
+  color: var(--muted-foreground);
+  font-size: 1.02rem;
+  line-height: 1.6;
+}
+
+.hero__actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 0.55rem;
+}
+
+.hero__meta {
+  color: var(--muted-foreground);
+  font-size: 0.8rem;
+  margin: 0 0 0.6rem;
+}
+
+/* ------------------------------------------------------------- buttons */
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  height: 2.35rem;
+  padding: 0 1rem;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  font-size: 0.9rem;
+  font-weight: 500;
+  text-decoration: none !important;
+  color: var(--foreground);
+  background: var(--background);
+  transition: background-color 0.15s ease, border-color 0.15s ease, transform 0.15s ease;
+}
+
+.btn:hover {
+  background: var(--secondary);
+  transform: translateY(-1px);
+}
+
+.btn--primary {
+  background: var(--mp-brand);
+  border-color: transparent;
+  color: oklch(100% 0 0);
+}
+
+.btn--primary:hover {
+  background: color-mix(in oklab, var(--mp-brand) 88%, black);
+  color: oklch(100% 0 0);
+}
+
+.btn svg {
+  width: 1rem;
+  height: 1rem;
+}
+
+/* --------------------------------------------------------------- cards */
+
+.cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr));
+  gap: 0.9rem;
+  margin: 1.2rem 0 2rem;
+}
+
+.card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  padding: 1.05rem 1.1rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--card);
+  color: var(--card-foreground);
+  text-decoration: none !important;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease, transform 0.15s ease;
+}
+
+a.card:hover {
+  border-color: var(--mp-brand);
+  box-shadow: 0 6px 20px -12px var(--mp-brand);
+  transform: translateY(-2px);
+}
+
+.card__icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2rem;
+  height: 2rem;
+  border-radius: calc(var(--radius) - 0.15rem);
+  background: var(--mp-brand-soft);
+  color: var(--mp-brand);
+  margin-bottom: 0.15rem;
+}
+
+.card__icon svg {
+  width: 1.1rem;
+  height: 1.1rem;
+}
+
+.card__title {
+  font-weight: 600;
+  font-size: 1rem;
+  line-height: 1.3;
+}
+
+.card__text {
+  color: var(--muted-foreground);
+  font-size: 0.9rem;
+  line-height: 1.5;
+  margin: 0;
+}
+
+.card__more {
+  margin-top: auto;
+  padding-top: 0.5rem;
+  color: var(--mp-brand);
+  font-size: 0.85rem;
+  font-weight: 500;
+}
+
+/* Small link lists inside a card (used on the troubleshooting page). */
+.card__links {
+  margin: 0.2rem 0 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  font-size: 0.9rem;
+}
+
+.card__links a {
+  text-decoration: none;
+}
+
+.card__links a:hover {
+  text-decoration: underline;
+}
+
+/* ------------------------------------------------------------- content */
+
+.typography table {
+  font-size: 0.92rem;
+}
+
+.typography td {
+  vertical-align: top;
+}
+
+/* ---------------------------------------------------------------- logo */
+
+/* The logo is the mod's thumbnail, and the theme drops a non-SVG icon into a
+   square 2rem slot - free both the slot and the image so the 3:2 artwork keeps
+   its aspect ratio. */
+header span.size-8 {
+  width: auto;
+}
+
+header span.size-8 > img {
+  width: auto;
+  height: 2.75rem;
+  border-radius: 0.35rem;
+}
+
+/* -------------------------------------------------------------- layout */
+
+/* Without the header's layout toggle the page is full-bleed on wide
+   screens, which parks the sidebar against the left edge far away from
+   the text. Cap and centre the whole shell like the theme's fixed mode. */
+.container-wrapper {
+  max-width: calc(var(--breakpoint-2xl) + 2rem);
+}
+
+/* Keep the sidebar closer to the content column. */
+@media (min-width: 1024px) {
+  [data-slot="sidebar-wrapper"] {
+    --sidebar-width: 16rem;
+  }
+}
+
+/* Hide the theme's wide-screen layout switch - the layout is fixed by the
+   rule above, so the button would only toggle it back off. */
+header button[title="Toggle layout"],
+header div[data-slot="separator"]:has(+ button[title="Toggle layout"]) {
+  display: none !important;
+}
+
+/* ---------------------------------------------------------- screenshots */
+
+.typography img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  margin: 1rem 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--card);
+}
+
+/* Shots inside a numbered step sit tighter to their step text. */
+.typography li img {
+  margin: .6rem 0 .2rem;
+}
+
+/* Alt text doubles as the caption. */
+.typography p > img:only-child {
+  margin-bottom: .35rem;
+}
+
+/* ---------------------------------------------------------------- search */
+
+/* The header search is one real input with a dropdown, see
+   overrides/templates/search.html. */
+.cs2mp-search {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: .45rem;
+  height: 2rem;
+  padding: 0 .45rem 0 .6rem;
+  width: 12rem;
+  border: 1px solid var(--border);
+  border-radius: .5rem;
+  background: var(--background);
+  color: var(--muted-foreground);
+  transition: border-color .15s ease, box-shadow .15s ease;
+}
+
+@media (min-width: 1024px) {
+  .cs2mp-search { width: 16rem; }
+}
+
+.cs2mp-search:focus-within {
+  border-color: var(--ring);
+  box-shadow: 0 0 0 3px color-mix(in oklab, var(--ring) 25%, transparent);
+}
+
+.cs2mp-search__icon {
+  width: 1rem;
+  height: 1rem;
+  flex: none;
+  opacity: .5;
+}
+
+#cs2mp-search-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  border: 0;
+  outline: none;
+  background: transparent;
+  font: inherit;
+  font-size: .8rem;
+  color: var(--foreground);
+}
+
+#cs2mp-search-input::placeholder {
+  color: var(--muted-foreground);
+}
+
+.cs2mp-search__hint {
+  flex: none;
+  font-size: .62rem;
+  line-height: 1;
+  padding: .2rem .3rem;
+  border: 1px solid var(--border);
+  border-radius: .25rem;
+  color: var(--muted-foreground);
+  background: var(--muted);
+}
+
+.cs2mp-search:focus-within .cs2mp-search__hint {
+  display: none;
+}
+
+.cs2mp-search__panel {
+  display: none;
+  position: absolute;
+  top: calc(100% + .4rem);
+  right: 0;
+  width: 26rem;
+  max-width: min(26rem, calc(100vw - 1.5rem));
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--popover);
+  color: var(--popover-foreground);
+  box-shadow: 0 12px 32px -12px rgba(0, 0, 0, .45);
+  overflow: hidden;
+  z-index: 60;
+}
+
+.cs2mp-search[data-open="true"] .cs2mp-search__panel {
+  display: block;
+}
+
+.cs2mp-search__empty {
+  display: none;
+  margin: 0;
+  padding: .8rem .7rem;
+  font-size: .8rem;
+  color: var(--muted-foreground);
+}
+
+/* Results come from MkDocs' own search script, which emits bare
+   <article><h3><a></h3><p></article> markup the theme never styles. */
+#mkdocs-search-results {
+  max-height: min(60vh, 24rem);
+  overflow-y: auto;
+  padding: .25rem;
+}
+
+#mkdocs-search-results:empty {
+  display: none;
+}
+
+#mkdocs-search-results article {
+  padding: .45rem .55rem;
+  border-radius: calc(var(--radius) - .25rem);
+}
+
+#mkdocs-search-results article:hover,
+#mkdocs-search-results article:focus-within {
+  background: var(--accent);
+}
+
+#mkdocs-search-results h3 {
+  margin: 0;
+  font-size: .85rem;
+  font-weight: 500;
+  line-height: 1.35;
+}
+
+#mkdocs-search-results h3 a {
+  color: var(--foreground);
+  text-decoration: none;
+}
+
+#mkdocs-search-results p {
+  margin: .1rem 0 0;
+  font-size: .75rem;
+  line-height: 1.45;
+  color: var(--muted-foreground);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+/* The theme's Copy Page button fetches an unset URL, so it copies nothing. */
+#page-header button.secondary {
+  display: none;
+}

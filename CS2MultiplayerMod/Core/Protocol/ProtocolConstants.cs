@@ -4,7 +4,51 @@ namespace CS2MultiplayerMod.Core.Protocol
     {
         /// <summary>
         /// Wire-format version. Bump when message layout changes to refuse handshake on mismatch.
-        /// Current v35 carries the host of an owned relocation. Relocating an installed upgrade or
+        /// Current v47 adds each synchronized household's owned personal-vehicle prefabs to the
+        /// occupancy roster. Receiving peers realize missing vehicles through the normal stopped
+        /// vehicle archetype and ownership references, so synchronized residents can actually use
+        /// cars and generate traffic. v46 makes growable construction and condition host-authoritative. Lifecycle
+        /// commands carry the native construction progress/rate and live state transitions, so a
+        /// locally random build speed or upkeep result cannot finish or abandon a different house.
+        /// v45 makes channel 21 a revisioned identity and lifecycle protocol. Every
+        /// property roster, household and citizen carries a world-scoped host identity; explicit
+        /// household location records distinguish a temporary unhoused state from departure, and
+        /// exact citizen tombstones prevent a surviving family member from being confused with a
+        /// replacement. Complete-sweep watermarks make property pruning safe under late pages.
+        /// The same channel carries household rent, cash/savings, displayed last-day salary and
+        /// daily accounting, plus random name slots and construction rate. A client reconciles
+        /// moves through the native renter pipeline, with bounded retries and rollback for full
+        /// building swaps. v44 added the random name slots and construction rate; v43 introduced
+        /// the bounded rolling host-authoritative occupancy channel but still paired households by
+        /// renter-buffer position. A lost, late or repeated v45 page remains a bounded repair
+        /// problem and is never a reason to reload the world.
+        /// The channel 19 wire format added in v40 and withdrawn in v41 is gone: it captured only
+        /// brand-new households, so the common case - a family that already existed moving into a
+        /// newly grown building - never reached the wire, while the client's spawner was already
+        /// held. v42 adds channel 20, bounded rolling numeric rent for properties that already
+        /// exist on every peer, applied between the game's rent-adjust and rent-payment systems.
+        /// v39 adds
+        /// command id 28, an atomic net-tool operation carrying the complete set
+        /// of placement, deletion, and replacement commands produced by one mixed road gesture.
+        /// Receivers can now validate and commit that heterogeneous set against one topology rather
+        /// than applying three independently ordered streams. v38 adds compact placement inputs to
+        /// native object operations. Ordinary and
+        /// specialized-industry buildings now carry the object tool's random seed and snapped
+        /// target so a receiver can regenerate the complete building/lot/driveway graph against its
+        /// own road subdivision, instead of dropping the building when the sender's finished
+        /// road-alignment definitions cannot be mapped one-for-one. v37 adds zone-grown buildings:
+        /// command id 27 carries the appearance, level
+        /// change, condition and removal of a building the zoning simulation grew, and city-state
+        /// channel 18 carries the host's zone demand and occupancy counts for comparison. The
+        /// spawner picks its building, its visual variant and its level-up target from a stream
+        /// seeded by the machine's own clock, so two cities with identical roads, zoning and demand
+        /// still grow different buildings: the host's choices have to travel, and a client holds
+        /// its own spawner while they do. v36 adds names: command id 26 carries what a street, district, transport line or
+        /// building is called, and city-state channel 17 carries the city's own name. A typed name is
+        /// replicated as text; an untouched entity's name is a draw from its prefab's name list, made
+        /// from a per-machine seed, so the draw itself has to travel or the same new road ends up
+        /// with a different name on each machine. v35 carries
+        /// the host of an owned relocation. Relocating an installed upgrade or
         /// sub-building from a building's upgrade list moves an owned entity, which no peer can
         /// look up as a free-standing object; the host's prefab and position identify it the same
         /// way an upgrade placement does. v34 normalizes the sender-local Permanent creation flag out of native object
@@ -59,7 +103,7 @@ namespace CS2MultiplayerMod.Core.Protocol
         /// islands) reattach on the receiver.
         /// See <see cref="Messages.HandshakeRequest"/> and version notes in doc/internals.
         /// </summary>
-        public const int ProtocolVersion = 35;
+        public const int ProtocolVersion = 47;
 
         /// <summary>
         /// Hard cap on a single payload, guarding against corrupt length prefixes.

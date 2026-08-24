@@ -1,0 +1,54 @@
+using Unity.Entities;
+using Game.City;
+using CS2MultiplayerMod.Core.Protocol;
+
+using CS2MultiplayerMod.Game.Sync.Infrastructure;
+namespace CS2MultiplayerMod.Game.Sync.Channels
+{
+    /// <summary>
+    /// Replicates city XP (<see cref="Game.City.XP"/>) - progression toward the next
+    /// milestone, with its recorded peak population/income.
+    /// </summary>
+    public sealed class XpStateChannel : IStateChannel
+    {
+        public const byte Id = 3;
+        public byte ChannelId => Id;
+
+        private EntityQuery _query;
+        private bool _ready;
+
+        private void Ensure(EntityManager em)
+        {
+            if (_ready) return;
+            _query = em.CreateEntityQuery(ComponentType.ReadWrite<XP>());
+            _ready = true;
+        }
+
+        public bool Capture(EntityManager em, NetworkWriter writer)
+        {
+            Ensure(em);
+            if (_query.CalculateEntityCount() == 0) return false;
+            XP xp = em.GetComponentData<XP>(_query.GetSingletonEntity());
+            writer.WriteInt(xp.m_XP);
+            writer.WriteInt(xp.m_MaximumPopulation);
+            writer.WriteInt(xp.m_MaximumIncome);
+            return true;
+        }
+
+        public void Apply(EntityManager em, NetworkReader reader)
+        {
+            Ensure(em);
+            int xpValue = reader.ReadInt();
+            int maxPop = reader.ReadInt();
+            int maxIncome = reader.ReadInt();
+            if (_query.CalculateEntityCount() == 0) return;
+
+            Entity e = _query.GetSingletonEntity();
+            XP xp = em.GetComponentData<XP>(e);
+            xp.m_XP = xpValue;
+            xp.m_MaximumPopulation = maxPop;
+            xp.m_MaximumIncome = maxIncome;
+            em.SetComponentData(e, xp);
+        }
+    }
+}

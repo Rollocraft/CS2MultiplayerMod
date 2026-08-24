@@ -11,7 +11,7 @@ The mod is **experimental**. Back up your saves before hosting or joining, and e
 ## Requirements
 
 - Cities: Skylines II (PC Version: Steam, XBox, Gamepass)
-- **All players must run the same version of the mod.** Players will not be able to connect with mismatched versions. 
+- **All players should run the same version of the mod.** A host can allow a different build with the own-risk compatibility override, but incompatible network protocols are always rejected and mixed builds can desync or crash.
 - Players should also have **matching gameplay DLC**. Radio Station DLC are unaffected. Learn how to disable DLC: [Disabling DLC](help/disable_dlc.md)
 - There are **no** mods currently working.
 - (Internet play only: Set up TCP Port Forwarding)
@@ -26,19 +26,11 @@ The easiest way is through **Paradox Mods**: find the mod, add it to an **empty*
 
 1. In the mod settings, set your player name and choose the host port, password, max players, LAN-only mode, and world re-sync interval.
 2. Click **Multiplayer** on the main menu, then **Host Game**.
-
-There is two ways to host: **Steam Relay**, which is suited for everyone who owns the game on Steam - and **Direct Connection**, which offers faster Sync times at the cost of setup time and can be used on XBox App, Microsoft Store and Game Pass versions of the game.
-
-3. If you selected **Steam Relay**, copy the join code and send it to your friends. [Instructions for using **Direct Connection**](help/direct_connection.md).
-3. Choose **Load World** for an existing city or **Create World** for a new one. If you use an existing save, **make a backup first**.
-4. Finish the game's normal world selection. The multiplayer session starts automatically once the city is fully loaded.
-5. If a city is already open, you can still start hosting from the in-game Multiplayer panel or the mod settings.
-
---- 
-
-### Direct Connection
-
-[Learn how to play via Direct Connection](help/direct_connection.md) (recommended for local play and best performance)
+3. Pick a connection. **Steam Relay** needs no setup and works if everyone owns the game on Steam. **Direct connection** syncs faster but the host has to make their port reachable, and it is the only option on Xbox App, Microsoft Store and Game Pass copies.
+4. With Steam Relay, copy the join code and send it to your friends. For direct connection, see [Direct connection](help/direct-connection.md).
+5. Choose **Load World** for an existing city or **Create World** for a new one. If you use an existing save, **make a backup first**.
+6. Finish the game's normal world selection. The multiplayer session starts automatically once the city is fully loaded.
+7. If a city is already open, you can still start hosting from the in-game Multiplayer panel or the mod settings.
 
 ## Joining a game
 
@@ -52,7 +44,7 @@ There is two ways to host: **Steam Relay**, which is suited for everyone who own
 - **City looks out of sync?** Run `/sync` in chat, or click **Sync World Now** in the mod settings. Clients pull a fresh save from the host; the host refreshes every connected player.
 - **Can't join (protocol mismatch)?** You and the host are on different mod versions. Update to the same build.
 
-Check out **[Troubleshooting](help/troubleshooting.md)** for more issues.
+Check out **[Troubleshooting](help/troubleshooting.md)** or the complete **[Error and Warning Reference](help/errors-and-warnings.md)** for more issues.
 
 ## Technical Details
 

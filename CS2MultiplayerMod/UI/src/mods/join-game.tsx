@@ -13,6 +13,7 @@ import {
 } from "mods/connection-picker";
 import { DisclaimerModal, disclaimerAccepted$ } from "mods/disclaimer";
 import { MultiplayerJoinLoadingScreen } from "mods/loading-screen";
+import { OtherModsBanner, useModsBlocked } from "mods/mods-banner";
 import { MULTIPLAYER_BLUE } from "mods/multiplayer-theme";
 import { VersionWarningBanner } from "mods/version-banner";
 
@@ -38,6 +39,7 @@ const LOC = {
     password: "CS2MP.UI.Password",
     join: "CS2MP.UI.Join",
     disconnect: "CS2MP.UI.Disconnect",
+    closeSession: "CS2MP.UI.CloseSession",
     ...CONNECTION_LOC,
 };
 
@@ -54,6 +56,7 @@ const port$ = bindValue<string>(GROUP, "joinPort", "25001");
 const password$ = bindValue<string>(GROUP, "joinPassword", "");
 const statusKind$ = bindValue<string>(GROUP, "statusKind", "offline");
 const inSession$ = bindValue<boolean>(GROUP, "inSession", false);
+const isHost$ = bindValue<boolean>(GROUP, "isHost", false);
 // The same native save-list binding that enables/disables the game's Load Game
 // menu item. Using it keeps our Load World choice in exact lockstep with vanilla.
 const savedGames$ = bindValue<unknown[]>("menu", "saves", []);
@@ -480,6 +483,7 @@ const ChoiceScreen = ({
     children: ReactNode;
 }) => (
     <div style={styles.choiceArea}>
+        <OtherModsBanner style={styles.choiceWarning} />
         <VersionWarningBanner style={styles.choiceWarning} />
         {header}
         <AutoNavigationScope
@@ -525,9 +529,13 @@ export const MultiplayerScreenRenderer = ({ focusKey, className, onClose }: Nati
     const password = useValue(password$);
     const statusKind = useValue(statusKind$);
     const inSession = useValue(inSession$);
+    const isHost = useValue(isHost$);
     const joinConnection = useValue(joinConnection$);
     const joinCodeInput = useValue(joinCodeInput$);
     const hasSavedGame = useValue(savedGames$).length > 0;
+    // Any other live mod blocks a session by default. The own-risk setting turns the
+    // banner into a warning and this hook re-enables the controls.
+    const modsBlocked = useModsBlocked();
     const relaySupported = useValue(relaySupported$);
     const joinIsRelay = relaySupported && joinConnection !== CONNECTION_DIRECT;
     const [view, setView] = useState<MultiplayerView>("choice");
@@ -639,8 +647,10 @@ export const MultiplayerScreenRenderer = ({ focusKey, className, onClose }: Nati
                                 variant="primary"
                                 style={styles.button}
                                 focusKey="disconnect"
-                                onSelect={() => trigger(GROUP, "disconnect")}>
-                                {t(LOC.disconnect, "Disconnect")}
+                                onSelect={() => trigger(GROUP, "requestDisconnect")}>
+                                {isHost
+                                    ? t(LOC.closeSession, "Close Session")
+                                    : t(LOC.disconnect, "Disconnect")}
                             </Button>
                         ) : (
                             <Button
@@ -662,17 +672,21 @@ export const MultiplayerScreenRenderer = ({ focusKey, className, onClose }: Nati
             focusKey={PAGE_INDEX.choice}
             debugName="CS2MP Multiplayer Choice"
             initialFocused="join-game">
+            {/* Greyed out for the same reason as Host Game, rather than letting the
+                player into the form to find Join disabled there. Still reachable while
+                a session runs: this tile is the only route to Disconnect. */}
             <ChoiceTile
                 focusKey="join-game"
                 icon="Media/Glyphs/Passenger.svg"
                 label={t(LOC.joinGame, "Join Game")}
+                disabled={modsBlocked && !inSession}
                 onSelect={() => openView("join")}
             />
             <ChoiceTile
                 focusKey="host-game"
                 icon="Media/Glyphs/Residence.svg"
                 label={t(LOC.hostGame, "Host Game")}
-                disabled={inSession}
+                disabled={inSession || modsBlocked}
                 onSelect={() => openView("host")}
             />
         </ChoiceScreen>
@@ -686,14 +700,14 @@ export const MultiplayerScreenRenderer = ({ focusKey, className, onClose }: Nati
                 focusKey="load-world"
                 icon="Media/Glyphs/Progress.svg"
                 label={t(LOC.loadWorld, "Load World")}
-                disabled={!hasSavedGame || inSession}
+                disabled={!hasSavedGame || inSession || modsBlocked}
                 onSelect={() => openHostWorld("hostLoadWorld")}
             />
             <ChoiceTile
                 focusKey="create-world"
                 icon="Media/Glyphs/Plus.svg"
                 label={t(LOC.createWorld, "Create World")}
-                disabled={inSession}
+                disabled={inSession || modsBlocked}
                 onSelect={() => openHostWorld("hostCreateWorld")}
             />
         </ChoiceScreen>
