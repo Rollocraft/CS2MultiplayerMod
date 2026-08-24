@@ -185,17 +185,17 @@ a.card:hover {
 
 /* ---------------------------------------------------------------- logo */
 
-/* The theme inlines assets/logo.svg into the header. The artwork is a
-   single-colour mark, so paint it with the current text colour - a fixed
-   near-black mark disappears in dark mode. */
-header span.size-8 > svg {
-  width: 1.85rem;
-  height: 1.85rem;
+/* The logo is the mod's thumbnail, and the theme drops a non-SVG icon into a
+   square 2rem slot - free both the slot and the image so the 3:2 artwork keeps
+   its aspect ratio. */
+header span.size-8 {
+  width: auto;
 }
 
-header span.size-8 > svg .cls-0,
-header span.size-8 > svg path {
-  fill: currentColor;
+header span.size-8 > img {
+  width: auto;
+  height: 2.75rem;
+  border-radius: 0.35rem;
 }
 
 /* -------------------------------------------------------------- layout */

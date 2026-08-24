@@ -13,7 +13,7 @@ site_dir: site
 theme:
   name: shadcn
   custom_dir: overrides
-  icon: assets/logo.svg
+  icon: assets/logo.webp
   favicon: assets/favicon.svg
   show_title: true
   topbar_sections: true
