@@ -4,7 +4,7 @@ title: Changelog
 
 # Changelog
 
-## 0.1.6
+## 0.1.6 - 2026-08-24
 
 This update focuses on synchronization, chat and general stability.
 
