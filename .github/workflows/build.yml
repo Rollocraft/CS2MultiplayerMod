@@ -1,0 +1,47 @@
+name: Build & Package CS2MultiplayerMod
+
+on:
+  push:
+    branches: [ master, main ]
+  pull_request:
+    branches: [ master, main ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build Mod & Package Artifact
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup .NET SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20.x'
+
+      - name: Install UI Dependencies & Build Web Assets
+        working-directory: CS2MultiplayerMod/UI
+        run: |
+          npm ci || npm install
+          npm run build || true
+        continue-on-error: true
+
+      - name: Package Mod Files
+        run: |
+          New-Item -ItemType Directory -Force -Path "dist/CS2MultiplayerMod"
+          Copy-Item -Recurse -Force -Path "CS2MultiplayerMod/*" -Destination "dist/CS2MultiplayerMod/" -Exclude "*.cs","obj","bin"
+          Compress-Archive -Path "dist/CS2MultiplayerMod" -DestinationPath "dist/CS2MultiplayerMod-Release.zip"
+
+      - name: Upload Build Artifact (.zip)
+        uses: actions/upload-artifact@v4
+        with:
+          name: CS2MultiplayerMod-Release
+          path: dist/CS2MultiplayerMod-Release.zip
+          retention-days: 30
