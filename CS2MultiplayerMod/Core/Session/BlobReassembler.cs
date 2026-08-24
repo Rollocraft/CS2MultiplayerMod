@@ -13,12 +13,13 @@ namespace CS2MultiplayerMod.Core.Session
     /// </summary>
     internal sealed class BlobReassembler
     {
-        private readonly MemoryStream _buffer = new MemoryStream();
+        private readonly MemoryStream _buffer;
 
         public BlobReassembler(int expectedBytes, long nowMs)
         {
             ExpectedBytes = expectedBytes;
             LastChunkAtMs = nowMs;
+            _buffer = expectedBytes > 0 ? new MemoryStream(expectedBytes) : new MemoryStream();
         }
 
         public int ExpectedBytes { get; }

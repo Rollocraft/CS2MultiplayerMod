@@ -98,6 +98,30 @@ namespace CS2MultiplayerMod.Game
         /// <summary>Latest known positions of the other players, for rendering their cursors.</summary>
         public IEnumerable<RemotePlayer> RemotePlayers => _remotePlayers.Values;
 
+        public RemotePlayer FindRemotePlayer(int playerId)
+        {
+            RemotePlayer player;
+            _remotePlayers.TryGetValue(playerId, out player);
+            return player;
+        }
+
+        public RemotePlayer FindRemotePlayerByName(string name)
+        {
+            if (string.IsNullOrEmpty(name)) return null;
+            foreach (var p in _remotePlayers.Values)
+            {
+                if (string.Equals(p.Name, name, System.StringComparison.OrdinalIgnoreCase))
+                    return p;
+                if (p.Name != null && p.Name.IndexOf(name, System.StringComparison.OrdinalIgnoreCase) >= 0)
+                    return p;
+                if (int.TryParse(name, out int id) && p.PlayerId == id)
+                    return p;
+            }
+            return null;
+        }
+
+        public void AppendSystemChat(string text) => AppendChatEntry(null, text);
+
         /// <summary>The joining client's place in the world-handover flow.</summary>
         public ClientWorldPhase WorldPhase => _phase;
 
@@ -201,6 +225,26 @@ namespace CS2MultiplayerMod.Game
                 case NetReplaceCommand.Id: return "net-replace";
                 case VisualCustomizationCommand.Id: return "visual-customization";
                 case ColorPaletteCommand.Id: return "color-palette";
+                case Sync.Commands.CityBudgetCommand.Id: return "city-budget";
+                case Sync.Commands.CustomNameCommand.Id: return "custom-name";
+                case Sync.Commands.SimulationSpeedCommand.Id: return "simulation-speed";
+                case Sync.Commands.CityLoanCommand.Id: return "city-loan";
+                case Sync.Commands.MilestoneCommand.Id: return "milestone-progression";
+                case Sync.Commands.UtilityGridCommand.Id: return "utility-grid";
+                case Sync.Commands.PollutionCommand.Id: return "pollution-state";
+                case Sync.Commands.WeatherControlCommand.Id: return "weather-climate";
+                case Sync.Commands.GhostPlacementCommand.Id: return "ghost-preview";
+                case Sync.Commands.DistrictClaimCommand.Id: return "district-claim";
+                case Sync.Commands.BookmarkCommand.Id: return "city-bookmark";
+                case Sync.Commands.MeasurementCommand.Id: return "ruler-measurement";
+                case Sync.Commands.ChecksumCommand.Id: return "simulation-checksum";
+                case Sync.Commands.TrafficLightCommand.Id: return "traffic-control";
+                case Sync.Commands.TransitLineDetailCommand.Id: return "transit-line-detail";
+                case Sync.Commands.BuildingToggleCommand.Id: return "building-toggle";
+                case Sync.Commands.ParkFeeCommand.Id: return "park-fee";
+                case Sync.Commands.ServiceDistrictCommand.Id: return "service-district";
+                case Sync.Commands.TransitColorCommand.Id: return "transit-color";
+                case Sync.Commands.ChirperCommand.Id: return "chirper-message";
                 default: return "unknown";
             }
         }
@@ -274,6 +318,41 @@ namespace CS2MultiplayerMod.Game
         /// </summary>
         public string ChatLogJson { get { lock (_chatLock) return _chatLogJson; } }
 
+        private readonly Core.Networking.Discovery.LanDiscovery _lanDiscovery = new Core.Networking.Discovery.LanDiscovery();
+        public Core.Networking.Discovery.LanDiscovery LanDiscovery => _lanDiscovery;
+
+        public string DiscoveredLanGamesJson
+        {
+            get
+            {
+                var servers = _lanDiscovery.DiscoveredServers;
+                if (servers.Count == 0) return "[]";
+
+                var sb = new System.Text.StringBuilder(servers.Count * 96 + 2);
+                sb.Append('[');
+                bool first = true;
+                foreach (var s in servers)
+                {
+                    if (!first) sb.Append(',');
+                    first = false;
+                    sb.Append("{\"server\":");
+                    AppendJsonString(sb, s.ServerName);
+                    sb.Append(",\"city\":");
+                    AppendJsonString(sb, s.CityName);
+                    sb.Append(",\"pop\":").Append(s.Population);
+                    sb.Append(",\"players\":").Append(s.PlayerCount);
+                    sb.Append(",\"maxPlayers\":").Append(s.MaxPlayers);
+                    sb.Append(",\"address\":");
+                    AppendJsonString(sb, s.Address);
+                    sb.Append(",\"port\":").Append(s.Port);
+                    sb.Append(",\"requiresPassword\":").Append(s.RequiresPassword ? "true" : "false");
+                    sb.Append('}');
+                }
+                sb.Append(']');
+                return sb.ToString();
+            }
+        }
+
         /// <summary>
         /// Host-side participant list used by the in-game panel. It is rebuilt only
         /// when session membership changes, avoiding a fresh JSON allocation every UI
@@ -299,37 +378,96 @@ namespace CS2MultiplayerMod.Game
         {
             lock (_chatLock)
             {
-                if (_session.Role != SessionRole.Host)
+                if (_session.Role == SessionRole.None)
                 {
                     _playerListJson = "[]";
                     return;
                 }
 
-                var peers = new List<Peer>();
-                foreach (Peer peer in _session.Peers)
-                    if (peer.Handshaked) peers.Add(peer);
-                peers.Sort((a, b) => a.PlayerId.CompareTo(b.PlayerId));
-
-                var sb = new System.Text.StringBuilder((peers.Count + 1) * 56 + 2);
-                sb.Append("[{\"id\":").Append(_session.LocalPlayerId).Append(",\"name\":");
-                AppendJsonString(sb, _session.LocalPlayerName);
-                sb.Append(",\"isHost\":true}]");
-
-                if (peers.Count > 0)
+                if (_session.Role == SessionRole.Host)
                 {
-                    // Replace the closing bracket while appending keeps this a single,
-                    // small allocation and reuses the chat JSON escaping rules.
-                    sb.Length--;
-                    for (int i = 0; i < peers.Count; i++)
+                    var peers = new List<Peer>();
+                    foreach (Peer peer in _session.Peers)
+                        if (peer.Handshaked) peers.Add(peer);
+                    peers.Sort((a, b) => a.PlayerId.CompareTo(b.PlayerId));
+
+                    var sb = new System.Text.StringBuilder((peers.Count + 1) * 80 + 2);
+                    sb.Append("[{\"id\":").Append(_session.LocalPlayerId).Append(",\"name\":");
+                    AppendJsonString(sb, _session.LocalPlayerName);
+                    sb.Append(",\"isHost\":true,\"isYou\":true,\"isSpectator\":false,\"latency\":0}]");
+
+                    if (peers.Count > 0)
                     {
-                        Peer peer = peers[i];
-                        sb.Append(",{\"id\":").Append(peer.PlayerId).Append(",\"name\":");
-                        AppendJsonString(sb, peer.Name);
-                        sb.Append(",\"isHost\":false}");
+                        sb.Length--;
+                        for (int i = 0; i < peers.Count; i++)
+                        {
+                            Peer peer = peers[i];
+                            sb.Append(",{\"id\":").Append(peer.PlayerId).Append(",\"name\":");
+                            AppendJsonString(sb, peer.Name);
+                            sb.Append(",\"isHost\":false,\"isYou\":false,\"isSpectator\":")
+                              .Append(peer.IsSpectator ? "true" : "false")
+                              .Append(",\"latency\":").Append(peer.LatencyMs)
+                              .Append('}');
+                        }
+                        sb.Append(']');
+                    }
+                    _playerListJson = sb.ToString();
+                    return;
+                }
+
+                if (_session.Role == SessionRole.Client)
+                {
+                    var sb = new System.Text.StringBuilder(128);
+                    sb.Append("[{\"id\":").Append(_session.LocalPlayerId).Append(",\"name\":");
+                    AppendJsonString(sb, _session.LocalPlayerName);
+                    sb.Append(",\"isHost\":false,\"isYou\":true,\"isSpectator\":false,\"latency\":0}");
+
+                    foreach (var player in _remotePlayers.Values)
+                    {
+                        sb.Append(",{\"id\":").Append(player.PlayerId).Append(",\"name\":");
+                        AppendJsonString(sb, player.Name ?? ("Player #" + player.PlayerId));
+                        sb.Append(",\"isHost\":").Append(player.PlayerId == 0 ? "true" : "false");
+                        sb.Append(",\"isYou\":false,\"isSpectator\":false,\"latency\":-1}");
                     }
                     sb.Append(']');
+                    _playerListJson = sb.ToString();
                 }
-                _playerListJson = sb.ToString();
+            }
+        }
+
+        public void SetPlayerRoleFromUi(int playerId, bool isSpectator)
+        {
+            if (_session.Role != SessionRole.Host) return;
+            _session.SetPeerSpectator(playerId, isSpectator);
+            RefreshPlayerListJson();
+            RemotePlayer target = FindRemotePlayer(playerId);
+            string name = target != null && !string.IsNullOrEmpty(target.Name) ? target.Name : ("Player #" + playerId);
+            string roleMsg = isSpectator
+                ? "🔒 " + name + " is now a Spectator (read-only mode)."
+                : "🔨 " + name + " is now a Builder (edit permissions granted).";
+            _session.SendChat(roleMsg);
+            AppendChatEntry(null, roleMsg);
+        }
+
+        public void TeleportToPlayerFromUi(int playerId)
+        {
+            RemotePlayer target = FindRemotePlayer(playerId);
+            if (target != null)
+            {
+                Sync.Players.PlayerCursorSyncSystem.FollowPlayerId = -1;
+                Sync.Players.PlayerCursorSyncSystem.TeleportCameraTo(new Unity.Mathematics.float3(target.X, target.Y, target.Z));
+                AppendChatEntry(null, "🎥 Teleported camera to " + (target.Name ?? ("Player #" + target.PlayerId)) + ".");
+            }
+        }
+
+        public void FollowPlayerFromUi(int playerId)
+        {
+            RemotePlayer target = FindRemotePlayer(playerId);
+            if (target != null)
+            {
+                Sync.Players.PlayerCursorSyncSystem.FollowPlayerId = target.PlayerId;
+                Sync.Players.PlayerCursorSyncSystem.TeleportCameraTo(new Unity.Mathematics.float3(target.X, target.Y, target.Z));
+                AppendChatEntry(null, "🎥 Now following " + (target.Name ?? ("Player #" + target.PlayerId)) + ". Move camera to stop following.");
             }
         }
 
@@ -479,6 +617,7 @@ namespace CS2MultiplayerMod.Game
                 _log.Info("[MP] Peer joined: " + peer);
                 Diagnostics.FlightRecorder.Note("peer joined #" + peer.PlayerId);
                 _service.RefreshPlayerListJson();
+                CoopAudio.PlayCue(CoopAudio.CueType.Join);
                 // WorldResyncSystem observes joins too and pushes the live world to the newcomer.
             }
             public override void OnPeerLeft(Peer peer, string reason)
@@ -488,10 +627,33 @@ namespace CS2MultiplayerMod.Game
                 RemotePlayer removed;
                 _service._remotePlayers.TryRemove(peer.PlayerId, out removed);
                 _service.RefreshPlayerListJson();
+                CoopAudio.PlayCue(CoopAudio.CueType.Leave);
             }
             public override void OnChatReceived(string sender, string text)
             {
                 _log.Info("[MP] " + (sender ?? "system") + ": " + text);
+                if (text != null && text.StartsWith("/ping ", System.StringComparison.OrdinalIgnoreCase))
+                {
+                    string[] parts = text.Substring(6).Trim().Split(new[] { ' ' }, 5, System.StringSplitOptions.RemoveEmptyEntries);
+                    if (parts.Length >= 4 &&
+                        float.TryParse(parts[0], System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out float px) &&
+                        float.TryParse(parts[1], System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out float py) &&
+                        float.TryParse(parts[2], System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out float pz) &&
+                        int.TryParse(parts[3], System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out int pColor))
+                    {
+                        string label = parts.Length > 4 ? parts[4] : "";
+                        var pos = new Unity.Mathematics.float3(px, py, pz);
+                        LastMapPingPosition = pos;
+                        HasMapPingPosition = true;
+                        OnMapPingReceived?.Invoke(pos, sender, label, pColor);
+                        CoopAudio.PlayCue(CoopAudio.CueType.Ping);
+                        string display = "📍 Pinged map at (" + (int)px + ", " + (int)pz + ")" +
+                                         (string.IsNullOrEmpty(label) ? "" : ": " + label);
+                        _service.AppendChatEntry(sender, display);
+                        return;
+                    }
+                }
+                CoopAudio.PlayCue(CoopAudio.CueType.Chat);
                 _service.AppendChatEntry(sender, text);
             }
             public override void OnCommandReceived(SimulationCommandMessage command)

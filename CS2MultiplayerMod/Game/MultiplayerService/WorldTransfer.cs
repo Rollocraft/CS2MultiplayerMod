@@ -134,10 +134,11 @@ namespace CS2MultiplayerMod.Game
         {
             if (_session.Role != SessionRole.Host || target.IsNone || data == null || epoch <= 0)
                 return;
-            _session.SendBlobTo(target, MapChannel, epoch, data);
-            _log.Info("[MP] Queued recovery snapshot '" + (saveName ?? "<save>") + "' (" +
-                      (data.Length / 1024) + " KB) for " + DescribeWorldTarget(target) +
-                      " in epoch " + epoch + ".");
+            byte[] payload = SavegameCompression.Compress(data);
+            _session.SendBlobTo(target, MapChannel, epoch, payload);
+            _log.Info("[MP] Queued compressed recovery snapshot '" + (saveName ?? "<save>") + "' (" +
+                      (payload.Length / 1024) + " KB, compressed from " + (data.Length / 1024) + " KB) for " +
+                      DescribeWorldTarget(target) + " in epoch " + epoch + ".");
         }
 
         private void LoadReceivedMap(long transferId, byte[] data)
@@ -242,6 +243,11 @@ namespace CS2MultiplayerMod.Game
             player.EyeZ = state.EyeZ;
             player.Yaw = state.Yaw;
             player.LastUpdateMs = _clock.ElapsedMilliseconds;
+            if (string.IsNullOrEmpty(player.Name))
+            {
+                Peer peer = _session.FindPeer(state.PlayerId);
+                if (peer != null) player.Name = peer.PlayerName;
+            }
         }
 
     }

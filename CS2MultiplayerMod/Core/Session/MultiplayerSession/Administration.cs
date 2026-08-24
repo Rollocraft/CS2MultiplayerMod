@@ -6,6 +6,36 @@ namespace CS2MultiplayerMod.Core.Session
 {
     public sealed partial class MultiplayerSession
     {
+        public bool IsLobbyLocked { get; set; }
+        public string Motd { get; set; }
+        public System.Collections.Generic.IReadOnlyCollection<string> BannedAddresses => _hostBannedAddresses;
+
+        private static readonly System.Collections.Concurrent.ConcurrentQueue<SimulationCommandMessage> _commandReplayBuffer =
+            new System.Collections.Concurrent.ConcurrentQueue<SimulationCommandMessage>();
+        private const int MaxReplayBufferSize = 200;
+
+        public static void RecordReplayableCommand(SimulationCommandMessage cmd)
+        {
+            if (cmd == null) return;
+            _commandReplayBuffer.Enqueue(cmd);
+            while (_commandReplayBuffer.Count > MaxReplayBufferSize && _commandReplayBuffer.TryDequeue(out _)) { }
+        }
+
+        public void ReplayCommandsToPeer(ConnectionId connection)
+        {
+            if (Role != SessionRole.Host || Status != SessionStatus.Connected) return;
+            foreach (var cmd in _commandReplayBuffer)
+            {
+                SendTo(connection, cmd);
+            }
+        }
+
+        public bool UnbanAddress(string address)
+        {
+            if (string.IsNullOrEmpty(address)) return false;
+            return _hostBannedAddresses.Remove(address);
+        }
+
         /// <summary>
         /// Host-only administrative removal. The explanation is flushed to the selected
         /// client before the socket closes, so it sees a useful error instead of a generic

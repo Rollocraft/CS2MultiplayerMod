@@ -63,6 +63,13 @@ namespace CS2MultiplayerMod
             // not at runtime.
             GameManager.instance.localizationManager.AddSource("en-US", new PropertiesLocaleSource(Setting, "en"));
             GameManager.instance.localizationManager.AddSource("de-DE", new PropertiesLocaleSource(Setting, "de"));
+            GameManager.instance.localizationManager.AddSource("fr-FR", new PropertiesLocaleSource(Setting, "fr"));
+            GameManager.instance.localizationManager.AddSource("es-ES", new PropertiesLocaleSource(Setting, "es"));
+            GameManager.instance.localizationManager.AddSource("zh-HANS", new PropertiesLocaleSource(Setting, "zh-HANS"));
+            GameManager.instance.localizationManager.AddSource("zh-HANT", new PropertiesLocaleSource(Setting, "zh-HANS"));
+            GameManager.instance.localizationManager.AddSource("ja-JP", new PropertiesLocaleSource(Setting, "ja"));
+            GameManager.instance.localizationManager.AddSource("pt-BR", new PropertiesLocaleSource(Setting, "pt-BR"));
+            GameManager.instance.localizationManager.AddSource("ru-RU", new PropertiesLocaleSource(Setting, "ru"));
 
             // Persist / load settings to the standard mod settings store.
             AssetDatabase.global.LoadSettings(Name, Setting, new Setting(this));

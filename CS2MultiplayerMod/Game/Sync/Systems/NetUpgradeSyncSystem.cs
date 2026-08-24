@@ -562,6 +562,10 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 for (int i = 0; i < entities.Length && targets.Count > 0; i++)
                 {
                     Entity entity = entities[i];
+                    if (!EntityManager.Exists(entity) ||
+                        !EntityManager.HasComponent<PrefabRef>(entity) ||
+                        !EntityManager.HasComponent<Curve>(entity)) continue;
+
                     Entity candidatePrefab = EntityManager.GetComponentData<PrefabRef>(entity).m_Prefab;
                     Bezier4x3 b = EntityManager.GetComponentData<Curve>(entity).m_Bezier;
 
@@ -637,9 +641,12 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                         EntityManager.AddComponent<Updated>(entity);
                         // The composition at each end (crosswalks, transitions) is selected
                         // per node - re-update them like the game's own commit does.
-                        Edge ends = EntityManager.GetComponentData<Edge>(entity);
-                        TagUpdated(ends.m_Start);
-                        TagUpdated(ends.m_End);
+                        if (EntityManager.HasComponent<Edge>(entity))
+                        {
+                            Edge ends = EntityManager.GetComponentData<Edge>(entity);
+                            TagUpdated(ends.m_Start);
+                            TagUpdated(ends.m_End);
+                        }
 
                         targets.RemoveAt(t);
                         applied++;
@@ -671,7 +678,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
                     for (int i = 0; i < entities.Length; i++)
                     {
-                        float3 pos = EntityManager.GetComponentData<Node>(entities[i]).m_Position;
+                        Entity nodeEntity = entities[i];
+                        if (!EntityManager.Exists(nodeEntity) || !EntityManager.HasComponent<Node>(nodeEntity)) continue;
+                        float3 pos = EntityManager.GetComponentData<Node>(nodeEntity).m_Position;
                         if (math.abs(pos.y - wanted.y) > NodeMatchMaxDy) continue;
                         float distSq = math.distancesq(pos.xz, wanted.xz);
                         if (distSq > MatchTolSq) continue;

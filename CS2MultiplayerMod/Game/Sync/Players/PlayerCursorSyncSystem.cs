@@ -17,11 +17,27 @@ namespace CS2MultiplayerMod.Game.Sync.Players
     {
         private const long SendIntervalMs = 100; // ~10 Hz
 
+        public static int FollowPlayerId = -1;
+        private float3 _lastFollowTargetPivot;
+
         private readonly Stopwatch _clock = Stopwatch.StartNew();
         private CameraUpdateSystem _camera;
         private long _lastSentMs;
         private long _lastLogMs;
         private int _sent;
+
+        private float3 _lastSentFocus;
+        private float3 _lastSentEye;
+        private float _lastSentYaw;
+
+        public static void TeleportCameraTo(float3 position)
+        {
+            var camera = Unity.Entities.World.DefaultGameObjectInjectionWorld?.GetExistingSystemManaged<CameraUpdateSystem>();
+            if (camera?.gamePlayController != null)
+            {
+                camera.gamePlayController.pivot = position;
+            }
+        }
 
         protected override void OnCreate()
         {
@@ -36,16 +52,57 @@ namespace CS2MultiplayerMod.Game.Sync.Players
             if (service == null) return;
 
             MultiplayerSession session = service.Session;
-            if (!service.GameplaySyncReady) return;
+            if (!service.GameplaySyncReady)
+            {
+                FollowPlayerId = -1;
+                return;
+            }
 
             long now = _clock.ElapsedMilliseconds;
-            if (now - _lastSentMs < SendIntervalMs) return;
-            _lastSentMs = now;
 
             if (_camera == null)
             {
                 _camera = World.GetExistingSystemManaged<CameraUpdateSystem>();
                 if (_camera == null) return;
+            }
+
+            CameraController controller = _camera.gamePlayController;
+
+            // Follow mode tracking
+            if (FollowPlayerId != -1)
+            {
+                RemotePlayer target = service.FindRemotePlayer(FollowPlayerId);
+                if (target != null && (now - target.LastUpdateMs <= 5000))
+                {
+                    if (controller != null)
+                    {
+                        float3 targetPos = new float3(target.X, target.Y, target.Z);
+                        // If player manually moved away from followed target, break follow
+                        if (math.distancesq(controller.pivot, _lastFollowTargetPivot) > 49f &&
+                            math.lengthsq(_lastFollowTargetPivot) > 0.01f)
+                        {
+                            FollowPlayerId = -1;
+                            service.AppendSystemChat("🎥 Camera moved. Stopped following " + (target.Name ?? "player") + ".");
+                        }
+                        else
+                        {
+                            // High-order Catmull-Rom spline interpolation for buttery-smooth follow
+                            float dt = UnityEngine.Time.deltaTime;
+                            float t = math.clamp(dt * 8f, 0.05f, 0.45f);
+                            controller.pivot = Core.Protocol.SplineInterpolator.CatmullRom(
+                                controller.pivot,
+                                controller.pivot,
+                                targetPos,
+                                targetPos,
+                                t);
+                            _lastFollowTargetPivot = controller.pivot;
+                        }
+                    }
+                }
+                else
+                {
+                    FollowPlayerId = -1;
+                }
             }
 
             // The ground focus (pivot) is where the player is looking; the eye is where
@@ -55,12 +112,26 @@ namespace CS2MultiplayerMod.Game.Sync.Players
             float3 eye = _camera.position;
             float3 focus = eye;
             float yaw = 0f;
-            CameraController controller = _camera.gamePlayController;
             if (controller != null)
             {
                 focus = controller.pivot;
                 yaw = controller.rotation.y;
             }
+
+            bool moved = math.distancesq(focus, _lastSentFocus) > 0.1f ||
+                         math.distancesq(eye, _lastSentEye) > 0.1f ||
+                         math.abs(yaw - _lastSentYaw) > 0.03f;
+
+            // Adaptive frame-pacing: throttle cursor send frequency when local frame rate drops
+            float frameDelta = UnityEngine.Time.unscaledDeltaTime;
+            long activeInterval = frameDelta > 0.033f ? 100 : 75; // 10 Hz on low FPS, 13 Hz on 30+ FPS
+            long minInterval = moved ? activeInterval : 1000;
+
+            if (now - _lastSentMs < minInterval) return;
+            _lastSentMs = now;
+            _lastSentFocus = focus;
+            _lastSentEye = eye;
+            _lastSentYaw = yaw;
 
             session.SendPlayerState(focus.x, focus.y, focus.z, eye.x, eye.y, eye.z, yaw);
             _sent++;

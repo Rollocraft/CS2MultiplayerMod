@@ -76,7 +76,6 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     ComponentType.ReadOnly<District>(),
                     ComponentType.ReadOnly<Node>(),
                     ComponentType.ReadOnly<PrefabRef>(),
-                    ComponentType.ReadOnly<Policy>(),
                 },
                 None = new[] { ComponentType.ReadOnly<Temp>(), ComponentType.ReadOnly<Deleted>() },
             });
@@ -87,7 +86,6 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 {
                     ComponentType.ReadOnly<Route>(),
                     ComponentType.ReadOnly<PrefabRef>(),
-                    ComponentType.ReadOnly<Policy>(),
                 },
                 None = new[] { ComponentType.ReadOnly<Temp>(), ComponentType.ReadOnly<Deleted>() },
             });
@@ -99,7 +97,6 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     ComponentType.ReadOnly<Building>(),
                     ComponentType.ReadOnly<PrefabRef>(),
                     ComponentType.ReadOnly<global::Game.Objects.Transform>(),
-                    ComponentType.ReadOnly<Policy>(),
                 },
                 None = new[]
                 {

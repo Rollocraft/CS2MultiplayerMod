@@ -365,9 +365,13 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             {
                 for (int i = 0; i < candidates.Length; i++)
                 {
-                    if (EntityManager.GetComponentData<PrefabRef>(candidates[i]).m_Prefab != ownerPrefab) continue;
-                    float3 pos = EntityManager.GetComponentData<Transform>(candidates[i]).m_Position;
-                    if (math.distancesq(pos, ownerPos) <= 4f) return candidates[i];
+                    Entity candidate = candidates[i];
+                    if (!EntityManager.Exists(candidate) ||
+                        !EntityManager.HasComponent<PrefabRef>(candidate) ||
+                        !EntityManager.HasComponent<Transform>(candidate)) continue;
+                    if (EntityManager.GetComponentData<PrefabRef>(candidate).m_Prefab != ownerPrefab) continue;
+                    float3 pos = EntityManager.GetComponentData<Transform>(candidate).m_Position;
+                    if (math.distancesq(pos, ownerPos) <= 4f) return candidate;
                 }
             }
             finally
@@ -479,9 +483,15 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 for (int i = 0; i < candidates.Length; i++)
                 {
                     Entity candidate = candidates[i];
+                    if (!EntityManager.Exists(candidate) ||
+                        !EntityManager.HasComponent<PrefabRef>(candidate) ||
+                        !EntityManager.HasComponent<Transform>(candidate)) continue;
                     if (EntityManager.GetComponentData<PrefabRef>(candidate).m_Prefab != prefab) continue;
-                    if (expectedOwner != Entity.Null &&
-                        EntityManager.GetComponentData<Owner>(candidate).m_Owner != expectedOwner) continue;
+                    if (expectedOwner != Entity.Null)
+                    {
+                        if (!EntityManager.HasComponent<Owner>(candidate) ||
+                            EntityManager.GetComponentData<Owner>(candidate).m_Owner != expectedOwner) continue;
+                    }
                     float3 candidatePosition = EntityManager.GetComponentData<Transform>(candidate).m_Position;
                     if (math.distancesq(candidatePosition, position) <= 4f) return candidate;
                 }

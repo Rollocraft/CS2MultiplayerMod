@@ -24,6 +24,54 @@ namespace CS2MultiplayerMod.Core.Session
         /// pre-handshake socket is never held open indefinitely.</summary>
         private const int JoinApprovalTimeoutMs = 120000;
 
+        public int AverageLatencyMs
+        {
+            get
+            {
+                int sum = 0, count = 0;
+                foreach (var p in _peers.Values)
+                {
+                    if (p.Handshaked && p.LatencyMs >= 0)
+                    {
+                        sum += p.LatencyMs;
+                        count++;
+                    }
+                }
+                return count > 0 ? sum / count : -1;
+            }
+        }
+
+        public int AverageJitterMs
+        {
+            get
+            {
+                int sum = 0, count = 0;
+                foreach (var p in _peers.Values)
+                {
+                    if (p.Handshaked && p.LatencyMs >= 0)
+                    {
+                        sum += p.JitterMs;
+                        count++;
+                    }
+                }
+                return count > 0 ? sum / count : 0;
+            }
+        }
+
+        public string AverageQualityRating
+        {
+            get
+            {
+                int lat = AverageLatencyMs;
+                if (lat < 0) return "Unknown";
+                int jit = AverageJitterMs;
+                if (lat <= 60 && jit <= 15) return "Excellent";
+                if (lat <= 140 && jit <= 35) return "Good";
+                if (lat <= 250) return "Fair";
+                return "Poor";
+            }
+        }
+
         private const int HostPlayerId = 1;
 
         /// <summary>Reassembling blobs allowed at once on a client.</summary>

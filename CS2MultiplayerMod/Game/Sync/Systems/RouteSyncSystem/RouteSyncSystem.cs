@@ -53,6 +53,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             public uint Rgba;
             public int RouteNumber;
             public bool IsComplete;
+            public string VehicleModelPrefabName;
         }
 
         private sealed class PendingRouteCommand
@@ -75,6 +76,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             public HashSet<Entity> PreexistingShapeMatches;
             public int RouteNumber;
             public uint Rgba;
+            public string VehicleModelPrefabName;
             public long DeadlineMs;
             public RouteCreateCommand Source;
             public int OriginPlayerId;

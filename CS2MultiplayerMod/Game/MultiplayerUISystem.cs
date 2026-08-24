@@ -102,6 +102,18 @@ namespace CS2MultiplayerMod.Game
             AddUpdateBinding(new GetterValueBinding<string>(Group, "clientExitReason",
                 () => Mod.Service != null ? Mod.Service.ClientExitReason : ""));
 
+            AddUpdateBinding(new GetterValueBinding<int>(Group, "networkLatency",
+                () => Mod.Service != null ? Mod.Service.Session.AverageLatencyMs : -1));
+            AddUpdateBinding(new GetterValueBinding<int>(Group, "networkJitter",
+                () => Mod.Service != null ? Mod.Service.Session.AverageJitterMs : 0));
+            AddUpdateBinding(new GetterValueBinding<string>(Group, "networkQuality",
+                () => Mod.Service != null ? Mod.Service.Session.AverageQualityRating : "Unknown"));
+            AddUpdateBinding(new GetterValueBinding<int>(Group, "playerBearingsCount",
+                () => {
+                    var sys = World.DefaultGameObjectInjectionWorld?.GetExistingSystemManaged<Sync.Players.PlayerCompassSystem>();
+                    return sys != null ? sys.Bearings.Count : 0;
+                }));
+
             // Untested game-version warning: localized sentence when the running build
             // is not in GameVersionCheck.TestedVersions, otherwise "" (banner hidden).
             AddUpdateBinding(new GetterValueBinding<string>(Group, "versionWarning",
@@ -120,9 +132,32 @@ namespace CS2MultiplayerMod.Game
                 Mod.Setting.DisclaimerAccepted = true;
                 Mod.Setting.ApplyAndSave();
             }));
-            AddBinding(new TriggerBinding(Group, "openMultiplayerScreen", OpenMultiplayerMenuScreen));
-            AddBinding(new TriggerBinding(Group, "multiplayerScreenExited",
-                () => _multiplayerMenuActiveBinding.Update(false)));
+            AddBinding(new TriggerBinding(Group, "openMultiplayerScreen", () =>
+            {
+                Mod.Service?.LanDiscovery.StartListener();
+                OpenMultiplayerMenuScreen();
+            }));
+            AddBinding(new TriggerBinding(Group, "multiplayerScreenExited", () =>
+            {
+                Mod.Service?.LanDiscovery.StopListener();
+                _multiplayerMenuActiveBinding.Update(false);
+            }));
+
+            AddUpdateBinding(new GetterValueBinding<string>(Group, "lanGames",
+                () => Mod.Service != null ? Mod.Service.DiscoveredLanGamesJson : "[]"));
+
+            AddBinding(new TriggerBinding<string, int, string>(Group, "joinLanGame", (address, port, password) =>
+            {
+                Mod.Service?.LanDiscovery.StopListener();
+                if (Mod.Setting != null)
+                {
+                    Mod.Setting.ServerAddress = address;
+                    Mod.Setting.JoinPort = port.ToString();
+                    if (!string.IsNullOrEmpty(password)) Mod.Setting.JoinPassword = password;
+                    Mod.Setting.ApplyAndSave();
+                }
+                Mod.Service?.ClientFromSettings(Mod.Setting);
+            }));
 
             // -- In-game hub panel (right-menu button above the Chirper) ----------
 
@@ -212,6 +247,14 @@ namespace CS2MultiplayerMod.Game
                 playerId => { if (Mod.Service != null) Mod.Service.KickPlayerFromUi(playerId); }));
             AddBinding(new TriggerBinding<int>(Group, "banPlayer",
                 playerId => { if (Mod.Service != null) Mod.Service.BanPlayerFromUi(playerId); }));
+            AddBinding(new TriggerBinding<int, bool>(Group, "setPlayerSpectator",
+                (playerId, isSpectator) => { if (Mod.Service != null) Mod.Service.SetPlayerRoleFromUi(playerId, isSpectator); }));
+            AddBinding(new TriggerBinding<int>(Group, "teleportToPlayer",
+                playerId => { if (Mod.Service != null) Mod.Service.TeleportToPlayerFromUi(playerId); }));
+            AddBinding(new TriggerBinding<int>(Group, "followPlayer",
+                playerId => { if (Mod.Service != null) Mod.Service.FollowPlayerFromUi(playerId); }));
+            AddBinding(new TriggerBinding(Group, "unfollowPlayer",
+                () => { Sync.Players.PlayerCursorSyncSystem.FollowPlayerId = -1; }));
             AddBinding(new TriggerBinding<int>(Group, "approveJoin",
                 playerId => { if (Mod.Service != null) Mod.Service.ApproveJoinFromUi(playerId); }));
             AddBinding(new TriggerBinding<int>(Group, "declineJoin",

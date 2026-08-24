@@ -50,6 +50,16 @@ namespace CS2MultiplayerMod.Core.Session
                     return;
                 }
 
+                if (IsLobbyLocked)
+                {
+                    _log.Warn("[security] Refused " + connection + " (" + address +
+                              "): lobby is locked by the host.");
+                    SendTo(connection, HandshakeResponse.Reject(
+                        "The host has locked this lobby from new players."));
+                    _transport.DisconnectAfterFlush(connection);
+                    return;
+                }
+
                 // Cap the number of sockets sitting in the pre-handshake state.
                 int pending = 0;
                 foreach (var pair in _peers)

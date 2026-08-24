@@ -79,7 +79,17 @@ namespace CS2MultiplayerMod.Core.Networking.Tcp
                 }
             }
 
-            TcpClient client = new TcpClient();
+            TcpClient client;
+            if (Socket.OSSupportsIPv6)
+            {
+                client = new TcpClient(AddressFamily.InterNetworkV6);
+                try { client.Client.DualMode = true; } catch { }
+            }
+            else
+            {
+                client = new TcpClient();
+            }
+
             _dialing = client; // lets Shutdown() abort a dial that is still in flight
             try
             {

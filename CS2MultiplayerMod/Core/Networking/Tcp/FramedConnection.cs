@@ -83,6 +83,13 @@ namespace CS2MultiplayerMod.Core.Networking.Tcp
             _serverCertificate = serverCertificate;
             _clientTls = clientTls;
             _client.NoDelay = true; // low latency matters more than packing for a co-op session
+            try
+            {
+                _client.ReceiveBufferSize = 1024 * 1024;
+                _client.SendBufferSize = 1024 * 1024;
+            }
+            catch { }
+            ConfigureKeepAlive(_client.Client);
 
             try
             {
@@ -92,11 +99,28 @@ namespace CS2MultiplayerMod.Core.Networking.Tcp
             catch { RemoteAddress = null; }
         }
 
+        private static void ConfigureKeepAlive(Socket socket)
+        {
+            if (socket == null) return;
+            try
+            {
+                socket.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.KeepAlive, true);
+                // Windows TCP Keepalive settings: 5000ms idle, 1000ms interval
+                byte[] keepAlive = new byte[12];
+                BitConverter.GetBytes(1).CopyTo(keepAlive, 0); // on
+                BitConverter.GetBytes(5000).CopyTo(keepAlive, 4); // 5 sec keepalive time
+                BitConverter.GetBytes(1000).CopyTo(keepAlive, 8); // 1 sec interval
+                socket.IOControl(IOControlCode.KeepAliveValues, keepAlive, null);
+            }
+            catch { }
+        }
+
         public void Start()
         {
             _readThread = new Thread(ReadLoop)
             {
                 IsBackground = true,
+                Priority = ThreadPriority.AboveNormal,
                 Name = "mp-recv-" + Id.Value,
             };
             _readThread.Start();
@@ -280,6 +304,7 @@ namespace CS2MultiplayerMod.Core.Networking.Tcp
         private bool ReadExactly(byte[] buffer, int count)
         {
             Stream stream = _stream;
+            if (stream == null) return false;
             int read = 0;
             while (read < count)
             {

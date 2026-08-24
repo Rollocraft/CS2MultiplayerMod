@@ -18,6 +18,7 @@ namespace CS2MultiplayerMod.Game.Sync.Commands
         public bool IsComplete;
         public byte ColorR, ColorG, ColorB, ColorA;
         public RouteWaypointIntent[] Waypoints;
+        public string VehicleModelPrefabName;
 
         public ushort CommandId => Id;
 
@@ -29,6 +30,9 @@ namespace CS2MultiplayerMod.Game.Sync.Commands
             writer.WriteBool(IsComplete);
             writer.WriteByte(ColorR); writer.WriteByte(ColorG); writer.WriteByte(ColorB); writer.WriteByte(ColorA);
             RouteCommandCodec.WriteWaypoints(writer, Waypoints);
+            bool hasVehicleModel = !string.IsNullOrEmpty(VehicleModelPrefabName);
+            writer.WriteBool(hasVehicleModel);
+            if (hasVehicleModel) writer.WriteString(VehicleModelPrefabName);
         }
 
         public void Read(NetworkReader reader)
@@ -39,6 +43,10 @@ namespace CS2MultiplayerMod.Game.Sync.Commands
             IsComplete = reader.ReadBool();
             ColorR = reader.ReadByte(); ColorG = reader.ReadByte(); ColorB = reader.ReadByte(); ColorA = reader.ReadByte();
             Waypoints = RouteCommandCodec.ReadWaypoints(reader, MaxWaypoints);
+            if (reader.Remaining > 0 && reader.ReadBool())
+            {
+                VehicleModelPrefabName = WireGuard.ReadName(reader);
+            }
             RouteCommandCodec.RequireFullyRead(reader, "route-create");
         }
 

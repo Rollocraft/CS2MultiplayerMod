@@ -196,6 +196,10 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     string prefabName;
                     if (!TryNamePrefab(entity, out prefab, out prefabName)) continue;
 
+                    if (!EntityManager.Exists(entity) ||
+                        !EntityManager.HasComponent<global::Game.Events.WeatherPhenomenon>(entity) ||
+                        !EntityManager.HasComponent<global::Game.Events.Duration>(entity)) continue;
+
                     var phenomenon =
                         EntityManager.GetComponentData<global::Game.Events.WeatherPhenomenon>(entity);
                     var command = new DisasterEventCommand
@@ -257,6 +261,10 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     // The query already excludes the stock rain flood by its Flood marker; a
                     // custom prefab could declare the same change type without that marker.
                     if (IsRainControlled(prefab)) continue;
+
+                    if (!EntityManager.Exists(entity) ||
+                        !EntityManager.HasComponent<global::Game.Events.WaterLevelChange>(entity) ||
+                        !EntityManager.HasComponent<global::Game.Events.Duration>(entity)) continue;
 
                     var surge =
                         EntityManager.GetComponentData<global::Game.Events.WaterLevelChange>(entity);

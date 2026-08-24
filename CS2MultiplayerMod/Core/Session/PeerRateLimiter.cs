@@ -26,9 +26,12 @@ namespace CS2MultiplayerMod.Core.Session
         private int _bytes;
         private int _commands;
         private int _chat;
+        private long _chatMuteUntilMs;
 
         private long _minuteStartMs;
         private int _resyncs;
+
+        public bool IsChatMuted(long nowMs) => nowMs < _chatMuteUntilMs;
 
         /// <summary>Account one received message. Returns null if fine, else the violated budget's name.</summary>
         public string Account(long nowMs, int payloadBytes, bool isCommand, bool isChat, bool isResync)
@@ -51,13 +54,20 @@ namespace CS2MultiplayerMod.Core.Session
             _messages++;
             _bytes += payloadBytes;
             if (isCommand) _commands++;
-            if (isChat) _chat++;
+            if (isChat)
+            {
+                _chat++;
+                if (_chat > MaxChatPerSecond)
+                {
+                    _chatMuteUntilMs = nowMs + 3000; // Soft mute for 3 seconds
+                }
+            }
             if (isResync) _resyncs++;
 
             if (_messages > MaxMessagesPerSecond) return "messages/sec (" + _messages + ")";
             if (_bytes > MaxBytesPerSecond) return "bytes/sec (" + _bytes + ")";
             if (_commands > MaxCommandsPerSecond) return "commands/sec (" + _commands + ")";
-            if (_chat > MaxChatPerSecond) return "chat/sec (" + _chat + ")";
+            if (_chat > 12) return "chat flood (" + _chat + "/sec)";
             if (_resyncs > MaxResyncPerMinute) return "resyncs/min (" + _resyncs + ")";
             return null;
         }

@@ -17,7 +17,10 @@ namespace CS2MultiplayerMod.Core.Session
             if (heartbeat.EchoOfMs > 0)
             {
                 long rtt = nowUnixMs - heartbeat.EchoOfMs;
-                if (peer != null && rtt >= 0 && rtt < 60000) peer.LatencyMs = (int)rtt;
+                if (peer != null && rtt >= 0 && rtt < 60000)
+                {
+                    peer.RecordRttSample(rtt);
+                }
                 return;
             }
 
@@ -190,8 +193,9 @@ namespace CS2MultiplayerMod.Core.Session
             var message = new SimulationCommandMessage(LocalPlayerId, tick, commandId, body);
             if (Role == SessionRole.Host)
             {
-                NotifyCommand(message);                    // apply on the host
-                BroadcastToAll(message, ConnectionId.None); // and to clients
+                NotifyCommand(message);
+                RecordReplayableCommand(message);
+                BroadcastToAll(message, ConnectionId.None); // host applies locally AND fans out
             }
             else
             {
@@ -205,6 +209,12 @@ namespace CS2MultiplayerMod.Core.Session
             // installs the host snapshot before Resume, so applying only a suffix on one side would
             // recreate the very drift this transaction is meant to repair.
             if (_worldSyncSuspended) return;
+
+            // If the peer is marked as a spectator, do not apply or relay simulation commands
+            if (Role == SessionRole.Host && peer != null && peer.IsSpectator)
+            {
+                return;
+            }
 
             // Only command ids the game layer registered are legitimate; anything else
             // is a peer probing the surface.
@@ -221,7 +231,23 @@ namespace CS2MultiplayerMod.Core.Session
 
             NotifyCommand(command);
             if (Role == SessionRole.Host)
+            {
+                RecordReplayableCommand(command);
                 BroadcastToAll(command, from); // relay to the other clients
+            }
+        }
+
+        public void SetPeerSpectator(int playerId, bool isSpectator)
+        {
+            if (Role != SessionRole.Host) return;
+            foreach (var peer in _peers.Values)
+            {
+                if (peer.PlayerId == playerId)
+                {
+                    peer.IsSpectator = isSpectator;
+                    break;
+                }
+            }
         }
 
         /// <summary>

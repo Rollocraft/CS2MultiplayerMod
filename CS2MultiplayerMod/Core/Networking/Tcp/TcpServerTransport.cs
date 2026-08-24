@@ -69,7 +69,15 @@ namespace CS2MultiplayerMod.Core.Networking.Tcp
 
             _lanOnly = lanOnly;
             _certificate = certificate;
-            _listener = new TcpListener(IPAddress.Any, port);
+            if (Socket.OSSupportsIPv6)
+            {
+                _listener = new TcpListener(IPAddress.IPv6Any, port);
+                try { _listener.Server.DualMode = true; } catch { }
+            }
+            else
+            {
+                _listener = new TcpListener(IPAddress.Any, port);
+            }
             _listener.Start();
             _active = true;
 

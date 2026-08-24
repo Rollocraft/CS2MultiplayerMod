@@ -28,6 +28,7 @@ namespace CS2MultiplayerMod.Game
     {
         public const string TransientName = "_MP_JoinSession";
         private const string SaveExtension = ".cok";
+        private static byte[] _lastStagedSaveBytes;
 
         /// <summary>
         /// Write the received world to the fixed transient path and kick off loading it.
@@ -52,11 +53,21 @@ namespace CS2MultiplayerMod.Game
                 // the fresh one when we look it up below.
                 DeleteTransient(log);
 
+                byte[] decompressed = Core.Session.SavegameCompression.DecompressIfNeeded(saveBytes);
+                byte[] finalBytes = Core.Session.DeltaSnapshotCodec.ApplyDelta(_lastStagedSaveBytes, decompressed);
+                _lastStagedSaveBytes = finalBytes;
+
+                if (finalBytes != saveBytes)
+                {
+                    log.Info("[MP] Decompressed/patched host world from " + (saveBytes.Length / 1024) +
+                             " KB to " + (finalBytes.Length / 1024) + " KB.");
+                }
+
                 Directory.CreateDirectory(dir);
                 string path = Path.Combine(dir, TransientName + SaveExtension);
-                File.WriteAllBytes(path, saveBytes);
-                log.Info("[MP] Host world staged at '" + path + "' (" + (saveBytes.Length / 1024) + " KB).");
-                log.Info("[MP] Host world received (" + (saveBytes.Length / 1024) + " KB); loading into game...");
+                File.WriteAllBytes(path, finalBytes);
+                log.Info("[MP] Host world staged at '" + path + "' (" + (finalBytes.Length / 1024) + " KB).");
+                log.Info("[MP] Host world received (" + (finalBytes.Length / 1024) + " KB); loading into game...");
 
                 // Claim the load before starting it: the session watcher treats a world swap
                 // it did not ask for as the player walking out of the session. Claimed here
