@@ -45,6 +45,10 @@ namespace CS2MultiplayerMod.Game
 
             _createdAt = UnityEngine.Time.realtimeSinceStartup;
 
+            // Second chance at the platform name: the mod can load before the platform
+            // backend is signed in, and this runs once per world, well after that.
+            if (Mod.Setting != null) Mod.Setting.ApplyPlatformNamePreset();
+
             // Fired once from the UI module's register() — proves the .mjs made it
             // through the game's sequential UI-module load chain. A broken module
             // from another mod (e.g. Gooee) can abort that chain, in which case
@@ -74,6 +78,8 @@ namespace CS2MultiplayerMod.Game
                 () => Mod.Service != null ? Mod.Service.UiStatusDetail : ""));
             AddUpdateBinding(new GetterValueBinding<string>(Group, "statusHelp",
                 () => Mod.Service != null ? Mod.Service.UiStatusHelp : ""));
+            AddUpdateBinding(new GetterValueBinding<string>(Group, "statusHelpPage",
+                () => Mod.Service != null ? Mod.Service.UiStatusHelpPage : ""));
             AddUpdateBinding(new GetterValueBinding<string>(Group, "progressMode",
                 () => Mod.Service != null ? Mod.Service.UiProgressMode : "none"));
             AddUpdateBinding(new GetterValueBinding<int>(Group, "mapTransferPercent",
@@ -101,6 +107,10 @@ namespace CS2MultiplayerMod.Game
                 () => Mod.Service != null && Mod.Service.ClientExitFailed));
             AddUpdateBinding(new GetterValueBinding<string>(Group, "clientExitReason",
                 () => Mod.Service != null ? Mod.Service.ClientExitReason : ""));
+            AddUpdateBinding(new GetterValueBinding<bool>(Group, "disconnectConfirmationRequested",
+                () => Mod.Service != null && Mod.Service.DisconnectConfirmationRequested));
+            AddUpdateBinding(new GetterValueBinding<bool>(Group, "disconnectConfirmationIsHost",
+                () => Mod.Service != null && Mod.Service.DisconnectConfirmationIsHost));
 
             AddUpdateBinding(new GetterValueBinding<int>(Group, "networkLatency",
                 () => Mod.Service != null ? Mod.Service.Session.AverageLatencyMs : -1));
@@ -118,6 +128,15 @@ namespace CS2MultiplayerMod.Game
             // is not in GameVersionCheck.TestedVersions, otherwise "" (banner hidden).
             AddUpdateBinding(new GetterValueBinding<string>(Group, "versionWarning",
                 () => GameVersionCheck.WarningText()));
+
+            // Other mods live in the active playset: localized sentence naming them,
+            // otherwise "" (banner hidden). The adjacent ignored flag decides whether
+            // the notice blocks Join/Host or warns about the own-risk override.
+            AddUpdateBinding(new GetterValueBinding<string>(Group, "modsBlocked",
+                () => ModsCheck.BlockText(Mod.Setting != null &&
+                                           Mod.Setting.IgnoreModCompatibilityChecks)));
+            AddUpdateBinding(new GetterValueBinding<bool>(Group, "modsCheckIgnored",
+                () => Mod.Setting != null && Mod.Setting.IgnoreModCompatibilityChecks));
 
             // One-time disclaimer gate: the UI shows it before the first host/join and
             // only flips this once the player accepts. Persisted in Setting so it never
@@ -174,7 +193,8 @@ namespace CS2MultiplayerMod.Game
             // Joins waiting for the host's approval (empty on a client / when approval is off).
             AddUpdateBinding(new GetterValueBinding<string>(Group, "pendingJoins",
                 () => Mod.Service != null ? Mod.Service.PendingJoinsJson : "[]"));
-            // Hosting shares the loaded city, so it needs one — and no running session.
+            // Hosting shares the loaded city, so it needs one and no running session.
+            // CannotStartHost also owns the other-mod gate and its expert override.
             AddUpdateBinding(new GetterValueBinding<bool>(Group, "canHost",
                 () => Mod.Setting != null && !Mod.Setting.CannotStartHost() && MultiplayerService.ModEnabled));
 
@@ -298,6 +318,24 @@ namespace CS2MultiplayerMod.Game
             AddBinding(new TriggerBinding(Group, "disconnect", () =>
             {
                 if (Mod.Service != null) Mod.Service.Disconnect();
+            }));
+            AddBinding(new TriggerBinding(Group, "requestDisconnect", () =>
+            {
+                if (Mod.Service != null) Mod.Service.RequestDisconnect();
+            }));
+            AddBinding(new TriggerBinding(Group, "confirmDisconnect", () =>
+            {
+                if (Mod.Service != null) Mod.Service.ConfirmDisconnect();
+            }));
+            AddBinding(new TriggerBinding(Group, "cancelDisconnect", () =>
+            {
+                if (Mod.Service != null) Mod.Service.CancelDisconnectRequest();
+            }));
+            AddBinding(new TriggerBinding<string>(Group, "openHelp", HelpLinks.Open));
+            // Sent alongside "disconnect" when the player closes an error screen.
+            AddBinding(new TriggerBinding(Group, "dismissStatusFault", () =>
+            {
+                if (Mod.Service != null) Mod.Service.DismissFault();
             }));
             AddBinding(new TriggerBinding(Group, "dismissClientExitNotice", () =>
             {

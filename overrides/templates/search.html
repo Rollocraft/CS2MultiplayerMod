@@ -1,0 +1,19 @@
+{# Override: the stock search is a trigger button plus a modal <dialog> with its
+   own input. Use one real input in the header and drop the results underneath. #}
+<div class="cs2mp-search" id="cs2mp-search">
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+        stroke-linecap="round" stroke-linejoin="round" class="cs2mp-search__icon">
+        <circle cx="11" cy="11" r="8"></circle>
+        <path d="m21 21-4.3-4.3"></path>
+    </svg>
+    <input id="cs2mp-search-input" type="text" autocomplete="off" autocorrect="off" spellcheck="false"
+        placeholder="{{ _('Search documentation...') }}" aria-label="{{ _('Search documentation...') }}"
+        oninput="onInputHandler(event)">
+    <kbd class="cs2mp-search__hint">Ctrl K</kbd>
+    <div class="cs2mp-search__panel" id="cs2mp-search-panel">
+        <div id="{% if is_properdocs %}properdocs-search-results{% else %}mkdocs-search-results{% endif %}">
+            <!-- search results go there -->
+        </div>
+        <p class="cs2mp-search__empty" id="cs2mp-search-empty">No results.</p>
+    </div>
+</div>

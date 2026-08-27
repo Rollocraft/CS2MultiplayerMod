@@ -4,7 +4,6 @@ using System.Diagnostics;
 using CS2MultiplayerMod.Core.Diagnostics;
 using CS2MultiplayerMod.Core.Protocol.Messages;
 using CS2MultiplayerMod.Core.Session;
-using CS2MultiplayerMod.Game.Sync.Commands;
 
 namespace CS2MultiplayerMod.Game
 {
@@ -51,6 +50,7 @@ namespace CS2MultiplayerMod.Game
         private readonly ConcurrentDictionary<int, RemotePlayer> _remotePlayers =
             new ConcurrentDictionary<int, RemotePlayer>();
         private ClientWorldPhase _phase = ClientWorldPhase.None;
+        private long _worldInstallGeneration;
         private long _phaseChangedMs;
         private bool _sawLoading;
         private string _lastFault;
@@ -77,17 +77,7 @@ namespace CS2MultiplayerMod.Game
             // a client may receive, and the complete set of gameplay command ids. A peer
             // sending anything outside these is disconnected.
             _session.AllowBlobChannel(MapChannel, MaxSaveBlobBytes);
-            _session.AllowCommands(
-                ObjectPlacementCommand.Id, NetPlacementCommand.Id,
-                ObjectDeleteCommand.Id, NetDeleteCommand.Id,
-                ZonePaintCommand.Id, TerrainBrushCommand.Id,
-                UpgradePlacementCommand.Id, ObjectMoveCommand.Id, NetUpgradeCommand.Id,
-                AreaCreateCommand.Id, AreaUpdateCommand.Id, AreaDeleteCommand.Id,
-                OwnedAreaSnapshotCommand.Id,
-                RouteCreateCommand.Id, RouteUpdateCommand.Id, RouteDeleteCommand.Id,
-                TilePurchaseCommand.Id, EntityPolicyCommand.Id, DevTreePurchaseCommand.Id,
-                NetReplaceCommand.Id, ObjectToolOperationCommand.Id, AssetStampCommand.Id,
-                VisualCustomizationCommand.Id, ColorPaletteCommand.Id);
+            GameplayCommandRegistry.Register(_session);
         }
 
         public MultiplayerSession Session => _session;
@@ -124,6 +114,13 @@ namespace CS2MultiplayerMod.Game
 
         /// <summary>The joining client's place in the world-handover flow.</summary>
         public ClientWorldPhase WorldPhase => _phase;
+
+        /// <summary>
+        /// Client-local generation of successfully installed authoritative worlds. It advances
+        /// only when a Resume is accepted after WaitingForResume; aborting back to the old world
+        /// deliberately leaves it unchanged.
+        /// </summary>
+        public long WorldInstallGeneration => _worldInstallGeneration;
 
         /// <summary>Master switch from the settings screen.</summary>
         public static bool ModEnabled => Mod.Setting == null || Mod.Setting.EnableMod;
@@ -199,54 +196,7 @@ namespace CS2MultiplayerMod.Game
 
         private static string CommandName(ushort id)
         {
-            switch (id)
-            {
-                case ObjectPlacementCommand.Id: return "object-place";
-                case NetPlacementCommand.Id: return "net-place";
-                case ObjectDeleteCommand.Id: return "object-delete";
-                case NetDeleteCommand.Id: return "net-delete";
-                case ZonePaintCommand.Id: return "zone-paint";
-                case TerrainBrushCommand.Id: return "terrain-brush";
-                case UpgradePlacementCommand.Id: return "building-upgrade";
-                case ObjectMoveCommand.Id: return "object-move";
-                case ObjectToolOperationCommand.Id: return "object-native-operation";
-                case AssetStampCommand.Id: return "asset-stamp";
-                case NetUpgradeCommand.Id: return "net-upgrade";
-                case AreaCreateCommand.Id: return "area-create";
-                case AreaDeleteCommand.Id: return "area-delete";
-                case RouteCreateCommand.Id: return "route-create";
-                case RouteDeleteCommand.Id: return "route-delete";
-                case TilePurchaseCommand.Id: return "tile-purchase";
-                case EntityPolicyCommand.Id: return "policy-edit";
-                case AreaUpdateCommand.Id: return "area-update";
-                case OwnedAreaSnapshotCommand.Id: return "owned-area-snapshot";
-                case RouteUpdateCommand.Id: return "route-update";
-                case DevTreePurchaseCommand.Id: return "dev-tree-purchase";
-                case NetReplaceCommand.Id: return "net-replace";
-                case VisualCustomizationCommand.Id: return "visual-customization";
-                case ColorPaletteCommand.Id: return "color-palette";
-                case Sync.Commands.CityBudgetCommand.Id: return "city-budget";
-                case Sync.Commands.CustomNameCommand.Id: return "custom-name";
-                case Sync.Commands.SimulationSpeedCommand.Id: return "simulation-speed";
-                case Sync.Commands.CityLoanCommand.Id: return "city-loan";
-                case Sync.Commands.MilestoneCommand.Id: return "milestone-progression";
-                case Sync.Commands.UtilityGridCommand.Id: return "utility-grid";
-                case Sync.Commands.PollutionCommand.Id: return "pollution-state";
-                case Sync.Commands.WeatherControlCommand.Id: return "weather-climate";
-                case Sync.Commands.GhostPlacementCommand.Id: return "ghost-preview";
-                case Sync.Commands.DistrictClaimCommand.Id: return "district-claim";
-                case Sync.Commands.BookmarkCommand.Id: return "city-bookmark";
-                case Sync.Commands.MeasurementCommand.Id: return "ruler-measurement";
-                case Sync.Commands.ChecksumCommand.Id: return "simulation-checksum";
-                case Sync.Commands.TrafficLightCommand.Id: return "traffic-control";
-                case Sync.Commands.TransitLineDetailCommand.Id: return "transit-line-detail";
-                case Sync.Commands.BuildingToggleCommand.Id: return "building-toggle";
-                case Sync.Commands.ParkFeeCommand.Id: return "park-fee";
-                case Sync.Commands.ServiceDistrictCommand.Id: return "service-district";
-                case Sync.Commands.TransitColorCommand.Id: return "transit-color";
-                case Sync.Commands.ChirperCommand.Id: return "chirper-message";
-                default: return "unknown";
-            }
+            return GameplayCommandRegistry.Name(id);
         }
 
         // All Status*/UiStatus* texts are re-read every UI frame by the options screen
@@ -580,12 +530,15 @@ namespace CS2MultiplayerMod.Game
                 if (status == SessionStatus.Connected && _service._session.Role == SessionRole.Host)
                 {
                     _service.AppendChatEntry(null, "Session started - players can join now.");
-                    if (_service._session.PublicExposure)
-                        _service.AppendChatEntry(null, "Friends from another network can only join if you forward TCP port " +
-                            _service._session.Port + " to this PC on your router and allow it through your firewall.");
-                    else
-                        _service.AppendChatEntry(null, "LAN-only is enabled - only players on your local network can join. " +
-                            "If they cannot connect, allow TCP port " + _service._session.Port + " through your firewall.");
+                    if (!_service._session.UsesRelay)
+                    {
+                        if (_service._session.PublicExposure)
+                            _service.AppendChatEntry(null, "Friends from another network can only join if you forward TCP port " +
+                                _service._session.Port + " to this PC on your router and allow it through your firewall.");
+                        else
+                            _service.AppendChatEntry(null, "LAN-only is enabled - only players on your local network can join. " +
+                                "If they cannot connect, allow TCP port " + _service._session.Port + " through your firewall.");
+                    }
                 }
                 else if (status == SessionStatus.Connected && _service._session.Role == SessionRole.Client)
                 {

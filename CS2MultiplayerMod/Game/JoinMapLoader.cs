@@ -66,7 +66,7 @@ namespace CS2MultiplayerMod.Game
                 Directory.CreateDirectory(dir);
                 string path = Path.Combine(dir, TransientName + SaveExtension);
                 File.WriteAllBytes(path, finalBytes);
-                log.Info("[MP] Host world staged at '" + path + "' (" + (finalBytes.Length / 1024) + " KB).");
+                log.Info("[MP] Host world staged at '" + Diagnostics.LogPaths.Redact(path) + "' (" + (finalBytes.Length / 1024) + " KB).");
                 log.Info("[MP] Host world received (" + (finalBytes.Length / 1024) + " KB); loading into game...");
 
                 // Claim the load before starting it: the session watcher treats a world swap

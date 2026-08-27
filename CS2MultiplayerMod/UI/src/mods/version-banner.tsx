@@ -1,6 +1,7 @@
 import { bindValue, useValue } from "cs2/api";
 import { useLocalization } from "cs2/l10n";
 import { CSSProperties } from "react";
+import { HELP_PAGE, OpenHelpButton } from "mods/help-link";
 
 // Binding group shared with MultiplayerUISystem on the C# side.
 const GROUP = "cs2mp";
@@ -51,6 +52,11 @@ const styles: Record<string, CSSProperties> = {
         color: "rgba(255, 255, 255, 0.8)",
         wordBreak: "break-word",
     },
+    helpButton: {
+        marginTop: "7rem",
+        padding: "4rem 10rem",
+        fontSize: "11.5rem",
+    },
 };
 
 // Non-blocking warning shown at the top of the Join dialog and the in-game hub
@@ -67,6 +73,7 @@ export const VersionWarningBanner = ({ style }: { style?: CSSProperties }) => {
             <div style={styles.textWrap}>
                 <div style={styles.title}>{t(LOC.title, "Untested Game Version")}</div>
                 <div style={styles.body}>{warning}</div>
+                <OpenHelpButton page={HELP_PAGE.gameVersion} style={styles.helpButton} />
             </div>
         </div>
     );

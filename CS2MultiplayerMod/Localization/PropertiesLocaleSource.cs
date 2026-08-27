@@ -12,8 +12,8 @@ namespace CS2MultiplayerMod.Localization
     /// file. Registered per language in <see cref="Mod.OnLoad"/>; the mod follows the game
     /// language, with no mod-specific setting. Keys starting with '@' are options-screen
     /// entries resolved here against the game's settings ID scheme; every other key (the
-    /// <c>CS2MP.*</c> runtime keys) is used verbatim. EN/DE key parity is a CI check
-    /// (<c>.github/workflows/locale.yml</c>), not a runtime one.
+    /// <c>CS2MP.*</c> runtime keys) is used verbatim. Key parity across the languages is a
+    /// CI check (<c>.github/workflows/locale.yml</c>), not a runtime one.
     /// </summary>
     public sealed class PropertiesLocaleSource : IDictionarySource
     {

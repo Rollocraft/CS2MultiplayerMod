@@ -51,6 +51,27 @@ namespace CS2MultiplayerMod.Core.Networking.Steam
             }
         }
 
+        /// <summary>
+        /// The Steam persona name. Read without gating on <see cref="UnavailableReason"/>:
+        /// the name is known whenever the API answers at all, and it is only ever used as
+        /// a first-run default for the player-name field.
+        /// </summary>
+        public string LocalPlayerName
+        {
+            get
+            {
+                try
+                {
+                    string name = SteamFriends.GetPersonaName();
+                    return name ?? "";
+                }
+                catch (Exception)
+                {
+                    return "";
+                }
+            }
+        }
+
         public ITransport CreateHost(IModLogger log)
         {
             return SteamRelayTransport.StartHost(log, VirtualPort);

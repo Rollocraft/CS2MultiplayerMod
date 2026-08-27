@@ -28,7 +28,7 @@
 	<!--Link to the forum post where the mod can be discussed-->
 	<ForumLink Value="" />
 	<!--Version of the mod-->
-	<ModVersion Value="0.1.5h2" />
+	<ModVersion Value="0.1.6" />
 	<!--Recommended version of the base game to use the mod-->
 	<GameVersion Value="1.6.*" />
 	<!--Dependency for the mod, can be set multiple times-->
@@ -37,7 +37,26 @@
 	<RequiredDLC Value="" />
 	<!--Change log for new version. Single line or multi line. Supports minimal markdown subset-->
 	<ChangeLog>
-		Fixes the mod failing to load on Microsoft Store / Game Pass copies of the game, which report a missing dependency and never start the mod. The Steam relay now ships separately and is only loaded where Steam exists; on those copies the connection picker is hidden and games are hosted and joined by address and port.
+		This update focuses on synchronization, chat and general stability.
+
+		**Synchronization**
+		- Renamed streets, buildings, districts and other entities now sync.
+		- Normally spawned residential buildings sync, including households, rent and income.
+
+		**Fixes**
+		- The same error message could appear twice, even after being closed.
+		- Several chat layout issues and redundant messages.
+		- Multiple unnecessary resync triggers.
+
+		**Quality of life**
+		- ESC closes all supported screens, and leaves the chat input.
+		- Steam players get their Steam name as the preset player name.
+		- A mod checker that can be disabled in the mod settings.
+		- New languages: French, Spanish, Italian, Polish, Russian, Japanese, Simplified Chinese.
+		- Clearer errors and warnings, with references to the help pages.
+		- A new documentation site covering setup, connections and every error the mod can show.
+
+		This version cannot connect to 0.1.5 or older; every player needs 0.1.6.
 	</ChangeLog>
 	<!--External link, can be set multiple times. supported types are "discord", "github", "youtube", "twitch", "x", "paypal", "patreon", "buymeacoffee", "kofi", "crowdin", "gitlab", "gofundme"-->
 	<ExternalLink Type="discord" Url="https://discord.gg/KFZTW2YSJt" />

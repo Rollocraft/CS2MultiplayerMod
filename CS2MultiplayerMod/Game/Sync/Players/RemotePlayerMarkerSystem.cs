@@ -25,6 +25,20 @@ namespace CS2MultiplayerMod.Game.Sync.Players
         /// <summary>Width of the line drawn from the ground focus up to the camera.</summary>
         private const float BeamWidth = 3f;
 
+        /// <summary>
+        /// Beam length cap. The overlay quad is camera-facing, so its screen area grows with the
+        /// partner's altitude even though the line itself stays 3 m wide - and a zoomed-out camera
+        /// sits kilometres up. The first stretch above the ground already reads as height.
+        /// </summary>
+        private const float MaxBeamLength = 400f;
+
+        /// <summary>
+        /// Keep-out radius around the local camera. The beam's far end is the partner's eye, which
+        /// in a shared view lands on top of the local camera; a camera-facing quad ending there is
+        /// clipped against the near plane and covers most of the screen in translucent fill.
+        /// </summary>
+        private const float BeamCameraClearance = 80f;
+
         // Distinct, readable colours cycled by player id so each partner is recognisable.
         private static readonly Color[] Palette =
         {
@@ -37,11 +51,14 @@ namespace CS2MultiplayerMod.Game.Sync.Players
         };
 
         private OverlayRenderSystem _overlay;
+        private CameraUpdateSystem _camera;
+        private readonly Plane[] _frustum = new Plane[6];
 
         protected override void OnCreate()
         {
             base.OnCreate();
             _overlay = World.GetOrCreateSystemManaged<OverlayRenderSystem>();
+            _camera = World.GetExistingSystemManaged<CameraUpdateSystem>();
             Mod.log.Info(nameof(RemotePlayerMarkerSystem) + " ready.");
         }
 
@@ -49,6 +66,7 @@ namespace CS2MultiplayerMod.Game.Sync.Players
         {
             MultiplayerService service = Mod.Service;
             if (service == null || _overlay == null || !service.GameplaySyncReady) return;
+            if (Mod.Setting != null && !Mod.Setting.ShowPartnerMarkers) return;
 
             long now = service.NowMs;
 
@@ -58,29 +76,102 @@ namespace CS2MultiplayerMod.Game.Sync.Players
                 if (now - p.LastUpdateMs <= StaleAfterMs) { anyFresh = true; break; }
             if (!anyFresh) return;
 
-            OverlayRenderSystem.Buffer buffer = _overlay.GetBuffer(out JobHandle dependencies);
-            dependencies.Complete();
+            if (_camera == null) _camera = World.GetExistingSystemManaged<CameraUpdateSystem>();
+            Camera view = _camera != null ? _camera.activeCamera : null;
+            bool culling = view != null;
+            if (culling) GeometryUtility.CalculateFrustumPlanes(view, _frustum);
+            float3 localEye = _camera != null ? _camera.position : default(float3);
+
+            // Writing the buffer forces the game's overlay pass on for the frame and completes its
+            // writers on this thread, so decide there is something visible to draw before taking it.
+            bool haveBuffer = false;
+            OverlayRenderSystem.Buffer buffer = default(OverlayRenderSystem.Buffer);
 
             foreach (RemotePlayer p in service.RemotePlayers)
             {
                 if (now - p.LastUpdateMs > StaleAfterMs) continue;
 
+                var focus = new float3(p.X, p.Y, p.Z);
+                var eye = new float3(p.EyeX, p.EyeY, p.EyeZ);
+
+                bool ringVisible = !culling || SphereVisible(focus, RingDiameter);
+                Line3.Segment beam;
+                bool beamVisible = TryBuildBeam(focus, eye, localEye, out beam) &&
+                                   (!culling || SegmentVisible(beam));
+                if (!ringVisible && !beamVisible) continue;
+
+                if (!haveBuffer)
+                {
+                    JobHandle dependencies;
+                    buffer = _overlay.GetBuffer(out dependencies);
+                    dependencies.Complete();
+                    haveBuffer = true;
+                }
+
                 Color color = Palette[((p.PlayerId % Palette.Length) + Palette.Length) % Palette.Length];
                 Color fill = new Color(color.r, color.g, color.b, 0.12f);
                 color.a = 0.9f;
 
-                var focus = new float3(p.X, p.Y, p.Z);
-                var eye = new float3(p.EyeX, p.EyeY, p.EyeZ);
-
                 // Ground ring where the partner is looking.
-                buffer.DrawCircle(color, fill, RingOutlineWidth, default,
-                    new float2(0f, 1f), focus, RingDiameter);
+                if (ringVisible)
+                    buffer.DrawCircle(color, fill, RingOutlineWidth, default,
+                        new float2(0f, 1f), focus, RingDiameter);
 
-                // A line from that point up to their camera, so you can see how high they
+                // A line from that point up towards their camera, so you can see how high they
                 // are "flying" (and roughly where they are when zoomed out).
-                if (math.distancesq(focus, eye) > 1f)
-                    buffer.DrawLine(color, new Line3.Segment(focus, eye), BeamWidth, true);
+                if (beamVisible) buffer.DrawLine(color, beam, BeamWidth, true);
             }
+        }
+
+        /// <summary>
+        /// The drawable part of the focus-to-eye line: capped in length and cut short of the local
+        /// camera's keep-out sphere. False when nothing worth drawing is left.
+        /// </summary>
+        private static bool TryBuildBeam(float3 focus, float3 eye, float3 localEye,
+            out Line3.Segment beam)
+        {
+            beam = default(Line3.Segment);
+            float3 delta = eye - focus;
+            float length = math.length(delta);
+            if (length <= 1f) return false;
+
+            float3 direction = delta / length;
+            length = math.min(length, MaxBeamLength);
+
+            // Both ends inside the keep-out sphere: the partner is where the local camera is, so
+            // the beam has nothing to say and everything to fill.
+            float3 fromCamera = focus - localEye;
+            float distanceToStart = math.length(fromCamera);
+            if (distanceToStart < BeamCameraClearance) return false;
+
+            // Otherwise clip at the sphere's first intersection along the line.
+            float b = 2f * math.dot(fromCamera, direction);
+            float c = distanceToStart * distanceToStart - BeamCameraClearance * BeamCameraClearance;
+            float discriminant = b * b - 4f * c;
+            if (discriminant > 0f)
+            {
+                float entry = 0.5f * (-b - math.sqrt(discriminant));
+                if (entry > 0f) length = math.min(length, entry);
+            }
+            if (length <= 1f) return false;
+
+            beam = new Line3.Segment(focus, focus + direction * length);
+            return true;
+        }
+
+        private bool SphereVisible(float3 center, float radius)
+        {
+            var point = new Vector3(center.x, center.y, center.z);
+            for (int i = 0; i < _frustum.Length; i++)
+                if (_frustum[i].GetDistanceToPoint(point) < -radius) return false;
+            return true;
+        }
+
+        private bool SegmentVisible(Line3.Segment segment)
+        {
+            float3 center = (segment.a + segment.b) * 0.5f;
+            float radius = math.length(segment.b - segment.a) * 0.5f + BeamWidth;
+            return SphereVisible(center, radius);
         }
     }
 }

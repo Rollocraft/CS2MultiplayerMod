@@ -63,7 +63,8 @@ namespace CS2MultiplayerMod.Game
             catch (Exception ex)
             {
                 RelayProvider.Current = null;
-                log.Warn("The Steam relay backend did not load (" + ex.Message +
+                // Redacted: a file-load fault puts the mod's full path in the message.
+                log.Warn("The Steam relay backend did not load (" + Diagnostics.LogPaths.Redact(ex.Message) +
                          "); multiplayer will use direct connections only.");
             }
         }
