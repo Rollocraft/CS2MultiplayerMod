@@ -34,6 +34,16 @@ Fewer world reloads, and a log that says why the ones that remain happened.
 - A terraforming sample that could not be applied no longer stops the whole session. It kept
   the terrain queue permanently non-empty, and that queue is what every other kind of edit
   waits behind, so one bad sample could leave a session unable to apply anything at all.
+- Transport lines and zoned buildings no longer give up on work they were never allowed to
+  attempt. Both wait a fixed time for something they depend on, and both are held back while
+  terrain or the road pipeline catches up - so the wait ran out against the clock rather than
+  against attempts, and asked for a world reload over a command that had never once been tried.
+- A zoned building waiting to join its road network no longer counts down that wait while the
+  road pipeline is the thing being held back.
+- Fixed a client that could sit waiting for a world forever. If the host finished a world
+  handover before this city had installed it, the client asked for a replacement - but its own
+  request was discarded as "a reload is already running", because the state it had just entered
+  looked like one. Nothing was coming, and only a manual sync recovered it.
 
 ### Bug fixes
 

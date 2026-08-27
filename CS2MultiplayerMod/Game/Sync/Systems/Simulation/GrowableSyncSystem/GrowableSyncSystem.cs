@@ -87,6 +87,12 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         /// Positions this client has asked the build pipeline for, so the building that appears
         /// there is recognised as the host's rather than as one this machine grew.
         /// </summary>
+        /// <summary>
+        /// Set by <see cref="SyncRealizeSystem"/> while the net pipeline cannot deliver roads. A
+        /// growable waiting to join its road graph is waiting on exactly that pipeline.
+        /// </summary>
+        public bool NetworkDependenciesHeld;
+
         private sealed class PendingRealizedSpawn
         {
             public Entity Prefab;
@@ -279,6 +285,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             _playerPlacedGrowables.Clear();
             _stalePlayerPlacedGrowables.Clear();
             _lastPlayerPlacedPruneMs = 0;
+            _lastGrowableRealizeMs = 0;
+            _lastValidationTickMs = 0;
+            NetworkDependenciesHeld = false;
             // A replaced world arrives complete. Anything still queued for the old one refers to
             // buildings that no longer exist, and every sequence number belongs to a city that is
             // gone: keeping either would apply a stale decision to a fresh world.

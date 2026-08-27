@@ -209,6 +209,37 @@ namespace CS2MultiplayerMod.Game
         private Diagnostics.ResyncReport _settledReport;
 
         /// <summary>
+        /// Set when this client must re-ask the host for a world it is otherwise never going to
+        /// receive. It deliberately bypasses the resync arbiter and the in-flight guard: this is
+        /// not a claim that the two cities diverged, it is a client saying the handover broke and
+        /// it is still waiting. See the Resume-before-load case in WorldSync.
+        /// </summary>
+        private bool _mapReRequestPending;
+
+        internal void RequestMapAgainNextTick() => _mapReRequestPending = true;
+
+        /// <summary>
+        /// Ask again for a world whose handover broke, once the session has actually left the epoch
+        /// that broke. Waiting for that is why this is a pumped flag rather than a direct call: the
+        /// session coalesces any request made while it is still inside the epoch.
+        /// </summary>
+        private void PumpMapReRequest()
+        {
+            if (!_mapReRequestPending) return;
+            if (_session == null || _session.Status != SessionStatus.Connected)
+            {
+                _mapReRequestPending = false;
+                return;
+            }
+            if (_session.WorldSyncSuspended) return;
+            _mapReRequestPending = false;
+            Diagnostics.SyncLog.ProdWarn(
+                "World sync: asking the host to stream this city again - the previous handover " +
+                "resumed before the snapshot had been installed.");
+            _session.RequestWorldSync("resume arrived before the snapshot finished loading");
+        }
+
+        /// <summary>
         /// The synchronous resync gate wired into <see cref="Sync.Infrastructure.SyncInbox.Arbitrate"/>.
         /// A caller that can still hold its work puts its evidence here and acts on the verdict:
         /// only <see cref="Diagnostics.ResyncVerdict.Settled"/> reloads the world.

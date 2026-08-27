@@ -150,11 +150,18 @@ namespace CS2MultiplayerMod.Game
                 _worldSyncResumeSpeed = SanitizeSpeed(resumeSpeed);
                 if (_phase != ClientWorldPhase.WaitingForResume)
                 {
-                    _log.Error("[MP] Host resumed world-sync epoch " + epoch +
-                               " before this client installed its snapshot; requesting a new epoch.");
+                    Diagnostics.SyncLog.ProdError(
+                        "World sync: the host finished epoch " + epoch +
+                        " before this city had installed its snapshot. Asking for the world again.");
                     ResetWorldSyncState(restoreSpeed: false);
                     SetPhase(ClientWorldPhase.WaitingForMap);
-                    SyncInbox.RequestResync("resume arrived before snapshot load completed");
+                    // Deliberately NOT the resync arbiter. Two things would swallow it: the session
+                    // is still inside its epoch at this point and coalesces the request away, and
+                    // the WaitingForMap phase set on the line above makes WorldRecoveryInFlight
+                    // true, which is read as "a reload is already running". Neither is the case -
+                    // nothing is coming - so the client sat in WaitingForMap for the rest of the
+                    // session, waiting for a world nobody had been asked for.
+                    RequestMapAgainNextTick();
                     return;
                 }
 

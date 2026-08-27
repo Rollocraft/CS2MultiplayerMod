@@ -53,6 +53,7 @@ namespace CS2MultiplayerMod.Game
                 SyncInbox.TryTakeResyncRequest(out queuedReport))
                 RequestAutomaticWorldRecovery(queuedReport);
             PumpMaturedResyncReports();
+            PumpMapReRequest();
             PumpWorldPhase();
             MaintainWorldSyncBarrier();
             PumpClientWorldSyncQuiescence();
@@ -277,6 +278,7 @@ namespace CS2MultiplayerMod.Game
         {
             _disconnectConfirmationRequested = false;
             _settledReport = null;
+            _mapReRequestPending = false;
             Diagnostics.ResyncArbiter.Reset();
             ResetWorldSyncState(restoreSpeed: false); // the world is going away with the process
             _session.StopWithNotice("The host closed the game, so this session has ended.");

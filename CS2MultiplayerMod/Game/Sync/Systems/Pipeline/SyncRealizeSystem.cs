@@ -153,13 +153,19 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 // that a road and its zoning produced, so realizing one before those arrive would put
                 // it on ground the receiver does not yet consider buildable.
                 _growableSync.DeferForTerrain = deferTerrain;
+                _growableSync.NetworkDependenciesHeld = deferNetworkDependents;
                 if (!deferNetworkDependents) Step("GrowableSync", _growableSync.RealizePending);
+                else _growableSync.NotifyRealizeHeld(nowMs);
                 Step("UpgradeSync", _upgradeSync.RealizePending);
                 Step("MoveSync", _moveSync.RealizePending);
                 if (!deferNetworkDependents) Step("NetUpgradeSync", _netUpgradeSync.RealizePending);
                 Step("AreaSync", _areaSync.RealizePending);
                 Step("RouteSync.FinalizePending", _routeSync.FinalizePending);
+                // Held rather than skipped: a route's retry window is for waiting on its own stop
+                // or road, not for waiting on permission to look, and expiring one unattempted
+                // asks for a world reload over a command that was never tried.
                 if (!deferNetworkDependents) Step("RouteSync", _routeSync.RealizePending);
+                else _routeSync.NotifyRealizeHeld(nowMs);
                 Step("TilePurchaseSync", _tileSync.RealizePending);
                 // Disaster events are plain simulation entities - no definitions, no terrain
                 // dependency - but they must still be created here: the game's event initialization
