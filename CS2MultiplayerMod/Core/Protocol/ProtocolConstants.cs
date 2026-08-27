@@ -4,7 +4,11 @@ namespace CS2MultiplayerMod.Core.Protocol
     {
         /// <summary>
         /// Wire-format version. Bump when message layout changes to refuse handshake on mismatch.
-        /// Current v49 adds city-state channel 22: host-authoritative workplace state for every
+        /// Current v50 adds a reason string to ResyncRequest. It is log text only - nothing
+        /// branches on it - but without it the host's log cannot tell a player pressing the sync
+        /// button apart from a client whose pipeline gave up on an edit, which is the single most
+        /// useful distinction when reading a session that kept reloading its world.
+        /// v49 adds city-state channel 22: host-authoritative workplace state for every
         /// commercial, industrial and office building. Each page entry is about the building, not
         /// the business, so the host can say "nobody rents this one" - the one statement a client
         /// cannot derive for itself. Occupied entries carry the tenant's archetype, the whole
@@ -115,7 +119,7 @@ namespace CS2MultiplayerMod.Core.Protocol
         /// islands) reattach on the receiver.
         /// See <see cref="Messages.HandshakeRequest"/> and version notes in doc/internals.
         /// </summary>
-        public const int ProtocolVersion = 49;
+        public const int ProtocolVersion = 50;
 
         /// <summary>
         /// Hard cap on a single payload, guarding against corrupt length prefixes.

@@ -106,6 +106,11 @@ namespace CS2MultiplayerMod
             Setting.ApplyPlatformNamePreset();
 
             Service = new MultiplayerService(coreLog);
+
+            // The sync pipeline asks before it reloads a world. Route that question at the live
+            // service, which owns the clock, the in-flight-recovery state and the arbiter.
+            Game.Sync.Infrastructure.SyncInbox.Arbitrate = Service.SettleResyncReport;
+
             FlightRecorder.Note("startup-stage service-created");
             log.Info("Multiplayer core initialised. Protocol v" +
                      CS2MultiplayerMod.Core.Protocol.ProtocolConstants.ProtocolVersion +
@@ -277,6 +282,9 @@ namespace CS2MultiplayerMod
         public void OnDispose()
         {
             log.Info(nameof(OnDispose));
+
+            Game.Sync.Infrastructure.SyncInbox.Arbitrate = null;
+            ResyncArbiter.Reset();
 
             if (Service != null)
             {

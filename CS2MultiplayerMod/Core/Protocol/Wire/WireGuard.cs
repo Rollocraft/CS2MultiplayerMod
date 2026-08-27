@@ -19,6 +19,9 @@ namespace CS2MultiplayerMod.Core.Protocol
         /// <summary>Cap for one chat line.</summary>
         public const int MaxChatLength = 500;
 
+        /// <summary>Cap for the reason a peer gives for asking to be re-synced (log text only).</summary>
+        public const int MaxResyncReasonLength = 120;
+
         /// <summary>Cap for node/waypoint style repeat counts in commands.</summary>
         public const int MaxItemCount = 4096;
 

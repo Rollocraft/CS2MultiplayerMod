@@ -257,6 +257,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
         // Consecutive ToolUpdate observations with none of the committed graph still Temp. Native
         // cleanup is deferred, so the next transaction stays blocked through a short clean fence.
         private int _drainCleanFrames;
+
+        /// <summary>Fewest surviving Temps this drain has observed; a new low restarts its window.</summary>
+        private int _drainRemainingTemps = int.MaxValue;
         // Remains set through the ToolUpdate which releases either drain state. Systems after
         // NetSync in that phase must still observe the coordinator as busy.
         private bool _drainReleasedThisFrame;
@@ -713,7 +716,10 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
             _atomicMixedOriginalsFrame = -1;
             _nativeTargetDeadlines.Clear();
             _operationAssemblyDeadlines.Clear();
-            _nativeOperationDeadlines.Clear();
+            _nativeOperationHolds.Clear();
+            // The world these described is being replaced; nothing left to withdraw or settle.
+            _outstandingDrainSubjects.Clear();
+            _drainRemainingTemps = int.MaxValue;
             _operationBuildFailures.Clear();
             _completedNetOperations.Clear();
             _armedNetOperations.Clear();
@@ -809,7 +815,13 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                 {
                     Mod.log.Warn("[MP] NetSync: mixed-operation inbox admission cap reached; " +
                                  "requesting recovery instead of dropping an atomic edit silently.");
-                    SyncInbox.RequestResync("mixed net operation inbox overflow");
+                    SyncInbox.RequestResync(CS2MultiplayerMod.Game.Diagnostics.ResyncReport
+                        .Create("mixed net operation inbox overflow", "net",
+                            CS2MultiplayerMod.Game.Diagnostics.ResyncEvidence.StreamLoss)
+                        .About("mixed net inbox")
+                        .Tried("nothing - the edit was refused at the door rather than dropped silently")
+                        .Fact("queued mixed operations", _sink.Count)
+                        .Fact("admission cap", MixedNetInboxAdmissionCap));
                     return;
                 }
                 // Remote Temp work intentionally waits while a local interactive tool is active.

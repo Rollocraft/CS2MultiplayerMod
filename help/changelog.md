@@ -4,6 +4,40 @@ title: Changelog
 
 # Changelog
 
+## Unreleased
+
+Fewer world reloads, and a log that says why the ones that remain happened.
+
+### Synchronization
+
+- A road placement waiting for the road it connects to no longer stops every other player's
+  edits behind it, and bulldozing no longer runs ahead of it. A bulldoze applied while a
+  placement waited could delete the very road that placement was anchored to, which then
+  looked like the two cities had diverged and triggered a full world reload.
+- Road endpoints can now be matched when the ground under them sits at a different height on
+  the two machines. Terrain and water routinely drift by more than the three metres the
+  matcher allowed, and past that point an ordinary road drawn near drifted ground could only
+  ever end in a world reload.
+- A large road edit is given time to finish in proportion to its size, and any progress
+  restarts its clock. A 311-piece replacement was being abandoned on the same three-second
+  budget that comfortably finished the 55-piece edits around it.
+- A bulldoze that never found anything to remove is now reported. It leaves a road or building
+  standing here that the other player no longer has, and it used to be visible only with
+  verbose logging switched on.
+
+### Bug fixes
+
+- Automatic world reloads now have to be justified before they happen. A reload costs both
+  players a save, a transfer and a load, and does not fix the edit that triggered it, so the
+  mod now writes down what it found, holds the mutating parts of the road pipeline still,
+  retries, and reloads only if the problem is still there. A problem that clears itself is
+  logged as a reload that did not have to happen.
+- The log now says why a world reload happened: which edit, which endpoint, what stands there
+  instead, how long the mod waited and what it tried first. Previously every cause printed one
+  short phrase and the world reloaded.
+- The host's log now records the reason a client asked to be re-synced, so a player pressing
+  the sync button reads differently from a client whose pipeline gave up on an edit.
+
 ## 0.1.6 - 2026-08-24
 
 This update focuses on synchronization, chat and general stability.

@@ -189,21 +189,31 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
         }
 
         /// <summary>
-        /// Project a utility endpoint's source-relative elevation onto this machine's surface for
+        /// Project an endpoint's source-relative elevation onto this machine's surface for
         /// connection lookup only. The committed geometry still uses <see cref="EndElevation"/> and
         /// therefore preserves the source height unless an existing node is actually reused.
         /// Trying raw source Y first remains important for already-synchronised geometry; this
-        /// alternate catches a locally-created pipe/cable node whose terrain or water reference
-        /// differs from the sender's by more than the vertical snap tolerance.
+        /// alternate catches a locally-created node whose terrain or water reference differs from
+        /// the sender's by more than the vertical snap tolerance.
+        ///
+        /// <paramref name="anyLayer"/> widens it past pipes and cables to roads and rails. It is
+        /// set only on the last-resort pass, once an operation has already spent a full retry
+        /// window, and it closes a gap the mod's own diagnostics had been reporting for a while:
+        /// the surface under a road endpoint routinely drifts by more than
+        /// <see cref="VerticalSnapTol"/> between two machines (the realize pass logs corrections of
+        /// over three metres), and past that point the endpoint cannot be matched at all - so a
+        /// perfectly ordinary road drawn near drifted ground could only ever end in a world reload.
+        /// Identity stays strict either way: prefab, layer contract, owner and curve direction are
+        /// still required, so only the height reference moves.
         /// </summary>
-        private bool TryProjectUtilityEndpointToLocalSurface(Entity prefab, NetPrefabInfo placedInfo,
-            float3 sourcePoint, float2 sourceElevation,
+        private bool TryProjectEndpointToLocalSurface(Entity prefab, NetPrefabInfo placedInfo,
+            float3 sourcePoint, float2 sourceElevation, bool anyLayer,
             ref TerrainHeightData heightData, ref WaterSurfaceData<SurfaceWater> waterData,
             out float3 projected)
         {
             projected = sourcePoint;
             Layer utilityLayers = placedInfo.RequiredLayers | placedInfo.ConnectLayers;
-            if ((utilityLayers & UtilityConnectLayers) == Layer.None) return false;
+            if (!anyLayer && (utilityLayers & UtilityConnectLayers) == Layer.None) return false;
 
             float surface = SurfaceHeightAt(sourcePoint, sourceElevation.x,
                 NetInfoOf(prefab).ElevationLimit, ref heightData, ref waterData);

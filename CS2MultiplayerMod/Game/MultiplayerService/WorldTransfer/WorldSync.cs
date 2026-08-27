@@ -82,6 +82,9 @@ namespace CS2MultiplayerMod.Game
             _worldSyncBarrierActive = true;
             _hostWorldSyncUiStage = HostWorldSyncUiStage.WaitingForQuiescence;
             SyncInbox.DrainAll();
+            // Held evidence describes the world that is about to be replaced. Keeping it would let
+            // a fault from before the barrier settle a second reload after it.
+            Diagnostics.ResyncArbiter.Reset();
             MaintainWorldSyncBarrier();
             resumeSpeed = _worldSyncResumeSpeed;
             _log.Info("[MP] World sync epoch " + epoch +
@@ -127,6 +130,7 @@ namespace CS2MultiplayerMod.Game
                     _clientQuiescenceCleanFrames = 0;
                     _clientQuiescedEpoch = 0;
                     SyncInbox.DrainAll();
+                    Diagnostics.ResyncArbiter.Reset();
                     SetPhase(ClientWorldPhase.WaitingForMap);
                     _log.Info("[MP] World sync epoch " + epoch +
                               " began; local gameplay is paused while native transactions drain.");

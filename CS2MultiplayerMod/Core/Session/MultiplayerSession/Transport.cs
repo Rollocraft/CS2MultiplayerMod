@@ -236,7 +236,8 @@ namespace CS2MultiplayerMod.Core.Session
                     HandleBlobChunk(connection, peer, (BlobChunkMessage)message, nowUnixMs);
                     break;
                 case MessageType.ResyncRequest:
-                    HandleResyncRequest(connection, peer, nowUnixMs);
+                    HandleResyncRequest(connection, peer, nowUnixMs,
+                        ((ResyncRequestMessage)message).Reason);
                     break;
                 case MessageType.WorldSyncControl:
                     HandleWorldSyncControl(connection, peer, (WorldSyncControlMessage)message);

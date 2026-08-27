@@ -43,8 +43,25 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
 
         private readonly Dictionary<NetOperationKey, long> _operationAssemblyDeadlines =
             new Dictionary<NetOperationKey, long>();
-        private readonly Dictionary<NetOperationKey, long> _nativeOperationDeadlines =
-            new Dictionary<NetOperationKey, long>();
+
+        /// <summary>
+        /// What an operation whose target has not appeared is still waiting for.
+        ///
+        /// <see cref="NativeOperationHold.Relaxed"/> is separate from the deadline on purpose. The
+        /// resolver's last-resort matches unlock when the first window expires, and a second window
+        /// granted by the resync arbiter must not take them away again - re-deriving "relaxed" from
+        /// the deadline alone would do exactly that, and the operation would spend its extra window
+        /// with strictly less resolving power than the one before it.
+        /// </summary>
+        private struct NativeOperationHold
+        {
+            public long DeadlineMs;
+            public bool Relaxed;
+            public int Windows;
+        }
+
+        private readonly Dictionary<NetOperationKey, NativeOperationHold> _nativeOperationHolds =
+            new Dictionary<NetOperationKey, NativeOperationHold>();
         private readonly Dictionary<NetOperationKey, int> _operationBuildFailures =
             new Dictionary<NetOperationKey, int>();
 
@@ -247,10 +264,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                     bool aliasedSplitTarget = false;
                     int alreadyBuiltCourses = 0;
                     string unresolvedDetail = null;
-                    long pendingDeadline;
-                    allowMergedNodeSplit =
-                        _nativeOperationDeadlines.TryGetValue(operationRetryKey, out pendingDeadline) &&
-                        now >= pendingDeadline;
+                    NetPlacementCommand unresolvedCommand = null;
+                    bool unresolvedStartResolved = false;
+                    allowMergedNodeSplit = RelaxedResolveAllowed(operationRetryKey, now);
                     _batchSplitClaims.Clear();
 
                     for (int i = 0; i < work.Count; i++)
@@ -324,7 +340,12 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                         {
                             Mod.log.Warn("[MP] NetSync: native operation " + command.OperationId +
                                          " contains an unsafe creation mode; dropping the whole operation.");
-                            SyncInbox.RequestResync("unsafe native net creation flags");
+                            SyncInbox.RequestResync(Diagnostics.ResyncReport
+                                .Create("unsafe native net creation flags", "net",
+                                    Diagnostics.ResyncEvidence.StreamLoss)
+                                .About("op " + command.OperationId)
+                                .Tried("nothing - the operation was refused before it could be built")
+                                .Fact("creation flags on the wire", command.CreationFlags));
                             return;
                         }
                         // NetCourse elevations are exact native generator state, not values limited
@@ -399,7 +420,11 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                         {
                             unresolvedOperationTarget = true;
                             if (unresolvedDetail == null)
+                            {
                                 unresolvedDetail = DescribeUnresolvedEndpoint(command, startResolved);
+                                unresolvedCommand = command;
+                                unresolvedStartResolved = startResolved;
+                            }
                         }
 
                         if (geometryAlreadyBuilt && topologyNeedsReplay)
@@ -414,7 +439,10 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
 
                     if (alreadyBuiltCourses == work.Count)
                     {
-                        _nativeOperationDeadlines.Remove(operationRetryKey);
+                        ClearOperationHold(operationRetryKey, UnresolvedNativeTargetReason,
+                            NativeOperationSubject(operationHeader.OperationId,
+                                operationRetryKey.Origin),
+                            "the operation turned out to be already present");
                         _operationBuildFailures.Remove(operationRetryKey);
                         Diagnostics.FlightRecorder.Note("net native op already present=" +
                                                           operationHeader.OperationId +
@@ -428,36 +456,65 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
 
                     if (unresolvedOperationTarget)
                     {
-                        long deadline;
-                        if (!_nativeOperationDeadlines.TryGetValue(operationRetryKey, out deadline))
+                        int windows;
+                        if (HoldUnresolvedOperation(operationRetryKey, now,
+                                operationHeader.OperationId, unresolvedDetail, out windows))
                         {
-                            deadline = now + NativeTargetRetryWindowMs;
-                            _nativeOperationDeadlines[operationRetryKey] = deadline;
-                            Diagnostics.FlightRecorder.Note("net native target retry op=" +
-                                                              operationHeader.OperationId + " " +
-                                                              unresolvedDetail);
-                        }
-                        if (now < deadline)
-                        {
-                            RequeueAtFront(work);
+                            // Wait BEHIND work that can still make progress, not in front of it.
+                            // Parking the whole queue here for the length of the window stopped
+                            // every later operation from every player - including, in the logs this
+                            // came from, the ones that would have built the target being waited for.
+                            RequeueStalledOperation(work);
                             return;
                         }
 
-                        _nativeOperationDeadlines.Remove(operationRetryKey);
-                        Mod.log.Warn("[MP] NetSync: native operation " + operationHeader.OperationId +
-                                     " has an unresolved target after its retry window (" +
-                                     unresolvedDetail + "); rejecting the complete operation and " +
-                                     "requesting world recovery.");
+                        // The window is up. Before spending a world reload on it, say exactly what
+                        // is missing and what stands there instead, and let the arbiter decide: the
+                        // same "missing" road has been observed to be one this machine's own delete
+                        // feeder removed while the placement waited.
+                        // Non-null whenever unresolvedOperationTarget is set - they are assigned
+                        // together - but the endpoint description is worth having either way.
+                        NetEndpointIntent failedEndpoint = unresolvedCommand == null
+                            ? default(NetEndpointIntent)
+                            : unresolvedStartResolved ? unresolvedCommand.End : unresolvedCommand.Start;
+                        Diagnostics.ResyncReport report = Diagnostics.ResyncReport
+                            .Create(UnresolvedNativeTargetReason, "net",
+                                Diagnostics.ResyncEvidence.MissingTarget)
+                            .About(NativeOperationSubject(operationHeader.OperationId,
+                                operationRetryKey.Origin))
+                            .Tried("re-resolved the endpoint every frame for " +
+                                   (NativeTargetRetryWindowMs / 1000) + " s across " + windows +
+                                   " window(s), including the relaxed node/edge fallbacks")
+                            .Fact("the other player built", operationHeader.PrefabName)
+                            .Fact("courses in the operation", work.Count)
+                            .Fact("courses already present here", alreadyBuiltCourses)
+                            .Fact("endpoint that would not resolve", unresolvedDetail)
+                            .Fact("what is actually here",
+                                DescribeLocalAnchorNeighbourhood(failedEndpoint, ref nodes, ref edges))
+                            .Fact("net operations still queued", _remoteDeferred.Count + _incoming.Count);
+
+                        if (SyncInbox.Settle(report) == Diagnostics.ResyncVerdict.Held)
+                        {
+                            // Not settled: keep the edit. The arbiter has frozen the feeders that
+                            // could remove the target, so this window is the first one that gets to
+                            // look at a world that is standing still.
+                            ExtendUnresolvedOperation(operationRetryKey, now);
+                            RequeueStalledOperation(work);
+                            return;
+                        }
+
+                        _nativeOperationHolds.Remove(operationRetryKey);
                         Diagnostics.FlightRecorder.Note("net native operation rejected/resync op=" +
                                                           operationHeader.OperationId + " " +
                                                           unresolvedDetail);
-                        SyncInbox.RequestResync("native net target did not resolve");
                         return;
                     }
                     if (allowMergedNodeSplit)
                         Diagnostics.FlightRecorder.Note("net native node target recovered op=" +
                                                           operationHeader.OperationId);
-                    _nativeOperationDeadlines.Remove(operationRetryKey);
+                    ClearOperationHold(operationRetryKey, UnresolvedNativeTargetReason,
+                        NativeOperationSubject(operationHeader.OperationId, operationRetryKey.Origin),
+                        "every endpoint resolved on a later attempt");
 
                     // Every target resolved, but two of them collapsed onto one local edge. There is
                     // no safe way to commit that batch and no way to repair it from here: the missing
@@ -465,14 +522,21 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                     if (aliasedSplitTarget)
                     {
                         _operationBuildFailures.Remove(operationRetryKey);
-                        Mod.log.Warn("[MP] NetSync: native operation " + operationHeader.OperationId +
-                                     " resolved two different source edges onto one local edge - this " +
-                                     "machine is missing an earlier split. Requesting world recovery " +
-                                     "rather than committing an aliased batch.");
                         Diagnostics.FlightRecorder.Note("net native op aliased split target op=" +
                                                           operationHeader.OperationId +
                                                           " courses=" + work.Count);
-                        SyncInbox.RequestResync("net split target aliased by local divergence");
+                        SyncInbox.RequestResync(Diagnostics.ResyncReport
+                            .Create("net split target aliased by local divergence", "net",
+                                Diagnostics.ResyncEvidence.Contradiction)
+                            .About("op " + operationHeader.OperationId + " from player " +
+                                   work[0].OriginPlayerId)
+                            .Tried("nothing - committing the batch anyway would hand the game two " +
+                                   "junctions cut from one road, which it dereferences without a check")
+                            .Fact("what disagrees",
+                                "two roads the other player split separately are one road here, so " +
+                                "an earlier split never arrived")
+                            .Fact("the other player built", operationHeader.PrefabName)
+                            .Fact("courses in the operation", work.Count));
                         return;
                     }
 
@@ -985,7 +1049,12 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                         {
                             Mod.log.Warn("[MP] NetSync: dropping malformed mixed net operation: " +
                                          ex.Message);
-                            SyncInbox.RequestResync("malformed mixed net operation");
+                            SyncInbox.RequestResync(Diagnostics.ResyncReport
+                                .Create("malformed mixed net operation", "net",
+                                    Diagnostics.ResyncEvidence.StreamLoss)
+                                .About("mixed operation from player " + message.OriginPlayerId)
+                                .Tried("nothing - the operation could not be decoded")
+                                .Fact("decoder said", ex.Message));
                             return false;
                         }
                         operation = new List<SimulationCommandMessage>(1) { message };
@@ -1075,11 +1144,15 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                         later.Add(scanned[i]);
                 }
                 RequeueAtFront(later);
-                Mod.log.Warn("[MP] NetSync: incomplete operation " + key.Operation + " from player " +
-                             key.Origin + " expired (" + received + "/" + expected + "); dropped whole operation.");
                 Diagnostics.FlightRecorder.Note("net incomplete op dropped=" + key.Operation +
                     " courses=" + received + "/" + expected);
-                SyncInbox.RequestResync("incomplete net operation expired");
+                SyncInbox.RequestResync(Diagnostics.ResyncReport
+                    .Create("incomplete net operation expired", "net",
+                        Diagnostics.ResyncEvidence.StreamLoss)
+                    .About("op " + key.Operation + " from player " + key.Origin)
+                    .Tried("waited " + (OperationAssemblyWindowMs / 1000) +
+                           " s for the missing pieces of the road the other player drew")
+                    .Fact("pieces received", received + " of " + expected));
                 return false;
             }
 
@@ -1120,11 +1193,15 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
             // from smuggling a partially native operation into per-course fallback realization.
             if ((hasNativeCourse && hasGeometryOnlyCourse) || (expected > 1 && !nativeOperation))
             {
-                Mod.log.Warn("[MP] NetSync: operation " + key.Operation + " from player " +
-                             key.Origin + " mixed incompatible course encodings; dropped whole operation.");
                 Diagnostics.FlightRecorder.Note("net incompatible multi-course op dropped=" +
                                                   key.Operation);
-                SyncInbox.RequestResync("incompatible net operation rejected");
+                SyncInbox.RequestResync(Diagnostics.ResyncReport
+                    .Create("incompatible net operation rejected", "net",
+                        Diagnostics.ResyncEvidence.StreamLoss)
+                    .About("op " + key.Operation + " from player " + key.Origin)
+                    .Tried("nothing - the operation mixed two course encodings that cannot be " +
+                           "applied as one transaction")
+                    .Fact("courses in the operation", expected));
                 operation = null;
                 nativeOperation = false;
                 return false;
@@ -1152,6 +1229,214 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
         {
             if (messages != null && messages.Count > 0)
                 _remoteDeferred.InsertRange(0, messages);
+        }
+
+        /// <summary>
+        /// Re-queue an operation that is waiting for a target it cannot see yet, WITHOUT parking
+        /// the rest of the pipeline behind it.
+        ///
+        /// The queue is strictly ordered, so the previous behaviour - putting it straight back at
+        /// the front - stopped every later operation, from every player, for the whole retry
+        /// window. That is worse than a delay: in the sessions this came from, the deferred
+        /// placement spent ten seconds in front of a queue while the world it was searching went on
+        /// changing, and then asked for a full world reload because what it was looking for was no
+        /// longer there.
+        ///
+        /// Causal order was only ever meaningful per sender, so only ANOTHER sender's work may
+        /// overtake. Everything the same sender queued behind this operation stays behind it.
+        /// </summary>
+        private void RequeueStalledOperation(List<SimulationCommandMessage> messages)
+        {
+            if (messages == null || messages.Count == 0) return;
+            int origin = messages[0].OriginPlayerId;
+
+            // Admit what has arrived so the reorder sees the whole ready set rather than whatever a
+            // previous scan happened to leave behind. Realization stays gated where it always was
+            // (see TryTakeNextPlacementMessage); only where the messages sit changes, and the same
+            // inbox cap bounds it.
+            SimulationCommandMessage admitted;
+            while (_remoteDeferred.Count < NetInboxCap && _incoming.TryDequeue(out admitted))
+                _remoteDeferred.Add(admitted);
+
+            int insertAt = 0;
+            while (insertAt < _remoteDeferred.Count &&
+                   _remoteDeferred[insertAt].OriginPlayerId != origin) insertAt++;
+            _remoteDeferred.InsertRange(insertAt, messages);
+        }
+
+        /// <summary>
+        /// A hold whose window lapsed this long ago no longer counts. An operation can leave the
+        /// pipeline by other doors - duplicate suppression, a malformed decode - and a forgotten
+        /// hold must never be able to stop bulldozing for the rest of a session.
+        /// </summary>
+        private const long StaleHoldGraceMs = 2000;
+
+        /// <summary>
+        /// True while at least one native operation is inside a live window waiting for a target
+        /// that has not arrived, pruning any hold whose window has fully lapsed.
+        ///
+        /// The feeders that can only ever REMOVE such a target - bulldoze, road replacement - stand
+        /// down while this is true. They used to run ahead of it every frame, which is how a
+        /// placement came to be rejected for a road this machine had just deleted out from under
+        /// it. Two windows is the most any operation gets, so the hold is seconds, not minutes.
+        /// </summary>
+        public bool HasStalledNativeOperation(long now)
+        {
+            if (_nativeOperationHolds.Count == 0) return false;
+            List<NetOperationKey> stale = null;
+            bool live = false;
+            foreach (KeyValuePair<NetOperationKey, NativeOperationHold> entry in _nativeOperationHolds)
+            {
+                if (now < entry.Value.DeadlineMs + StaleHoldGraceMs) { live = true; continue; }
+                (stale ?? (stale = new List<NetOperationKey>())).Add(entry.Key);
+            }
+            if (stale != null)
+                for (int i = 0; i < stale.Count; i++) _nativeOperationHolds.Remove(stale[i]);
+            return live;
+        }
+
+        /// <summary>
+        /// Whether the resolver may use its relaxed last-resort matches for this operation - the
+        /// merged-node-as-edge-split fallback. Unlocked once a full retry window has passed, and
+        /// never locked again for that operation (see <see cref="NativeOperationHold"/>).
+        /// </summary>
+        private bool RelaxedResolveAllowed(NetOperationKey key, long now)
+        {
+            NativeOperationHold hold;
+            if (!_nativeOperationHolds.TryGetValue(key, out hold)) return false;
+            return hold.Relaxed || now >= hold.DeadlineMs;
+        }
+
+        /// <summary>
+        /// Arm or advance the hold on an operation whose target is missing. Returns true while it
+        /// should keep waiting; false once the current window is up and a verdict is due.
+        /// </summary>
+        private bool HoldUnresolvedOperation(NetOperationKey key, long now, long operationId,
+            string detail, out int windows)
+        {
+            NativeOperationHold hold;
+            if (!_nativeOperationHolds.TryGetValue(key, out hold))
+            {
+                hold = new NativeOperationHold
+                {
+                    DeadlineMs = now + NativeTargetRetryWindowMs,
+                    Relaxed = false,
+                    Windows = 1,
+                };
+                _nativeOperationHolds[key] = hold;
+                Diagnostics.FlightRecorder.Note("net native target retry op=" + operationId +
+                                                  " " + detail);
+            }
+            windows = hold.Windows;
+            return now < hold.DeadlineMs;
+        }
+
+        /// <summary>
+        /// Grant one more window after the arbiter declined to settle the report. Deliberately
+        /// shorter than the first: this one runs against a world the arbiter has frozen, so it is a
+        /// far better test than the first window was, and the feeders it holds up are waiting on it.
+        /// </summary>
+        private void ExtendUnresolvedOperation(NetOperationKey key, long now)
+        {
+            NativeOperationHold hold;
+            _nativeOperationHolds.TryGetValue(key, out hold);
+            hold.DeadlineMs = now + NativeTargetRetryWindowMs / 2;
+            hold.Relaxed = true;
+            hold.Windows++;
+            _nativeOperationHolds[key] = hold;
+        }
+
+        /// <summary>How a report and a withdrawal name the same stalled operation.</summary>
+        internal const string UnresolvedNativeTargetReason = "native net target did not resolve";
+        internal const string UnresolvedMixedTargetReason = "mixed net operation target did not resolve";
+
+        private static string NativeOperationSubject(long operationId, int origin) =>
+            "op " + operationId + " from player " + origin;
+
+        private static string MixedOperationSubject(long operationId, int origin) =>
+            "mixed op " + operationId + " from player " + origin;
+
+        /// <summary>
+        /// Release a hold because the operation succeeded. Withdrawing the report is the point of
+        /// holding one: a world reload that was proposed and then did not have to happen is worth
+        /// exactly as much in the log as one that did.
+        /// </summary>
+        private void ClearOperationHold(NetOperationKey key, string reason, string subject,
+            string outcome)
+        {
+            if (!_nativeOperationHolds.Remove(key)) return;
+            Diagnostics.ResyncArbiter.Withdraw("net", reason, subject,
+                Mod.Service != null ? Mod.Service.NowMs : 0L, outcome);
+        }
+
+        /// <summary>
+        /// What this machine actually has where the source anchored its endpoint, and why each
+        /// candidate was refused.
+        ///
+        /// This is the fact the log never carried. "No road within reach", "a Medium Road is there
+        /// instead of the Small Road named", and "the road is there but six metres lower" are three
+        /// entirely different bugs, and all three used to print the same line before reloading the
+        /// world. Runs once, on the frame a reload is being considered, so the wider search it does
+        /// costs nothing in the normal case.
+        /// </summary>
+        private string DescribeLocalAnchorNeighbourhood(NetEndpointIntent intent,
+            ref NodePool nodes, ref EdgePool edges)
+        {
+            const float SearchXZ = 16f;
+            float3 anchor = new float3(intent.AnchorX, intent.AnchorY, intent.AnchorZ);
+            var report = new System.Text.StringBuilder();
+
+            float bestNodeXZ = float.MaxValue, bestNodeDy = 0f;
+            NetCellIndex.Enumerator nodeCandidates = nodes.Index.Near(anchor.xz, SearchXZ);
+            while (nodeCandidates.MoveNext())
+            {
+                int i = nodeCandidates.Current;
+                float xz = math.distance(nodes.Data[i].m_Position.xz, anchor.xz);
+                if (xz >= bestNodeXZ) continue;
+                bestNodeXZ = xz;
+                bestNodeDy = nodes.Data[i].m_Position.y - anchor.y;
+            }
+
+            float bestEdgeXZ = float.MaxValue, bestEdgeDy = 0f;
+            string bestEdgePrefab = null;
+            NetCellIndex.Enumerator edgeCandidates = edges.Index.Near(anchor.xz, SearchXZ);
+            while (edgeCandidates.MoveNext())
+            {
+                int i = edgeCandidates.Current;
+                float t;
+                float xz = MathUtils.Distance(edges.Curves[i].m_Bezier.xz, anchor.xz, out t);
+                if (xz >= bestEdgeXZ) continue;
+                Entity edge = edges.Entities[i];
+                if (!EntityManager.Exists(edge)) continue;
+                bestEdgeXZ = xz;
+                bestEdgeDy = MathUtils.Position(edges.Curves[i].m_Bezier, t).y - anchor.y;
+                bestEdgePrefab = EntityManager.HasComponent<global::Game.Prefabs.PrefabRef>(edge)
+                    ? PrefabNameOf(EntityManager
+                        .GetComponentData<global::Game.Prefabs.PrefabRef>(edge).m_Prefab)
+                    : "(no prefab)";
+            }
+
+            if (bestEdgeXZ == float.MaxValue)
+            {
+                report.Append("no road at all within ").Append(SearchXZ.ToString("F0")).Append(" m");
+            }
+            else
+            {
+                report.Append("nearest road is '").Append(bestEdgePrefab).Append("' ")
+                    .Append(bestEdgeXZ.ToString("F1")).Append(" m away, ")
+                    .Append(bestEdgeDy.ToString("F1")).Append(" m in height");
+            }
+
+            if (bestNodeXZ != float.MaxValue)
+                report.Append("; nearest junction ").Append(bestNodeXZ.ToString("F1"))
+                    .Append(" m away, ").Append(bestNodeDy.ToString("F1")).Append(" m in height");
+
+            // The resolver's own tolerances, so a reader can see at a glance whether the candidate
+            // above was refused on distance or on identity.
+            report.Append(" (must be within ").Append(NativeEdgeResolveXZ.ToString("F0"))
+                .Append(" m and ").Append(NativeTargetResolveY.ToString("F0"))
+                .Append(" m of height, same prefab, same layers, same owner)");
+            return report.ToString();
         }
 
         private static NativeTargetRetryKey NativeRetryKey(SimulationCommandMessage message,
@@ -1341,8 +1626,11 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
             if (kind != KindFree) return result;
 
             float3 projected;
-            if (!TryProjectUtilityEndpointToLocalSurface(prefab, placedInfo, sourcePoint,
-                    sourceElevation, ref heightData, ref waterData, out projected))
+            // Utility layers only here: this path classifies an endpoint the source left on open
+            // ground, where a height reference moved for a road is exactly the bridge/tunnel level
+            // separation that must be preserved.
+            if (!TryProjectEndpointToLocalSurface(prefab, placedInfo, sourcePoint,
+                    sourceElevation, false, ref heightData, ref waterData, out projected))
                 return result;
 
             float projectedT;

@@ -34,7 +34,14 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             // applies), leave incoming commands and retries queued for the next cycle — RealizePending
             // runs after DeleteSync, so a delete armed this frame defers us. A selected build tool is
             // allowed on quiet preview frames; only its actual Apply/Clear frame has priority.
-            if (_netSync == null || !_netSync.CanBuildDefinitions) return;
+            if (DeferForPendingPlacement || _netSync == null || !_netSync.CanBuildDefinitions)
+            {
+                // Time locked out is not the replacement's fault: its window is for waiting on its
+                // own target to arrive, not for waiting on this system to be allowed to run.
+                ExtendPendingReplaceWindows(service.NowMs);
+                return;
+            }
+            _lastReplaceRealizeMs = service.NowMs;
 
             long now = service.NowMs;
             List<(NetReplaceCommand cmd, long deadline)> work = null;
@@ -72,7 +79,13 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                                  " s; dropping them and requesting authoritative world recovery.");
                     // One request for this expiry pass, not one per command. The expired entries were
                     // removed above, so they cannot request recovery again on later frames.
-                    SyncInbox.RequestResync("road replacement target did not resolve");
+                    SyncInbox.RequestResync(Diagnostics.ResyncReport
+                        .Create("road replacement target did not resolve", "net",
+                            Diagnostics.ResyncEvidence.MissingTarget)
+                        .About("road replacement")
+                        .Tried("rescanned the city's roads for the replaced span every cycle for " +
+                               (RetryWindowMs / 1000) + " s")
+                        .Fact("replacements that found no road here", expired));
                 }
             }
 
@@ -89,6 +102,15 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             }
 
             if (work != null && work.Count > 0) Apply(work, now);
+        }
+
+        private void ExtendPendingReplaceWindows(long now)
+        {
+            long frozenMs = _lastReplaceRealizeMs == 0 ? 0 : now - _lastReplaceRealizeMs;
+            _lastReplaceRealizeMs = now;
+            if (frozenMs <= 0) return;
+            for (int i = 0; i < _retry.Count; i++)
+                _retry[i] = (_retry[i].command, _retry[i].deadline + frozenMs);
         }
 
         private void Apply(List<(NetReplaceCommand cmd, long deadline)> commands, long now)

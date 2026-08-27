@@ -120,10 +120,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
             string failure = null;
             bool deterministicFailure = false;
             bool definitionsArmed = false;
-            long pendingDeadline;
-            bool allowMergedNodeSplit =
-                _nativeOperationDeadlines.TryGetValue(key, out pendingDeadline) &&
-                now >= pendingDeadline;
+            bool allowMergedNodeSplit = RelaxedResolveAllowed(key, now);
 
             try
             {
@@ -168,7 +165,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                     }
                 }
 
-                _nativeOperationDeadlines.Remove(key);
+                ClearOperationHold(key, UnresolvedMixedTargetReason,
+                    MixedOperationSubject(operation.OperationId, key.Origin),
+                    "the whole mixed operation preflighted on a later attempt");
                 _armedNetOperations.Remember(key, now, ArmedOperationWindowMs);
                 definitionsArmed = BuildAndArmMixedOperation(source, operation, key, now,
                     ref nodes, ref edges, ref ownedNodes, ref ownedEdges,
@@ -735,28 +734,40 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
             NetToolOperationCommand operation, NetOperationKey key, long now,
             string reason, bool deterministic)
         {
+            int windows = 0;
             if (!deterministic)
             {
-                long deadline;
-                if (!_nativeOperationDeadlines.TryGetValue(key, out deadline))
+                if (HoldUnresolvedOperation(key, now, operation.OperationId, reason, out windows))
                 {
-                    deadline = now + NativeTargetRetryWindowMs;
-                    _nativeOperationDeadlines[key] = deadline;
-                }
-                if (now < deadline)
-                {
-                    RequeueAtFront(new List<SimulationCommandMessage>(1) { source });
+                    // Behind other senders' work, not in front of it - see RequeueStalledOperation.
+                    RequeueStalledOperation(new List<SimulationCommandMessage>(1) { source });
                     return;
                 }
             }
 
-            _nativeOperationDeadlines.Remove(key);
-            Mod.log.Warn("[MP] NetSync: mixed operation " + operation.OperationId +
-                         " cannot be preflighted atomically (" + reason +
-                         "); rejecting the whole operation and requesting world recovery.");
+            Diagnostics.ResyncReport report = Diagnostics.ResyncReport
+                .Create(UnresolvedMixedTargetReason, "net",
+                    deterministic
+                        ? Diagnostics.ResyncEvidence.Contradiction
+                        : Diagnostics.ResyncEvidence.MissingTarget)
+                .About(MixedOperationSubject(operation.OperationId, key.Origin))
+                .Tried(deterministic
+                    ? "nothing - this rejection cannot change on a retry"
+                    : "re-preflighted the whole operation every frame for " +
+                      (NativeTargetRetryWindowMs / 1000) + " s across " + windows + " window(s)")
+                .Fact("what could not be preflighted", reason)
+                .Fact("items in the operation", operation.Items != null ? operation.Items.Length : 0);
+
+            if (SyncInbox.Settle(report) == Diagnostics.ResyncVerdict.Held)
+            {
+                ExtendUnresolvedOperation(key, now);
+                RequeueStalledOperation(new List<SimulationCommandMessage>(1) { source });
+                return;
+            }
+
+            _nativeOperationHolds.Remove(key);
             Diagnostics.FlightRecorder.Note("net mixed operation rejected/resync op=" +
                                               operation.OperationId);
-            SyncInbox.RequestResync("mixed net operation target did not resolve");
         }
 
         private static Dictionary<int, List<MixedDeleteAction>> GroupMixedDeletes(
