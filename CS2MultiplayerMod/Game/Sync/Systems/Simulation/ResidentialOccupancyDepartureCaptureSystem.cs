@@ -21,7 +21,10 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
         protected override void OnUpdate()
         {
-            if (_occupancy != null) _occupancy.ProcessHouseholdLifecycleBoundary();
+            using (Diagnostics.SyncProfiler.Measure("Occupancy.Lifecycle"))
+            {
+                if (_occupancy != null) _occupancy.ProcessHouseholdLifecycleBoundary();
+            }
         }
     }
 }

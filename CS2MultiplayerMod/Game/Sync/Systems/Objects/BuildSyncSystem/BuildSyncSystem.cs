@@ -289,34 +289,37 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
         protected override void OnUpdate()
         {
-            MultiplayerService service = Mod.Service;
-            if (service == null) return;
-
-            bool ready = service.GameplaySyncReady;
-            _hbUpdates++;
-            // These probes walk broad Created queries. They are troubleshooting-only work,
-            // so keep them off the normal frame path unless their verbose summary is enabled.
-            if (ready && Mod.Setting != null && Mod.Setting.VerboseLogging)
+            using (Diagnostics.SyncProfiler.Measure("BuildSync"))
             {
-                _hbAnyCreated = System.Math.Max(_hbAnyCreated, _diagAnyCreated.CalculateEntityCount());
-                _hbCreatedPrefab = System.Math.Max(_hbCreatedPrefab, _diagCreatedPrefab.CalculateEntityCount());
-                _hbCreatedTransform = System.Math.Max(_hbCreatedTransform, _diagCreatedTransform.CalculateEntityCount());
-                _hbFiltered = System.Math.Max(_hbFiltered, _createdObjects.CalculateEntityCount());
-            }
+                MultiplayerService service = Mod.Service;
+                if (service == null) return;
 
-            long now = service.NowMs;
-            MultiplayerSession session = service.Session;
-            if (ready)
-            {
-                CaptureCompletedSpecializedArea();
-                PrioritizeCreatedTrees(session);
-                _guard.Prune(now);
-                TryPublishCommittedObjectGraph(now);
-                CaptureNewObjects(session, now);
+                bool ready = service.GameplaySyncReady;
+                _hbUpdates++;
+                // These probes walk broad Created queries. They are troubleshooting-only work,
+                // so keep them off the normal frame path unless their verbose summary is enabled.
+                if (ready && Mod.Setting != null && Mod.Setting.VerboseLogging)
+                {
+                    _hbAnyCreated = System.Math.Max(_hbAnyCreated, _diagAnyCreated.CalculateEntityCount());
+                    _hbCreatedPrefab = System.Math.Max(_hbCreatedPrefab, _diagCreatedPrefab.CalculateEntityCount());
+                    _hbCreatedTransform = System.Math.Max(_hbCreatedTransform, _diagCreatedTransform.CalculateEntityCount());
+                    _hbFiltered = System.Math.Max(_hbFiltered, _createdObjects.CalculateEntityCount());
+                }
+
+                long now = service.NowMs;
+                MultiplayerSession session = service.Session;
+                if (ready)
+                {
+                    CaptureCompletedSpecializedArea();
+                    PrioritizeCreatedTrees(session);
+                    _guard.Prune(now);
+                    TryPublishCommittedObjectGraph(now);
+                    CaptureNewObjects(session, now);
+                }
+                else DrainQueue();
+                _localObjectApplyThisFrame = false;
+                FlushDiagnostics(now, ready);
             }
-            else DrainQueue();
-            _localObjectApplyThisFrame = false;
-            FlushDiagnostics(now, ready);
         }
 
         private void PrioritizeCreatedTrees(MultiplayerSession session)

@@ -48,17 +48,21 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
         protected override void OnUpdate()
         {
-            if (_occupancy == null || _changedHouseholds.IsEmptyIgnoreFilter) return;
-            NativeArray<Entity> households = default(NativeArray<Entity>);
-            try
+            using (Diagnostics.SyncProfiler.Measure("Occupancy.Economy"))
             {
-                households = _changedHouseholds.ToEntityArray(Allocator.Temp);
-                if (households.Length != 0)
-                    _occupancy.CorrectHouseholdEconomyAfterLocalUpdate(households);
-            }
-            finally
-            {
-                if (households.IsCreated) households.Dispose();
+                if (_occupancy == null || !_occupancy.WantsHouseholdEconomyCorrection ||
+                    _changedHouseholds.IsEmptyIgnoreFilter) return;
+                NativeArray<Entity> households = default(NativeArray<Entity>);
+                try
+                {
+                    households = _changedHouseholds.ToEntityArray(Allocator.Temp);
+                    if (households.Length != 0)
+                        _occupancy.CorrectHouseholdEconomyAfterLocalUpdate(households);
+                }
+                finally
+                {
+                    if (households.IsCreated) households.Dispose();
+                }
             }
         }
     }

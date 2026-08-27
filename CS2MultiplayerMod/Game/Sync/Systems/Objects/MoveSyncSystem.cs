@@ -97,15 +97,18 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
         protected override void OnUpdate()
         {
-            MultiplayerService service = Mod.Service;
-            if (service == null) return;
+            using (Diagnostics.SyncProfiler.Measure("MoveSync"))
+            {
+                MultiplayerService service = Mod.Service;
+                if (service == null) return;
 
-            MultiplayerSession session = service.Session;
-            if (!service.GameplaySyncReady) return;
+                MultiplayerSession session = service.Session;
+                if (!service.GameplaySyncReady) return;
 
-            long now = service.NowMs;
-            _guard.Prune(now);
-            CaptureMoves(session, now);
+                long now = service.NowMs;
+                _guard.Prune(now);
+                CaptureMoves(session, now);
+            }
         }
 
         /// <summary>Called by <see cref="SyncRealizeSystem"/> during ToolUpdate (see there for why).</summary>

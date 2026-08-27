@@ -125,14 +125,17 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
         protected override void OnUpdate()
         {
-            MultiplayerService service = Mod.Service;
-            if (service == null) return;
+            using (Diagnostics.SyncProfiler.Measure("TerrainSync"))
+            {
+                MultiplayerService service = Mod.Service;
+                if (service == null) return;
 
-            MultiplayerSession session = service.Session;
-            if (!service.GameplaySyncReady) return;
+                MultiplayerSession session = service.Session;
+                if (!service.GameplaySyncReady) return;
 
-            CaptureBrushes(session);
-            FlushDiagnostics(service.NowMs);
+                CaptureBrushes(session);
+                FlushDiagnostics(service.NowMs);
+            }
         }
 
         /// <summary>

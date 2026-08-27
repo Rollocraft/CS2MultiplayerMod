@@ -381,17 +381,28 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 {
                     Entity household = households[i];
                     ulong householdId = PackHostEntityId(household);
-                    if (householdId != 0)
+                    if (householdId == 0) continue;
+                    HostDeparture known;
+                    bool tracked = _hostDepartures.TryGetValue(householdId, out known) &&
+                                   !known.Unhoused;
+
+                    // The native move-away executor runs on a wider interval than this
+                    // every-frame boundary, so the same family sits in this query for a stretch of
+                    // frames. Once its members are tombstoned there is nothing left to harvest and
+                    // only the retention window still needs pushing forward; a member the family
+                    // gains afterwards is caught by the tracked-citizen scan.
+                    if (tracked && !_hostHouseholds.ContainsKey(householdId) &&
+                        !_hostHouseholdCitizens.ContainsKey(householdId))
                     {
-                        HostDeparture known;
-                        ulong revision = _hostDepartures.TryGetValue(householdId, out known) &&
-                                         !known.Unhoused
-                            ? known.Revision : NextHostRevision();
-                        RecordHostDeparture(householdId, revision, now, false);
-                        RecordHostCitizensForDepartingHousehold(household, householdId,
-                            revision, now, true);
-                        _hostHouseholds.Remove(householdId);
+                        RecordHostDeparture(householdId, known.Revision, now, false);
+                        continue;
                     }
+
+                    ulong revision = tracked ? known.Revision : NextHostRevision();
+                    RecordHostDeparture(householdId, revision, now, false);
+                    RecordHostCitizensForDepartingHousehold(household, householdId,
+                        revision, now, true);
+                    _hostHouseholds.Remove(householdId);
                 }
             }
             finally
@@ -537,30 +548,32 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 }
             }
 
-            var current = new ulong[captured.Citizens.Length];
             DynamicBuffer<HouseholdCitizen> members =
                 EntityManager.GetBuffer<HouseholdCitizen>(household, true);
-            for (int i = 0; i < captured.Citizens.Length; i++)
+            // A family's roster is re-observed on every pass and almost never differs. Writing back
+            // into the array already stored for this household keeps the common case free of an
+            // allocation; a household is only re-keyed when its member count actually changed.
+            int count = captured.Citizens.Length;
+            bool reuse = previous != null && previous.Length == count;
+            ulong[] current = reuse ? previous : new ulong[count];
+            for (int i = 0; i < count; i++)
             {
                 ulong citizenId = captured.Citizens[i].CitizenId;
                 current[i] = citizenId;
                 HostCitizenObservation observed;
-                if (!_hostCitizens.TryGetValue(citizenId, out observed))
-                {
-                    observed = new HostCitizenObservation();
-                    _hostCitizens[citizenId] = observed;
-                    if (_hostCitizenOrderMembers.Add(citizenId))
-                        _hostCitizenOrder.Enqueue(citizenId);
-                }
+                if (!_hostCitizens.TryGetValue(citizenId, out observed) &&
+                    _hostCitizenOrderMembers.Add(citizenId))
+                    _hostCitizenOrder.Enqueue(citizenId);
                 observed.Entity = members[i].m_Citizen;
                 observed.HouseholdId = householdId;
+                _hostCitizens[citizenId] = observed;
 
                 HostDeparture departure;
                 if (_hostCitizenDepartures.TryGetValue(citizenId, out departure) &&
                     revision > departure.Revision)
                     _hostCitizenDepartures.Remove(citizenId);
             }
-            _hostHouseholdCitizens[householdId] = current;
+            if (!reuse) _hostHouseholdCitizens[householdId] = current;
         }
 
         private void RecordHostCitizensForDepartingHousehold(Entity household, ulong householdId,
@@ -692,21 +705,31 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         }
 
         /// <summary>
-        /// One residential partition per update. This is the change detector that gets a newly
-        /// occupied building onto the wire in seconds rather than waiting for the rolling baseline
-        /// sweep to come round to it.
+        /// The change detector that gets a newly occupied building onto the wire in seconds rather
+        /// than waiting for the rolling baseline sweep to come round to it. It walks at most
+        /// <see cref="MaxPropertiesObservedPerUpdate"/> properties of one residential partition per
+        /// update and resumes where it stopped, so its cost does not grow with the city. A
+        /// partition counts as initialized, and its stale observations are pruned, only once the
+        /// cursor has been all the way round it.
         /// </summary>
         private void ScanHostChanges(int bucket)
         {
             _properties.SetSharedComponentFilter(new UpdateFrame((uint)bucket));
             NativeArray<Entity> properties = default(NativeArray<Entity>);
+            bool wrapped = false;
             try
             {
                 properties = _properties.ToEntityArray(Allocator.Temp);
                 bool initialized = _hostBucketInitialized[bucket];
-                for (int i = 0; i < properties.Length; i++)
+                int cursor = _hostBucketCursor[bucket];
+                if (cursor >= properties.Length) { cursor = 0; wrapped = true; }
+                int examine = properties.Length < MaxPropertiesObservedPerUpdate
+                    ? properties.Length : MaxPropertiesObservedPerUpdate;
+                for (int i = 0; i < examine; i++)
                 {
-                    Entity property = properties[i];
+                    if (cursor >= properties.Length) { cursor = 0; wrapped = true; }
+                    Entity property = properties[cursor++];
+                    _observedProperties++;
                     OccupancyProperty captured;
                     if (!TryCaptureProperty(property, out captured)) continue;
                     int hash = Hash(captured);
@@ -715,22 +738,30 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     {
                         _hostObserved[property] = new HostObserved { Hash = hash, Bucket = bucket };
                         _hostObservedBuckets[bucket].Add(property);
-                        if (initialized) Prioritize(property, captured);
+                        if (initialized) Prioritize(property, captured.Identity);
+                    }
+                    else if (observed.Stale)
+                    {
+                        // A renter event already queued this property; re-baseline only.
+                        observed.Stale = false;
+                        observed.Hash = hash;
                     }
                     else if (observed.Hash != hash)
                     {
                         observed.Hash = hash;
-                        if (initialized) Prioritize(property, captured);
+                        if (initialized) Prioritize(property, captured.Identity);
                     }
                 }
-                _hostBucketInitialized[bucket] = true;
+                if (cursor >= properties.Length) { cursor = 0; wrapped = true; }
+                _hostBucketCursor[bucket] = cursor;
+                if (wrapped) _hostBucketInitialized[bucket] = true;
             }
             finally
             {
                 if (properties.IsCreated) properties.Dispose();
                 _properties.ResetFilter();
             }
-            PruneHostObservedBucket(bucket);
+            if (wrapped) PruneHostObservedBucket(bucket);
         }
 
         /// <summary>
@@ -752,26 +783,20 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 for (int i = 0; i < updates.Length; i++)
                 {
                     Entity property = updates[i].m_Property;
-                    OccupancyProperty captured;
-                    if (!TryCaptureProperty(property, out captured)) continue;
+                    // Only the portable identity is needed to queue the signal. Serializing the
+                    // whole roster here was work thrown away: the page builder recaptures a
+                    // priority property at send time anyway, and this runs every simulation frame
+                    // over however many renter transactions the city just completed.
+                    PropertyRentIdentity identity;
+                    if (!TryGetHostPropertyIdentity(property, out identity)) continue;
 
-                    int bucket = (int)(EntityManager.GetSharedComponent<UpdateFrame>(property)
-                        .m_Index % UpdatePartitions);
-                    int hash = Hash(captured);
+                    // The event is authoritative proof of a completed renter mutation, so it is
+                    // always queued. The observer's stored hash now describes a roster that no
+                    // longer exists; mark it rather than recomputing it, so the next rolling pass
+                    // re-baselines without queueing the same property a second time.
                     HostObserved observed;
-                    if (!_hostObserved.TryGetValue(property, out observed))
-                    {
-                        _hostObserved[property] = new HostObserved { Hash = hash, Bucket = bucket };
-                        _hostObservedBuckets[bucket].Add(property);
-                    }
-                    else
-                    {
-                        observed.Hash = hash;
-                    }
-
-                    // Always queue the event, even if the rolling observer happened to sample the
-                    // same hash. The event is authoritative proof of a completed renter mutation.
-                    Prioritize(property, captured);
+                    if (_hostObserved.TryGetValue(property, out observed)) observed.Stale = true;
+                    Prioritize(property, identity);
                 }
             }
             finally
@@ -780,9 +805,28 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             }
         }
 
-        private void Prioritize(Entity entity, OccupancyProperty property)
+        /// <summary>
+        /// The property's portable identity without serializing anything inside it. Prefab names
+        /// come from the cached catalogue, so this is a handful of component reads.
+        /// </summary>
+        private bool TryGetHostPropertyIdentity(Entity property, out PropertyRentIdentity identity)
         {
-            PropertyRentIdentity identity = property.Identity;
+            identity = default(PropertyRentIdentity);
+            if (!IsLiveProperty(property)) return false;
+            Entity prefab = EntityManager.GetComponentData<PrefabRef>(property).m_Prefab;
+            if (prefab == Entity.Null || !EntityManager.Exists(prefab) ||
+                !EntityManager.HasComponent<BuildingPropertyData>(prefab)) return false;
+            string prefabName = _prefabIndex.NameOf(prefab);
+            if (string.IsNullOrEmpty(prefabName)) return false;
+            global::Game.Objects.Transform transform =
+                EntityManager.GetComponentData<global::Game.Objects.Transform>(property);
+            identity = new PropertyRentIdentity(prefabName, transform.m_Position.x,
+                transform.m_Position.y, transform.m_Position.z);
+            return true;
+        }
+
+        private void Prioritize(Entity entity, PropertyRentIdentity identity)
+        {
             if (_priority.ContainsKey(identity))
             {
                 _priority[identity] = entity;
@@ -831,7 +875,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             Entity prefab = EntityManager.GetComponentData<PrefabRef>(property).m_Prefab;
             if (prefab == Entity.Null || !EntityManager.Exists(prefab) ||
                 !EntityManager.HasComponent<BuildingPropertyData>(prefab)) return false;
-            string prefabName = PrefabIndex.SafeName(_prefabSystem, prefab);
+            string prefabName = _prefabIndex.NameOf(prefab);
             if (string.IsNullOrEmpty(prefabName)) return false;
 
             var households = new List<OccupancyHousehold>();
@@ -932,7 +976,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         {
             result = default(OccupancyHousehold);
             Entity prefab = EntityManager.GetComponentData<PrefabRef>(entity).m_Prefab;
-            string prefabName = PrefabIndex.SafeName(_prefabSystem, prefab);
+            string prefabName = _prefabIndex.NameOf(prefab);
             if (string.IsNullOrEmpty(prefabName)) return false;
 
             Household data = EntityManager.GetComponentData<Household>(entity);
@@ -971,7 +1015,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                         !EntityManager.HasComponent<HouseholdPet>(pet) ||
                         EntityManager.GetComponentData<HouseholdPet>(pet).m_Household != entity)
                         return false;
-                    string petName = PrefabIndex.SafeName(_prefabSystem,
+                    string petName = _prefabIndex.NameOf(
                         EntityManager.GetComponentData<PrefabRef>(pet).m_Prefab);
                     if (string.IsNullOrEmpty(petName)) return false;
                     pets.Add(petName);
@@ -1031,7 +1075,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     continue;
                 if (!EntityManager.HasComponent<PrefabRef>(vehicle)) return false;
 
-                string name = PrefabIndex.SafeName(_prefabSystem,
+                string name = _prefabIndex.NameOf(
                     EntityManager.GetComponentData<PrefabRef>(vehicle).m_Prefab);
                 if (string.IsNullOrEmpty(name)) return false;
                 if (prefabs.Count >= ResidentialOccupancySnapshot.MaxVehiclesPerHousehold)
@@ -1071,7 +1115,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 EntityManager.HasComponent<Deleted>(entity) ||
                 !EntityManager.HasComponent<Citizen>(entity) ||
                 !EntityManager.HasComponent<PrefabRef>(entity)) return false;
-            string name = PrefabIndex.SafeName(_prefabSystem,
+            string name = _prefabIndex.NameOf(
                 EntityManager.GetComponentData<PrefabRef>(entity).m_Prefab);
             if (string.IsNullOrEmpty(name)) return false;
 

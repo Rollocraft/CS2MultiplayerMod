@@ -20,7 +20,10 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
         protected override void OnUpdate()
         {
-            if (_terrainSync != null) _terrainSync.CompletePendingHeightReadback();
+            using (Diagnostics.SyncProfiler.Measure("TerrainReadback"))
+            {
+                if (_terrainSync != null) _terrainSync.CompletePendingHeightReadback();
+            }
         }
     }
 }

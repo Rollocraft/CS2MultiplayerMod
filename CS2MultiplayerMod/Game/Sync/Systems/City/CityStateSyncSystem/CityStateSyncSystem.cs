@@ -148,37 +148,40 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
         protected override void OnUpdate()
         {
-            if (Interlocked.Exchange(ref _orderedPoisonRequested, 0) != 0)
-                PoisonOrderedStream("invalid or overflowed ordered-state ingress");
-            MultiplayerService service = Mod.Service;
-            if (service == null) return;
+            using (Diagnostics.SyncProfiler.Measure("CityState"))
+            {
+                if (Interlocked.Exchange(ref _orderedPoisonRequested, 0) != 0)
+                    PoisonOrderedStream("invalid or overflowed ordered-state ingress");
+                MultiplayerService service = Mod.Service;
+                if (service == null) return;
 
-            MultiplayerSession session = service.Session;
-            if (!service.GameplaySyncReady)
-            {
-                // Leaving a session invalidates everything we knew about the host's state.
-                if (_lastHostPayload.Count > 0) { _lastHostPayload.Clear(); _pendingEdits.Clear(); }
-                for (int i = 0; i < _pumped.Count; i++) _pumped[i].ResetPending();
-                SyncInbox.Clear(_incoming);
-                SyncInbox.Clear(_incomingEdits);
-                SyncInbox.Clear(_orderedDeferred);
-                _newestSnapshot.Clear();
-                _newestOrder.Clear();
-                _orderedInvalidated = false;
-                Interlocked.Exchange(ref _orderedPoisonRequested, 0);
-                return;
-            }
+                MultiplayerSession session = service.Session;
+                if (!service.GameplaySyncReady)
+                {
+                    // Leaving a session invalidates everything we knew about the host's state.
+                    if (_lastHostPayload.Count > 0) { _lastHostPayload.Clear(); _pendingEdits.Clear(); }
+                    for (int i = 0; i < _pumped.Count; i++) _pumped[i].ResetPending();
+                    SyncInbox.Clear(_incoming);
+                    SyncInbox.Clear(_incomingEdits);
+                    SyncInbox.Clear(_orderedDeferred);
+                    _newestSnapshot.Clear();
+                    _newestOrder.Clear();
+                    _orderedInvalidated = false;
+                    Interlocked.Exchange(ref _orderedPoisonRequested, 0);
+                    return;
+                }
 
-            if (session.Role == SessionRole.Host)
-            {
-                ApplyIncomingEdits();
-                CaptureAndBroadcast(session);
-            }
-            else
-            {
-                DetectLocalEdits(session);
-                ApplyIncoming();
-                PumpChannels();
+                if (session.Role == SessionRole.Host)
+                {
+                    ApplyIncomingEdits();
+                    CaptureAndBroadcast(session);
+                }
+                else
+                {
+                    DetectLocalEdits(session);
+                    ApplyIncoming();
+                    PumpChannels();
+                }
             }
         }
 

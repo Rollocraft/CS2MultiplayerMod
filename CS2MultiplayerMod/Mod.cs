@@ -43,8 +43,14 @@ namespace CS2MultiplayerMod
         /// </summary>
         public static void Verbose(string message)
         {
-            if (Setting != null && Setting.VerboseLogging) log.Info(message);
+            if (VerboseEnabled) log.Info(message);
         }
+
+        /// <summary>
+        /// Whether anything would come of a <see cref="Verbose"/> call. Ask before *computing* a
+        /// diagnostic, not just before logging one: a counter nobody reads must not cost a frame.
+        /// </summary>
+        public static bool VerboseEnabled => Setting != null && Setting.VerboseLogging;
 
         /// <summary>
         /// The live multiplayer bridge. Created here and pumped each tick by

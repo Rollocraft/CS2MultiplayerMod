@@ -711,8 +711,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                                 endSnap, endT, endKind, endElevation);
                         else
                             definition = CreateCourse(prefab, bezier, command.Length,
-                                startSnap, startT, endSnap, endT,
-                                startElevation, endElevation);
+                                startSnap, startT, startKind, endSnap, endT, endKind,
+                                startElevation, endElevation, command.PinProfile);
                         createdDefinitions.Add(definition);
                         built++;
                         (retained ?? (retained = new List<SimulationCommandMessage>())).Add(message);

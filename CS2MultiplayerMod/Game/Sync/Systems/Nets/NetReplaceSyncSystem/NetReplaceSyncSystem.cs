@@ -209,22 +209,25 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
         protected override void OnUpdate()
         {
-            MultiplayerService service = Mod.Service;
-            if (service == null) return;
-
-            MultiplayerSession session = service.Session;
-            if (!service.GameplaySyncReady)
+            using (Diagnostics.SyncProfiler.Measure("NetReplace"))
             {
-                // Drop the baseline between sessions/world-loads so the next world re-seeds cleanly.
-                DrainQueue();
-                return;
-            }
+                MultiplayerService service = Mod.Service;
+                if (service == null) return;
 
-            long now = service.NowMs;
-            if (!_seeded) SeedBaseline();
-            SeedCreatedEdges();
-            CaptureReplacements(session, now);
-            PruneDeadBaseline(now);
+                MultiplayerSession session = service.Session;
+                if (!service.GameplaySyncReady)
+                {
+                    // Drop the baseline between sessions/world-loads so the next world re-seeds cleanly.
+                    DrainQueue();
+                    return;
+                }
+
+                long now = service.NowMs;
+                if (!_seeded) SeedBaseline();
+                SeedCreatedEdges();
+                CaptureReplacements(session, now);
+                PruneDeadBaseline(now);
+            }
         }
 
         private EdgeBaseline BaselineOf(Entity e)

@@ -95,47 +95,50 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
         protected override void OnUpdate()
         {
-            MultiplayerService service = Mod.Service;
-            if (service == null) return;
-            MultiplayerSession session = service.Session;
-            if (session.Role != SessionRole.Host || session.Status != SessionStatus.Connected)
+            using (Diagnostics.SyncProfiler.Measure("WorldResync"))
             {
-                ResetInactiveState();
-                return;
-            }
+                MultiplayerService service = Mod.Service;
+                if (service == null) return;
+                MultiplayerSession session = service.Session;
+                if (session.Role != SessionRole.Host || session.Status != SessionStatus.Connected)
+                {
+                    ResetInactiveState();
+                    return;
+                }
 
-            long now = service.NowMs;
-            DrainObserverEvents(session);
+                long now = service.NowMs;
+                DrainObserverEvents(session);
 
-            if (_state == RecoveryState.Idle)
-            {
-                if (_lastResyncMs < 0 || !HasPeers(session))
-                    _lastResyncMs = now;
-                else if (now - _lastResyncMs >= service.ResyncIntervalMs)
-                    _recoveryRequested = true;
+                if (_state == RecoveryState.Idle)
+                {
+                    if (_lastResyncMs < 0 || !HasPeers(session))
+                        _lastResyncMs = now;
+                    else if (now - _lastResyncMs >= service.ResyncIntervalMs)
+                        _recoveryRequested = true;
 
-                if (_recoveryRequested) StartEpoch(service, session, now);
-                return;
-            }
+                    if (_recoveryRequested) StartEpoch(service, session, now);
+                    return;
+                }
 
-            PruneDisconnectedParticipants(session);
-            if (_participants.Count == 0)
-            {
-                AbortEpoch(service, "all snapshot participants disconnected");
-                return;
-            }
+                PruneDisconnectedParticipants(session);
+                if (_participants.Count == 0)
+                {
+                    AbortEpoch(service, "all snapshot participants disconnected");
+                    return;
+                }
 
-            switch (_state)
-            {
-                case RecoveryState.WaitingForQuiescence:
-                    PumpQuiescence(service, session, now);
-                    break;
-                case RecoveryState.Saving:
-                    PumpSave(service, session, now);
-                    break;
-                case RecoveryState.WaitingForLoaded:
-                    PumpLoaded(service, session, now);
-                    break;
+                switch (_state)
+                {
+                    case RecoveryState.WaitingForQuiescence:
+                        PumpQuiescence(service, session, now);
+                        break;
+                    case RecoveryState.Saving:
+                        PumpSave(service, session, now);
+                        break;
+                    case RecoveryState.WaitingForLoaded:
+                        PumpLoaded(service, session, now);
+                        break;
+                }
             }
         }
 

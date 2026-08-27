@@ -289,69 +289,72 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
         protected override void OnUpdate()
         {
-            MultiplayerService service = Mod.Service;
-            if (service == null) return;
-
-            MultiplayerSession session = service.Session;
-            if (!service.GameplaySyncReady)
+            using (Diagnostics.SyncProfiler.Measure("VisualCustomization"))
             {
-                ResetTracking();
-                if (session.Status != SessionStatus.Connected)
-                    SyncInbox.Clear(_incoming);
-                return;
-            }
+                MultiplayerService service = Mod.Service;
+                if (service == null) return;
 
-            long now = service.NowMs;
-            _frameCommandsValid = false;
-            _selectedInfoDirty = false;
-            Prune(now);
-
-            bool seededNow = false;
-            if (!_initialized)
-            {
-                SeedCurrentState();
-                _initialized = true;
-                seededNow = true;
-            }
-
-            if (!seededNow)
-            {
-                CaptureLocalVisualChanges(now);
-                CaptureLocalPaletteChange(now);
-            }
-
-            try
-            {
-                ApplyRetries(now);
-                ApplyIncoming(session, now);
-
-                List<VisualCustomizationCommand> localVisual = TakeSettledVisualChanges(now);
-                ColorPaletteCommand localPalette = TakeSettledPaletteChange(now);
-
-                // A UI edit and an incoming edit can land in the same UI frame. The host
-                // relays the incoming command first and the local command second, so preserve
-                // that same final order locally.
-                if (localVisual != null)
+                MultiplayerSession session = service.Session;
+                if (!service.GameplaySyncReady)
                 {
-                    for (int i = 0; i < localVisual.Count; i++)
-                        EnsureLocalState(localVisual[i], now);
+                    ResetTracking();
+                    if (session.Status != SessionStatus.Connected)
+                        SyncInbox.Clear(_incoming);
+                    return;
                 }
-                if (localPalette != null) EnsureLocalPalette(localPalette);
 
-                if (localVisual != null)
+                long now = service.NowMs;
+                _frameCommandsValid = false;
+                _selectedInfoDirty = false;
+                Prune(now);
+
+                bool seededNow = false;
+                if (!_initialized)
                 {
-                    for (int i = 0; i < localVisual.Count; i++)
-                        session.SendCommand(0, VisualCustomizationCommand.Id, localVisual[i].Encode());
+                    SeedCurrentState();
+                    _initialized = true;
+                    seededNow = true;
                 }
-                if (localPalette != null)
-                    session.SendCommand(0, ColorPaletteCommand.Id, localPalette.Encode());
-            }
-            finally
-            {
-                _candidates.Release();
-            }
 
-            if (_selectedInfoDirty) _selectedInfo.RequestUpdate();
+                if (!seededNow)
+                {
+                    CaptureLocalVisualChanges(now);
+                    CaptureLocalPaletteChange(now);
+                }
+
+                try
+                {
+                    ApplyRetries(now);
+                    ApplyIncoming(session, now);
+
+                    List<VisualCustomizationCommand> localVisual = TakeSettledVisualChanges(now);
+                    ColorPaletteCommand localPalette = TakeSettledPaletteChange(now);
+
+                    // A UI edit and an incoming edit can land in the same UI frame. The host
+                    // relays the incoming command first and the local command second, so preserve
+                    // that same final order locally.
+                    if (localVisual != null)
+                    {
+                        for (int i = 0; i < localVisual.Count; i++)
+                            EnsureLocalState(localVisual[i], now);
+                    }
+                    if (localPalette != null) EnsureLocalPalette(localPalette);
+
+                    if (localVisual != null)
+                    {
+                        for (int i = 0; i < localVisual.Count; i++)
+                            session.SendCommand(0, VisualCustomizationCommand.Id, localVisual[i].Encode());
+                    }
+                    if (localPalette != null)
+                        session.SendCommand(0, ColorPaletteCommand.Id, localPalette.Encode());
+                }
+                finally
+                {
+                    _candidates.Release();
+                }
+
+                if (_selectedInfoDirty) _selectedInfo.RequestUpdate();
+            }
         }
 
         private EntityCommandBuffer FrameCommands()

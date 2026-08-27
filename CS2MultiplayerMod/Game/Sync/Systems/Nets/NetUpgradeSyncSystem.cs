@@ -220,23 +220,26 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
         protected override void OnUpdate()
         {
-            MultiplayerService service = Mod.Service;
-            if (service == null) return;
-
-            MultiplayerSession session = service.Session;
-            if (!service.GameplaySyncReady)
+            using (Diagnostics.SyncProfiler.Measure("NetUpgrade"))
             {
-                if (_lastSeen.Count > 0) { _lastSeen.Clear(); _retry.Clear(); }
-                _seeded = false;
-                return;
+                MultiplayerService service = Mod.Service;
+                if (service == null) return;
+
+                MultiplayerSession session = service.Session;
+                if (!service.GameplaySyncReady)
+                {
+                    if (_lastSeen.Count > 0) { _lastSeen.Clear(); _retry.Clear(); }
+                    _seeded = false;
+                    return;
+                }
+
+                if (!_seeded) { SeedLastSeen(); _seeded = true; }
+
+                CaptureEdgeUpgrades(session);
+                CaptureEdgeClears(session);
+                CaptureNodeUpgrades(session);
+                CaptureNodeClears(session);
             }
-
-            if (!_seeded) { SeedLastSeen(); _seeded = true; }
-
-            CaptureEdgeUpgrades(session);
-            CaptureEdgeClears(session);
-            CaptureNodeUpgrades(session);
-            CaptureNodeClears(session);
         }
 
         /// <summary>

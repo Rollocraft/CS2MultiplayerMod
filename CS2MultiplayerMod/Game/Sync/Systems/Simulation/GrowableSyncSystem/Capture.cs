@@ -322,16 +322,29 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         private void CaptureStateChanges(MultiplayerSession session, long now)
         {
             _stateBuildings.SetSharedComponentFilter(new UpdateFrame((uint)_stateScanBucket));
-            _stateScanBucket = (_stateScanBucket + 1) % 16;
             try
             {
-                if (_stateBuildings.IsEmptyIgnoreFilter) return;
+                if (_stateBuildings.IsEmptyIgnoreFilter)
+                {
+                    _stateScanCursor = 0;
+                    _stateScanBucket = (_stateScanBucket + 1) % 16;
+                    return;
+                }
                 NativeArray<Entity> entities = _stateBuildings.ToEntityArray(Allocator.Temp);
                 try
                 {
-                    for (int i = 0; i < entities.Length; i++)
+                    // A partition of a large city holds thousands of buildings and each of these
+                    // checks reaches into several component chunks. Walk a window and resume from
+                    // it next time; the bucket only advances once the window has been all the way
+                    // round, so no building is skipped, it is merely revisited less often.
+                    int cursor = _stateScanCursor;
+                    if (cursor >= entities.Length) cursor = 0;
+                    int examine = entities.Length < MaxStateBuildingsPerScan
+                        ? entities.Length : MaxStateBuildingsPerScan;
+                    for (int i = 0; i < examine; i++)
                     {
-                        Entity entity = entities[i];
+                        if (cursor >= entities.Length) cursor = 0;
+                        Entity entity = entities[cursor++];
                         if (!IsAutonomousGrowable(entity, now)) continue;
                         byte flags = CaptureStateFlags(entity);
                         byte previous;
@@ -350,6 +363,12 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                         }
                         _hostStateFlags[entity] = flags;
                     }
+                    if (cursor >= entities.Length)
+                    {
+                        cursor = 0;
+                        _stateScanBucket = (_stateScanBucket + 1) % 16;
+                    }
+                    _stateScanCursor = cursor;
                 }
                 finally
                 {
@@ -399,8 +418,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             return true;
         }
 
-        private string PrefabIndexSafeName(Entity prefab) =>
-            PrefabIndex.SafeName(_prefabSystem, prefab);
+        private string PrefabIndexSafeName(Entity prefab) => _prefabIndex.NameOf(prefab);
 
         private static string Format(Unity.Mathematics.float3 position) =>
             "(" + position.x.ToString("F1") + ", " + position.y.ToString("F1") + ", " +

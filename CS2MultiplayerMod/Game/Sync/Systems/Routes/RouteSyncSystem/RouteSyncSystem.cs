@@ -198,31 +198,34 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
         protected override void OnUpdate()
         {
-            MultiplayerService service = Mod.Service;
-            if (service == null) return;
-
-            MultiplayerSession session = service.Session;
-            if (!service.GameplaySyncReady)
+            using (Diagnostics.SyncProfiler.Measure("RouteSync"))
             {
-                _wasGameplaySyncReady = false;
-                if (_knownRoutes.Count > 0) _knownRoutes.Clear();
-                if (_nextRoutes.Count > 0) _nextRoutes.Clear();
-                if (_needsCreateCapture.Count > 0) _needsCreateCapture.Clear();
-                if (_baselinePendingRoutes.Count > 0) _baselinePendingRoutes.Clear();
-                return;
-            }
+                MultiplayerService service = Mod.Service;
+                if (service == null) return;
 
-            long now = service.NowMs;
-            _guard.Prune(now);
-            if (!_wasGameplaySyncReady)
-            {
-                _wasGameplaySyncReady = true;
-                BaselineLiveRoutes();
-                return;
+                MultiplayerSession session = service.Session;
+                if (!service.GameplaySyncReady)
+                {
+                    _wasGameplaySyncReady = false;
+                    if (_knownRoutes.Count > 0) _knownRoutes.Clear();
+                    if (_nextRoutes.Count > 0) _nextRoutes.Clear();
+                    if (_needsCreateCapture.Count > 0) _needsCreateCapture.Clear();
+                    if (_baselinePendingRoutes.Count > 0) _baselinePendingRoutes.Clear();
+                    return;
+                }
+
+                long now = service.NowMs;
+                _guard.Prune(now);
+                if (!_wasGameplaySyncReady)
+                {
+                    _wasGameplaySyncReady = true;
+                    BaselineLiveRoutes();
+                    return;
+                }
+                CaptureCreated(session, now);
+                CaptureDeleted(session, now);
+                ScanForEdits(session, now);
             }
-            CaptureCreated(session, now);
-            CaptureDeleted(session, now);
-            ScanForEdits(session, now);
         }
 
         /// <summary>

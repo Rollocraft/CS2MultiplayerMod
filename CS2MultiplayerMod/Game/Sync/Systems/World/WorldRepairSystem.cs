@@ -69,31 +69,34 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
         protected override void OnUpdate()
         {
-            if (!MultiplayerService.ModEnabled)
+            using (Diagnostics.SyncProfiler.Measure("WorldRepair"))
             {
-                CancelSweep();
-                _sawLoading = true;
-                return;
+                if (!MultiplayerService.ModEnabled)
+                {
+                    CancelSweep();
+                    _sawLoading = true;
+                    return;
+                }
+
+                GameManager manager = GameManager.instance;
+                if (manager == null) return;
+
+                if (manager.isGameLoading)
+                {
+                    CancelSweep();
+                    _sawLoading = true;
+                    return;
+                }
+
+                if (_sawLoading)
+                {
+                    _sawLoading = false;
+                    if (!manager.gameMode.IsGame()) return;
+                    BeginSweep();
+                }
+
+                if (_sweeping) SweepStep();
             }
-
-            GameManager manager = GameManager.instance;
-            if (manager == null) return;
-
-            if (manager.isGameLoading)
-            {
-                CancelSweep();
-                _sawLoading = true;
-                return;
-            }
-
-            if (_sawLoading)
-            {
-                _sawLoading = false;
-                if (!manager.gameMode.IsGame()) return;
-                BeginSweep();
-            }
-
-            if (_sweeping) SweepStep();
         }
 
         private void BeginSweep()

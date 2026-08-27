@@ -78,6 +78,10 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
             public float HalfWidth;
             public float SnapDistance;
             public float ElevationLimit;
+            public float MaxSlopeSteepness;
+            public bool HasElevationRange;
+            public float ElevationRangeMin;
+            public float ElevationRangeMax;
         }
         private readonly Dictionary<Entity, NetPrefabInfo> _netInfoCache = new Dictionary<Entity, NetPrefabInfo>();
 
@@ -754,29 +758,37 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
 
         protected override void OnUpdate()
         {
-            MultiplayerService service = Mod.Service;
-            if (service == null) return;
-
-            MultiplayerSession session = service.Session;
-            if (!service.GameplaySyncReady)
+            using (Diagnostics.SyncProfiler.Measure("NetSync"))
             {
-                DrainNetQueues();
-                return;
+                MultiplayerService service = Mod.Service;
+                if (service == null) return;
+
+                MultiplayerSession session = service.Session;
+                if (!service.GameplaySyncReady)
+                {
+                    DrainNetQueues();
+                    return;
+                }
+
+                long now = service.NowMs;
+                _guard.Prune(now);
+                PruneCommittedNetSideEffects(now);
+
+                // Sample net-edge lifecycle tags every frame (peak over the 5 s window). Runs at
+                // ModificationEnd where the one-frame Created/Updated/Deleted tags are still alive.
+                // Each count walks every matching chunk, and the only thing they feed is a verbose
+                // line - so they are not paid at all unless someone is reading it.
+                if (Mod.VerboseEnabled)
+                {
+                    _peakCreated = System.Math.Max(_peakCreated, _createdEdges.CalculateEntityCount());
+                    _peakUpdated = System.Math.Max(_peakUpdated, _updatedEdges.CalculateEntityCount());
+                    _peakDeleted = System.Math.Max(_peakDeleted, _deletedEdges.CalculateEntityCount());
+                }
+
+                FlushDeferredSpanPieces(session);
+                CaptureNewEdges(session, now);
+                FlushDiagnostics(now);
             }
-
-            long now = service.NowMs;
-            _guard.Prune(now);
-            PruneCommittedNetSideEffects(now);
-
-            // Sample net-edge lifecycle tags every frame (peak over the 5 s window). Runs at
-            // ModificationEnd where the one-frame Created/Updated/Deleted tags are still alive.
-            _peakCreated = System.Math.Max(_peakCreated, _createdEdges.CalculateEntityCount());
-            _peakUpdated = System.Math.Max(_peakUpdated, _updatedEdges.CalculateEntityCount());
-            _peakDeleted = System.Math.Max(_peakDeleted, _deletedEdges.CalculateEntityCount());
-
-            FlushDeferredSpanPieces(session);
-            CaptureNewEdges(session, now);
-            FlushDiagnostics(now);
         }
 
         private sealed class Observer : SessionObserver

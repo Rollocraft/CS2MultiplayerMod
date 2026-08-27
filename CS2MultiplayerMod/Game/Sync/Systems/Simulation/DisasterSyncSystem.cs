@@ -125,25 +125,28 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
         protected override void OnUpdate()
         {
-            MultiplayerService service = Mod.Service;
-            if (service == null || !service.GameplaySyncReady)
+            using (Diagnostics.SyncProfiler.Measure("DisasterSync"))
             {
-                SuppressLocalRolls(false);
-                if (_justRealized.Count > 0) _justRealized.Clear();
-                return;
+                MultiplayerService service = Mod.Service;
+                if (service == null || !service.GameplaySyncReady)
+                {
+                    SuppressLocalRolls(false);
+                    if (_justRealized.Count > 0) _justRealized.Clear();
+                    return;
+                }
+
+                MultiplayerSession session = service.Session;
+                SuppressLocalRolls(session.Role == SessionRole.Client);
+
+                CapturePhenomena(session);
+                CaptureSurges(session);
+
+                // The game's initialization pass (Modification2) has run by now, so anything it
+                // overwrote or re-randomized on a replica gets the sender's values put back. This also
+                // ends the frame's echo window: from here on those entities are indistinguishable
+                // from local ones, which is safe because their Created tag is stripped at Cleanup.
+                ReassertRealized();
             }
-
-            MultiplayerSession session = service.Session;
-            SuppressLocalRolls(session.Role == SessionRole.Client);
-
-            CapturePhenomena(session);
-            CaptureSurges(session);
-
-            // The game's initialization pass (Modification2) has run by now, so anything it
-            // overwrote or re-randomized on a replica gets the sender's values put back. This also
-            // ends the frame's echo window: from here on those entities are indistinguishable
-            // from local ones, which is safe because their Created tag is stripped at Cleanup.
-            ReassertRealized();
         }
 
         /// <summary>Called by <see cref="SyncRealizeSystem"/> during ToolUpdate: an event created

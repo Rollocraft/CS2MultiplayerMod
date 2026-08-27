@@ -39,26 +39,29 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
         protected override void OnUpdate()
         {
-            MultiplayerService service = Mod.Service;
-            if (service == null || !service.GameplaySyncReady) return;
-            if (_netSync == null || !_netSync.HasArmedToolCommit) return;
+            using (Diagnostics.SyncProfiler.Measure("OwnerDefSnapshot"))
+            {
+                MultiplayerService service = Mod.Service;
+                if (service == null || !service.GameplaySyncReady) return;
+                if (_netSync == null || !_netSync.HasArmedToolCommit) return;
 
-            NativeArray<Entity> entities = _describedTemps.ToEntityArray(Allocator.Temp);
-            try
-            {
-                _netSync.BeginOwnerDescriptionSnapshot(entities.Length);
-                for (int i = 0; i < entities.Length; i++)
+                NativeArray<Entity> entities = _describedTemps.ToEntityArray(Allocator.Temp);
+                try
                 {
-                    Entity entity = entities[i];
-                    OwnerDefinition described =
-                        EntityManager.GetComponentData<OwnerDefinition>(entity);
-                    if (described.m_Prefab == Entity.Null) continue;
-                    _netSync.RecordOwnerDescription(entity, described.m_Prefab, described.m_Position);
+                    _netSync.BeginOwnerDescriptionSnapshot(entities.Length);
+                    for (int i = 0; i < entities.Length; i++)
+                    {
+                        Entity entity = entities[i];
+                        OwnerDefinition described =
+                            EntityManager.GetComponentData<OwnerDefinition>(entity);
+                        if (described.m_Prefab == Entity.Null) continue;
+                        _netSync.RecordOwnerDescription(entity, described.m_Prefab, described.m_Position);
+                    }
                 }
-            }
-            finally
-            {
-                entities.Dispose();
+                finally
+                {
+                    entities.Dispose();
+                }
             }
         }
     }

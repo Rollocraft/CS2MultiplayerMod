@@ -156,25 +156,28 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
         protected override void OnUpdate()
         {
-            MultiplayerService service = Mod.Service;
-            if (service == null) return;
-
-            MultiplayerSession session = service.Session;
-            if (!service.GameplaySyncReady)
+            using (Diagnostics.SyncProfiler.Measure("PolicySync"))
             {
-                if (_known.Count > 0) { _known.Clear(); _primed = false; }
-                _targetRetry.Clear();
-                SyncInbox.Clear(_incoming);
-                return;
+                MultiplayerService service = Mod.Service;
+                if (service == null) return;
+
+                MultiplayerSession session = service.Session;
+                if (!service.GameplaySyncReady)
+                {
+                    if (_known.Count > 0) { _known.Clear(); _primed = false; }
+                    _targetRetry.Clear();
+                    SyncInbox.Clear(_incoming);
+                    return;
+                }
+
+                long now = service.NowMs;
+                _guard.Prune(now);
+                ApplyIncoming(session, now);
+
+                if (now - _lastScanMs < ScanIntervalMs) return;
+                _lastScanMs = now;
+                Scan(session, now);
             }
-
-            long now = service.NowMs;
-            _guard.Prune(now);
-            ApplyIncoming(session, now);
-
-            if (now - _lastScanMs < ScanIntervalMs) return;
-            _lastScanMs = now;
-            Scan(session, now);
         }
 
         // ---- Detect ------------------------------------------------------------

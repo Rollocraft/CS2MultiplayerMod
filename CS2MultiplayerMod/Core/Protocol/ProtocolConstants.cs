@@ -92,6 +92,9 @@ namespace CS2MultiplayerMod.Core.Protocol
         /// replacement an epoch-scoped pause/load/resume transaction and tags blob chunks with
         /// their transfer epoch. v18 adds entity visual-customization
         /// and savegame color-palette commands.
+        /// v48 carries the water-profile pin on a net course: capture measures the deck it is
+        /// committing and the receiver reproduces it instead of re-deriving the span from its own
+        /// (never replicated) water field.
         /// v17 carries atomic native object-tool definition batches, portable owned-net connector
         /// identities, and host-authoritative tree stage/growth correction. v16 carries
         /// object random seed/tree age and service-upgrade random seed. v15
@@ -103,7 +106,7 @@ namespace CS2MultiplayerMod.Core.Protocol
         /// islands) reattach on the receiver.
         /// See <see cref="Messages.HandshakeRequest"/> and version notes in doc/internals.
         /// </summary>
-        public const int ProtocolVersion = 47;
+        public const int ProtocolVersion = 48;
 
         /// <summary>
         /// Hard cap on a single payload, guarding against corrupt length prefixes.

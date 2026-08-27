@@ -74,33 +74,36 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
         protected override void OnUpdate()
         {
-            MultiplayerService service = Mod.Service;
-            if (service == null) return;
-
-            MultiplayerSession session = service.Session;
-            if (!service.GameplaySyncReady)
+            using (Diagnostics.SyncProfiler.Measure("DevTree"))
             {
-                _initialized = false;
-                return;
+                MultiplayerService service = Mod.Service;
+                if (service == null) return;
+
+                MultiplayerSession session = service.Session;
+                if (!service.GameplaySyncReady)
+                {
+                    _initialized = false;
+                    return;
+                }
+
+                long now = service.NowMs;
+                _guard.Prune(now);
+
+                // Apply remote purchases first so their unlocks are accounted for before we
+                // diff for local ones.
+                ApplyIncoming(session, now);
+
+                // First ready tick: adopt the current unlocked set as the baseline so the
+                // already-unlocked nodes from the loaded save are never re-broadcast.
+                if (!_initialized)
+                {
+                    SeedKnown();
+                    _initialized = true;
+                    return;
+                }
+
+                DetectLocalPurchases(session, now);
             }
-
-            long now = service.NowMs;
-            _guard.Prune(now);
-
-            // Apply remote purchases first so their unlocks are accounted for before we
-            // diff for local ones.
-            ApplyIncoming(session, now);
-
-            // First ready tick: adopt the current unlocked set as the baseline so the
-            // already-unlocked nodes from the loaded save are never re-broadcast.
-            if (!_initialized)
-            {
-                SeedKnown();
-                _initialized = true;
-                return;
-            }
-
-            DetectLocalPurchases(session, now);
         }
 
         private bool IsLocked(Entity node) =>

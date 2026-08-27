@@ -233,31 +233,34 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
         protected override void OnUpdate()
         {
-            MultiplayerService service = Mod.Service;
-            if (service == null) return;
-
-            MultiplayerSession session = service.Session;
-            if (!service.GameplaySyncReady)
+            using (Diagnostics.SyncProfiler.Measure("NameSync"))
             {
-                // Anything queued while a world is loading is already part of that world; holding it
-                // would only fill the inbox until it overflowed.
-                DrainQueue();
-                return;
+                MultiplayerService service = Mod.Service;
+                if (service == null) return;
+
+                MultiplayerSession session = service.Session;
+                if (!service.GameplaySyncReady)
+                {
+                    // Anything queued while a world is loading is already part of that world; holding it
+                    // would only fill the inbox until it overflowed.
+                    DrainQueue();
+                    return;
+                }
+
+                long now = service.NowMs;
+                ApplyIncoming(session, now);
+                CaptureAutoNames(session, now);
+
+                if (now - _lastPruneMs >= PublishedPruneIntervalMs)
+                {
+                    _lastPruneMs = now;
+                    PrunePublished();
+                }
+
+                if (now - _lastScanMs < ScanIntervalMs) return;
+                _lastScanMs = now;
+                ScanCustomNames(session);
             }
-
-            long now = service.NowMs;
-            ApplyIncoming(session, now);
-            CaptureAutoNames(session, now);
-
-            if (now - _lastPruneMs >= PublishedPruneIntervalMs)
-            {
-                _lastPruneMs = now;
-                PrunePublished();
-            }
-
-            if (now - _lastScanMs < ScanIntervalMs) return;
-            _lastScanMs = now;
-            ScanCustomNames(session);
         }
 
         /// <summary>Which of the four wire identities this entity is named through.</summary>

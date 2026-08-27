@@ -62,6 +62,19 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                              _rzFreeEnds + " free ground.");
             }
 
+            if (_capPinnedSpans > 0 || _rzPinnedSpans > 0 || _rzPinRefused > 0)
+            {
+                Mod.log.Info("[MP] NetSync water profile/5s: captured " + _capPinnedSpans +
+                             " span(s) over water as " + _capPinnedPieces +
+                             " pinned piece(s); realized " + _rzPinnedSpans +
+                             " pinned span(s), " + _rzPinRefused +
+                             " refused (those rebuild their deck from local water).");
+                Diagnostics.FlightRecorder.Note("net water pin captured=" + _capPinnedSpans +
+                                                  " pieces=" + _capPinnedPieces +
+                                                  " realized=" + _rzPinnedSpans +
+                                                  " refused=" + _rzPinRefused);
+            }
+
             if (_rzSurfaceCorrections > 0)
             {
                 Mod.log.Info("[MP] NetSync: " + _rzSurfaceCorrections + " remote endpoint(s)/5s needed " +
@@ -86,6 +99,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
             _diagTotal = 0;
             _rzSegments = _rzSnapEnds = _rzMergeEnds = _rzMidEnds = _rzFreeEnds = 0;
             _rzLocalSurfaceMatches = 0;
+            _capPinnedSpans = _capPinnedPieces = 0;
+            _rzPinnedSpans = _rzPinRefused = 0;
             _rzSurfaceCorrections = 0;
             _rzSurfaceCorrectionMax = 0f;
             _peakCreated = _peakUpdated = _peakDeleted = 0;
@@ -237,7 +252,11 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                         Length = curve.m_Length,
                         Start = { ElevationLeft = startElevation.x, ElevationRight = startElevation.y },
                         End = { ElevationLeft = endElevation.x, ElevationRight = endElevation.y },
+                        // Over water the receiver would rebuild the deck from ITS water field; pin
+                        // the span to the two committed end-node heights instead.
+                        PinProfile = ShouldPinCommittedEdge(prefab, b),
                     };
+                    if (command.PinProfile) { _capPinnedSpans++; _capPinnedPieces++; }
                     if (onKeptSpan)
                     {
                         _deferredSpanPieces.Add(command);

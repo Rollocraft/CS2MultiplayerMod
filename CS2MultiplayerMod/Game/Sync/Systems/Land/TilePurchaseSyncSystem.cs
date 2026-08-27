@@ -90,19 +90,22 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
         protected override void OnUpdate()
         {
-            MultiplayerService service = Mod.Service;
-            if (service == null) return;
+            using (Diagnostics.SyncProfiler.Measure("TilePurchase"))
+            {
+                MultiplayerService service = Mod.Service;
+                if (service == null) return;
 
-            MultiplayerSession session = service.Session;
-            if (!service.GameplaySyncReady) return;
+                MultiplayerSession session = service.Session;
+                if (!service.GameplaySyncReady) return;
 
-            // The exact price disappears with the selection the moment the purchase
-            // lands, so remember the last quoted cost while the player is selecting.
-            if (_purchase.selecting && _purchase.cost > 0) _lastSelectionCost = _purchase.cost;
+                // The exact price disappears with the selection the moment the purchase
+                // lands, so remember the last quoted cost while the player is selecting.
+                if (_purchase.selecting && _purchase.cost > 0) _lastSelectionCost = _purchase.cost;
 
-            long now = service.NowMs;
-            _guard.Prune(now);
-            CapturePurchases(session, now);
+                long now = service.NowMs;
+                _guard.Prune(now);
+                CapturePurchases(session, now);
+            }
         }
 
         /// <summary>Called by <see cref="SyncRealizeSystem"/> during ToolUpdate (see there for why).</summary>

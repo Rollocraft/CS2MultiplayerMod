@@ -18,7 +18,10 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
         protected override void OnUpdate()
         {
-            if (_occupancy != null) _occupancy.SeedLoadedWorldHouseholdRents();
+            using (Diagnostics.SyncProfiler.Measure("Occupancy.RentSeed"))
+            {
+                if (_occupancy != null) _occupancy.SeedLoadedWorldHouseholdRents();
+            }
         }
     }
 }

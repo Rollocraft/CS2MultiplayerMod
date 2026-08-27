@@ -79,6 +79,17 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         private const long ResolveTimeoutMs = 300000;
         private const int MaxPriorityProperties = 4096;
         private const int PriorityPropertiesPerPage = 16;
+
+        // Properties examined by the rolling change detector in one update, and cached properties
+        // reconciled by the rolling client partition in one update. Both walks used to cover a
+        // whole sixteenth of the city per update, so their cost grew with the city until a
+        // quarter-million residents turned each one into a visible hitch every second. A ceiling
+        // keeps them flat: a very large city takes proportionally longer to complete one rotation.
+        // Nothing urgent rides on that rotation - a move-in or move-out reaches the wire through
+        // the RentersUpdated event in the same frame it happens, and a page that changes a
+        // property reconciles it immediately through the dirty queue.
+        private const int MaxPropertiesObservedPerUpdate = 256;
+        private const int MaxCachedPropertiesWalkedPerUpdate = 256;
         // Retained lifecycle records rotate across pages rather than consuming the whole soft
         // page budget. Leave enough guaranteed room to drain several just-occupied properties per
         // snapshot while still advancing the baseline by at least one property.
@@ -103,6 +114,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             new Dictionary<Entity, CachedProperty>();
         private readonly List<Entity>[] _cacheBuckets = CreateBuckets();
         private readonly HashSet<Entity>[] _cacheBucketMembers = CreateBucketSets();
+        private readonly int[] _cacheBucketCursor = new int[UpdatePartitions];
         private readonly List<Entity> _dirty = new List<Entity>();
         private readonly HashSet<Entity> _dirtyMembers = new HashSet<Entity>();
         private readonly Dictionary<PropertyRentIdentity, PendingProperty> _pending =
@@ -130,6 +142,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             new Dictionary<Entity, HostObserved>();
         private readonly List<Entity>[] _hostObservedBuckets = CreateBuckets();
         private readonly bool[] _hostBucketInitialized = new bool[UpdatePartitions];
+        private readonly int[] _hostBucketCursor = new int[UpdatePartitions];
         private readonly Dictionary<Entity, int> _traceSentRosterHashes =
             new Dictionary<Entity, int>();
         private readonly Dictionary<PropertyRentIdentity, int> _traceReceivedRosterHashes =
@@ -197,6 +210,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         private int _priorityChanges;
         private int _priorityDrops;
         private int _captureSkips;
+        private int _observedProperties;
         private int _receivedPages;
         private int _droppedPages;
         private int _resolved;
@@ -221,6 +235,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         private int _deferredForConstruction;
         private int _renamedEntities;
         private int _economyCorrections;
+        private int _economyDeferred;
 
         private sealed class CachedProperty
         {
@@ -264,6 +279,13 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         {
             public int Hash;
             public int Bucket;
+
+            /// <summary>
+            /// Set when a renter event queued this property: the stored hash describes a roster
+            /// that no longer exists, and the next rolling pass must re-baseline it without
+            /// treating the difference as a second, independent change.
+            /// </summary>
+            public bool Stale;
         }
 
         private sealed class HostDeparture
@@ -273,7 +295,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             public bool Unhoused;
         }
 
-        private sealed class HostCitizenObservation
+        // A struct: a city of a quarter of a million residents keeps one of these per person, and
+        // a boxed object each would be a large permanently live heap graph for the GC to walk.
+        private struct HostCitizenObservation
         {
             public Entity Entity;
             public ulong HouseholdId;
@@ -476,20 +500,29 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 _simulationSystem.frameIndex, UpdateIntervalFrames, UpdatePartitions) %
                 UpdatePartitions);
 
+            // Two sibling scopes rather than one around the method: the branches are mutually
+            // exclusive, so the profiler's total stays a sum of what it lists.
             if (session.Role == SessionRole.Host)
             {
-                DropIncomingPages();
-                ScanHostDepartures(service.NowMs);
-                ScanTrackedHostHouseholds(service.NowMs);
-                ScanTrackedHostCitizens(service.NowMs);
-                ScanHostChanges(bucket);
+                using (Diagnostics.SyncProfiler.Measure("Occupancy.HostScan"))
+                {
+                    DropIncomingPages();
+                    ScanHostDepartures(service.NowMs);
+                    ScanTrackedHostHouseholds(service.NowMs);
+                    ScanTrackedHostCitizens(service.NowMs);
+                    ScanHostChanges(bucket);
+                }
             }
             else
             {
-                // Normally the city-state pump has already turned every arrived page into cache
-                // entries. Pump once more as a harmless fallback before this bucket is consumed.
-                PumpIncoming();
-                ApplyPending(bucket);
+                using (Diagnostics.SyncProfiler.Measure("Occupancy.Apply"))
+                {
+                    // Normally the city-state pump has already turned every arrived page into
+                    // cache entries. Pump once more as a harmless fallback before this bucket
+                    // is consumed.
+                    PumpIncoming();
+                    ApplyPending(bucket);
+                }
             }
             ReportStats(session, service.NowMs);
         }
@@ -532,49 +565,48 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         /// </summary>
         private void CancelClientLifecycleDecisions()
         {
+            // This runs every simulation frame. A large city proposes hundreds of these decisions
+            // per frame, and cancelling them one entity at a time makes each removal its own
+            // structural change; both cancellations are therefore issued in bulk.
             if (!_departingHouseholds.IsEmptyIgnoreFilter)
             {
-                NativeArray<Entity> departures = _departingHouseholds.ToEntityArray(Allocator.Temp);
-                try
+                if (_authorizedMoveAways.Count == 0)
                 {
-                    for (int i = 0; i < departures.Length; i++)
-                    {
-                        Entity household = departures[i];
-                        if (_authorizedMoveAways.Contains(household)) continue;
-                        if (EntityManager.Exists(household) &&
-                            EntityManager.HasComponent<global::Game.Agents.MovingAway>(household))
-                            EntityManager.RemoveComponent<global::Game.Agents.MovingAway>(household);
-                        if (EntityManager.Exists(household) &&
-                            EntityManager.HasComponent<global::Game.Agents.PropertySeeker>(household))
-                            EntityManager.SetComponentEnabled<global::Game.Agents.PropertySeeker>(
-                                household, false);
-                    }
+                    EntityManager.RemoveComponent<global::Game.Agents.MovingAway>(
+                        _departingHouseholds);
                 }
-                finally
+                else
                 {
-                    departures.Dispose();
+                    NativeArray<Entity> departures =
+                        _departingHouseholds.ToEntityArray(Allocator.Temp);
+                    NativeList<Entity> cancelled =
+                        new NativeList<Entity>(departures.Length, Allocator.Temp);
+                    try
+                    {
+                        for (int i = 0; i < departures.Length; i++)
+                        {
+                            Entity household = departures[i];
+                            if (_authorizedMoveAways.Contains(household)) continue;
+                            cancelled.Add(household);
+                        }
+                        if (cancelled.Length > 0)
+                            EntityManager.RemoveComponent<global::Game.Agents.MovingAway>(
+                                cancelled.AsArray());
+                    }
+                    finally
+                    {
+                        cancelled.Dispose();
+                        departures.Dispose();
+                    }
                 }
             }
 
+            // PropertySeeker is enableable, so this query holds exactly the households whose flag
+            // is set - including any that were departing above. Clearing the bits a chunk at a
+            // time replaces one main-thread call per family.
             if (!_clientPropertySeekers.IsEmptyIgnoreFilter)
-            {
-                NativeArray<Entity> seekers = _clientPropertySeekers.ToEntityArray(Allocator.Temp);
-                try
-                {
-                    for (int i = 0; i < seekers.Length; i++)
-                    {
-                        Entity household = seekers[i];
-                        if (EntityManager.Exists(household) &&
-                            EntityManager.HasComponent<global::Game.Agents.PropertySeeker>(household))
-                            EntityManager.SetComponentEnabled<global::Game.Agents.PropertySeeker>(
-                                household, false);
-                    }
-                }
-                finally
-                {
-                    seekers.Dispose();
-                }
-            }
+                EntityManager.SetComponentEnabled<global::Game.Agents.PropertySeeker>(
+                    _clientPropertySeekers, false);
 
             if (_authorizedMoveAways.Count <= 4096) return;
             _authorizedMoveAwayScratch.Clear();
@@ -626,6 +658,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             _authorizedMoveAwayScratch.Clear();
             ClearBuckets(_cacheBuckets);
             ClearBucketSets(_cacheBucketMembers);
+            Array.Clear(_cacheBucketCursor, 0, _cacheBucketCursor.Length);
             _dirty.Clear();
             _dirtyMembers.Clear();
             _pending.Clear();
@@ -665,6 +698,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             _reapply.Clear();
             ClearIdentityState();
             ClearRentAuthorityState();
+            _economyCursor = 0;
             _applyWarned = false;
             _arrivalSourceWarned = false;
             _nextPendingPumpMs = 0;
@@ -674,6 +708,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             _hostObserved.Clear();
             ClearBuckets(_hostObservedBuckets);
             Array.Clear(_hostBucketInitialized, 0, _hostBucketInitialized.Length);
+            Array.Clear(_hostBucketCursor, 0, _hostBucketCursor.Length);
             _traceSentRosterHashes.Clear();
             _traceReceivedRosterHashes.Clear();
             _tracePlacedHouseholds.Clear();
@@ -787,7 +822,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                             _priority.Count + ", priorityDropped=" + _priorityDrops +
                             ", departuresTracked=" + _hostDepartures.Count +
                             ", citizenDeparturesTracked=" + _hostCitizenDepartures.Count +
-                            ", captureSkipped=" + _captureSkips + ".");
+                            ", captureSkipped=" + _captureSkips + ", observed=" +
+                            _observedProperties + ".");
             }
             else
             {
@@ -807,10 +843,12 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                             _alignedBuildRates + ", forcedCompletions=" + _forcedCompletions +
                             ", deferredForConstruction=" + _deferredForConstruction +
                             ", economyCorrections=" + _economyCorrections +
+                            "/deferred " + _economyDeferred +
                             ", pendingMoveIns=" + _pendingMoveIns.Count + ", dirty=" +
                             _dirty.Count + ".");
             }
             _sentPages = _sentProperties = _priorityChanges = _priorityDrops = _captureSkips = 0;
+            _observedProperties = 0;
             _sentBytes = 0;
             _receivedPages = _droppedPages = _resolved = _unresolved = _ambiguous = 0;
             _expired = _stalePages = _pruned = _cacheDrops = _appliedProperties = 0;
@@ -818,7 +856,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             _retiredHouseholds = _removedCitizens = _rewrittenCitizens = 0;
             _rentActions = _refusedMoveIns = 0;
             _forcedCompletions = _alignedBuildRates = _deferredForConstruction = 0;
-            _renamedEntities = _economyCorrections = 0;
+            _renamedEntities = _economyCorrections = _economyDeferred = 0;
         }
     }
 }

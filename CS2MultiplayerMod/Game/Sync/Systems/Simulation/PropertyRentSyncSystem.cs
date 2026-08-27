@@ -67,6 +67,14 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             new Dictionary<Entity, HostObservedRent>();
         private readonly List<Entity>[] _hostObservedBuckets = CreateBuckets();
         private readonly bool[] _hostBucketInitialized = new bool[UpdatePartitions];
+        private readonly int[] _hostBucketCursor = new int[UpdatePartitions];
+
+        /// <summary>
+        /// Properties the rolling rent observer examines per update. See the same ceiling in
+        /// <see cref="ResidentialOccupancySyncSystem"/>: the observer only shortens latency, and a
+        /// city large enough to hit this simply takes longer to come all the way round.
+        /// </summary>
+        private const int MaxPropertiesObservedPerUpdate = 256;
         private readonly Dictionary<PropertyRentIdentity, PropertyRentEntry> _priority =
             new Dictionary<PropertyRentIdentity, PropertyRentEntry>();
         private readonly ConcurrentQueue<PropertyRentIdentity> _priorityOrder =
@@ -194,35 +202,38 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
         protected override void OnUpdate()
         {
-            MultiplayerService service = Mod.Service;
-            if (service == null || !service.GameplaySyncReady)
+            using (Diagnostics.SyncProfiler.Measure("PropertyRent"))
             {
-                if (_syncWasReady) DrainForWorldChange();
-                _syncWasReady = false;
-                return;
-            }
-            _syncWasReady = true;
+                MultiplayerService service = Mod.Service;
+                if (service == null || !service.GameplaySyncReady)
+                {
+                    if (_syncWasReady) DrainForWorldChange();
+                    _syncWasReady = false;
+                    return;
+                }
+                _syncWasReady = true;
 
-            MultiplayerSession session = service.Session;
-            uint updateFrame = SimulationUtils.GetUpdateFrame(
-                _simulationSystem.frameIndex, UpdatePartitions, 16);
-            int bucket = (int)(updateFrame % UpdatePartitions);
-            if (session.Role == SessionRole.Host)
-            {
-                DropIncomingPages();
-                ScanHostChanges(bucket);
+                MultiplayerSession session = service.Session;
+                uint updateFrame = SimulationUtils.GetUpdateFrame(
+                    _simulationSystem.frameIndex, UpdatePartitions, 16);
+                int bucket = (int)(updateFrame % UpdatePartitions);
+                if (session.Role == SessionRole.Host)
+                {
+                    DropIncomingPages();
+                    ScanHostChanges(bucket);
+                    ReportStats(session, service.NowMs);
+                    return;
+                }
+
+                // Normally CityState's UIUpdate pump has already merged all pages into the managed
+                // cache. Pump once more here as a harmless fallback before this bucket is consumed.
+                PumpIncoming();
+                ApplyBucket(bucket);
+                // RentAdjust also rewrites household contracts. Channel 20 intentionally skips them,
+                // so restore each channel-21 identity at this same pre-payment boundary.
+                if (_occupancy != null) _occupancy.CorrectHouseholdRentsAfterRentAdjust(bucket);
                 ReportStats(session, service.NowMs);
-                return;
             }
-
-            // Normally CityState's UIUpdate pump has already merged all pages into the managed
-            // cache. Pump once more here as a harmless fallback before this bucket is consumed.
-            PumpIncoming();
-            ApplyBucket(bucket);
-            // RentAdjust also rewrites household contracts. Channel 20 intentionally skips them,
-            // so restore each channel-21 identity at this same pre-payment boundary.
-            if (_occupancy != null) _occupancy.CorrectHouseholdRentsAfterRentAdjust(bucket);
-            ReportStats(session, service.NowMs);
         }
 
         /// <summary>
@@ -387,6 +398,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             _hostObserved.Clear();
             ClearBuckets(_hostObservedBuckets);
             Array.Clear(_hostBucketInitialized, 0, _hostBucketInitialized.Length);
+            Array.Clear(_hostBucketCursor, 0, _hostBucketCursor.Length);
             _priority.Clear();
             PropertyRentIdentity discardedPriority;
             while (_priorityOrder.TryDequeue(out discardedPriority)) { }
@@ -467,7 +479,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             Entity prefab = EntityManager.GetComponentData<PrefabRef>(property).m_Prefab;
             if (prefab == Entity.Null || !EntityManager.Exists(prefab) ||
                 !EntityManager.HasComponent<BuildingPropertyData>(prefab)) return false;
-            string prefabName = PrefabIndex.SafeName(_prefabSystem, prefab);
+            string prefabName = _prefabIndex.NameOf(prefab);
             if (string.IsNullOrEmpty(prefabName) || prefabName.Length > WireGuard.MaxNameLength)
                 return false;
 
@@ -545,17 +557,28 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             }
         }
 
+        /// <summary>
+        /// Walks at most <see cref="MaxPropertiesObservedPerUpdate"/> properties of one partition
+        /// and resumes where it stopped. Without the ceiling a large city examined thousands of
+        /// properties in a single frame each time this system came round.
+        /// </summary>
         private void ScanHostChanges(int bucket)
         {
             _properties.SetSharedComponentFilter(new UpdateFrame((uint)bucket));
             NativeArray<Entity> properties = default(NativeArray<Entity>);
+            bool wrapped = false;
             try
             {
                 properties = _properties.ToEntityArray(Allocator.Temp);
                 bool initialized = _hostBucketInitialized[bucket];
-                for (int i = 0; i < properties.Length; i++)
+                int cursor = _hostBucketCursor[bucket];
+                if (cursor >= properties.Length) { cursor = 0; wrapped = true; }
+                int examine = properties.Length < MaxPropertiesObservedPerUpdate
+                    ? properties.Length : MaxPropertiesObservedPerUpdate;
+                for (int i = 0; i < examine; i++)
                 {
-                    Entity property = properties[i];
+                    if (cursor >= properties.Length) { cursor = 0; wrapped = true; }
+                    Entity property = properties[cursor++];
                     PropertyRentEntry entry;
                     if (!TryCaptureEntry(property, out entry)) continue;
                     HostObservedRent observed;
@@ -572,14 +595,16 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                         if (initialized) Prioritize(entry);
                     }
                 }
-                _hostBucketInitialized[bucket] = true;
+                if (cursor >= properties.Length) { cursor = 0; wrapped = true; }
+                _hostBucketCursor[bucket] = cursor;
+                if (wrapped) _hostBucketInitialized[bucket] = true;
             }
             finally
             {
                 if (properties.IsCreated) properties.Dispose();
                 _properties.ResetFilter();
             }
-            PruneHostObservedBucket(bucket);
+            if (wrapped) PruneHostObservedBucket(bucket);
         }
 
         private void Prioritize(PropertyRentEntry entry)

@@ -37,6 +37,14 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         /// <summary>How often the host looks for level changes. They are rare; the query is small.</summary>
         private const long LevelScanIntervalMs = 500;
 
+        /// <summary>
+        /// Buildings the rolling abandonment/condemnation scan examines per pass. It exists to
+        /// notice a state the host never announced, so a very large city may take longer to come
+        /// all the way round without anything being missed; every real transition still reaches
+        /// the wire through its own event-driven capture.
+        /// </summary>
+        private const int MaxStateBuildingsPerScan = 256;
+
         /// <summary>Maximum time for a generated building to acquire its native road link.</summary>
         private const long RealizationValidationWindowMs = 15000;
 
@@ -133,6 +141,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         private readonly List<Entity> _constructionScratch = new List<Entity>();
         private readonly Dictionary<Entity, byte> _hostStateFlags = new Dictionary<Entity, byte>();
         private int _stateScanBucket;
+        private int _stateScanCursor;
 
         private uint _sequence;
         private long _lastLevelScanMs;
@@ -280,6 +289,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             _constructionScratch.Clear();
             _hostStateFlags.Clear();
             _stateScanBucket = 0;
+            _stateScanCursor = 0;
         }
 
         /// <summary>
@@ -288,41 +298,44 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         /// </summary>
         protected override void OnUpdate()
         {
-            MultiplayerService service = Mod.Service;
-            if (service == null) return;
-
-            if (!service.GameplaySyncReady)
+            using (Diagnostics.SyncProfiler.Measure("Growable"))
             {
-                DrainQueue();
-                RestoreLocalAuthority();
-                return;
-            }
+                MultiplayerService service = Mod.Service;
+                if (service == null) return;
 
-            MultiplayerSession session = service.Session;
-            long now = service.NowMs;
-            PrunePlayerPlacedGrowables(now);
-            ApplyLocalAuthority(session);
+                if (!service.GameplaySyncReady)
+                {
+                    DrainQueue();
+                    RestoreLocalAuthority();
+                    return;
+                }
 
-            if (session.Role != SessionRole.Host)
-            {
-                // ModificationEnd, not the ToolUpdate realize pass: the Created tag this reads is
-                // written by the object pipeline during the Modification phases and is gone again
-                // by the next frame's ToolUpdate.
-                RejectLocallyGrownBuildings(now);
-                ValidateRealizedBuildings(now);
-                return;
-            }
+                MultiplayerSession session = service.Session;
+                long now = service.NowMs;
+                PrunePlayerPlacedGrowables(now);
+                ApplyLocalAuthority(session);
 
-            CaptureCreated(session, now);
-            CaptureRemoved(session, now);
-            if (now - _lastLevelScanMs >= LevelScanIntervalMs)
-            {
-                _lastLevelScanMs = now;
-                CaptureLevelChanges(session, now);
-                CaptureConstructionChanges(session, now);
-                CaptureStateChanges(session, now);
+                if (session.Role != SessionRole.Host)
+                {
+                    // ModificationEnd, not the ToolUpdate realize pass: the Created tag this reads is
+                    // written by the object pipeline during the Modification phases and is gone again
+                    // by the next frame's ToolUpdate.
+                    RejectLocallyGrownBuildings(now);
+                    ValidateRealizedBuildings(now);
+                    return;
+                }
+
+                CaptureCreated(session, now);
+                CaptureRemoved(session, now);
+                if (now - _lastLevelScanMs >= LevelScanIntervalMs)
+                {
+                    _lastLevelScanMs = now;
+                    CaptureLevelChanges(session, now);
+                    CaptureConstructionChanges(session, now);
+                    CaptureStateChanges(session, now);
+                }
+                ReportStats(session, now);
             }
-            ReportStats(session, now);
         }
 
         /// <summary>

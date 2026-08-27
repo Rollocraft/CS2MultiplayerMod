@@ -102,9 +102,16 @@ namespace CS2MultiplayerMod.Game.Sync.Players
 
                 if (!haveBuffer)
                 {
-                    JobHandle dependencies;
-                    buffer = _overlay.GetBuffer(out dependencies);
-                    dependencies.Complete();
+                    // Taking the buffer turns the game's overlay pass on for this frame and blocks
+                    // here until everything the overlay system depends on has finished. Both halves
+                    // are paid per frame and both get more expensive the more the frame is already
+                    // doing, so this is measured separately from the cheap culling above.
+                    using (Diagnostics.SyncProfiler.Measure("PartnerMarkers.Overlay"))
+                    {
+                        JobHandle dependencies;
+                        buffer = _overlay.GetBuffer(out dependencies);
+                        dependencies.Complete();
+                    }
                     haveBuffer = true;
                 }
 

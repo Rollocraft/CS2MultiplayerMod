@@ -91,6 +91,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         private readonly HashSet<Entity> _appliedThisUpdate = new HashSet<Entity>();
         private readonly HashSet<Entity> _unreachableSeen = new HashSet<Entity>();
         private readonly List<Entity> _reapply = new List<Entity>();
+        private readonly List<int> _bootstrapKeyScratch = new List<int>();
         private readonly Budget _budget = new Budget();
         private bool _applyWarned;
         private bool _arrivalSourceWarned;
@@ -799,25 +800,50 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             _settlingScratch.Clear();
         }
 
+        /// <summary>
+        /// Reconciles a window of one cached partition per update and resumes where it stopped, so
+        /// the walk costs the same in a hamlet and in a metropolis. Membership is maintained as the
+        /// window is compacted rather than rebuilt from the whole list: <see cref="AddToCacheBucket"/>
+        /// is the only other writer, and it already refuses a duplicate.
+        /// </summary>
         private void ApplyBucket(int bucket)
         {
             List<Entity> entities = _cacheBuckets[bucket];
+            if (entities.Count == 0)
+            {
+                _cacheBucketCursor[bucket] = 0;
+                return;
+            }
+
             HashSet<Entity> members = _cacheBucketMembers[bucket];
-            // Rebuild membership while compacting: this drops entries whose cache is gone and any
-            // duplicate left behind by a property that changed partition.
-            members.Clear();
-            int write = 0;
-            for (int i = 0; i < entities.Count; i++)
+            int start = _cacheBucketCursor[bucket];
+            if (start >= entities.Count) start = 0;
+            int examine = entities.Count - start;
+            if (examine > MaxCachedPropertiesWalkedPerUpdate)
+                examine = MaxCachedPropertiesWalkedPerUpdate;
+
+            int end = start + examine;
+            int write = start;
+            for (int i = start; i < end; i++)
             {
                 Entity property = entities[i];
                 CachedProperty cached;
-                if (!_cache.TryGetValue(property, out cached)) continue;
+                if (!_cache.TryGetValue(property, out cached))
+                {
+                    members.Remove(property);
+                    continue;
+                }
                 // A stale entry can remain in its old bucket list after a local partition move.
                 // Do not delete the live cache the new bucket now owns.
-                if (cached.Bucket != bucket) continue;
+                if (cached.Bucket != bucket)
+                {
+                    members.Remove(property);
+                    continue;
+                }
                 if (!MatchesCachedProperty(property, cached))
                 {
                     RemoveCachedProperty(property);
+                    members.Remove(property);
                     continue;
                 }
                 int currentBucket = (int)(EntityManager
@@ -825,15 +851,18 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 if (currentBucket != cached.Bucket)
                 {
                     cached.Bucket = currentBucket;
+                    members.Remove(property);
                     AddToCacheBucket(currentBucket, property);
                     continue;
                 }
-                if (!members.Add(property)) continue;
                 entities[write++] = property;
                 if (_budget.Exhausted) continue;
                 ApplyOne(property);
             }
-            if (write < entities.Count) entities.RemoveRange(write, entities.Count - write);
+            // Reconciling can append to this same bucket, so drop exactly the gap the window left
+            // rather than everything past the write cursor.
+            if (write < end) entities.RemoveRange(write, end - write);
+            _cacheBucketCursor[bucket] = write >= entities.Count ? 0 : write;
         }
 
         private void ApplyOne(Entity property)
@@ -1226,29 +1255,31 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             candidates.Add(entity);
         }
 
+        // The bootstrap index is built over every household in the city in one pass, so the key
+        // builders share one scratch buffer rather than allocating a member array per family.
         private int HouseholdBootstrapKey(Entity household)
         {
             if (household == Entity.Null || !EntityManager.Exists(household) ||
                 !EntityManager.HasComponent<PrefabRef>(household) ||
                 !EntityManager.HasBuffer<HouseholdCitizen>(household)) return 0;
-            string prefabName = PrefabIndex.SafeName(_prefabSystem,
+            string prefabName = _prefabIndex.NameOf(
                 EntityManager.GetComponentData<PrefabRef>(household).m_Prefab);
             DynamicBuffer<HouseholdCitizen> members =
                 EntityManager.GetBuffer<HouseholdCitizen>(household, true);
-            var citizenKeys = new int[members.Length];
+            _bootstrapKeyScratch.Clear();
             for (int i = 0; i < members.Length; i++)
-                citizenKeys[i] = CitizenBootstrapKey(members[i].m_Citizen);
-            Array.Sort(citizenKeys);
-            return CombineBootstrapKey(prefabName, citizenKeys);
+                _bootstrapKeyScratch.Add(CitizenBootstrapKey(members[i].m_Citizen));
+            _bootstrapKeyScratch.Sort();
+            return CombineBootstrapKey(prefabName, _bootstrapKeyScratch);
         }
 
-        private static int HouseholdBootstrapKey(OccupancyHousehold household)
+        private int HouseholdBootstrapKey(OccupancyHousehold household)
         {
-            var citizenKeys = new int[household.Citizens.Length];
+            _bootstrapKeyScratch.Clear();
             for (int i = 0; i < household.Citizens.Length; i++)
-                citizenKeys[i] = CitizenBootstrapKey(household.Citizens[i]);
-            Array.Sort(citizenKeys);
-            return CombineBootstrapKey(household.PrefabName, citizenKeys);
+                _bootstrapKeyScratch.Add(CitizenBootstrapKey(household.Citizens[i]));
+            _bootstrapKeyScratch.Sort();
+            return CombineBootstrapKey(household.PrefabName, _bootstrapKeyScratch);
         }
 
         private int CitizenBootstrapKey(Entity citizen)
@@ -1257,7 +1288,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 !EntityManager.HasComponent<Citizen>(citizen) ||
                 !EntityManager.HasComponent<PrefabRef>(citizen)) return 0;
             Citizen data = EntityManager.GetComponentData<Citizen>(citizen);
-            string prefabName = PrefabIndex.SafeName(_prefabSystem,
+            string prefabName = _prefabIndex.NameOf(
                 EntityManager.GetComponentData<PrefabRef>(citizen).m_Prefab);
             return CombineCitizenBootstrapKey(prefabName, data.m_PseudoRandom, data.m_BirthDay,
                 (short)data.m_State & HostOwnedCitizenFlags);
@@ -1279,13 +1310,13 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             }
         }
 
-        private static int CombineBootstrapKey(string prefabName, int[] citizenKeys)
+        private static int CombineBootstrapKey(string prefabName, List<int> citizenKeys)
         {
             unchecked
             {
                 int hash = prefabName != null ? prefabName.GetHashCode() : 0;
-                hash = hash * 397 ^ citizenKeys.Length;
-                for (int i = 0; i < citizenKeys.Length; i++)
+                hash = hash * 397 ^ citizenKeys.Count;
+                for (int i = 0; i < citizenKeys.Count; i++)
                     hash = hash * 397 ^ citizenKeys[i];
                 return hash;
             }
@@ -1295,7 +1326,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         {
             if (!EntityManager.HasComponent<PrefabRef>(household) ||
                 !EntityManager.HasBuffer<HouseholdCitizen>(household)) return false;
-            string prefabName = PrefabIndex.SafeName(_prefabSystem,
+            string prefabName = _prefabIndex.NameOf(
                 EntityManager.GetComponentData<PrefabRef>(household).m_Prefab);
             if (!string.Equals(prefabName, wanted.PrefabName, StringComparison.Ordinal)) return false;
             if (!BootstrapNameIndicesMatch(household, wanted.NameIndices)) return false;
@@ -1336,7 +1367,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             if (data.m_PseudoRandom != wanted.PseudoRandom || data.m_BirthDay != wanted.BirthDay ||
                 ((short)data.m_State & HostOwnedCitizenFlags) !=
                 (wanted.State & HostOwnedCitizenFlags)) return false;
-            string prefabName = PrefabIndex.SafeName(_prefabSystem,
+            string prefabName = _prefabIndex.NameOf(
                 EntityManager.GetComponentData<PrefabRef>(citizen).m_Prefab);
             return string.Equals(prefabName, wanted.PrefabName, StringComparison.Ordinal) &&
                    BootstrapNameIndicesMatch(citizen, wanted.NameIndices);
@@ -1594,7 +1625,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                         !EntityManager.HasComponent<Owner>(vehicle) ||
                         EntityManager.GetComponentData<Owner>(vehicle).m_Owner != household)
                         continue;
-                    string name = PrefabIndex.SafeName(_prefabSystem,
+                    string name = _prefabIndex.NameOf(
                         EntityManager.GetComponentData<PrefabRef>(vehicle).m_Prefab);
                     if (string.IsNullOrEmpty(name)) continue;
                     int count;
@@ -2072,7 +2103,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     if (_claimedPets.Contains(candidate) || candidate == Entity.Null ||
                         !EntityManager.Exists(candidate) ||
                         !EntityManager.HasComponent<PrefabRef>(candidate)) continue;
-                    string localName = PrefabIndex.SafeName(_prefabSystem,
+                    string localName = _prefabIndex.NameOf(
                         EntityManager.GetComponentData<PrefabRef>(candidate).m_Prefab);
                     if (!string.Equals(localName, wanted.Pets[i], StringComparison.Ordinal)) continue;
                     match = candidate;
@@ -2762,7 +2793,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         {
             if (entity == Entity.Null || !EntityManager.Exists(entity) ||
                 !EntityManager.HasComponent<PrefabRef>(entity)) return "<none>";
-            return PrefabIndex.SafeName(_prefabSystem,
+            return _prefabIndex.NameOf(
                 EntityManager.GetComponentData<PrefabRef>(entity).m_Prefab);
         }
 

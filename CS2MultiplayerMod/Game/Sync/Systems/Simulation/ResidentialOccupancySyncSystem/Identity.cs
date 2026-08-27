@@ -183,15 +183,24 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 RemoveCitizenBinding(citizenId, citizen);
         }
 
+        /// <summary>
+        /// The id map is consulted before the entity is inspected: this is called for every
+        /// household a local economy system touched, and most families in a large city were never
+        /// bound to a host identity at all. An unmapped entity has nothing to unbind either way.
+        /// </summary>
         private bool TryGetBoundHouseholdId(Entity household, out ulong householdId)
         {
-            householdId = 0;
+            if (!_hostIdsByHousehold.TryGetValue(household, out householdId))
+            {
+                householdId = 0;
+                return false;
+            }
             if (!IsLiveMappedHousehold(household))
             {
                 UnbindHousehold(household);
+                householdId = 0;
                 return false;
             }
-            if (!_hostIdsByHousehold.TryGetValue(household, out householdId)) return false;
 
             Entity reverse;
             if (_householdsByHostId.TryGetValue(householdId, out reverse) && reverse == household)
@@ -204,13 +213,17 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
         private bool TryGetBoundCitizenId(Entity citizen, out ulong citizenId)
         {
-            citizenId = 0;
+            if (!_hostIdsByCitizen.TryGetValue(citizen, out citizenId))
+            {
+                citizenId = 0;
+                return false;
+            }
             if (!IsLiveMappedCitizen(citizen))
             {
                 UnbindCitizen(citizen);
+                citizenId = 0;
                 return false;
             }
-            if (!_hostIdsByCitizen.TryGetValue(citizen, out citizenId)) return false;
 
             Entity reverse;
             if (_citizensByHostId.TryGetValue(citizenId, out reverse) && reverse == citizen)

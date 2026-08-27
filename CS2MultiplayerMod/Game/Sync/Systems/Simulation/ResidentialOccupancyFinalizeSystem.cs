@@ -19,9 +19,12 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
         protected override void OnUpdate()
         {
-            if (_occupancy == null) return;
-            _occupancy.CaptureRenterChanges();
-            _occupancy.FinalizeMoveIns();
+            using (Diagnostics.SyncProfiler.Measure("Occupancy.Finalize"))
+            {
+                if (_occupancy == null) return;
+                _occupancy.CaptureRenterChanges();
+                _occupancy.FinalizeMoveIns();
+            }
         }
     }
 }
