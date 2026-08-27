@@ -150,6 +150,19 @@ namespace CS2MultiplayerMod
             // the same authoritative snapshot when the residents panel calculates its averages.
             updateSystem.UpdateAfter<Game.Sync.Systems.ResidentialHouseholdEconomyCorrectionSystem,
                 global::Game.Simulation.RentAdjustSystem>(SystemUpdatePhase.GameSimulation);
+            // Strip the client's own company closure/seeking proposals at the last point before
+            // anything acts on them. The systems that make those proposals stay running because
+            // they also produce the figures and demand the rest of the simulation reads.
+            updateSystem.UpdateBefore<Game.Sync.Systems.CompanyLifecycleBoundarySystem,
+                global::Game.Simulation.CompanyMoveAwaySystem>(SystemUpdatePhase.GameSimulation);
+            // Directly after the game's own company bookkeeping, at that system's own interval and
+            // over that system's own UpdateFrame partition. This ordering IS the feature: an
+            // earlier attempt corrected on a 1024-frame rotation while CompanyEconomyStatisticSystem
+            // rewrites the same fields every 128 frames, so every correction was overwritten
+            // several times over before the next one arrived and the panels never settled.
+            updateSystem.UpdateAfter<Game.Sync.Systems.CompanyStatsSyncSystem,
+                global::Game.Simulation.CompanyEconomyStatisticSystem>(
+                SystemUpdatePhase.GameSimulation);
             // Before PropertyProcessingSystem: that system drains the rent-action queue this one
             // fills. The queue is persistent, so an action always survives to the next drain; the
             // ordering is what lets a move-in land in the same tick it was decided in whenever the

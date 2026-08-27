@@ -4,7 +4,16 @@ namespace CS2MultiplayerMod.Core.Protocol
     {
         /// <summary>
         /// Wire-format version. Bump when message layout changes to refuse handshake on mismatch.
-        /// Current v47 adds each synchronized household's owned personal-vehicle prefabs to the
+        /// Current v49 adds city-state channel 22: host-authoritative workplace state for every
+        /// commercial, industrial and office building. Each page entry is about the building, not
+        /// the business, so the host can say "nobody rents this one" - the one statement a client
+        /// cannot derive for itself. Occupied entries carry the tenant's archetype, the whole
+        /// CompanyStatisticData block, the profitability rating and the goods held. Figures are
+        /// corrected on the game's own company cadence and UpdateFrame partition so a panel
+        /// settles instead of being overwritten between corrections; tenancy is taken as
+        /// authority, because a client left choosing its own tenants opens businesses the host
+        /// never had and no correction removes them afterwards.
+        /// v47 adds each synchronized household's owned personal-vehicle prefabs to the
         /// occupancy roster. Receiving peers realize missing vehicles through the normal stopped
         /// vehicle archetype and ownership references, so synchronized residents can actually use
         /// cars and generate traffic. v46 makes growable construction and condition host-authoritative. Lifecycle
@@ -106,7 +115,7 @@ namespace CS2MultiplayerMod.Core.Protocol
         /// islands) reattach on the receiver.
         /// See <see cref="Messages.HandshakeRequest"/> and version notes in doc/internals.
         /// </summary>
-        public const int ProtocolVersion = 48;
+        public const int ProtocolVersion = 49;
 
         /// <summary>
         /// Hard cap on a single payload, guarding against corrupt length prefixes.

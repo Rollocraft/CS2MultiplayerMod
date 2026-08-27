@@ -95,6 +95,11 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             // renter pipeline. See ResidentialOccupancySyncSystem.
             Register(new ResidentialOccupancyChannel(
                 World.GetOrCreateSystemManaged<ResidentialOccupancySyncSystem>()));
+            // The money-facing figures behind every shop, factory and office, and the goods they
+            // hold. Rolling absolute pages; the runtime corrects them in GameSimulation in the
+            // same frame the game recomputes them. See CompanyStatsSyncSystem.
+            Register(new CompanyStatsStateChannel(
+                World.GetOrCreateSystemManaged<CompanyStatsSyncSystem>()));
 
             // Player-editable settings: every player may change them; the host arbitrates.
             RegisterEditable(new TaxStateChannel());
