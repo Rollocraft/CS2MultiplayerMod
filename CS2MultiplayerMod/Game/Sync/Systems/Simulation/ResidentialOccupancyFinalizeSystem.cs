@@ -19,7 +19,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
         protected override void OnUpdate()
         {
-            using (Diagnostics.SyncProfiler.Measure("Occupancy.Finalize"))
+            using (Diagnostics.SyncProfiler.Measure("Occupancy.Finalize", Diagnostics.SyncZone.Residential))
             {
                 if (_occupancy == null) return;
                 _occupancy.CaptureRenterChanges();

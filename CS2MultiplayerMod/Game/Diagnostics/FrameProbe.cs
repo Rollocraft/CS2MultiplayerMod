@@ -72,19 +72,15 @@ namespace CS2MultiplayerMod.Game.Diagnostics
                           " (" + (_frames / seconds) + "/s, mean " + (_totalMs / _frames) +
                           " ms, worst " + _worstMs + " ms) " + Histogram();
 
-            Mod.Verbose(line);
-            // The flight log keeps it regardless of the verbose setting: a performance report is
-            // exactly the case where the log was already captured before anyone asked for detail.
-            FlightRecorder.Note(line);
+            // The flight log keeps both lines regardless of the switch: a performance report is
+            // exactly the case where the log was already captured before anyone thought to turn
+            // one on.
+            SyncLog.Record(LogTopic.Performance, line);
 
             // Immediately after the frame times, so a slow window and the mod's share of it are
             // always read together.
             string cost = SyncProfiler.Report(now - _lastReportMs);
-            if (cost != null)
-            {
-                Mod.Verbose(cost);
-                FlightRecorder.Note(cost);
-            }
+            if (cost != null) SyncLog.Record(LogTopic.Performance, cost);
 
             _lastReportMs = now;
             _frames = 0;

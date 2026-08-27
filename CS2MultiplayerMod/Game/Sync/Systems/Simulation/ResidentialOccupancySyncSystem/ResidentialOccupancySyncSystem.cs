@@ -504,7 +504,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             // exclusive, so the profiler's total stays a sum of what it lists.
             if (session.Role == SessionRole.Host)
             {
-                using (Diagnostics.SyncProfiler.Measure("Occupancy.HostScan"))
+                using (Diagnostics.SyncProfiler.Measure("Occupancy.HostScan", Diagnostics.SyncZone.Residential))
                 {
                     DropIncomingPages();
                     ScanHostDepartures(service.NowMs);
@@ -515,7 +515,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             }
             else
             {
-                using (Diagnostics.SyncProfiler.Measure("Occupancy.Apply"))
+                using (Diagnostics.SyncProfiler.Measure("Occupancy.Apply", Diagnostics.SyncZone.Residential))
                 {
                     // Normally the city-state pump has already turned every arrived page into
                     // cache entries. Pump once more as a harmless fallback before this bucket
@@ -814,7 +814,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             {
                 int clients = 0;
                 foreach (Peer peer in session.Peers) if (peer.Handshaked) clients++;
-                Mod.Verbose("[MP] Occupancy/30s host: pages=" + _sentPages + ", properties=" +
+                Diagnostics.SyncLog.Write(Diagnostics.LogTopic.Residential, "Occupancy/30s host: pages=" + _sentPages + ", properties=" +
                             _sentProperties + ", bytes=" + _sentBytes + ", clients=" + clients +
                             ", estimatedFanoutBytes=" + _sentBytes * clients +
                             ", transportPendingBytes=" + session.PendingSendBytes +
@@ -827,7 +827,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             }
             else
             {
-                Mod.Verbose("[MP] Occupancy/30s client: pages=" + _receivedPages +
+                Diagnostics.SyncLog.Write(Diagnostics.LogTopic.Residential, "Occupancy/30s client: pages=" + _receivedPages +
                             ", queueDropped=" + _droppedPages + ", cached=" + _cache.Count +
                             ", pending=" + _pending.Count + ", resolved=" + _resolved +
                             ", unresolved=" + _unresolved + ", ambiguous=" + _ambiguous +

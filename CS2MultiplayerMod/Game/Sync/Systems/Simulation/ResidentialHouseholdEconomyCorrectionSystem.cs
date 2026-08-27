@@ -48,7 +48,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
         protected override void OnUpdate()
         {
-            using (Diagnostics.SyncProfiler.Measure("Occupancy.Economy"))
+            using (Diagnostics.SyncProfiler.Measure("Occupancy.Economy", Diagnostics.SyncZone.Residential))
             {
                 if (_occupancy == null || !_occupancy.WantsHouseholdEconomyCorrection ||
                     _changedHouseholds.IsEmptyIgnoreFilter) return;

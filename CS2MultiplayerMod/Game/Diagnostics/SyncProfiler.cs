@@ -6,6 +6,20 @@ using System.Text;
 namespace CS2MultiplayerMod.Game.Diagnostics
 {
     /// <summary>
+    /// The part of the city a scope's work belongs to. Attributing time this way is the only way
+    /// to answer "what is commercial sync costing me?" - a scope name alone cannot, because one
+    /// channel serves three zones and one zone is served by several channels.
+    /// </summary>
+    public enum SyncZone
+    {
+        None = 0,
+        Residential,
+        Commercial,
+        Industrial,
+        Office,
+    }
+
+    /// <summary>
     /// How much of the main thread the mod's own systems used, by scope.
     ///
     /// A performance complaint about a large city is otherwise unanswerable: the game is already
@@ -34,10 +48,15 @@ namespace CS2MultiplayerMod.Game.Diagnostics
         internal sealed class Sample
         {
             public string Name;
+            public SyncZone Zone;
             public long Ticks;
             public long WorstTicks;
             public int Calls;
         }
+
+        private static readonly string[] ZoneNames =
+            { null, "residential", "commercial", "industrial", "office" };
+        private static readonly long[] ZoneTicks = new long[5];
 
         /// <summary>
         /// Accumulates into one scope for as long as it is alive. Always use it with
@@ -68,14 +87,21 @@ namespace CS2MultiplayerMod.Game.Diagnostics
         /// Nesting is allowed, but an inner scope's time is also counted in its outer one, so the
         /// reported total is not a sum of the listed scopes. Prefer siblings over nesting.
         /// </summary>
-        public static Scope Measure(string name)
+        public static Scope Measure(string name) => Measure(name, SyncZone.None);
+
+        /// <summary>
+        /// As <see cref="Measure(string)"/>, but the time also lands in a zone total. Use this
+        /// wherever a pass is known to be about one kind of building; the zone line is what makes
+        /// "residential is fine, commercial is the problem" a fact rather than a guess.
+        /// </summary>
+        public static Scope Measure(string name, SyncZone zone)
         {
             if (string.IsNullOrEmpty(name)) return default(Scope);
             Sample sample;
             if (!Samples.TryGetValue(name, out sample))
             {
                 if (Samples.Count >= MaxScopes) return default(Scope);
-                sample = new Sample { Name = name };
+                sample = new Sample { Name = name, Zone = zone };
                 Samples[name] = sample;
             }
             return new Scope(sample);
@@ -90,6 +116,7 @@ namespace CS2MultiplayerMod.Game.Diagnostics
                 pair.Value.WorstTicks = 0;
                 pair.Value.Calls = 0;
             }
+            for (int i = 0; i < ZoneTicks.Length; i++) ZoneTicks[i] = 0;
         }
 
         /// <summary>
@@ -101,10 +128,13 @@ namespace CS2MultiplayerMod.Game.Diagnostics
         {
             Ordered.Clear();
             long totalTicks = 0;
+            for (int i = 0; i < ZoneTicks.Length; i++) ZoneTicks[i] = 0;
             foreach (KeyValuePair<string, Sample> pair in Samples)
             {
                 if (pair.Value.Calls == 0) continue;
                 totalTicks += pair.Value.Ticks;
+                int zone = (int)pair.Value.Zone;
+                if (zone > 0 && zone < ZoneTicks.Length) ZoneTicks[zone] += pair.Value.Ticks;
                 Ordered.Add(pair.Value);
             }
             if (Ordered.Count == 0) return null;
@@ -136,8 +166,36 @@ namespace CS2MultiplayerMod.Game.Diagnostics
                 text.Append(", +").Append(Ordered.Count - listed).Append(" more");
             text.Append('.');
 
+            AppendZones(text, windowMs);
+
             Reset();
             return text.ToString();
+        }
+
+        /// <summary>
+        /// The by-zone line, appended only when something was actually attributed. Unattributed
+        /// scopes are deliberately not folded in anywhere: a zone total that quietly included
+        /// "everything else" would be the kind of number that ends an investigation in the wrong
+        /// place.
+        /// </summary>
+        private static void AppendZones(StringBuilder text, long windowMs)
+        {
+            long attributed = 0;
+            for (int i = 1; i < ZoneTicks.Length; i++) attributed += ZoneTicks[i];
+            if (attributed == 0) return;
+
+            text.Append(" By zone:");
+            bool first = true;
+            for (int i = 1; i < ZoneTicks.Length; i++)
+            {
+                double ms = ZoneTicks[i] * MillisecondsPerTick;
+                text.Append(first ? " " : ", ").Append(ZoneNames[i]).Append(' ')
+                    .Append(ms.ToString("F0")).Append(" ms");
+                if (windowMs > 0)
+                    text.Append(" (").Append((100.0 * ms / windowMs).ToString("F2")).Append("%)");
+                first = false;
+            }
+            text.Append('.');
         }
 
         private static int CompareDescendingByTicks(Sample first, Sample second) =>

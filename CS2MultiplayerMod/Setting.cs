@@ -13,8 +13,8 @@ namespace CS2MultiplayerMod
 {
     [FileLocation(nameof(CS2MultiplayerMod))]
     [SettingsUITabOrder(GeneralTab, JoinTab, HostTab)]
-    [SettingsUIGroupOrder(GeneralGroup, StatusGroup, SessionGroup, JoinSetupGroup, JoinActionGroup, HostSetupGroup, HostActionGroup)]
-    [SettingsUIShowGroupName(GeneralGroup, StatusGroup, SessionGroup, JoinSetupGroup, JoinActionGroup, HostSetupGroup, HostActionGroup)]
+    [SettingsUIGroupOrder(GeneralGroup, DiagnosticsGroup, StatusGroup, SessionGroup, JoinSetupGroup, JoinActionGroup, HostSetupGroup, HostActionGroup)]
+    [SettingsUIShowGroupName(GeneralGroup, DiagnosticsGroup, StatusGroup, SessionGroup, JoinSetupGroup, JoinActionGroup, HostSetupGroup, HostActionGroup)]
     public class Setting : ModSetting
     {
         // The options UI exposes general/session state plus join and host setup.
@@ -26,6 +26,7 @@ namespace CS2MultiplayerMod
         public const string HostTab = "Host";
 
         public const string GeneralGroup = "General";
+        public const string DiagnosticsGroup = "Diagnostics";
         public const string StatusGroup = "Status";
         public const string SessionGroup = "Session";
         public const string JoinSetupGroup = "JoinSetup";
@@ -171,6 +172,26 @@ namespace CS2MultiplayerMod
         /// </summary>
         [SettingsUISection(GeneralTab, GeneralGroup)]
         public bool VerboseLogging { get; set; } = false;
+
+        /// <summary>
+        /// Frame times and the mod's own main-thread cost, reported every 30 s together with a
+        /// per-zone split. Cheap enough to leave on: the measurement itself is two timestamp reads
+        /// per pass, and it is the only thing that can tell the mod's cost apart from the city's.
+        /// </summary>
+        [SettingsUISection(GeneralTab, DiagnosticsGroup)]
+        public bool LogPerformance { get; set; } = false;
+
+        [SettingsUISection(GeneralTab, DiagnosticsGroup)]
+        public bool LogResidential { get; set; } = false;
+
+        [SettingsUISection(GeneralTab, DiagnosticsGroup)]
+        public bool LogCommercial { get; set; } = false;
+
+        [SettingsUISection(GeneralTab, DiagnosticsGroup)]
+        public bool LogIndustrial { get; set; } = false;
+
+        [SettingsUISection(GeneralTab, DiagnosticsGroup)]
+        public bool LogOffice { get; set; } = false;
 
         /// <summary>
         /// The partner markers are the only thing this mod draws every rendered frame, so they are
