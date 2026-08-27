@@ -24,6 +24,16 @@ Fewer world reloads, and a log that says why the ones that remain happened.
 - A bulldoze that never found anything to remove is now reported. It leaves a road or building
   standing here that the other player no longer has, and it used to be visible only with
   verbose logging switched on.
+- Terraforming now lands in one frame instead of being spread over several. Roads, buildings,
+  zoning, growables and routes all wait for terrain to catch up, so every extra frame spent
+  applying a stroke was a frame in which nothing else in the session could be applied either.
+- Terraforming that goes missing is now reported instead of being dropped in silence. A stroke
+  that could not be sent, or that arrived naming a tool this game does not have, leaves the
+  ground a different shape on the two machines - and the roads drawn near it afterwards then
+  fail to connect. Every one of those paths used to be invisible.
+- A terraforming sample that could not be applied no longer stops the whole session. It kept
+  the terrain queue permanently non-empty, and that queue is what every other kind of edit
+  waits behind, so one bad sample could leave a session unable to apply anything at all.
 
 ### Bug fixes
 
