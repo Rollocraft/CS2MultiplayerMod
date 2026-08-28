@@ -26,9 +26,9 @@ namespace CS2MultiplayerMod.Game.Sync.Infrastructure
         /// to, which is what the systems' own <c>if (Mod.Service != null)</c> guard did; the drain
         /// is registered either way, because a queue can still need emptying.
         /// </summary>
-        public static T Bind<T>(Func<T> create, Action drain = null) where T : ISessionObserver
+        public static T Bind<T>(Func<T> create, Action drain = null) where T : class, ISessionObserver
         {
-            T observer = default(T);
+            T observer = null;
             if (Mod.Service != null)
             {
                 observer = create();
