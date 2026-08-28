@@ -42,22 +42,10 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             // pedestrians and pets are retained or removed by their explicit linkage below.
             _moverCandidates = GetEntityQuery(new EntityQueryDesc
             {
-                All = new[]
-                {
-                    ComponentType.ReadOnly<PrefabRef>(),
-                    ComponentType.ReadOnly<global::Game.Objects.Transform>(),
-                },
-                Any = new[]
-                {
-                    ComponentType.ReadOnly<global::Game.Vehicles.Vehicle>(),
-                    ComponentType.ReadOnly<global::Game.Creatures.Creature>(),
-                },
-                None = new[]
-                {
-                    ComponentType.ReadOnly<Temp>(),
-                    ComponentType.ReadOnly<Deleted>(),
-                    ComponentType.ReadOnly<Owner>(),
-                },
+                All = SyncQuery.ReadOnly<PrefabRef, global::Game.Objects.Transform>(),
+                Any = SyncQuery.ReadOnly<global::Game.Vehicles.Vehicle,
+                    global::Game.Creatures.Creature>(),
+                None = SyncQuery.ReadOnly<Temp, Deleted, Owner>(),
             });
         }
 

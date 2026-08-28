@@ -110,20 +110,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             // on where a vehicle is), so they stay off the wire entirely.
             _deletedObjects = GetEntityQuery(new EntityQueryDesc
             {
-                All = new[]
-                {
-                    ComponentType.ReadOnly<Deleted>(),
-                    ComponentType.ReadOnly<PrefabRef>(),
-                    ComponentType.ReadOnly<Transform>(),
-                },
-                None = new[]
-                {
-                    ComponentType.ReadOnly<Temp>(),
-                    ComponentType.ReadOnly<Owner>(),
-                    ComponentType.ReadOnly<Edge>(),
-                    ComponentType.ReadOnly<global::Game.Vehicles.Vehicle>(),
-                    ComponentType.ReadOnly<global::Game.Creatures.Creature>(),
-                },
+                All = SyncQuery.ReadOnly<Deleted, PrefabRef, Transform>(),
+                None = SyncQuery.ReadOnly<Temp, Owner, Edge, global::Game.Vehicles.Vehicle,
+                    global::Game.Creatures.Creature>(),
             });
 
             // Owned service upgrades removed on their own (the building properties panel tags just
@@ -131,60 +120,25 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             // delete's children are not published here.
             _deletedOwnedUpgrades = GetEntityQuery(new EntityQueryDesc
             {
-                All = new[]
-                {
-                    ComponentType.ReadOnly<Deleted>(),
-                    ComponentType.ReadOnly<PrefabRef>(),
-                    ComponentType.ReadOnly<Transform>(),
-                    ComponentType.ReadOnly<Owner>(),
-                },
-                Any = new[]
-                {
-                    ComponentType.ReadOnly<global::Game.Buildings.ServiceUpgrade>(),
-                    ComponentType.ReadOnly<global::Game.Buildings.Extension>(),
-                },
-                None = new[]
-                {
-                    ComponentType.ReadOnly<Temp>(),
-                    ComponentType.ReadOnly<Edge>(),
-                    ComponentType.ReadOnly<global::Game.Vehicles.Vehicle>(),
-                    ComponentType.ReadOnly<global::Game.Creatures.Creature>(),
-                },
+                All = SyncQuery.ReadOnly<Deleted, PrefabRef, Transform, Owner>(),
+                Any = SyncQuery.ReadOnly<global::Game.Buildings.ServiceUpgrade,
+                    global::Game.Buildings.Extension>(),
+                None = SyncQuery.ReadOnly<Temp, Edge, global::Game.Vehicles.Vehicle,
+                    global::Game.Creatures.Creature>(),
             });
 
             _deletedEdges = GetEntityQuery(new EntityQueryDesc
             {
-                All = new[]
-                {
-                    ComponentType.ReadOnly<Deleted>(),
-                    ComponentType.ReadOnly<Edge>(),
-                    ComponentType.ReadOnly<Curve>(),
-                    ComponentType.ReadOnly<PrefabRef>(),
-                },
-                None = new[]
-                {
-                    ComponentType.ReadOnly<Temp>(),
-                    ComponentType.ReadOnly<Owner>(),
-                },
+                All = SyncQuery.ReadOnly<Deleted, Edge, Curve, PrefabRef>(),
+                None = SyncQuery.ReadOnly<Temp, Owner>(),
             });
 
             // Edges freshly Created this frame — used to tell a mid-span SPLIT (the original edge is
             // deleted and its two halves are created on its centreline) from a genuine bulldoze.
             _createdEdges = GetEntityQuery(new EntityQueryDesc
             {
-                All = new[]
-                {
-                    ComponentType.ReadOnly<Edge>(),
-                    ComponentType.ReadOnly<Curve>(),
-                    ComponentType.ReadOnly<Created>(),
-                    ComponentType.ReadOnly<PrefabRef>(),
-                },
-                None = new[]
-                {
-                    ComponentType.ReadOnly<Temp>(),
-                    ComponentType.ReadOnly<Owner>(),
-                    ComponentType.ReadOnly<Deleted>(),
-                },
+                All = SyncQuery.ReadOnly<Edge, Curve, Created, PrefabRef>(),
+                None = SyncQuery.ReadOnly<Temp, Owner, Deleted>(),
             });
 
             // Pre-existing edges whose geometry CHANGED this frame (Updated but NOT freshly Created).
@@ -195,38 +149,16 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             // CaptureDeletedEdges).
             _updatedEdges = GetEntityQuery(new EntityQueryDesc
             {
-                All = new[]
-                {
-                    ComponentType.ReadOnly<Updated>(),
-                    ComponentType.ReadOnly<Edge>(),
-                    ComponentType.ReadOnly<Curve>(),
-                    ComponentType.ReadOnly<PrefabRef>(),
-                },
-                None = new[]
-                {
-                    ComponentType.ReadOnly<Created>(),
-                    ComponentType.ReadOnly<Temp>(),
-                    ComponentType.ReadOnly<Deleted>(),
-                    ComponentType.ReadOnly<Owner>(),
-                },
+                All = SyncQuery.ReadOnly<Updated, Edge, Curve, PrefabRef>(),
+                None = SyncQuery.ReadOnly<Created, Temp, Deleted, Owner>(),
             });
 
             // Remote object deletes match against the game's object search tree, not a query —
             // see RealizeObjectDeletes. Edges have no equivalent pool small enough to matter.
             _liveEdges = GetEntityQuery(new EntityQueryDesc
             {
-                All = new[]
-                {
-                    ComponentType.ReadOnly<Edge>(),
-                    ComponentType.ReadOnly<Curve>(),
-                    ComponentType.ReadOnly<PrefabRef>(),
-                },
-                None = new[]
-                {
-                    ComponentType.ReadOnly<Temp>(),
-                    ComponentType.ReadOnly<Owner>(),
-                    ComponentType.ReadOnly<Deleted>(),
-                },
+                All = SyncQuery.ReadOnly<Edge, Curve, PrefabRef>(),
+                None = SyncQuery.ReadOnly<Temp, Owner, Deleted>(),
             });
 
             if (Mod.Service != null)

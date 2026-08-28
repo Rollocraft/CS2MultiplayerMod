@@ -42,36 +42,15 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             // Owned-this-frame: Updated map tiles that (no longer) carry Native.
             _flippedTiles = GetEntityQuery(new EntityQueryDesc
             {
-                All = new[]
-                {
-                    ComponentType.ReadOnly<MapTile>(),
-                    ComponentType.ReadOnly<Area>(),
-                    ComponentType.ReadOnly<Node>(),
-                    ComponentType.ReadOnly<Updated>(),
-                },
-                None = new[]
-                {
-                    ComponentType.ReadOnly<Native>(),
-                    ComponentType.ReadOnly<Temp>(),
-                    ComponentType.ReadOnly<Deleted>(),
-                },
+                All = SyncQuery.ReadOnly<MapTile, Area, Node, Updated>(),
+                None = SyncQuery.ReadOnly<Native, Temp, Deleted>(),
             });
 
             // Still-purchasable tiles — the candidate pool for realizing a remote purchase.
             _nativeTiles = GetEntityQuery(new EntityQueryDesc
             {
-                All = new[]
-                {
-                    ComponentType.ReadOnly<MapTile>(),
-                    ComponentType.ReadOnly<Area>(),
-                    ComponentType.ReadOnly<Node>(),
-                    ComponentType.ReadOnly<Native>(),
-                },
-                None = new[]
-                {
-                    ComponentType.ReadOnly<Temp>(),
-                    ComponentType.ReadOnly<Deleted>(),
-                },
+                All = SyncQuery.ReadOnly<MapTile, Area, Node, Native>(),
+                None = SyncQuery.ReadOnly<Temp, Deleted>(),
             });
 
             if (Mod.Service != null)

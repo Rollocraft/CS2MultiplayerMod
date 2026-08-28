@@ -134,20 +134,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             // ours. Temp/Deleted/Owner excluded so we never look at previews, dying edges or sub-nets.
             _updatedEdges = GetEntityQuery(new EntityQueryDesc
             {
-                All = new[]
-                {
-                    ComponentType.ReadOnly<Updated>(),
-                    ComponentType.ReadOnly<Edge>(),
-                    ComponentType.ReadOnly<Curve>(),
-                    ComponentType.ReadOnly<PrefabRef>(),
-                },
-                None = new[]
-                {
-                    ComponentType.ReadOnly<Created>(),
-                    ComponentType.ReadOnly<Temp>(),
-                    ComponentType.ReadOnly<Deleted>(),
-                    ComponentType.ReadOnly<Owner>(),
-                },
+                All = SyncQuery.ReadOnly<Updated, Edge, Curve, PrefabRef>(),
+                None = SyncQuery.ReadOnly<Created, Temp, Deleted, Owner>(),
             });
 
             // Edges built this frame (locally drawn or realized from a remote command). They enter the
@@ -156,36 +144,15 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             // baseline and swallow exactly that replacement.
             _createdEdges = GetEntityQuery(new EntityQueryDesc
             {
-                All = new[]
-                {
-                    ComponentType.ReadOnly<Created>(),
-                    ComponentType.ReadOnly<Edge>(),
-                    ComponentType.ReadOnly<Curve>(),
-                    ComponentType.ReadOnly<PrefabRef>(),
-                },
-                None = new[]
-                {
-                    ComponentType.ReadOnly<Temp>(),
-                    ComponentType.ReadOnly<Deleted>(),
-                    ComponentType.ReadOnly<Owner>(),
-                },
+                All = SyncQuery.ReadOnly<Created, Edge, Curve, PrefabRef>(),
+                None = SyncQuery.ReadOnly<Temp, Deleted, Owner>(),
             });
 
             // Match pool for realizing remote replacements, and the seed pool for the baseline.
             _liveEdges = GetEntityQuery(new EntityQueryDesc
             {
-                All = new[]
-                {
-                    ComponentType.ReadOnly<Edge>(),
-                    ComponentType.ReadOnly<Curve>(),
-                    ComponentType.ReadOnly<PrefabRef>(),
-                },
-                None = new[]
-                {
-                    ComponentType.ReadOnly<Temp>(),
-                    ComponentType.ReadOnly<Owner>(),
-                    ComponentType.ReadOnly<Deleted>(),
-                },
+                All = SyncQuery.ReadOnly<Edge, Curve, PrefabRef>(),
+                None = SyncQuery.ReadOnly<Temp, Owner, Deleted>(),
             });
 
             if (Mod.Service != null)

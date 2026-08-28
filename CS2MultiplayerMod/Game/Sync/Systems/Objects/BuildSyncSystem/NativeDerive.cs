@@ -61,8 +61,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             // DefinitionGateSystem off them, so the complement is exactly the local tool's.
             _freshDefinitions = GetEntityQuery(new EntityQueryDesc
             {
-                All = new[] { ComponentType.ReadOnly<CreationDefinition>() },
-                None = new[] { ComponentType.ReadOnly<Deleted>() },
+                All = SyncQuery.ReadOnly<CreationDefinition>(),
+                None = SyncQuery.ReadOnly<Deleted>(),
             });
 
             // A tool's definitions lose their Updated tag at the Cleanup after they were consumed and
@@ -70,12 +70,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             // behind the previews now committing. Our own definitions are born Deleted.
             _standingDefinitions = GetEntityQuery(new EntityQueryDesc
             {
-                All = new[] { ComponentType.ReadOnly<CreationDefinition>() },
-                None = new[]
-                {
-                    ComponentType.ReadOnly<Updated>(),
-                    ComponentType.ReadOnly<Deleted>(),
-                },
+                All = SyncQuery.ReadOnly<CreationDefinition>(),
+                None = SyncQuery.ReadOnly<Updated, Deleted>(),
             });
         }
 

@@ -49,8 +49,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             // DevTree nodes are prefab entities — IncludePrefab so the query finds them.
             _nodes = GetEntityQuery(new EntityQueryDesc
             {
-                All = new[] { ComponentType.ReadOnly<DevTreeNodeData>() },
-                None = new[] { ComponentType.ReadOnly<Temp>() },
+                All = SyncQuery.ReadOnly<DevTreeNodeData>(),
+                None = SyncQuery.ReadOnly<Temp>(),
                 Options = EntityQueryOptions.IncludePrefab,
             });
             _pointsQuery = GetEntityQuery(ComponentType.ReadWrite<DevTreePoints>());

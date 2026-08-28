@@ -173,34 +173,15 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             _nativeNetCoordinator = World.GetOrCreateSystemManaged<Net.NetSyncSystem>();
             _portableObjects = GetEntityQuery(new EntityQueryDesc
             {
-                All = new[]
-                {
-                    ComponentType.ReadOnly<global::Game.Objects.Object>(),
-                    ComponentType.ReadOnly<global::Game.Objects.Transform>(),
-                    ComponentType.ReadOnly<PrefabRef>(),
-                },
-                None = new[]
-                {
-                    ComponentType.ReadOnly<Temp>(),
-                    ComponentType.ReadOnly<Deleted>(),
-                    ComponentType.ReadOnly<global::Game.Objects.Moving>(),
-                    ComponentType.ReadOnly<global::Game.Vehicles.Vehicle>(),
-                    ComponentType.ReadOnly<global::Game.Creatures.Creature>(),
-                },
+                All = SyncQuery.ReadOnly<global::Game.Objects.Object,
+                    global::Game.Objects.Transform, PrefabRef>(),
+                None = SyncQuery.ReadOnly<Temp, Deleted, global::Game.Objects.Moving,
+                    global::Game.Vehicles.Vehicle, global::Game.Creatures.Creature>(),
             });
             _portableAreas = GetEntityQuery(new EntityQueryDesc
             {
-                All = new[]
-                {
-                    ComponentType.ReadOnly<global::Game.Areas.Area>(),
-                    ComponentType.ReadOnly<PrefabRef>(),
-                    ComponentType.ReadOnly<global::Game.Areas.Node>(),
-                },
-                None = new[]
-                {
-                    ComponentType.ReadOnly<Temp>(),
-                    ComponentType.ReadOnly<Deleted>(),
-                },
+                All = SyncQuery.ReadOnly<global::Game.Areas.Area, PrefabRef, global::Game.Areas.Node>(),
+                None = SyncQuery.ReadOnly<Temp, Deleted>(),
             });
         }
 

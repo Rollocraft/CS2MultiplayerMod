@@ -121,17 +121,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             // consumed sample Applied (+Deleted). RemoteTerrainBrush excludes the ones we realized.
             _appliedBrushes = GetEntityQuery(new EntityQueryDesc
             {
-                All = new[]
-                {
-                    ComponentType.ReadOnly<Brush>(),
-                    ComponentType.ReadOnly<PrefabRef>(),
-                    ComponentType.ReadOnly<Temp>(),
-                    ComponentType.ReadOnly<Applied>(),
-                },
-                None = new[]
-                {
-                    ComponentType.ReadOnly<RemoteTerrainBrush>(),
-                },
+                All = SyncQuery.ReadOnly<Brush, PrefabRef, Temp, Applied>(),
+                None = SyncQuery.ReadOnly<RemoteTerrainBrush>(),
             });
 
             if (Mod.Service != null)

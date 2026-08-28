@@ -1,4 +1,4 @@
-﻿using System.Collections.Concurrent;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using Game;
 using Game.Common;
@@ -435,53 +435,29 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
             // Deleted. The operation-level query below expands this with native side-effect domains.
             _netTransactionTemps = GetEntityQuery(new EntityQueryDesc
             {
-                All = new[] { ComponentType.ReadOnly<Temp>() },
-                Any = new[]
-                {
-                    ComponentType.ReadOnly<Node>(),
-                    ComponentType.ReadOnly<Edge>(),
-                    ComponentType.ReadOnly<Lane>(),
-                    ComponentType.ReadOnly<Aggregate>(),
-                },
+                All = SyncQuery.ReadOnly<Temp>(),
+                Any = SyncQuery.ReadOnly<Node, Edge, Lane, Aggregate>(),
             });
 
             _netOperationTemps = GetEntityQuery(new EntityQueryDesc
             {
-                All = new[] { ComponentType.ReadOnly<Temp>() },
-                Any = new[]
-                {
-                    ComponentType.ReadOnly<global::Game.Objects.Object>(),
-                    ComponentType.ReadOnly<Node>(),
-                    ComponentType.ReadOnly<Edge>(),
-                    ComponentType.ReadOnly<Lane>(),
-                    ComponentType.ReadOnly<Aggregate>(),
-                    ComponentType.ReadOnly<global::Game.Areas.Area>(),
-                },
+                All = SyncQuery.ReadOnly<Temp>(),
+                Any = SyncQuery.ReadOnly<global::Game.Objects.Object, Node, Edge, Lane, Aggregate,
+                    global::Game.Areas.Area>(),
             });
 
             _objectTransactionTemps = GetEntityQuery(new EntityQueryDesc
             {
-                All = new[] { ComponentType.ReadOnly<Temp>() },
-                Any = new[]
-                {
-                    ComponentType.ReadOnly<global::Game.Objects.Object>(),
-                    ComponentType.ReadOnly<Node>(),
-                    ComponentType.ReadOnly<Edge>(),
-                    ComponentType.ReadOnly<Lane>(),
-                    ComponentType.ReadOnly<Aggregate>(),
-                    ComponentType.ReadOnly<global::Game.Areas.Area>(),
-                },
+                All = SyncQuery.ReadOnly<Temp>(),
+                Any = SyncQuery.ReadOnly<global::Game.Objects.Object, Node, Edge, Lane, Aggregate,
+                    global::Game.Areas.Area>(),
             });
 
             _routeTransactionTemps = GetEntityQuery(new EntityQueryDesc
             {
-                All = new[] { ComponentType.ReadOnly<Temp>() },
-                Any = new[]
-                {
-                    ComponentType.ReadOnly<global::Game.Routes.Route>(),
-                    ComponentType.ReadOnly<global::Game.Routes.Waypoint>(),
-                    ComponentType.ReadOnly<global::Game.Routes.Segment>(),
-                },
+                All = SyncQuery.ReadOnly<Temp>(),
+                Any = SyncQuery.ReadOnly<global::Game.Routes.Route, global::Game.Routes.Waypoint,
+                    global::Game.Routes.Segment>(),
             });
 
             // Zone cell blocks are excluded: an isolated commit only ever drives the object, net,
@@ -490,12 +466,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
             // commits in a single one (the marquee), so isolating it discards the whole gesture.
             _standingTemps = GetEntityQuery(new EntityQueryDesc
             {
-                All = new[] { ComponentType.ReadOnly<Temp>() },
-                None = new[]
-                {
-                    ComponentType.ReadOnly<Deleted>(),
-                    ComponentType.ReadOnly<global::Game.Zones.Block>(),
-                },
+                All = SyncQuery.ReadOnly<Temp>(),
+                None = SyncQuery.ReadOnly<Deleted, global::Game.Zones.Block>(),
             });
 
             // Tool definitions lose Updated after the frame that materializes their preview. Those
@@ -503,37 +475,19 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
             // Sync-created definitions carry Deleted from birth and must never be recaptured.
             _standingLocalDefinitions = GetEntityQuery(new EntityQueryDesc
             {
-                All = new[] { ComponentType.ReadOnly<CreationDefinition>() },
-                None = new[]
-                {
-                    ComponentType.ReadOnly<Updated>(),
-                    ComponentType.ReadOnly<Deleted>(),
-                },
+                All = SyncQuery.ReadOnly<CreationDefinition>(),
+                None = SyncQuery.ReadOnly<Updated, Deleted>(),
             });
 
             _localBrushTemps = GetEntityQuery(new EntityQueryDesc
             {
-                All = new[]
-                {
-                    ComponentType.ReadOnly<Temp>(),
-                    ComponentType.ReadOnly<Brush>(),
-                },
-                None = new[]
-                {
-                    ComponentType.ReadOnly<Deleted>(),
-                    ComponentType.ReadOnly<RemoteTerrainBrush>(),
-                },
+                All = SyncQuery.ReadOnly<Temp, Brush>(),
+                None = SyncQuery.ReadOnly<Deleted, RemoteTerrainBrush>(),
             });
 
             _createdEdges = GetEntityQuery(new EntityQueryDesc
             {
-                All = new[]
-                {
-                    ComponentType.ReadOnly<Created>(),
-                    ComponentType.ReadOnly<Edge>(),
-                    ComponentType.ReadOnly<Curve>(),
-                    ComponentType.ReadOnly<PrefabRef>(),
-                },
+                All = SyncQuery.ReadOnly<Created, Edge, Curve, PrefabRef>(),
                 None = new[]
                 {
                     ComponentType.ReadOnly<Temp>(),
@@ -550,30 +504,15 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
             // that is being torn down this frame.
             _existingNodes = GetEntityQuery(new EntityQueryDesc
             {
-                All = new[] { ComponentType.ReadOnly<Node>() },
-                None = new[]
-                {
-                    ComponentType.ReadOnly<Temp>(),
-                    ComponentType.ReadOnly<Deleted>(),
-                    ComponentType.ReadOnly<Owner>(),
-                },
+                All = SyncQuery.ReadOnly<Node>(),
+                None = SyncQuery.ReadOnly<Temp, Deleted, Owner>(),
             });
 
             // Read-only: standalone edges, used to classify an incoming endpoint as a mid-span tap.
             _existingEdges = GetEntityQuery(new EntityQueryDesc
             {
-                All = new[]
-                {
-                    ComponentType.ReadOnly<Edge>(),
-                    ComponentType.ReadOnly<Curve>(),
-                    ComponentType.ReadOnly<PrefabRef>(),
-                },
-                None = new[]
-                {
-                    ComponentType.ReadOnly<Temp>(),
-                    ComponentType.ReadOnly<Deleted>(),
-                    ComponentType.ReadOnly<Owner>(),
-                },
+                All = SyncQuery.ReadOnly<Edge, Curve, PrefabRef>(),
+                None = SyncQuery.ReadOnly<Temp, Deleted, Owner>(),
             });
 
             // OWNED nodes — building sub-net stubs among them. A power line / pipe endpoint may
@@ -581,60 +520,31 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
             // FindUtilityNodeAt); everything else keeps ignoring them, exactly like _existingNodes.
             _ownedNodes = GetEntityQuery(new EntityQueryDesc
             {
-                All = new[]
-                {
-                    ComponentType.ReadOnly<Node>(),
-                    ComponentType.ReadOnly<Owner>(),
-                    ComponentType.ReadOnly<PrefabRef>(),
-                },
-                None = new[]
-                {
-                    ComponentType.ReadOnly<Temp>(),
-                    ComponentType.ReadOnly<Deleted>(),
-                },
+                All = SyncQuery.ReadOnly<Node, Owner, PrefabRef>(),
+                None = SyncQuery.ReadOnly<Temp, Deleted>(),
             });
 
             // Owned connector edges are kept out of all fallback searches. Captured native intent
             // may target one explicitly, in which case ResolveIntent searches this separate pool.
             _ownedEdges = GetEntityQuery(new EntityQueryDesc
             {
-                All = new[]
-                {
-                    ComponentType.ReadOnly<Edge>(),
-                    ComponentType.ReadOnly<Curve>(),
-                    ComponentType.ReadOnly<Owner>(),
-                    ComponentType.ReadOnly<PrefabRef>(),
-                },
-                None = new[]
-                {
-                    ComponentType.ReadOnly<Temp>(),
-                    ComponentType.ReadOnly<Deleted>(),
-                },
+                All = SyncQuery.ReadOnly<Edge, Curve, Owner, PrefabRef>(),
+                None = SyncQuery.ReadOnly<Temp, Deleted>(),
             });
 
             // Diagnostic: pre-existing edges whose geometry CHANGED this frame (Updated but NOT
             // freshly Created) — exactly what an in-place split of the original edge looks like.
             _updatedEdges = GetEntityQuery(new EntityQueryDesc
             {
-                All = new[] { ComponentType.ReadOnly<Edge>(), ComponentType.ReadOnly<Curve>(), ComponentType.ReadOnly<Updated>() },
-                None = new[]
-                {
-                    ComponentType.ReadOnly<Temp>(),
-                    ComponentType.ReadOnly<Deleted>(),
-                    ComponentType.ReadOnly<Created>(),
-                    ComponentType.ReadOnly<Owner>(),
-                },
+                All = SyncQuery.ReadOnly<Edge, Curve, Updated>(),
+                None = SyncQuery.ReadOnly<Temp, Deleted, Created, Owner>(),
             });
 
             // Diagnostic: edges being removed this frame.
             _deletedEdges = GetEntityQuery(new EntityQueryDesc
             {
-                All = new[] { ComponentType.ReadOnly<Edge>(), ComponentType.ReadOnly<Curve>(), ComponentType.ReadOnly<Deleted>() },
-                None = new[]
-                {
-                    ComponentType.ReadOnly<Temp>(),
-                    ComponentType.ReadOnly<Owner>(),
-                },
+                All = SyncQuery.ReadOnly<Edge, Curve, Deleted>(),
+                None = SyncQuery.ReadOnly<Temp, Owner>(),
             });
 
             if (Mod.Service != null)

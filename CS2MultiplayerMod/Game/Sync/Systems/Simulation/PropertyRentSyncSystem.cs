@@ -172,21 +172,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             _occupancy = World.GetOrCreateSystemManaged<ResidentialOccupancySyncSystem>();
             _properties = GetEntityQuery(new EntityQueryDesc
             {
-                All = new[]
-                {
-                    ComponentType.ReadOnly<Building>(),
-                    ComponentType.ReadOnly<Renter>(),
-                    ComponentType.ReadOnly<PrefabRef>(),
-                    ComponentType.ReadOnly<global::Game.Objects.Transform>(),
-                    ComponentType.ReadOnly<UpdateFrame>(),
-                },
-                None = new[]
-                {
-                    ComponentType.ReadOnly<Temp>(),
-                    ComponentType.ReadOnly<Deleted>(),
-                    ComponentType.ReadOnly<Owner>(),
-                    ComponentType.ReadOnly<StorageProperty>(),
-                },
+                All = SyncQuery.ReadOnly<Building, Renter, PrefabRef,
+                    global::Game.Objects.Transform, UpdateFrame>(),
+                None = SyncQuery.ReadOnly<Temp, Deleted, Owner, StorageProperty>(),
             });
             SyncInbox.RegisterDrain(DrainForWorldChange);
             Mod.log.Info(nameof(PropertyRentSyncSystem) +

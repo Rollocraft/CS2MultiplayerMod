@@ -57,60 +57,23 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             // Any{} keeps out the decorative props the game also parents to buildings.
             _createdUpgrades = GetEntityQuery(new EntityQueryDesc
             {
-                All = new[]
-                {
-                    ComponentType.ReadOnly<Created>(),
-                    ComponentType.ReadOnly<PrefabRef>(),
-                    ComponentType.ReadOnly<Transform>(),
-                    ComponentType.ReadOnly<Owner>(),
-                },
-                Any = new[]
-                {
-                    ComponentType.ReadOnly<global::Game.Buildings.ServiceUpgrade>(),
-                    ComponentType.ReadOnly<Extension>(),
-                },
-                None = new[]
-                {
-                    ComponentType.ReadOnly<Temp>(),
-                    ComponentType.ReadOnly<Deleted>(),
-                },
+                All = SyncQuery.ReadOnly<Created, PrefabRef, Transform, Owner>(),
+                Any = SyncQuery.ReadOnly<global::Game.Buildings.ServiceUpgrade, Extension>(),
+                None = SyncQuery.ReadOnly<Temp, Deleted>(),
             });
 
             _liveUpgrades = GetEntityQuery(new EntityQueryDesc
             {
-                All = new[]
-                {
-                    ComponentType.ReadOnly<PrefabRef>(),
-                    ComponentType.ReadOnly<Transform>(),
-                    ComponentType.ReadOnly<Owner>(),
-                },
-                Any = new[]
-                {
-                    ComponentType.ReadOnly<global::Game.Buildings.ServiceUpgrade>(),
-                    ComponentType.ReadOnly<Extension>(),
-                },
-                None = new[]
-                {
-                    ComponentType.ReadOnly<Temp>(),
-                    ComponentType.ReadOnly<Deleted>(),
-                },
+                All = SyncQuery.ReadOnly<PrefabRef, Transform, Owner>(),
+                Any = SyncQuery.ReadOnly<global::Game.Buildings.ServiceUpgrade, Extension>(),
+                None = SyncQuery.ReadOnly<Temp, Deleted>(),
             });
 
             // Candidate owner buildings for realizing a remote upgrade.
             _liveOwners = GetEntityQuery(new EntityQueryDesc
             {
-                All = new[]
-                {
-                    ComponentType.ReadOnly<Building>(),
-                    ComponentType.ReadOnly<PrefabRef>(),
-                    ComponentType.ReadOnly<Transform>(),
-                },
-                None = new[]
-                {
-                    ComponentType.ReadOnly<Temp>(),
-                    ComponentType.ReadOnly<Owner>(),
-                    ComponentType.ReadOnly<Deleted>(),
-                },
+                All = SyncQuery.ReadOnly<Building, PrefabRef, Transform>(),
+                None = SyncQuery.ReadOnly<Temp, Owner, Deleted>(),
             });
 
             if (Mod.Service != null)

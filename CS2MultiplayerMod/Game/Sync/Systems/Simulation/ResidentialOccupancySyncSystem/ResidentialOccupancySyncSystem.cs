@@ -330,19 +330,10 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 ComponentType.ReadOnly<ArchetypeData>());
             _arrivalOutsideConnections = GetEntityQuery(new EntityQueryDesc
             {
-                All = new[]
-                {
-                    ComponentType.ReadOnly<global::Game.Objects.OutsideConnection>(),
-                    ComponentType.ReadOnly<PrefabRef>(),
-                    ComponentType.ReadOnly<global::Game.Objects.Transform>(),
-                },
-                None = new[]
-                {
-                    ComponentType.ReadOnly<global::Game.Objects.ElectricityOutsideConnection>(),
-                    ComponentType.ReadOnly<global::Game.Objects.WaterPipeOutsideConnection>(),
-                    ComponentType.ReadOnly<Deleted>(),
-                    ComponentType.ReadOnly<Temp>(),
-                },
+                All = SyncQuery.ReadOnly<global::Game.Objects.OutsideConnection, PrefabRef,
+                    global::Game.Objects.Transform>(),
+                None = SyncQuery.ReadOnly<global::Game.Objects.ElectricityOutsideConnection,
+                    global::Game.Objects.WaterPipeOutsideConnection, Deleted, Temp>(),
             });
             _prefabIndex = new PrefabIndex(_prefabSystem, _prefabs);
             _objectSearch = new ObjectSearch(
@@ -351,51 +342,22 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             _propertyProcessing = World.GetOrCreateSystemManaged<PropertyProcessingSystem>();
             _properties = GetEntityQuery(new EntityQueryDesc
             {
-                All = new[]
-                {
-                    ComponentType.ReadOnly<Building>(),
-                    ComponentType.ReadOnly<ResidentialProperty>(),
-                    ComponentType.ReadOnly<Renter>(),
-                    ComponentType.ReadOnly<PrefabRef>(),
-                    ComponentType.ReadOnly<global::Game.Objects.Transform>(),
-                    ComponentType.ReadOnly<UpdateFrame>(),
-                },
-                None = new[]
-                {
-                    ComponentType.ReadOnly<Temp>(),
-                    ComponentType.ReadOnly<Deleted>(),
-                    ComponentType.ReadOnly<Owner>(),
-                },
+                All = SyncQuery.ReadOnly<Building, ResidentialProperty, Renter, PrefabRef,
+                    global::Game.Objects.Transform, UpdateFrame>(),
+                None = SyncQuery.ReadOnly<Temp, Deleted, Owner>(),
             });
             _bootstrapHouseholds = GetEntityQuery(new EntityQueryDesc
             {
-                All = new[]
-                {
-                    ComponentType.ReadOnly<global::Game.Citizens.Household>(),
-                    ComponentType.ReadOnly<global::Game.Citizens.HouseholdCitizen>(),
-                    ComponentType.ReadOnly<PrefabRef>(),
-                },
-                None = new[]
-                {
-                    ComponentType.ReadOnly<Deleted>(),
-                    ComponentType.ReadOnly<Temp>(),
-                    ComponentType.ReadOnly<global::Game.Citizens.TouristHousehold>(),
-                    ComponentType.ReadOnly<global::Game.Citizens.CommuterHousehold>(),
-                },
+                All = SyncQuery.ReadOnly<global::Game.Citizens.Household,
+                    global::Game.Citizens.HouseholdCitizen, PrefabRef>(),
+                None = SyncQuery.ReadOnly<Deleted, Temp, global::Game.Citizens.TouristHousehold,
+                    global::Game.Citizens.CommuterHousehold>(),
             });
             _bootstrapCitizens = GetEntityQuery(new EntityQueryDesc
             {
-                All = new[]
-                {
-                    ComponentType.ReadOnly<global::Game.Citizens.Citizen>(),
-                    ComponentType.ReadOnly<global::Game.Citizens.HouseholdMember>(),
-                    ComponentType.ReadOnly<PrefabRef>(),
-                },
-                None = new[]
-                {
-                    ComponentType.ReadOnly<Deleted>(),
-                    ComponentType.ReadOnly<Temp>(),
-                },
+                All = SyncQuery.ReadOnly<global::Game.Citizens.Citizen,
+                    global::Game.Citizens.HouseholdMember, PrefabRef>(),
+                None = SyncQuery.ReadOnly<Deleted, Temp>(),
             });
             // Households nothing can ever house again on a client. Tourists and commuters are a
             // different simulation with their own lifecycle and are never ours to retire; a
@@ -403,54 +365,27 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             // yet.
             _unreachableHouseholds = GetEntityQuery(new EntityQueryDesc
             {
-                All = new[]
-                {
-                    ComponentType.ReadOnly<global::Game.Citizens.Household>(),
-                    ComponentType.ReadOnly<PrefabRef>(),
-                },
-                None = new[]
-                {
-                    ComponentType.ReadOnly<PropertyRenter>(),
-                    ComponentType.ReadOnly<global::Game.Citizens.HomelessHousehold>(),
-                    ComponentType.ReadOnly<global::Game.Agents.MovingAway>(),
-                    ComponentType.ReadOnly<global::Game.Citizens.CurrentBuilding>(),
-                    ComponentType.ReadOnly<global::Game.Citizens.TouristHousehold>(),
-                    ComponentType.ReadOnly<global::Game.Citizens.CommuterHousehold>(),
-                    ComponentType.ReadOnly<Deleted>(),
-                    ComponentType.ReadOnly<Temp>(),
-                },
+                All = SyncQuery.ReadOnly<global::Game.Citizens.Household, PrefabRef>(),
+                None = SyncQuery.ReadOnly<PropertyRenter, global::Game.Citizens.HomelessHousehold,
+                    global::Game.Agents.MovingAway, global::Game.Citizens.CurrentBuilding,
+                    global::Game.Citizens.TouristHousehold, global::Game.Citizens.CommuterHousehold,
+                    Deleted, Temp>(),
             });
             _departingHouseholds = GetEntityQuery(new EntityQueryDesc
             {
-                All = new[]
-                {
-                    ComponentType.ReadOnly<global::Game.Citizens.Household>(),
-                    ComponentType.ReadOnly<global::Game.Agents.MovingAway>(),
-                },
-                None = new[]
-                {
-                    ComponentType.ReadOnly<Deleted>(),
-                    ComponentType.ReadOnly<Temp>(),
-                    ComponentType.ReadOnly<global::Game.Citizens.TouristHousehold>(),
-                    ComponentType.ReadOnly<global::Game.Citizens.CommuterHousehold>(),
-                },
+                All = SyncQuery.ReadOnly<global::Game.Citizens.Household,
+                    global::Game.Agents.MovingAway>(),
+                None = SyncQuery.ReadOnly<Deleted, Temp, global::Game.Citizens.TouristHousehold,
+                    global::Game.Citizens.CommuterHousehold>(),
             });
             // PropertySeeker is enableable, so this query only contains households whose local
             // behaviour has actively asked to find a property. The host owns that decision.
             _clientPropertySeekers = GetEntityQuery(new EntityQueryDesc
             {
-                All = new[]
-                {
-                    ComponentType.ReadOnly<global::Game.Citizens.Household>(),
-                    ComponentType.ReadOnly<global::Game.Agents.PropertySeeker>(),
-                },
-                None = new[]
-                {
-                    ComponentType.ReadOnly<Deleted>(),
-                    ComponentType.ReadOnly<Temp>(),
-                    ComponentType.ReadOnly<global::Game.Citizens.TouristHousehold>(),
-                    ComponentType.ReadOnly<global::Game.Citizens.CommuterHousehold>(),
-                },
+                All = SyncQuery.ReadOnly<global::Game.Citizens.Household,
+                    global::Game.Agents.PropertySeeker>(),
+                None = SyncQuery.ReadOnly<Deleted, Temp, global::Game.Citizens.TouristHousehold,
+                    global::Game.Citizens.CommuterHousehold>(),
             });
             // PropertyProcessingSystem emits this exact event whenever a renter is added to or
             // removed from a property. A dedicated every-frame boundary consumes the signal so a

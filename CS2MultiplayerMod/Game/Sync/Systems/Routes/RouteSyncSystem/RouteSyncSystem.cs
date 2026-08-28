@@ -119,61 +119,27 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
             _createdRoutes = GetEntityQuery(new EntityQueryDesc
             {
-                All = new[]
-                {
-                    ComponentType.ReadOnly<Created>(),
-                    ComponentType.ReadOnly<Route>(),
-                    ComponentType.ReadOnly<PrefabRef>(),
-                },
-                None = new[]
-                {
-                    ComponentType.ReadOnly<Temp>(),
-                    ComponentType.ReadOnly<Deleted>(),
-                },
+                All = SyncQuery.ReadOnly<Created, Route, PrefabRef>(),
+                None = SyncQuery.ReadOnly<Temp, Deleted>(),
             });
 
             _deletedRoutes = GetEntityQuery(new EntityQueryDesc
             {
-                All = new[]
-                {
-                    ComponentType.ReadOnly<Deleted>(),
-                    ComponentType.ReadOnly<Route>(),
-                    ComponentType.ReadOnly<PrefabRef>(),
-                },
-                None = new[]
-                {
-                    ComponentType.ReadOnly<Temp>(),
-                },
+                All = SyncQuery.ReadOnly<Deleted, Route, PrefabRef>(),
+                None = SyncQuery.ReadOnly<Temp>(),
             });
 
             _liveRoutes = GetEntityQuery(new EntityQueryDesc
             {
-                All = new[]
-                {
-                    ComponentType.ReadOnly<Route>(),
-                    ComponentType.ReadOnly<PrefabRef>(),
-                },
-                None = new[]
-                {
-                    ComponentType.ReadOnly<Temp>(),
-                    ComponentType.ReadOnly<Deleted>(),
-                },
+                All = SyncQuery.ReadOnly<Route, PrefabRef>(),
+                None = SyncQuery.ReadOnly<Temp, Deleted>(),
             });
 
             _transportStops = GetEntityQuery(new EntityQueryDesc
             {
-                All = new[]
-                {
-                    ComponentType.ReadOnly<global::Game.Routes.TransportStop>(),
-                    ComponentType.ReadOnly<ConnectedRoute>(),
-                    ComponentType.ReadOnly<PrefabRef>(),
-                    ComponentType.ReadOnly<global::Game.Objects.Transform>(),
-                },
-                None = new[]
-                {
-                    ComponentType.ReadOnly<Temp>(),
-                    ComponentType.ReadOnly<Deleted>(),
-                },
+                All = SyncQuery.ReadOnly<global::Game.Routes.TransportStop, ConnectedRoute,
+                    PrefabRef, global::Game.Objects.Transform>(),
+                None = SyncQuery.ReadOnly<Temp, Deleted>(),
             });
 
             if (Mod.Service != null)

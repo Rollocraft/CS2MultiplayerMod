@@ -38,16 +38,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             // on the frame the player releases (see NetSyncSystem's standing-Temp query).
             _foreignDefinitions = GetEntityQuery(new EntityQueryDesc
             {
-                All = new[]
-                {
-                    ComponentType.ReadOnly<CreationDefinition>(),
-                    ComponentType.ReadOnly<Updated>(),
-                },
-                None = new[]
-                {
-                    ComponentType.ReadOnly<Deleted>(),
-                    ComponentType.ReadOnly<Zoning>(),
-                },
+                All = SyncQuery.ReadOnly<CreationDefinition, Updated>(),
+                None = SyncQuery.ReadOnly<Deleted, Zoning>(),
             });
         }
 

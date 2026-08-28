@@ -102,20 +102,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             // the placement command alone rebuilds a plain edge on the other side.
             _upgradedEdges = GetEntityQuery(new EntityQueryDesc
             {
-                All = new[]
-                {
-                    ComponentType.ReadOnly<Updated>(),
-                    ComponentType.ReadOnly<Upgraded>(),
-                    ComponentType.ReadOnly<Edge>(),
-                    ComponentType.ReadOnly<Curve>(),
-                    ComponentType.ReadOnly<PrefabRef>(),
-                },
-                None = new[]
-                {
-                    ComponentType.ReadOnly<Temp>(),
-                    ComponentType.ReadOnly<Deleted>(),
-                    ComponentType.ReadOnly<Owner>(),
-                },
+                All = SyncQuery.ReadOnly<Updated, Upgraded, Edge, Curve, PrefabRef>(),
+                None = SyncQuery.ReadOnly<Temp, Deleted, Owner>(),
             });
 
             // Removal detection: the game strips Upgraded entirely when the last upgrade
@@ -123,85 +111,32 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             // we knew as upgraded (last-seen cache) produce a command.
             _bareEdges = GetEntityQuery(new EntityQueryDesc
             {
-                All = new[]
-                {
-                    ComponentType.ReadOnly<Updated>(),
-                    ComponentType.ReadOnly<Edge>(),
-                    ComponentType.ReadOnly<Curve>(),
-                    ComponentType.ReadOnly<PrefabRef>(),
-                },
-                None = new[]
-                {
-                    ComponentType.ReadOnly<Upgraded>(),
-                    ComponentType.ReadOnly<Temp>(),
-                    ComponentType.ReadOnly<Deleted>(),
-                    ComponentType.ReadOnly<Owner>(),
-                },
+                All = SyncQuery.ReadOnly<Updated, Edge, Curve, PrefabRef>(),
+                None = SyncQuery.ReadOnly<Upgraded, Temp, Deleted, Owner>(),
             });
 
             _upgradedNodes = GetEntityQuery(new EntityQueryDesc
             {
-                All = new[]
-                {
-                    ComponentType.ReadOnly<Updated>(),
-                    ComponentType.ReadOnly<Upgraded>(),
-                    ComponentType.ReadOnly<Node>(),
-                    ComponentType.ReadOnly<PrefabRef>(),
-                },
-                None = new[]
-                {
-                    ComponentType.ReadOnly<Temp>(),
-                    ComponentType.ReadOnly<Deleted>(),
-                    ComponentType.ReadOnly<Owner>(),
-                },
+                All = SyncQuery.ReadOnly<Updated, Upgraded, Node, PrefabRef>(),
+                None = SyncQuery.ReadOnly<Temp, Deleted, Owner>(),
             });
 
             _bareNodes = GetEntityQuery(new EntityQueryDesc
             {
-                All = new[]
-                {
-                    ComponentType.ReadOnly<Updated>(),
-                    ComponentType.ReadOnly<Node>(),
-                    ComponentType.ReadOnly<PrefabRef>(),
-                },
-                None = new[]
-                {
-                    ComponentType.ReadOnly<Upgraded>(),
-                    ComponentType.ReadOnly<Temp>(),
-                    ComponentType.ReadOnly<Deleted>(),
-                    ComponentType.ReadOnly<Owner>(),
-                },
+                All = SyncQuery.ReadOnly<Updated, Node, PrefabRef>(),
+                None = SyncQuery.ReadOnly<Upgraded, Temp, Deleted, Owner>(),
             });
 
             _liveEdges = GetEntityQuery(new EntityQueryDesc
             {
-                All = new[]
-                {
-                    ComponentType.ReadOnly<Edge>(),
-                    ComponentType.ReadOnly<Curve>(),
-                    ComponentType.ReadOnly<PrefabRef>(),
-                },
-                None = new[]
-                {
-                    ComponentType.ReadOnly<Temp>(),
-                    ComponentType.ReadOnly<Owner>(),
-                    ComponentType.ReadOnly<Deleted>(),
-                },
+                All = SyncQuery.ReadOnly<Edge, Curve, PrefabRef>(),
+                None = SyncQuery.ReadOnly<Temp, Owner, Deleted>(),
             });
 
             _liveNodes = GetEntityQuery(new EntityQueryDesc
             {
-                All = new[]
-                {
-                    ComponentType.ReadOnly<Node>(),
-                    ComponentType.ReadOnly<PrefabRef>(),
-                },
-                None = new[]
-                {
-                    ComponentType.ReadOnly<Temp>(),
-                    ComponentType.ReadOnly<Owner>(),
-                    ComponentType.ReadOnly<Deleted>(),
-                },
+                All = SyncQuery.ReadOnly<Node, PrefabRef>(),
+                None = SyncQuery.ReadOnly<Temp, Owner, Deleted>(),
             });
 
             if (Mod.Service != null)
@@ -252,22 +187,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         {
             EntityQuery allUpgraded = GetEntityQuery(new EntityQueryDesc
             {
-                All = new[]
-                {
-                    ComponentType.ReadOnly<Upgraded>(),
-                    ComponentType.ReadOnly<PrefabRef>(),
-                },
-                Any = new[]
-                {
-                    ComponentType.ReadOnly<Edge>(),
-                    ComponentType.ReadOnly<Node>(),
-                },
-                None = new[]
-                {
-                    ComponentType.ReadOnly<Temp>(),
-                    ComponentType.ReadOnly<Deleted>(),
-                    ComponentType.ReadOnly<Owner>(),
-                },
+                All = SyncQuery.ReadOnly<Upgraded, PrefabRef>(),
+                Any = SyncQuery.ReadOnly<Edge, Node>(),
+                None = SyncQuery.ReadOnly<Temp, Deleted, Owner>(),
             });
 
             NativeArray<Entity> entities = allUpgraded.ToEntityArray(Allocator.Temp);

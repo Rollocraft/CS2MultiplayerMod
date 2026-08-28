@@ -71,42 +71,20 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
             _districts = GetEntityQuery(new EntityQueryDesc
             {
-                All = new[]
-                {
-                    ComponentType.ReadOnly<District>(),
-                    ComponentType.ReadOnly<Node>(),
-                    ComponentType.ReadOnly<PrefabRef>(),
-                    ComponentType.ReadOnly<Policy>(),
-                },
-                None = new[] { ComponentType.ReadOnly<Temp>(), ComponentType.ReadOnly<Deleted>() },
+                All = SyncQuery.ReadOnly<District, Node, PrefabRef, Policy>(),
+                None = SyncQuery.ReadOnly<Temp, Deleted>(),
             });
 
             _routes = GetEntityQuery(new EntityQueryDesc
             {
-                All = new[]
-                {
-                    ComponentType.ReadOnly<Route>(),
-                    ComponentType.ReadOnly<PrefabRef>(),
-                    ComponentType.ReadOnly<Policy>(),
-                },
-                None = new[] { ComponentType.ReadOnly<Temp>(), ComponentType.ReadOnly<Deleted>() },
+                All = SyncQuery.ReadOnly<Route, PrefabRef, Policy>(),
+                None = SyncQuery.ReadOnly<Temp, Deleted>(),
             });
 
             _buildings = GetEntityQuery(new EntityQueryDesc
             {
-                All = new[]
-                {
-                    ComponentType.ReadOnly<Building>(),
-                    ComponentType.ReadOnly<PrefabRef>(),
-                    ComponentType.ReadOnly<global::Game.Objects.Transform>(),
-                    ComponentType.ReadOnly<Policy>(),
-                },
-                None = new[]
-                {
-                    ComponentType.ReadOnly<Temp>(),
-                    ComponentType.ReadOnly<Deleted>(),
-                    ComponentType.ReadOnly<Owner>(),
-                },
+                All = SyncQuery.ReadOnly<Building, PrefabRef, global::Game.Objects.Transform, Policy>(),
+                None = SyncQuery.ReadOnly<Temp, Deleted, Owner>(),
             });
 
             // Disabling a service upgrade is not a component edit: the game routes it through the
@@ -122,22 +100,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             // diff had nothing to compare against and the toggle was never sent.
             _ownedUpgrades = GetEntityQuery(new EntityQueryDesc
             {
-                All = new[]
-                {
-                    ComponentType.ReadOnly<PrefabRef>(),
-                    ComponentType.ReadOnly<global::Game.Objects.Transform>(),
-                    ComponentType.ReadOnly<Owner>(),
-                },
-                Any = new[]
-                {
-                    ComponentType.ReadOnly<global::Game.Buildings.ServiceUpgrade>(),
-                    ComponentType.ReadOnly<Extension>(),
-                },
-                None = new[]
-                {
-                    ComponentType.ReadOnly<Temp>(),
-                    ComponentType.ReadOnly<Deleted>(),
-                },
+                All = SyncQuery.ReadOnly<PrefabRef, global::Game.Objects.Transform, Owner>(),
+                Any = SyncQuery.ReadOnly<global::Game.Buildings.ServiceUpgrade, Extension>(),
+                None = SyncQuery.ReadOnly<Temp, Deleted>(),
             });
 
             if (Mod.Service != null)

@@ -227,39 +227,17 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
             _batchColorQuery = GetEntityQuery(new EntityQueryDesc
             {
-                All = new[]
-                {
-                    ComponentType.ReadOnly<BatchesUpdated>(),
-                    ComponentType.ReadOnly<CustomMeshColor>(),
-                    ComponentType.ReadOnly<MeshColor>(),
-                    ComponentType.ReadOnly<PrefabRef>(),
-                    ComponentType.ReadOnly<Transform>(),
-                },
-                None = new[]
-                {
-                    ComponentType.ReadOnly<Temp>(),
-                    ComponentType.ReadOnly<Deleted>(),
-                },
+                All = SyncQuery.ReadOnly<BatchesUpdated, CustomMeshColor, MeshColor, PrefabRef,
+                    Transform>(),
+                None = SyncQuery.ReadOnly<Temp, Deleted>(),
                 Options = EntityQueryOptions.IgnoreComponentEnabledState,
             });
 
             _targetQuery = GetEntityQuery(new EntityQueryDesc
             {
-                All = new[]
-                {
-                    ComponentType.ReadOnly<PrefabRef>(),
-                    ComponentType.ReadOnly<Transform>(),
-                },
-                Any = new[]
-                {
-                    ComponentType.ReadOnly<CustomMeshColor>(),
-                    ComponentType.ReadOnly<Building>(),
-                },
-                None = new[]
-                {
-                    ComponentType.ReadOnly<Temp>(),
-                    ComponentType.ReadOnly<Deleted>(),
-                },
+                All = SyncQuery.ReadOnly<PrefabRef, Transform>(),
+                Any = SyncQuery.ReadOnly<CustomMeshColor, Building>(),
+                None = SyncQuery.ReadOnly<Temp, Deleted>(),
                 Options = EntityQueryOptions.IgnoreComponentEnabledState,
             });
 

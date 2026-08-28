@@ -71,14 +71,9 @@ namespace CS2MultiplayerMod.Game.Sync.Channels
                 ComponentType.ReadOnly<PropertyOnMarket>());
             _citizenOutsideConnections = em.CreateEntityQuery(new EntityQueryDesc
             {
-                All = new[] { ComponentType.ReadOnly<global::Game.Objects.OutsideConnection>() },
-                None = new[]
-                {
-                    ComponentType.ReadOnly<global::Game.Objects.ElectricityOutsideConnection>(),
-                    ComponentType.ReadOnly<global::Game.Objects.WaterPipeOutsideConnection>(),
-                    ComponentType.ReadOnly<Temp>(),
-                    ComponentType.ReadOnly<Deleted>(),
-                },
+                All = SyncQuery.ReadOnly<global::Game.Objects.OutsideConnection>(),
+                None = SyncQuery.ReadOnly<global::Game.Objects.ElectricityOutsideConnection,
+                    global::Game.Objects.WaterPipeOutsideConnection, Temp, Deleted>(),
             });
             _population = em.CreateEntityQuery(ComponentType.ReadOnly<Population>());
             _households = em.CreateEntityQuery(ComponentType.ReadOnly<Household>());
@@ -102,11 +97,7 @@ namespace CS2MultiplayerMod.Game.Sync.Channels
             return em.CreateEntityQuery(new EntityQueryDesc
             {
                 All = required,
-                None = new[]
-                {
-                    ComponentType.ReadOnly<Temp>(),
-                    ComponentType.ReadOnly<Deleted>(),
-                },
+                None = SyncQuery.ReadOnly<Temp, Deleted>(),
             });
         }
 

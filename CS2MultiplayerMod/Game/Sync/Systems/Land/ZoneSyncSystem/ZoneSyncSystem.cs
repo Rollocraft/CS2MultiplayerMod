@@ -133,12 +133,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
             _updatedBlocks = GetEntityQuery(new EntityQueryDesc
             {
-                All = new[]
-                {
-                    ComponentType.ReadOnly<Block>(),
-                    ComponentType.ReadOnly<Cell>(),
-                    ComponentType.ReadOnly<Updated>(),
-                },
+                All = SyncQuery.ReadOnly<Block, Cell, Updated>(),
                 None = new[]
                 {
                     ComponentType.ReadOnly<Temp>(),
@@ -151,16 +146,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
             _allBlocks = GetEntityQuery(new EntityQueryDesc
             {
-                All = new[]
-                {
-                    ComponentType.ReadOnly<Block>(),
-                    ComponentType.ReadOnly<Cell>(),
-                },
-                None = new[]
-                {
-                    ComponentType.ReadOnly<Temp>(),
-                    ComponentType.ReadOnly<Deleted>(),
-                },
+                All = SyncQuery.ReadOnly<Block, Cell>(),
+                None = SyncQuery.ReadOnly<Temp, Deleted>(),
             });
 
             _zonePrefabs = GetEntityQuery(

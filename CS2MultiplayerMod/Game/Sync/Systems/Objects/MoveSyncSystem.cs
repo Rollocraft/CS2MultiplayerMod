@@ -49,20 +49,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             // can persist) to the frame the move actually happened.
             _movedObjects = GetEntityQuery(new EntityQueryDesc
             {
-                All = new[]
-                {
-                    ComponentType.ReadOnly<Updated>(),
-                    ComponentType.ReadOnly<MovedLocation>(),
-                    ComponentType.ReadOnly<PrefabRef>(),
-                    ComponentType.ReadOnly<Transform>(),
-                },
-                None = new[]
-                {
-                    ComponentType.ReadOnly<Temp>(),
-                    ComponentType.ReadOnly<Owner>(),
-                    ComponentType.ReadOnly<Deleted>(),
-                    ComponentType.ReadOnly<Created>(),
-                },
+                All = SyncQuery.ReadOnly<Updated, MovedLocation, PrefabRef, Transform>(),
+                None = SyncQuery.ReadOnly<Temp, Owner, Deleted, Created>(),
             });
 
             // A blocked move re-runs FindAt every frame until its retry window closes; that lookup
