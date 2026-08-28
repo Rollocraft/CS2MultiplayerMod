@@ -139,17 +139,13 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 None = SyncQuery.ReadOnly<Temp, Owner, Deleted>(),
             });
 
-            if (Mod.Service != null)
-            {
-                _observer = new CommandObserver(_incoming, NetUpgradeCommand.Id);
-                Mod.Service.Session.AddObserver(_observer);
-            }
+            _observer = SyncObserverBinding.Bind(
+                () => new CommandObserver(_incoming, NetUpgradeCommand.Id));
         }
 
         protected override void OnDestroy()
         {
-            if (_observer != null && Mod.Service != null)
-                Mod.Service.Session.RemoveObserver(_observer);
+            SyncObserverBinding.Unbind(_observer);
             base.OnDestroy();
         }
 

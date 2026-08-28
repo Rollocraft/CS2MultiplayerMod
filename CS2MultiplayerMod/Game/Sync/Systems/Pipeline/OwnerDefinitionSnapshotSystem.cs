@@ -4,6 +4,7 @@ using Game.Tools;
 using Unity.Collections;
 using Unity.Entities;
 
+using CS2MultiplayerMod.Game.Sync.Infrastructure;
 using CS2MultiplayerMod.Game.Sync.Systems.Net;
 namespace CS2MultiplayerMod.Game.Sync.Systems
 {

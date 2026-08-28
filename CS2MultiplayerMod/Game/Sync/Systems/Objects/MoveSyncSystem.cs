@@ -58,19 +58,13 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             _objectSearch = new ObjectSearch(
                 World.GetOrCreateSystemManaged<global::Game.Objects.SearchSystem>());
 
-            if (Mod.Service != null)
-            {
-                _observer = new CommandObserver(_incoming, ObjectMoveCommand.Id);
-                Mod.Service.Session.AddObserver(_observer);
-            }
-            SyncInbox.RegisterDrain(DrainQueue);
+            _observer = SyncObserverBinding.Bind(
+                () => new CommandObserver(_incoming, ObjectMoveCommand.Id), DrainQueue);
         }
 
         protected override void OnDestroy()
         {
-            SyncInbox.UnregisterDrain(DrainQueue);
-            if (_observer != null && Mod.Service != null)
-                Mod.Service.Session.RemoveObserver(_observer);
+            SyncObserverBinding.Unbind(_observer, DrainQueue);
             base.OnDestroy();
         }
 

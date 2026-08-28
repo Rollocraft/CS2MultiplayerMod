@@ -86,23 +86,19 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 None = SyncQuery.ReadOnly<global::Game.Events.Flood, Deleted, Temp>(),
             });
 
-            if (Mod.Service != null)
-            {
-                _observer = new CommandObserver(_incoming, DisasterEventCommand.Id)
-                {
-                    MaxBodyBytes = DisasterEventCommand.MaxEncodedBytes,
-                };
-                Mod.Service.Session.AddObserver(_observer);
-            }
-            SyncInbox.RegisterDrain(DrainQueue);
+            _observer = SyncObserverBinding.Bind(
+                () => new CommandObserver(_incoming, DisasterEventCommand.Id)
+                    {
+                        MaxBodyBytes = DisasterEventCommand.MaxEncodedBytes,
+                    },
+                DrainQueue);
         }
 
         protected override void OnDestroy()
         {
             SyncInbox.UnregisterDrain(DrainQueue);
             SuppressLocalRolls(false);
-            if (_observer != null && Mod.Service != null)
-                Mod.Service.Session.RemoveObserver(_observer);
+            SyncObserverBinding.Unbind(_observer);
             base.OnDestroy();
         }
 

@@ -547,20 +547,15 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                 None = SyncQuery.ReadOnly<Temp, Owner>(),
             });
 
-            if (Mod.Service != null)
-            {
-                _observer = new Observer(_incoming);
-                Mod.Service.Session.AddObserver(_observer);
-            }
-            SyncInbox.RegisterDrain(DrainNetQueues);
+            _observer = SyncObserverBinding.Bind(
+                () => new Observer(_incoming), DrainNetQueues);
         }
 
         protected override void OnDestroy()
         {
             SyncInbox.UnregisterDrain(DrainNetQueues);
             ReleaseAllIsolation();
-            if (_observer != null && Mod.Service != null)
-                Mod.Service.Session.RemoveObserver(_observer);
+            SyncObserverBinding.Unbind(_observer);
             base.OnDestroy();
         }
 

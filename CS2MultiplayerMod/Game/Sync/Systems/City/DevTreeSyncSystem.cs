@@ -58,17 +58,13 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             _unlockArchetype = EntityManager.CreateArchetype(
                 ComponentType.ReadWrite<Unlock>(), ComponentType.ReadWrite<global::Game.Common.Event>());
 
-            if (Mod.Service != null)
-            {
-                _observer = new CommandObserver(_incoming, DevTreePurchaseCommand.Id);
-                Mod.Service.Session.AddObserver(_observer);
-            }
+            _observer = SyncObserverBinding.Bind(
+                () => new CommandObserver(_incoming, DevTreePurchaseCommand.Id));
         }
 
         protected override void OnDestroy()
         {
-            if (_observer != null && Mod.Service != null)
-                Mod.Service.Session.RemoveObserver(_observer);
+            SyncObserverBinding.Unbind(_observer);
             base.OnDestroy();
         }
 

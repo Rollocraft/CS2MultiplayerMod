@@ -76,13 +76,10 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 None = SyncQuery.ReadOnly<Temp, Deleted, Owner>(),
             });
 
-            if (Mod.Service != null)
-            {
-                _observer = new CommandObserver(_incoming, AreaCreateCommand.Id,
-                    AreaUpdateCommand.Id, AreaDeleteCommand.Id,
-                    OwnedAreaSnapshotCommand.Id);
-                Mod.Service.Session.AddObserver(_observer);
-            }
+            _observer = SyncObserverBinding.Bind(
+                () => new CommandObserver(_incoming, AreaCreateCommand.Id,
+                AreaUpdateCommand.Id, AreaDeleteCommand.Id,
+                OwnedAreaSnapshotCommand.Id));
         }
 
         private static EntityQueryDesc AreaQuery(ComponentType lifecycleTag) => new EntityQueryDesc
@@ -105,8 +102,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
         protected override void OnDestroy()
         {
-            if (_observer != null && Mod.Service != null)
-                Mod.Service.Session.RemoveObserver(_observer);
+            SyncObserverBinding.Unbind(_observer);
             base.OnDestroy();
         }
 
