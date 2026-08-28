@@ -94,7 +94,11 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                                 if (_objectRetry.Count >= MaxPendingDeletes)
                                 {
                                     _objectRetry.Clear();
-                                    SyncInbox.RequestResync("object delete retry queue overflow");
+                                    SyncInbox.RequestResync(CS2MultiplayerMod.Game.Diagnostics.ResyncReport
+                                        .Create("object delete retry queue overflow", "delete",
+                                            CS2MultiplayerMod.Game.Diagnostics.ResyncEvidence.StreamLoss)
+                                        .About("object delete retry queue")
+                                        .Tried("nothing - the queue was full and was cleared"));
                                 }
                                 else _objectRetry.Add(commands[t]);
                                 waiting++;
@@ -102,7 +106,11 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                             else
                             {
                                 expired++;
-                                SyncInbox.RequestResync("object delete graph validation failed");
+                                SyncInbox.RequestResync(CS2MultiplayerMod.Game.Diagnostics.ResyncReport
+                                    .Create("object delete graph validation failed", "delete",
+                                        CS2MultiplayerMod.Game.Diagnostics.ResyncEvidence.Contradiction)
+                                    .About("object delete graph")
+                                    .Tried("nothing - the ownership graph under this object cannot be torn down safely"));
                                 Mod.log.Warn("[MP] DeleteSync: rejected stale building graph: " +
                                              invalidReason + ".");
                             }

@@ -336,7 +336,11 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     if (_pendingStateCorrections.Count >= MaxPendingStateCorrections)
                     {
                         _pendingStateSequences.Remove(command.Sequence);
-                        SyncInbox.RequestResync("growable state retry queue overflow");
+                        SyncInbox.RequestResync(CS2MultiplayerMod.Game.Diagnostics.ResyncReport
+                            .Create("growable state retry queue overflow", "growable",
+                                CS2MultiplayerMod.Game.Diagnostics.ResyncEvidence.StreamLoss)
+                            .About("state retry queue")
+                            .Tried("nothing - the pending-correction queue was full"));
                     }
                     else
                     {
@@ -372,7 +376,11 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     _pendingStateCorrections.RemoveAt(i);
                     _unmatched++;
                     _applied.Remember(pending.Command.Sequence, now, ReplayWindowMs);
-                    SyncInbox.RequestResync("growable state target did not resolve");
+                    SyncInbox.RequestResync(CS2MultiplayerMod.Game.Diagnostics.ResyncReport
+                        .Create("growable state target did not resolve", "growable",
+                            CS2MultiplayerMod.Game.Diagnostics.ResyncEvidence.MissingTarget)
+                        .About("state correction target")
+                        .Tried("retried for 15 s of attempts, not counting time this system was held back"));
                     continue;
                 }
 
@@ -708,7 +716,11 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                         EntityManager.AddComponent<Updated>(entity);
                         if (_realizationValidations.Count >= MaxRealizationValidations)
                         {
-                            SyncInbox.RequestResync("growable realization validation overflow");
+                            SyncInbox.RequestResync(CS2MultiplayerMod.Game.Diagnostics.ResyncReport
+                                .Create("growable realization validation overflow", "growable",
+                                    CS2MultiplayerMod.Game.Diagnostics.ResyncEvidence.StreamLoss)
+                                .About("realization validation queue")
+                                .Tried("nothing - the validation queue was full"));
                         }
                         else _realizationValidations.Add(new RealizationValidation
                         {
@@ -789,7 +801,11 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                                  Format(pending.Position) + " did not join its road/service graph; " +
                                  "requesting world repair.");
                     Diagnostics.FlightRecorder.Note("growable realization invalid/resync");
-                    SyncInbox.RequestResync("growable building failed road/service realization");
+                    SyncInbox.RequestResync(CS2MultiplayerMod.Game.Diagnostics.ResyncReport
+                        .Create("growable building failed road/service realization", "growable",
+                            CS2MultiplayerMod.Game.Diagnostics.ResyncEvidence.MissingTarget)
+                        .About("building road/service graph")
+                        .Tried("re-ran native initialization for 15 s of attempts, not counting time roads were held back"));
                     continue;
                 }
 

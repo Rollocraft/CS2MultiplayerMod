@@ -40,6 +40,17 @@ Fewer world reloads, and a log that says why the ones that remain happened.
   against attempts, and asked for a world reload over a command that had never once been tried.
 - A zoned building waiting to join its road network no longer counts down that wait while the
   road pipeline is the thing being held back.
+- Every remaining reason the mod can reload a world now records what it actually saw, instead
+  of a short phrase. A reason that says commands were lost, or that this city contradicts the
+  other player's, reloads at once; one that only says a deadline passed has to survive a hold
+  first, and a fault that clears during that hold is logged as a reload that did not happen.
+- Buildings, decorations, policies, appearance changes and transport lines no longer count down
+  their waiting time while the thing they are waiting for is being held back by the mod itself.
+  A prop waiting for its road, a policy waiting for its building and a line waiting to be
+  created could all run out of patience against the clock rather than against attempts.
+- A transport line whose commit was lost during a world reload no longer asks for another world
+  reload. The incoming world already replaces it, and asking again is how a session gets stuck
+  in a loop of them.
 - Fixed a client that could sit waiting for a world forever. If the host finished a world
   handover before this city had installed it, the client asked for a replacement - but its own
   request was discarded as "a reload is already running", because the state it had just entered

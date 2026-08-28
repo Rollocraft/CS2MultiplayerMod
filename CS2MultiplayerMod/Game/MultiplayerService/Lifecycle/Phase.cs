@@ -280,6 +280,7 @@ namespace CS2MultiplayerMod.Game
             _settledReport = null;
             _mapReRequestPending = false;
             Diagnostics.ResyncArbiter.Reset();
+            Sync.Infrastructure.RealizeGate.Reset();
             ResetWorldSyncState(restoreSpeed: false); // the world is going away with the process
             _session.StopWithNotice("The host closed the game, so this session has ended.");
             SetPhase(ClientWorldPhase.None);

@@ -381,11 +381,19 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                                  "the remote stamp '" + prefabName +
                                  "' was skipped and world recovery was requested.");
                     Diagnostics.FlightRecorder.Note("asset stamp unsupported; recovery requested");
-                    SyncInbox.RequestResync("asset stamp generator unavailable");
+                    SyncInbox.RequestResync(CS2MultiplayerMod.Game.Diagnostics.ResyncReport
+                        .Create("asset stamp generator unavailable", "object",
+                            CS2MultiplayerMod.Game.Diagnostics.ResyncEvidence.Contradiction)
+                        .About("asset stamp generator")
+                        .Tried("nothing - this build cannot reach the generator and a stamp has no reduced form"));
                     return NativeObjectResult.Rejected;
                 case NativeDeriveResult.Failed:
                     Diagnostics.FlightRecorder.Note("asset stamp derive failed; recovery requested");
-                    SyncInbox.RequestResync("asset stamp generation failed");
+                    SyncInbox.RequestResync(CS2MultiplayerMod.Game.Diagnostics.ResyncReport
+                        .Create("asset stamp generation failed", "object",
+                            CS2MultiplayerMod.Game.Diagnostics.ResyncEvidence.Contradiction)
+                        .About("asset stamp generation")
+                        .Tried("nothing - the generator refused the stamp and will refuse it again"));
                     return NativeObjectResult.Rejected;
                 default:
                     return NativeObjectResult.Rejected;
@@ -507,7 +515,11 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                              "requesting world recovery: " + ex.Message);
                 Diagnostics.FlightRecorder.Note("object definitions failed=" + ex.GetType().Name +
                                                   "; recovery requested");
-                SyncInbox.RequestResync("native object definitions could not be generated");
+                SyncInbox.RequestResync(CS2MultiplayerMod.Game.Diagnostics.ResyncReport
+                    .Create("native object definitions could not be generated", "object",
+                        CS2MultiplayerMod.Game.Diagnostics.ResyncEvidence.Contradiction)
+                    .About("object definition generation")
+                    .Tried("tore the partial definitions down, so nothing inconsistent was committed"));
                 return NativeObjectResult.Rejected;
             }
 
@@ -1071,7 +1083,11 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 Mod.log.Warn("[MP] BuildSync: native object replay prefix overflowed; requesting " +
                              "world recovery instead of losing an operation.");
                 Diagnostics.FlightRecorder.Note("object replay prefix overflow; recovery requested");
-                SyncInbox.RequestResync("native object replay prefix overflow");
+                SyncInbox.RequestResync(CS2MultiplayerMod.Game.Diagnostics.ResyncReport
+                    .Create("native object replay prefix overflow", "object",
+                        CS2MultiplayerMod.Game.Diagnostics.ResyncEvidence.StreamLoss)
+                    .About("object replay prefix")
+                    .Tried("nothing - the replay prefix was full and the operation could not be kept"));
                 return;
             }
             _nativeObjectReplayPrefix.Add(message);

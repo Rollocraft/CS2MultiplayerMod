@@ -60,9 +60,10 @@ namespace CS2MultiplayerMod.Game.Sync.Infrastructure
         }
 
         /// <summary>
-        /// Ask for a world reload without evidence. Kept for the call sites that have already let
-        /// go of their work and for anything running off the main thread; the request is classified
-        /// as an unproven timeout, so the arbiter will corroborate it before any world is reloaded.
+        /// Ask for a world reload without evidence. No call site in the mod does this any more -
+        /// every one of them now names what it saw - but the overload stays as the safe default for
+        /// anything added later: an unclassified request is treated as an unproven timeout, so it
+        /// is held and corroborated rather than reloading a world on nothing.
         /// </summary>
         public static void RequestResync(string reason)
         {

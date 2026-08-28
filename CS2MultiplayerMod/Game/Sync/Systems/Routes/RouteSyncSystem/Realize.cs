@@ -40,7 +40,11 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             Entity prefab;
             if (!_prefabIndex.TryResolve(command.PrefabName, out prefab))
             {
-                SyncInbox.RequestResync("unknown route prefab during creation");
+                SyncInbox.RequestResync(CS2MultiplayerMod.Game.Diagnostics.ResyncReport
+                    .Create("unknown route prefab during creation", "route",
+                        CS2MultiplayerMod.Game.Diagnostics.ResyncEvidence.StreamLoss)
+                    .About("route prefab on creation")
+                    .Tried("nothing - this game does not have the transport line prefab the other player used"));
                 Mod.log.Warn("[MP] RouteSync create: unknown prefab '" +
                              command.PrefabName + "'; skipping.");
                 return RealizeResult.Rejected;
@@ -61,7 +65,11 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 if (command.RouteNumber > 0 &&
                     pending.RouteNumber == command.RouteNumber)
                 {
-                    SyncInbox.RequestResync("pending route number conflict");
+                    SyncInbox.RequestResync(CS2MultiplayerMod.Game.Diagnostics.ResyncReport
+                        .Create("pending route number conflict", "route",
+                            CS2MultiplayerMod.Game.Diagnostics.ResyncEvidence.Contradiction)
+                        .About("pending line number")
+                        .Tried("nothing - another line being created in this batch already claimed that number"));
                     Mod.log.Warn("[MP] RouteSync create: two different pending lines claim number " +
                                  command.RouteNumber + " for '" + command.PrefabName + "'.");
                     return RealizeResult.Rejected;
@@ -76,7 +84,11 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 command.Waypoints, out numberConflict);
             if (numberConflict)
             {
-                SyncInbox.RequestResync("route number conflict during creation");
+                SyncInbox.RequestResync(CS2MultiplayerMod.Game.Diagnostics.ResyncReport
+                    .Create("route number conflict during creation", "route",
+                        CS2MultiplayerMod.Game.Diagnostics.ResyncEvidence.Contradiction)
+                    .About("line number on creation")
+                    .Tried("nothing - an established line here already uses that number"));
                 Mod.log.Warn("[MP] RouteSync create: route number " + command.RouteNumber +
                              " for '" + command.PrefabName +
                              "' already belongs to a different line; requested a fresh world sync.");
@@ -90,7 +102,11 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 if (!TryApplyMetadata(existing, prefab, command.RouteNumber,
                         PackColor(command.ColorR, command.ColorG, command.ColorB, command.ColorA)))
                 {
-                    SyncInbox.RequestResync("route metadata conflict during idempotent creation");
+                    SyncInbox.RequestResync(CS2MultiplayerMod.Game.Diagnostics.ResyncReport
+                        .Create("route metadata conflict during idempotent creation", "route",
+                            CS2MultiplayerMod.Game.Diagnostics.ResyncEvidence.Contradiction)
+                        .About("line metadata on re-creation")
+                        .Tried("nothing - the line already exists here with different metadata"));
                     return RealizeResult.Rejected;
                 }
                 MarkCreateGuards(command, now);
@@ -174,7 +190,11 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                         EntityManager.DestroyEntity(definition);
                     if (_netSync != null) _netSync.CancelPreparedDefinitionFrame();
                 }
-                SyncInbox.RequestResync("route creation failed");
+                SyncInbox.RequestResync(CS2MultiplayerMod.Game.Diagnostics.ResyncReport
+                    .Create("route creation failed", "route",
+                        CS2MultiplayerMod.Game.Diagnostics.ResyncEvidence.Contradiction)
+                    .About("line creation")
+                    .Tried("nothing - creation threw and was rolled back"));
                 Mod.log.Error("[MP] RouteSync create FAILED for '" +
                               command.PrefabName + "': " + ex);
                 return RealizeResult.Rejected;
@@ -186,7 +206,11 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             Entity prefab;
             if (!_prefabIndex.TryResolve(command.PrefabName, out prefab))
             {
-                SyncInbox.RequestResync("unknown route prefab during update");
+                SyncInbox.RequestResync(CS2MultiplayerMod.Game.Diagnostics.ResyncReport
+                    .Create("unknown route prefab during update", "route",
+                        CS2MultiplayerMod.Game.Diagnostics.ResyncEvidence.StreamLoss)
+                    .About("route prefab on update")
+                    .Tried("nothing - this game does not have the transport line prefab the other player used"));
                 Mod.log.Warn("[MP] RouteSync update: unknown prefab '" +
                              command.PrefabName + "'; skipping.");
                 return RealizeResult.Rejected;
@@ -222,7 +246,11 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 command.ColorB, command.ColorA);
             if (!RouteNumberAvailable(route, prefab, command.RouteNumber))
             {
-                SyncInbox.RequestResync("route number conflict during update");
+                SyncInbox.RequestResync(CS2MultiplayerMod.Game.Diagnostics.ResyncReport
+                    .Create("route number conflict during update", "route",
+                        CS2MultiplayerMod.Game.Diagnostics.ResyncEvidence.Contradiction)
+                    .About("line number on update")
+                    .Tried("nothing - another line here already uses the number this update assigns"));
                 Mod.log.Warn("[MP] RouteSync update: requested number " +
                              command.RouteNumber + " is already in use for '" +
                              command.PrefabName + "'.");
@@ -289,7 +317,11 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 // is applied explicitly even when the waypoint graph is rebuilt in the same frame.
                 if (!TryApplyMetadata(route, prefab, command.RouteNumber, rgba))
                 {
-                    SyncInbox.RequestResync("route number conflict during update");
+                    SyncInbox.RequestResync(CS2MultiplayerMod.Game.Diagnostics.ResyncReport
+                        .Create("route number conflict during update", "route",
+                            CS2MultiplayerMod.Game.Diagnostics.ResyncEvidence.Contradiction)
+                        .About("line number on update")
+                        .Tried("nothing - another line here already uses the number this update assigns"));
                     Mod.log.Warn("[MP] RouteSync update: requested number " +
                                  command.RouteNumber + " is already in use for '" +
                                  command.PrefabName + "'.");
@@ -339,7 +371,11 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     if (_netSync != null) _netSync.CancelPreparedDefinitionFrame();
                     TryApplyMetadata(route, prefab, local.RouteNumber, local.Rgba);
                 }
-                SyncInbox.RequestResync("route update failed");
+                SyncInbox.RequestResync(CS2MultiplayerMod.Game.Diagnostics.ResyncReport
+                    .Create("route update failed", "route",
+                        CS2MultiplayerMod.Game.Diagnostics.ResyncEvidence.Contradiction)
+                    .About("line update")
+                    .Tried("nothing - the update threw and was rolled back"));
                 Mod.log.Error("[MP] RouteSync update FAILED for '" +
                               command.PrefabName + "': " + ex);
                 return RealizeResult.Rejected;
@@ -351,7 +387,11 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             Entity prefab;
             if (!_prefabIndex.TryResolve(command.PrefabName, out prefab))
             {
-                SyncInbox.RequestResync("unknown route prefab during deletion");
+                SyncInbox.RequestResync(CS2MultiplayerMod.Game.Diagnostics.ResyncReport
+                    .Create("unknown route prefab during deletion", "route",
+                        CS2MultiplayerMod.Game.Diagnostics.ResyncEvidence.StreamLoss)
+                    .About("route prefab on deletion")
+                    .Tried("nothing - this game does not have the transport line prefab the other player used"));
                 Mod.log.Warn("[MP] RouteSync delete: unknown prefab '" +
                              command.PrefabName + "'; skipping.");
                 return RealizeResult.Rejected;
@@ -395,7 +435,11 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             if (waypoints == null || waypoints.Length < 2 ||
                 waypoints.Length > RouteCreateCommand.MaxWaypoints)
             {
-                SyncInbox.RequestResync("invalid route topology");
+                SyncInbox.RequestResync(CS2MultiplayerMod.Game.Diagnostics.ResyncReport
+                    .Create("invalid route topology", "route",
+                        CS2MultiplayerMod.Game.Diagnostics.ResyncEvidence.Contradiction)
+                    .About("line topology")
+                    .Tried("nothing - the described line does not form a valid route here"));
                 return false;
             }
 
@@ -404,7 +448,11 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 if (!string.IsNullOrEmpty(waypoints[i].StopPrefabName))
                     return true;
 
-            SyncInbox.RequestResync("public transport route without any stop rejected");
+            SyncInbox.RequestResync(CS2MultiplayerMod.Game.Diagnostics.ResyncReport
+                .Create("public transport route without any stop rejected", "route",
+                    CS2MultiplayerMod.Game.Diagnostics.ResyncEvidence.Contradiction)
+                .About("line with no stops")
+                .Tried("nothing - a public transport line with no stops cannot be created"));
             Mod.log.Warn("[MP] RouteSync rejected public-transport line '" + prefabName +
                          "' because none of its waypoints is connected to a stop.");
             return false;
@@ -882,7 +930,11 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 if (!TryApplyMetadata(route, pending.Prefab,
                         pending.RouteNumber, pending.Rgba, readyRoutes))
                 {
-                    SyncInbox.RequestResync("route number conflict after creation");
+                    SyncInbox.RequestResync(CS2MultiplayerMod.Game.Diagnostics.ResyncReport
+                        .Create("route number conflict after creation", "route",
+                            CS2MultiplayerMod.Game.Diagnostics.ResyncEvidence.Contradiction)
+                        .About("line number after creation")
+                        .Tried("assigned every line finalized in this batch together before rejecting the conflict"));
                     Mod.log.Warn("[MP] RouteSync could not assign number " +
                                  pending.RouteNumber + " to '" + pending.PrefabName +
                                  "'; requested a fresh world sync.");
@@ -1000,12 +1052,25 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         {
             MultiplayerService service = Mod.Service;
             long now = service != null ? service.NowMs : 0;
-            if (service == null || !service.GameplaySyncReady ||
-                now >= command.DeadlineMs ||
+            // Gameplay not being ready means the world is already being replaced. The replacement
+            // supersedes this commit, so asking for another one is noise - and asking for a world
+            // reload BECAUSE a world reload is under way is how a session gets into a loop.
+            if (service == null || !service.GameplaySyncReady)
+            {
+                Mod.log.Warn("[MP] RouteSync " + operation +
+                             " commit was lost while the world was being replaced; the incoming " +
+                             "world supersedes it.");
+                return;
+            }
+            if (now >= command.DeadlineMs ||
                 _pendingCommands.Count >= MaxPendingCommands)
             {
-                SyncInbox.RequestResync("route " + operation +
-                                         " commit could not be replayed");
+                SyncInbox.RequestResync(CS2MultiplayerMod.Game.Diagnostics.ResyncReport
+                    .Create("route commit could not be replayed", "route",
+                        CS2MultiplayerMod.Game.Diagnostics.ResyncEvidence.StreamLoss)
+                    .About("route " + operation + " commit")
+                    .Tried("nothing - the armed commit was wiped and its window had already closed")
+                    .Fact("route commands still queued", _pendingCommands.Count));
                 Mod.log.Warn("[MP] RouteSync " + operation +
                              " commit was lost and could not be replayed safely.");
                 return;

@@ -720,7 +720,11 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                 Diagnostics.FlightRecorder.Note((commitArmed ?
                     "net mixed operation post-arm failure/resync op=" :
                     "net mixed operation rollback/resync op=") + operation.OperationId);
-                SyncInbox.RequestResync("mixed net operation could not be generated atomically");
+                SyncInbox.RequestResync(CS2MultiplayerMod.Game.Diagnostics.ResyncReport
+                    .Create("mixed net operation could not be generated atomically", "net",
+                        CS2MultiplayerMod.Game.Diagnostics.ResyncEvidence.Contradiction)
+                    .About("mixed operation generation")
+                    .Tried("nothing - the operation threw while being generated and cannot be rebuilt identically"));
                 return commitArmed;
             }
             finally

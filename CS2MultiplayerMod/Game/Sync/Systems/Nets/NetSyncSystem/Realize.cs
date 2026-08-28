@@ -837,7 +837,11 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                     // Aliasing is deterministic: retrying the same courses against the same local
                     // geometry resolves them onto the same edge again. Recover the world instead.
                     bool retry = failures <= 3 && !abortAliasedSplit;
-                    if (abortAliasedSplit) SyncInbox.RequestResync("net split target aliased by local divergence");
+                    if (abortAliasedSplit) SyncInbox.RequestResync(CS2MultiplayerMod.Game.Diagnostics.ResyncReport
+                        .Create("net split target aliased by local divergence", "net",
+                            CS2MultiplayerMod.Game.Diagnostics.ResyncEvidence.Contradiction)
+                        .About("aliased split target")
+                        .Tried("nothing - two roads the other player split separately are one road here"));
                     if (retry)
                     {
                         _operationBuildFailures[failureKey] = failures;
