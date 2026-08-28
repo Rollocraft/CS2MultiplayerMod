@@ -1,7 +1,5 @@
-using System;
-using System.Collections.Generic;
 using CS2MultiplayerMod.Core.Session;
-using Unity.Entities;
+using CS2MultiplayerMod.Game.Sync.Infrastructure;
 
 namespace CS2MultiplayerMod.Game.Sync.Systems
 {
@@ -35,77 +33,26 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         /// * <c>AgingSystem</c> stays running: it contains no randomness and both peers hold the
         ///   same birthdays.
         /// </summary>
-        private static readonly Type[] ClientSuppressedSystems =
-        {
+        private readonly LocalAuthorityHold _authority = new LocalAuthorityHold(
+            "Occupancy", "residential occupancy", "who lives where", "occupancy authority",
             typeof(global::Game.Simulation.HouseholdSpawnSystem),
             typeof(global::Game.Simulation.HouseholdFindPropertySystem),
             typeof(global::Game.Simulation.HouseholdPetSpawnSystem),
             typeof(global::Game.Simulation.BirthSystem),
-            typeof(global::Game.Simulation.LeaveHouseholdSystem),
-        };
-
-        private readonly Dictionary<Type, bool> _suppressedWasEnabled = new Dictionary<Type, bool>();
-        private bool _authorityApplied;
+            typeof(global::Game.Simulation.LeaveHouseholdSystem));
 
         /// <summary>
         /// Hands residential occupancy to the host. Idempotent, and re-checked every update so a
         /// system the game re-enables on a state change does not quietly start populating houses
         /// this peer's own way again.
         /// </summary>
-        private void ApplyLocalAuthority(MultiplayerSession session)
-        {
-            if (session.Role == SessionRole.Host)
-            {
-                // A host owns its own simulation. Restore in case this process was a client
-                // earlier in its life.
-                RestoreLocalAuthority();
-                return;
-            }
-
-            for (int i = 0; i < ClientSuppressedSystems.Length; i++)
-            {
-                Type type = ClientSuppressedSystems[i];
-                ComponentSystemBase system = World.GetExistingSystemManaged(type);
-                if (system == null) continue;
-                if (!_suppressedWasEnabled.ContainsKey(type))
-                    _suppressedWasEnabled[type] = system.Enabled;
-                if (!system.Enabled) continue;
-                // If a system that was initially off becomes enabled during the session, remember
-                // that latest native intent before holding it again so disconnect restores it on.
-                _suppressedWasEnabled[type] = true;
-                system.Enabled = false;
-                Mod.Verbose("[MP] Occupancy: " + type.Name +
-                            " disabled on this client; the host decides who lives where.");
-            }
-
-            if (_authorityApplied) return;
-            _authorityApplied = true;
-            Mod.log.Info("[MP] Occupancy: residential occupancy handed to the host (" +
-                         ClientSuppressedSystems.Length + " simulation system(s) held).");
-            Diagnostics.FlightRecorder.Note("occupancy authority -> host");
-        }
+        private void ApplyLocalAuthority(MultiplayerSession session) =>
+            _authority.Apply(World, session);
 
         /// <summary>
         /// Gives the local simulation its population back when the session ends. Without this a
         /// player who leaves a session keeps a city nobody can ever move into again.
         /// </summary>
-        private void RestoreLocalAuthority()
-        {
-            if (_suppressedWasEnabled.Count == 0)
-            {
-                _authorityApplied = false;
-                return;
-            }
-
-            foreach (KeyValuePair<Type, bool> pair in _suppressedWasEnabled)
-            {
-                ComponentSystemBase system = World.GetExistingSystemManaged(pair.Key);
-                if (system != null) system.Enabled = pair.Value;
-            }
-            _suppressedWasEnabled.Clear();
-            _authorityApplied = false;
-            Mod.log.Info("[MP] Occupancy: residential occupancy returned to the local simulation.");
-            Diagnostics.FlightRecorder.Note("occupancy authority -> local");
-        }
+        private void RestoreLocalAuthority() => _authority.Restore(World);
     }
 }
