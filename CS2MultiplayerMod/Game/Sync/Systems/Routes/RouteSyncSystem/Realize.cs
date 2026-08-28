@@ -910,9 +910,17 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
                 if (now < pending.DeadlineMs) continue;
                 _pendingCreateMetadata.RemoveAt(i);
-                SyncInbox.RequestResync(ambiguous
-                    ? "ambiguous created route"
-                    : "created route did not materialize");
+                SyncInbox.RequestResync(CS2MultiplayerMod.Game.Diagnostics.ResyncReport
+                    .Create(ambiguous ? "ambiguous created route" : "created route did not materialize",
+                        "route", ambiguous
+                            ? CS2MultiplayerMod.Game.Diagnostics.ResyncEvidence.Contradiction
+                            : CS2MultiplayerMod.Game.Diagnostics.ResyncEvidence.MissingTarget)
+                    .About("created line " + pending.PrefabName + " number " + pending.RouteNumber)
+                    .Tried(ambiguous
+                        ? "declined to guess between two equally good candidate lines"
+                        : "waited for the line the game builds from this definition, not counting " +
+                          "time route realization was held back")
+                    .Fact("line number", pending.RouteNumber));
                 Mod.log.Warn("[MP] RouteSync could not finalize created line '" +
                              pending.PrefabName + "' number " + pending.RouteNumber +
                              "; requested a fresh world sync.");

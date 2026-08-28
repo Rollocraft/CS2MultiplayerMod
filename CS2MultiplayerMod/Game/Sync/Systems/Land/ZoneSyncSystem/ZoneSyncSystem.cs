@@ -267,7 +267,10 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             SyncInbox.Clear(_incoming);
             _ready.Clear();
             _pending.Clear();
-            SyncInbox.RequestResync(reason);
+            SyncInbox.RequestResync(CS2MultiplayerMod.Game.Diagnostics.ResyncReport
+                .Create(reason, "zone", CS2MultiplayerMod.Game.Diagnostics.ResyncEvidence.StreamLoss)
+                .About("zone latest-state queue")
+                .Tried("nothing - the bounded queue was full and its zoning changes were shed"));
             Mod.log.Warn("[MP] ZoneSync overflowed its bounded latest-state queue; " +
                          "requesting a fresh world sync.");
         }

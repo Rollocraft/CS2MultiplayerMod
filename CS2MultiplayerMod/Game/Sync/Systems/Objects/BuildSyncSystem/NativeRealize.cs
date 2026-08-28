@@ -255,13 +255,21 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     Diagnostics.FlightRecorder.Note(
                         "object operation target expired; world sync requested");
                 }
+                // Read before the reset below clears it - it is the whole point of the report.
+                string unresolvedDetail = _lastUnresolvedObjectReason ?? "unknown target";
                 _hasBlockedNativeObject = false;
                 _blockedNativeObject = null;
                 _blockedNativeObjectDeadline = 0;
                 _lastUnresolvedObjectReason = null;
-                SyncInbox.RequestResync(compactPlacement
-                    ? "building placement target did not resolve"
-                    : "native object operation target did not resolve");
+                SyncInbox.RequestResync(CS2MultiplayerMod.Game.Diagnostics.ResyncReport
+                    .Create(compactPlacement
+                            ? "building placement target did not resolve"
+                            : "native object operation target did not resolve",
+                        "object", CS2MultiplayerMod.Game.Diagnostics.ResyncEvidence.MissingTarget)
+                    .About(compactPlacement ? "building placement target" : "native object target")
+                    .Tried("re-resolved the target every frame for the whole retry window, not " +
+                           "counting time the road pipeline was held back")
+                    .Fact("what would not resolve", unresolvedDetail));
                 return false;
             }
 
