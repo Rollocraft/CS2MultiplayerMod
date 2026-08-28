@@ -11,6 +11,7 @@ Library/
 # UI module build artifacts
 node_modules/
 CS2MultiplayerMod/UI/build/
+CS2MultiplayerMod/UI/artifacts/
 
 docs/
 tools/

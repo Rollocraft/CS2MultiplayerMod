@@ -32,12 +32,6 @@ namespace CS2MultiplayerMod.Game
             session.AllowCommands(AllowedCommandIds);
         }
 
-        /// <summary>A defensive copy for validation and tooling.</summary>
-        internal static ushort[] CopyAllowedIds()
-        {
-            return (ushort[])AllowedCommandIds.Clone();
-        }
-
         internal static string Name(ushort id)
         {
             switch (id)

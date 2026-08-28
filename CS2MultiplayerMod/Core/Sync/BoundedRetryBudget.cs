@@ -17,7 +17,6 @@ namespace CS2MultiplayerMod.Core.Sync
 
         public int MaximumAttempts { get; }
         public int AttemptsUsed { get; private set; }
-        public int AttemptsRemaining => MaximumAttempts - AttemptsUsed;
 
         public bool TryConsume()
         {

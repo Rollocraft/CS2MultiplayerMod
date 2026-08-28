@@ -226,8 +226,6 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
             return remaining;
         }
 
-        private bool CommittedRemoteTempsRemain() => CountCommittedRemoteTempsRemaining() > 0;
-
         private void InvalidateArmedBatch(string reason, int count)
         {
             TrackInvalidatedTemps(ActiveTransactionQuery());

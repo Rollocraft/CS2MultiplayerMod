@@ -36,7 +36,6 @@ namespace CS2MultiplayerMod.Game
 
         /// <summary>True while all gameplay traffic and local tools are quiesced for a snapshot.</summary>
         public bool WorldSyncBarrierActive => _worldSyncBarrierActive;
-        public long ActiveWorldSyncEpoch => _activeWorldSyncEpoch;
 
         /// <summary>
         /// Capture which newly connected players caused this epoch. Periodic/manual
