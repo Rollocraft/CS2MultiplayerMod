@@ -17,7 +17,7 @@ namespace CS2MultiplayerMod.Core.Session
             if (heartbeat.EchoOfMs > 0)
             {
                 long rtt = nowUnixMs - heartbeat.EchoOfMs;
-                if (peer != null && rtt >= 0 && rtt < 60000) peer.LatencyMs = (int)rtt;
+                if (peer != null && rtt >= 0 && rtt < 60000) peer.RecordRttSample(rtt);
                 return;
             }
 

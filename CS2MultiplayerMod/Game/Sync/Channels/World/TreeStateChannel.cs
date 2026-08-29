@@ -95,23 +95,34 @@ namespace CS2MultiplayerMod.Game.Sync.Channels
                 if (included.Add(entity)) TryCapture(em, entity, records);
             }
 
-            // ToEntityArray copies every tree in the city, so the sweep - not the send - is what
-            // this channel costs the host. Prioritized trees still go out on every snapshot.
+            // The sweep - not the send - is what this channel costs the host: it only ever ships
+            // MaxRecords, but it used to copy every tree in the city into a NativeArray to pick
+            // them, which on a forested map is a six-figure allocation per sweep. Walking the
+            // archetype chunks instead reads the same entities out of the chunks the ECS already
+            // holds. The round-robin cursor is now chunk-granular: one chunk is drained before
+            // the cursor moves on, which keeps the same guarantee that every tree is eventually
+            // visited. Prioritized trees still go out on every snapshot.
             if (_captureTick++ % SnapshotsPerSweep == 0)
             {
-                NativeArray<Entity> trees = _trees.ToEntityArray(Allocator.Temp);
+                NativeArray<ArchetypeChunk> chunks = _trees.ToArchetypeChunkArray(Allocator.Temp);
                 try
                 {
-                    if (trees.Length > 0)
+                    if (chunks.Length > 0)
                     {
-                        if (_cursor >= trees.Length) _cursor = 0;
-                        int scanned = 0;
-                        while (scanned < trees.Length && records.Count < TreeStateBatch.MaxRecords)
+                        EntityTypeHandle entityType = em.GetEntityTypeHandle();
+                        if (_cursor >= chunks.Length) _cursor = 0;
+                        int scannedChunks = 0;
+                        while (scannedChunks < chunks.Length && records.Count < TreeStateBatch.MaxRecords)
                         {
-                            Entity entity = trees[_cursor];
-                            _cursor = (_cursor + 1) % trees.Length;
-                            scanned++;
-                            if (included.Add(entity)) TryCapture(em, entity, records);
+                            NativeArray<Entity> chunkEntities = chunks[_cursor].GetNativeArray(entityType);
+                            for (int i = 0; i < chunkEntities.Length &&
+                                            records.Count < TreeStateBatch.MaxRecords; i++)
+                            {
+                                Entity entity = chunkEntities[i];
+                                if (included.Add(entity)) TryCapture(em, entity, records);
+                            }
+                            _cursor = (_cursor + 1) % chunks.Length;
+                            scannedChunks++;
                         }
                     }
                     else
@@ -121,7 +132,7 @@ namespace CS2MultiplayerMod.Game.Sync.Channels
                 }
                 finally
                 {
-                    trees.Dispose();
+                    chunks.Dispose();
                 }
             }
 

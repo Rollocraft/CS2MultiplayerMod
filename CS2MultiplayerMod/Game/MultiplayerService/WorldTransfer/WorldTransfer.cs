@@ -234,7 +234,11 @@ namespace CS2MultiplayerMod.Game
             // Ignore our own echo; we already know where we are.
             if (state.PlayerId == _session.LocalPlayerId) return;
 
+            int before = _remotePlayers.Count;
             var player = _remotePlayers.GetOrAdd(state.PlayerId, id => new RemotePlayer { PlayerId = id });
+            // A client's roster is built from exactly this dictionary - it is never sent a peer
+            // list - so a player first appearing here is a membership change for it.
+            if (_remotePlayers.Count != before) RefreshPlayerListJson();
             player.X = state.PosX;
             player.Y = state.PosY;
             player.Z = state.PosZ;
