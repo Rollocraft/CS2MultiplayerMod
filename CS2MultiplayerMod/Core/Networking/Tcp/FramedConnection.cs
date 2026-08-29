@@ -60,6 +60,18 @@ namespace CS2MultiplayerMod.Core.Networking.Tcp
         private Thread _readThread;
         private int _closed; // 0 = open, 1 = closed (Interlocked guarded)
 
+        /// <summary>Kernel send/receive buffer size requested per socket.</summary>
+        private const int SocketBufferBytes = 1024 * 1024;
+
+        /// <summary>How long a peer may take over the TLS handshake before it is dropped.</summary>
+        private const int HandshakeTimeoutMs = 15000;
+
+        /// <summary>
+        /// Payloads at or below this size are copied behind their length prefix and written in
+        /// one call. Above it the copy costs more than the extra write saves.
+        /// </summary>
+        private const int SingleWriteThreshold = 8 * 1024;
+
         /// <summary>Raised on the read thread once the connection is usable (TLS done).</summary>
         public Action<ConnectionId> OnReady;
 
@@ -83,6 +95,16 @@ namespace CS2MultiplayerMod.Core.Networking.Tcp
             _serverCertificate = serverCertificate;
             _clientTls = clientTls;
             _client.NoDelay = true; // low latency matters more than packing for a co-op session
+            // A world transfer is tens of megabytes through this socket. The default kernel
+            // buffers are sized for request/response traffic and make the sender stall on a
+            // full window far more often than the link requires. Best-effort: a platform that
+            // refuses the size keeps its default rather than failing the connection.
+            try
+            {
+                _client.ReceiveBufferSize = SocketBufferBytes;
+                _client.SendBufferSize = SocketBufferBytes;
+            }
+            catch { /* keep the platform default */ }
 
             try
             {
@@ -129,15 +151,38 @@ namespace CS2MultiplayerMod.Core.Networking.Tcp
         {
             try
             {
+                // Scratch for the combined prefix+payload write. Only this thread touches it.
+                byte[] framed = new byte[SingleWriteThreshold + 4];
+
                 foreach (byte[] payload in _sendQueue.GetConsumingEnumerable())
                 {
                     try
                     {
                         Stream stream = _stream;
                         if (stream == null) continue; // closed before the stream was ready
-                        WriteLength(payload.Length);
-                        stream.Write(_sendPrefix, 0, 4);
-                        stream.Write(payload, 0, payload.Length);
+
+                        int length = payload.Length;
+                        if (length <= SingleWriteThreshold)
+                        {
+                            // Copy the prefix and the payload into one buffer and issue a single
+                            // write. Over TLS each Write becomes its own record, so a 4-byte
+                            // prefix written separately carried ~29 bytes of record overhead to
+                            // describe 4 bytes of length - and with NoDelay set it was also its
+                            // own TCP segment. Most traffic on this socket is small commands, so
+                            // that was close to a fixed tax per message.
+                            framed[0] = (byte)(length & 0xFF);
+                            framed[1] = (byte)((length >> 8) & 0xFF);
+                            framed[2] = (byte)((length >> 16) & 0xFF);
+                            framed[3] = (byte)((length >> 24) & 0xFF);
+                            Buffer.BlockCopy(payload, 0, framed, 4, length);
+                            stream.Write(framed, 0, length + 4);
+                        }
+                        else
+                        {
+                            WriteLength(length);
+                            stream.Write(_sendPrefix, 0, 4);
+                            stream.Write(payload, 0, length);
+                        }
                         stream.Flush();
                     }
                     finally
@@ -251,10 +296,15 @@ namespace CS2MultiplayerMod.Core.Networking.Tcp
 
             if (_serverCertificate != null)
             {
-                raw.ReadTimeout = 15000; // a peer that stalls the TLS handshake gets dropped
+                // Both directions get a deadline: a peer that stalls the handshake mid-write
+                // wedges this thread exactly as one that stalls mid-read does, and only the
+                // read side was guarded.
+                raw.ReadTimeout = HandshakeTimeoutMs;
+                raw.WriteTimeout = HandshakeTimeoutMs;
                 var ssl = new SslStream(raw, false);
                 ssl.AuthenticateAsServer(_serverCertificate, false, SslProtocols.Tls12, false);
                 raw.ReadTimeout = Timeout.Infinite;
+                raw.WriteTimeout = Timeout.Infinite;
                 _channelBinding = TlsCertificate.HashOf(_serverCertificate);
                 _stream = ssl;
                 return true;
@@ -262,12 +312,16 @@ namespace CS2MultiplayerMod.Core.Networking.Tcp
 
             if (_clientTls)
             {
+                raw.ReadTimeout = HandshakeTimeoutMs;
+                raw.WriteTimeout = HandshakeTimeoutMs;
                 var ssl = new SslStream(raw, false, (sender, cert, chain, errors) =>
                 {
                     _channelBinding = TlsCertificate.HashOf(cert);
                     return true; // trust is established by the password proof over this hash
                 });
                 ssl.AuthenticateAsClient("CS2MultiplayerMod", null, SslProtocols.Tls12, false);
+                raw.ReadTimeout = Timeout.Infinite;
+                raw.WriteTimeout = Timeout.Infinite;
                 _stream = ssl;
                 return true;
             }
@@ -279,7 +333,11 @@ namespace CS2MultiplayerMod.Core.Networking.Tcp
         /// <summary>Read exactly <paramref name="count"/> bytes; false on clean EOF.</summary>
         private bool ReadExactly(byte[] buffer, int count)
         {
+            // Close() clears _stream from another thread; without this the read loop can
+            // dereference null between the close and its own cancellation check, and the
+            // connection ends in an unhandled NullReferenceException instead of a reason.
             Stream stream = _stream;
+            if (stream == null) return false;
             int read = 0;
             while (read < count)
             {
