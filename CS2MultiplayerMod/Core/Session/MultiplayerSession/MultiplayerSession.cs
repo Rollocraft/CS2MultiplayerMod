@@ -133,6 +133,15 @@ namespace CS2MultiplayerMod.Core.Session
 
         public IReadOnlyCollection<Peer> Peers => _peers.Values;
 
+        /// <summary>How many peers finished the handshake - the session's real participant count.</summary>
+        public int HandshakedPeerCount()
+        {
+            int count = 0;
+            foreach (Peer peer in _peers.Values)
+                if (peer.Handshaked) count++;
+            return count;
+        }
+
         /// <summary>
         /// Client-only: the host acknowledged the join and it is waiting for the host to
         /// approve it by hand. True between the host's HandshakePending and its accept/reject.
