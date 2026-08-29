@@ -161,7 +161,7 @@ namespace CS2MultiplayerMod.Game.Sync.Players
         }
 
         /// <summary>Record a ping so it can be drawn. Also used for the local player's own.</summary>
-        public void Add(float3 position, int playerId, long nowMs)
+        private void Add(float3 position, int playerId, long nowMs)
         {
             if (_active.Count >= MaxActive) _active.RemoveAt(0);
             _active.Add(new ActivePing
