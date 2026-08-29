@@ -12,13 +12,13 @@ Library/
 node_modules/
 CS2MultiplayerMod/UI/build/
 
-docs/
-tools/
+/docs/
+/tools/
 .claude/
 .idea
 CLAUDE.md
 Logs/
-tests/
+/tests/
 .mcp.json
 
 # MkDocs build output
