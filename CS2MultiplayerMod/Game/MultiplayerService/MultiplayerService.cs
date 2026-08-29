@@ -191,6 +191,88 @@ namespace CS2MultiplayerMod.Game
         /// <summary>Post a line into the local chat feed without sending it to anyone.</summary>
         public void AppendSystemChat(string text) => AppendChatEntry(null, text);
 
+        // ---- Map pings ---------------------------------------------------------------
+
+        private float3 _localCameraFocus;
+        private float3 _localPing;
+        private int _localPingPending;
+
+        /// <summary>
+        /// Where the local camera is looking, republished by PlayerCursorSyncSystem each time it
+        /// sends. Chat commands need a point on the map and have no camera reference of their own.
+        /// </summary>
+        public float3 LocalCameraFocus
+        {
+            get { return _localCameraFocus; }
+            internal set { _localCameraFocus = value; }
+        }
+
+        /// <summary>
+        /// Drop a beacon at the local camera focus for everyone in the session.
+        ///
+        /// The sender's own ring is recorded locally rather than waiting for the command to come
+        /// back: a host is notified of its own commands and a client is not, so relying on the
+        /// echo would draw the host's pings and silently swallow every client's.
+        /// </summary>
+        public void SendMapPing(string label)
+        {
+            if (!GameplaySyncReady) return;
+
+            float3 at = _localCameraFocus;
+            var command = new Sync.Commands.MapPingCommand
+            {
+                X = at.x,
+                Y = at.y,
+                Z = at.z,
+                Label = Core.Protocol.WireGuard.SanitizeText(
+                    label, Sync.Commands.MapPingCommand.MaxLabelLength),
+            };
+
+            try { _session.SendCommand(0, Sync.Commands.MapPingCommand.Id, command.Encode()); }
+            catch (Exception ex)
+            {
+                _log.Warn("[MP] Ping not sent: " + ex.Message);
+                return;
+            }
+
+            _localPing = at;
+            Interlocked.Exchange(ref _localPingPending, 1);
+            NotePing(at);
+
+            AppendChatEntry(null, string.IsNullOrEmpty(command.Label)
+                ? "Pinged (" + (int)at.x + ", " + (int)at.z + ")."
+                : "Pinged (" + (int)at.x + ", " + (int)at.z + "): " + command.Label);
+        }
+
+        /// <summary>Consume the local player's own pending ping. True exactly once per send.</summary>
+        public bool TakeLocalPing(out float3 position)
+        {
+            if (Interlocked.Exchange(ref _localPingPending, 0) == 0)
+            {
+                position = default(float3);
+                return false;
+            }
+            position = _localPing;
+            return true;
+        }
+
+        private float3 _lastPing;
+        private bool _hasLastPing;
+
+        /// <summary>Remember where the most recent ping landed, whoever dropped it.</summary>
+        internal void NotePing(float3 position)
+        {
+            _lastPing = position;
+            _hasLastPing = true;
+        }
+
+        /// <summary>Where the most recent ping landed, for "/goto ping".</summary>
+        public bool TryGetLastPing(out float3 position)
+        {
+            position = _lastPing;
+            return _hasLastPing;
+        }
+
         /// <summary>The joining client's place in the world-handover flow.</summary>
         public ClientWorldPhase WorldPhase => _phase;
 

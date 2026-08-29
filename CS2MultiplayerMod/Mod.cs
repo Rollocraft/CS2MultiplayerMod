@@ -188,6 +188,11 @@ namespace CS2MultiplayerMod
             // Renders the other players' camera positions as ground rings. Rendering phase
             // so the markers draw every frame, in every state (including paused).
             updateSystem.UpdateAt<Game.Sync.Players.RemotePlayerMarkerSystem>(SystemUpdatePhase.Rendering);
+            // Draws incoming map pings, and receives them - the beacon is a command, so the
+            // observer has to be attached even in the frames where nothing is on screen.
+            // Rendering phase for the same reason as the markers above: pings must appear
+            // while the game is paused, which is exactly when players stop to point at things.
+            updateSystem.UpdateAt<Game.Sync.Players.MapPingSystem>(SystemUpdatePhase.Rendering);
             // UIUpdate, not GameSimulation: policies can be toggled while the game is paused
             // (the policies panel works paused - the game routes the change through an event
             // entity consumed by the every-frame modification pipeline), but the GameSimulation
