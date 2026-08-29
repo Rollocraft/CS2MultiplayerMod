@@ -51,6 +51,11 @@ namespace CS2MultiplayerMod.Core.Protocol
             }
         }
 
+        public void RemovePeer(int playerId)
+        {
+            _peerHistories.TryRemove(playerId, out _);
+        }
+
         public void Clear()
         {
             _peerHistories.Clear();

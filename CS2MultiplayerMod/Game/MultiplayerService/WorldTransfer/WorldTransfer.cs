@@ -40,6 +40,9 @@ namespace CS2MultiplayerMod.Game
 
             if (snapshot == null || snapshot.Length == 0)
                 throw new InvalidOperationException("The game produced no world snapshot data.");
+
+            // Create automatic backup of host world before transferring to peers
+            SessionBackupManager.CreateBackup("HostCity", snapshot);
             return snapshot;
         }
 
@@ -195,6 +198,10 @@ namespace CS2MultiplayerMod.Game
             _log.Info("[MP] Map blob delivered to game layer (" +
                       (data != null ? data.Length / 1024 : 0) + " KB); staging and loading.");
             Diagnostics.FlightRecorder.Note("world blob received " + (data != null ? data.Length >> 10 : 0) + " KB; reloading world");
+            
+            // Save automatic local backup copy of transferred world
+            SessionBackupManager.CreateBackup("JoinedCity", data);
+
             // Purge every sync inbox before the reload: queued commands describe the pre-reload
             // world and would apply stale edits (or reference vanished entities) on the new one.
             Sync.Infrastructure.SyncInbox.DrainAll();
@@ -243,10 +250,23 @@ namespace CS2MultiplayerMod.Game
             player.EyeZ = state.EyeZ;
             player.Yaw = state.Yaw;
             player.LastUpdateMs = _clock.ElapsedMilliseconds;
-            if (string.IsNullOrEmpty(player.Name))
+            bool needsRefresh = string.IsNullOrEmpty(player.Name);
+            if (needsRefresh)
             {
                 Peer peer = _session.FindPeer(state.PlayerId);
-                if (peer != null) player.Name = peer.PlayerName;
+                if (peer != null && !string.IsNullOrEmpty(peer.Name))
+                {
+                    player.Name = peer.Name;
+                }
+                else if (state.PlayerId == 0)
+                {
+                    player.Name = "Host";
+                }
+                else
+                {
+                    player.Name = "Player (" + state.PlayerId + ")";
+                }
+                RefreshPlayerListJson();
             }
         }
 

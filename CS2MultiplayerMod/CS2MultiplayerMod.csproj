@@ -14,6 +14,7 @@
         <PathMap>$(MSBuildProjectDirectory)\=CS2MultiplayerMod\</PathMap>
         <EnableSourceLink>false</EnableSourceLink>
         <DebugType>portable</DebugType>
+        <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     </PropertyGroup>
 
     <!--The per-entity occupancy/household trace lines (see Game/Diagnostics/DevTrace.cs).
@@ -22,9 +23,13 @@
         <DefineConstants>$(DefineConstants);MP_DEV_TRACE</DefineConstants>
     </PropertyGroup>
 
+    <PropertyGroup>
+        <ToolPath>$([System.Environment]::GetEnvironmentVariable('CSII_TOOLPATH', 'EnvironmentVariableTarget.User'))</ToolPath>
+    </PropertyGroup>
+
     <!--Imports must be after PropertyGroup block-->
-    <Import Project="$([System.Environment]::GetEnvironmentVariable('CSII_TOOLPATH', 'EnvironmentVariableTarget.User'))\Mod.props" Condition="Exists('$([System.Environment]::GetEnvironmentVariable(\'CSII_TOOLPATH\', \'EnvironmentVariableTarget.User\'))\Mod.props')"/>
-    <Import Project="$([System.Environment]::GetEnvironmentVariable('CSII_TOOLPATH', 'EnvironmentVariableTarget.User'))\Mod.targets" Condition="Exists('$([System.Environment]::GetEnvironmentVariable(\'CSII_TOOLPATH\', \'EnvironmentVariableTarget.User\'))\Mod.targets')"/>
+    <Import Project="$(ToolPath)\Mod.props" Condition="'$(ToolPath)' != '' and Exists('$(ToolPath)\Mod.props')"/>
+    <Import Project="$(ToolPath)\Mod.targets" Condition="'$(ToolPath)' != '' and Exists('$(ToolPath)\Mod.targets')"/>
 
     <ItemGroup>
         <Reference Include="Game">
@@ -94,6 +99,10 @@
         <Reference Include="Unity.Mathematics">
             <Private>false</Private>
         </Reference>
+        <Reference Include="System.Memory">
+            <HintPath>D:\Games\Cities - Skylines II\Cities2_Data\Managed\System.Memory.dll</HintPath>
+            <Private>false</Private>
+        </Reference>
     </ItemGroup>
 
     <ItemGroup>
@@ -127,7 +136,7 @@
             <SteamBackendDir>$(MSBuildProjectDirectory)\..\CS2MultiplayerMod.Steam</SteamBackendDir>
         </PropertyGroup>
         <MSBuild Projects="$(SteamBackendDir)\CS2MultiplayerMod.Steam.csproj"
-                 Targets="Build" Properties="Configuration=$(Configuration)"/>
+                 Targets="Build" Properties="Configuration=$(Configuration);BuildProjectReferences=false"/>
         <ItemGroup>
             <SteamBackendFiles Include="$(SteamBackendDir)\bin\$(Configuration)\net48\CS2MultiplayerMod.Steam.dll"/>
             <SteamBackendFiles Include="$(SteamBackendDir)\bin\$(Configuration)\net48\CS2MultiplayerMod.Steam.pdb"/>
@@ -155,6 +164,12 @@
               Condition="Exists('$(DeployDir)')"/>
         <!--OutDir keeps its trailing slash, which would escape the closing quote.-->
         <Exec Command="powershell -NoProfile -ExecutionPolicy Bypass -File &quot;$(ScrubScript)&quot; -Directory &quot;$(MSBuildProjectDirectory)\$(OutDir.TrimEnd('\'))&quot;"/>
+    </Target>
+
+    <Target Name="CustomModPostProcessorConfig" AfterTargets="ModPostProcessorConfig">
+        <PropertyGroup>
+            <ModPostProcessorArgs>"$(ModPostProcessorFullPath)" PostProcess "$(TargetPath)" -u "$(UnityModProjectFullPath)" @(ReferencePath->'-r "%(Identity)"', ' ') -d -v</ModPostProcessorArgs>
+        </PropertyGroup>
     </Target>
 
 </Project>

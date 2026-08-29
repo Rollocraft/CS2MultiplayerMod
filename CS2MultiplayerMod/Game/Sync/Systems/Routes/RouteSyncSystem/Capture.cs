@@ -55,26 +55,12 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             if (!TryCaptureWaypoints(route, out waypoints)) return false;
 
             Route routeData = EntityManager.GetComponentData<Route>(route);
-            string vehicleModel = null;
-            if (EntityManager.HasComponent<TransportLine>(route))
-            {
-                TransportLine tl = EntityManager.GetComponentData<TransportLine>(route);
-                if (tl.m_VehicleModel != Entity.Null &&
-                    EntityManager.Exists(tl.m_VehicleModel) &&
-                    EntityManager.HasComponent<PrefabRef>(tl.m_VehicleModel))
-                {
-                    Entity vmPrefab = EntityManager.GetComponentData<PrefabRef>(tl.m_VehicleModel).m_Prefab;
-                    vehicleModel = _prefabSystem.GetPrefabName(vmPrefab);
-                }
-            }
-
             snapshot = new RouteSnapshot
             {
                 Waypoints = waypoints,
                 Rgba = ColorOf(route),
                 RouteNumber = RouteNumberOf(route),
                 IsComplete = (routeData.m_Flags & RouteFlags.Complete) != 0,
-                VehicleModelPrefabName = vehicleModel,
             };
 
             Entity prefab =
@@ -316,7 +302,6 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     ColorB = (byte)(snapshot.Rgba >> 16),
                     ColorA = (byte)(snapshot.Rgba >> 24),
                     Waypoints = snapshot.Waypoints,
-                    VehicleModelPrefabName = snapshot.VehicleModelPrefabName,
                 };
                 session.SendCommand(0, RouteCreateCommand.Id, command.Encode());
                 Mod.Verbose("[MP] RouteSync captured line '" + name + "' (" +
@@ -361,7 +346,6 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             return a.RouteNumber == b.RouteNumber &&
                    a.IsComplete == b.IsComplete &&
                    a.Rgba == b.Rgba &&
-                   string.Equals(a.VehicleModelPrefabName ?? "", b.VehicleModelPrefabName ?? "", StringComparison.Ordinal) &&
                    WaypointsEqual(a.Waypoints, b.Waypoints);
         }
 
@@ -540,7 +524,6 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                         ColorB = (byte)(snapshot.Rgba >> 16),
                         ColorA = (byte)(snapshot.Rgba >> 24),
                         Waypoints = snapshot.Waypoints,
-                        VehicleModelPrefabName = snapshot.VehicleModelPrefabName,
                     };
                     session.SendCommand(0, RouteUpdateCommand.Id, command.Encode());
                     Mod.Verbose("[MP] RouteSync captured edit of line '" + name + "' (" +

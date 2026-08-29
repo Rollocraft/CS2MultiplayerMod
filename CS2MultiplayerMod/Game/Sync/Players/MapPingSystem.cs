@@ -149,6 +149,8 @@ namespace CS2MultiplayerMod.Game.Sync.Players
                     buffer.DrawLine(beamColor, new Line3.Segment(ping.Position, beamTop), isDanger ? BeamWidth * 1.8f : BeamWidth, true);
                 }
             }
+
+            _overlay.AddBufferWriter(default);
         }
     }
 }

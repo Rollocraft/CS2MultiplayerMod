@@ -25,7 +25,7 @@ namespace CS2MultiplayerMod.Game.Sync.Players
         private readonly ConcurrentDictionary<int, PlayerBearing> _bearings =
             new ConcurrentDictionary<int, PlayerBearing>();
 
-        public IReadOnlyCollection<PlayerBearing> Bearings => _bearings.Values;
+        public ICollection<PlayerBearing> Bearings => _bearings.Values;
 
         private CameraUpdateSystem _cameraSystem;
 
@@ -47,8 +47,10 @@ namespace CS2MultiplayerMod.Game.Sync.Players
 
             float3 localPos = _cameraSystem.gamePlayController.pivot;
 
+            var activeIds = new HashSet<int>();
             foreach (var remote in service.RemotePlayers)
             {
+                activeIds.Add(remote.PlayerId);
                 var targetPos = new float3(remote.X, remote.Y, remote.Z);
                 float dx = targetPos.x - localPos.x;
                 float dz = targetPos.z - localPos.z;
@@ -68,6 +70,14 @@ namespace CS2MultiplayerMod.Game.Sync.Players
                     DistanceKm = (float)Math.Round(distanceKm, 2),
                     BearingDegrees = (float)Math.Round(degrees, 1)
                 };
+            }
+
+            foreach (var key in _bearings.Keys)
+            {
+                if (!activeIds.Contains(key))
+                {
+                    _bearings.TryRemove(key, out _);
+                }
             }
         }
     }

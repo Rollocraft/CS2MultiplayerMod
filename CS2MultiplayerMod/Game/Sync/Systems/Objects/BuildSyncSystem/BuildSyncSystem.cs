@@ -230,26 +230,24 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             InitializeNativeObjectOperations();
             InitializeNativeDerive();
 
-            if (Mod.Service != null)
+            _observer = new CommandObserver(_incoming,
+                ObjectPlacementCommand.Id, ObjectToolOperationCommand.Id,
+                AssetStampCommand.Id)
             {
-                _observer = new CommandObserver(_incoming,
-                    ObjectPlacementCommand.Id, ObjectToolOperationCommand.Id,
-                    AssetStampCommand.Id)
-                {
-                    MaxBodyBytes = ObjectToolOperationCommand.MaxEncodedBytes,
-                };
-                Mod.Service.Session.AddObserver(_observer);
-            }
+                MaxBodyBytes = ObjectToolOperationCommand.MaxEncodedBytes,
+            };
             SyncInbox.RegisterDrain(DrainQueue);
         }
 
         protected override void OnDestroy()
         {
             SyncInbox.UnregisterDrain(DrainQueue);
-            if (_observer != null && Mod.Service != null)
+            if (_observer != null && Mod.Service?.Session != null)
                 Mod.Service.Session.RemoveObserver(_observer);
             base.OnDestroy();
         }
+
+        private bool _registered;
 
         private void DrainQueue()
         {
@@ -308,13 +306,23 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             MultiplayerSession session = service.Session;
             if (ready)
             {
+                if (!_registered && session != null)
+                {
+                    session.AddObserver(_observer);
+                    _registered = true;
+                }
+
                 CaptureCompletedSpecializedArea();
                 PrioritizeCreatedTrees(session);
                 _guard.Prune(now);
                 TryPublishCommittedObjectGraph(now);
                 CaptureNewObjects(session, now);
             }
-            else DrainQueue();
+            else
+            {
+                _registered = false;
+                DrainQueue();
+            }
             _localObjectApplyThisFrame = false;
             FlushDiagnostics(now, ready);
         }

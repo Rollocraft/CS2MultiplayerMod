@@ -1,11 +1,12 @@
 using System;
-using System.IO;
+using CS2MultiplayerMod.Core.Networking;
 
 namespace CS2MultiplayerMod.Core.Protocol
 {
     /// <summary>
     /// Bitmask Run-Length Encoding (RLE) codec for compressing large 2D zoning block grids
     /// into compact byte arrays.
+    /// High performance direct array traversal with zero-allocation overloads.
     /// </summary>
     public static class ZoneRleCodec
     {
@@ -13,48 +14,80 @@ namespace CS2MultiplayerMod.Core.Protocol
         {
             if (rawZones == null || rawZones.Length == 0) return Array.Empty<byte>();
 
-            using (var ms = new MemoryStream(rawZones.Length / 2))
-            using (var w = new BinaryWriter(ms))
+            // In worst case (no consecutive duplicates), RLE output is 2 * input length.
+            int maxLen = rawZones.Length * 2;
+            byte[] temp = BufferPool.Rent(maxLen);
+            try
             {
-                int i = 0;
-                while (i < rawZones.Length)
-                {
-                    byte current = rawZones[i];
-                    byte count = 1;
-                    while (i + count < rawZones.Length && rawZones[i + count] == current && count < 255)
-                    {
-                        count++;
-                    }
-
-                    w.Write(count);
-                    w.Write(current);
-                    i += count;
-                }
-                return ms.ToArray();
+                Encode(rawZones, 0, rawZones.Length, temp, out int bytesWritten);
+                byte[] result = new byte[bytesWritten];
+                Buffer.BlockCopy(temp, 0, result, 0, bytesWritten);
+                return result;
             }
+            finally
+            {
+                BufferPool.Return(temp);
+            }
+        }
+
+        public static void Encode(byte[] rawZones, int offset, int length, byte[] destination, out int bytesWritten)
+        {
+            bytesWritten = 0;
+            if (rawZones == null || length <= 0 || destination == null) return;
+
+            int end = offset + length;
+            int i = offset;
+            int outIdx = 0;
+
+            while (i < end)
+            {
+                byte current = rawZones[i];
+                byte count = 1;
+                while (i + count < end && rawZones[i + count] == current && count < 255)
+                {
+                    count++;
+                }
+
+                destination[outIdx++] = count;
+                destination[outIdx++] = current;
+                i += count;
+            }
+
+            bytesWritten = outIdx;
         }
 
         public static byte[] Decode(byte[] compressed, int expectedLength)
         {
-            if (compressed == null || compressed.Length == 0) return Array.Empty<byte>();
+            if (compressed == null || compressed.Length == 0 || expectedLength <= 0) return Array.Empty<byte>();
 
             var output = new byte[expectedLength];
-            int outIdx = 0;
+            Decode(compressed, 0, compressed.Length, output, out _);
+            return output;
+        }
 
-            using (var ms = new MemoryStream(compressed, writable: false))
-            using (var r = new BinaryReader(ms))
+        public static void Decode(byte[] compressed, int compressedOffset, int compressedLength, byte[] destination, out int bytesWritten)
+        {
+            bytesWritten = 0;
+            if (compressed == null || compressedLength < 2 || destination == null) return;
+
+            int inIdx = compressedOffset;
+            int inEnd = compressedOffset + compressedLength;
+            int outIdx = 0;
+            int destLen = destination.Length;
+
+            while (inIdx + 1 < inEnd && outIdx < destLen)
             {
-                while (ms.Position < ms.Length && outIdx < expectedLength)
+                byte count = compressed[inIdx++];
+                byte val = compressed[inIdx++];
+
+                int writeCount = Math.Min((int)count, destLen - outIdx);
+                for (int j = 0; j < writeCount; j++)
                 {
-                    byte count = r.ReadByte();
-                    byte val = r.ReadByte();
-                    for (int j = 0; j < count && outIdx < expectedLength; j++)
-                    {
-                        output[outIdx++] = val;
-                    }
+                    destination[outIdx++] = val;
                 }
             }
-            return output;
+
+            bytesWritten = outIdx;
         }
     }
 }

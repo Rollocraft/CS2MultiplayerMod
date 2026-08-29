@@ -74,19 +74,17 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 },
             });
 
-            if (Mod.Service != null)
-            {
-                _observer = new CommandObserver(_incoming, TilePurchaseCommand.Id);
-                Mod.Service.Session.AddObserver(_observer);
-            }
+            _observer = new CommandObserver(_incoming, TilePurchaseCommand.Id);
         }
 
         protected override void OnDestroy()
         {
-            if (_observer != null && Mod.Service != null)
+            if (_observer != null && Mod.Service?.Session != null)
                 Mod.Service.Session.RemoveObserver(_observer);
             base.OnDestroy();
         }
+
+        private bool _registered;
 
         protected override void OnUpdate()
         {
@@ -94,7 +92,17 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             if (service == null) return;
 
             MultiplayerSession session = service.Session;
-            if (!service.GameplaySyncReady) return;
+            if (!service.GameplaySyncReady)
+            {
+                _registered = false;
+                return;
+            }
+
+            if (!_registered && session != null)
+            {
+                session.AddObserver(_observer);
+                _registered = true;
+            }
 
             // The exact price disappears with the selection the moment the purchase
             // lands, so remember the last quoted cost while the player is selecting.

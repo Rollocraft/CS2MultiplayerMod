@@ -167,27 +167,25 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 ComponentType.ReadOnly<ZoneData>(),
                 ComponentType.ReadOnly<PrefabData>());
 
-            if (Mod.Service != null)
+            _observer = new CommandObserver(_incoming, ZonePaintCommand.Id)
             {
-                _observer = new CommandObserver(_incoming, ZonePaintCommand.Id)
-                {
-                    // A legacy peer may still deliver a large one-frame zoning burst. Keep it
-                    // bounded, but large enough for this system's frame-budgeted coalescer.
-                    QueueCap = MaxIncomingZones,
-                    MaxBodyBytes = ZonePaintCommand.MaxEncodedBytes,
-                };
-                Mod.Service.Session.AddObserver(_observer);
-            }
+                // A legacy peer may still deliver a large one-frame zoning burst. Keep it
+                // bounded, but large enough for this system's frame-budgeted coalescer.
+                QueueCap = MaxIncomingZones,
+                MaxBodyBytes = ZonePaintCommand.MaxEncodedBytes,
+            };
             SyncInbox.RegisterDrain(DrainQueue);
         }
 
         protected override void OnDestroy()
         {
             SyncInbox.UnregisterDrain(DrainQueue);
-            if (_observer != null && Mod.Service != null)
+            if (_observer != null && Mod.Service?.Session != null)
                 Mod.Service.Session.RemoveObserver(_observer);
             base.OnDestroy();
         }
+
+        private bool _registered;
 
         private void DrainQueue()
         {
@@ -208,7 +206,17 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             if (service == null) return;
 
             MultiplayerSession session = service.Session;
-            if (!service.GameplaySyncReady) return;
+            if (!service.GameplaySyncReady)
+            {
+                _registered = false;
+                return;
+            }
+
+            if (!_registered && session != null)
+            {
+                session.AddObserver(_observer);
+                _registered = true;
+            }
 
             long now = service.NowMs;
             _guard.Prune(now);

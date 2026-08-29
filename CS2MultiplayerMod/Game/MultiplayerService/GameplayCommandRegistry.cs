@@ -25,6 +25,18 @@ namespace CS2MultiplayerMod.Game
             VisualCustomizationCommand.Id, ColorPaletteCommand.Id,
             DisasterEventCommand.Id, EntityNameCommand.Id,
             GrowableLifecycleCommand.Id,
+            CityBudgetCommand.Id, CustomNameCommand.Id,
+            SimulationSpeedCommand.Id, CityLoanCommand.Id,
+            MilestoneCommand.Id, UtilityGridCommand.Id,
+            PollutionCommand.Id, WeatherControlCommand.Id,
+            GhostPlacementCommand.Id, DistrictClaimCommand.Id,
+            ChecksumCommand.Id, TrafficLightCommand.Id,
+            TransitLineDetailCommand.Id, BuildingToggleCommand.Id,
+            ParkFeeCommand.Id, ServiceDistrictCommand.Id,
+            TransitColorCommand.Id, ChirperCommand.Id,
+            EmergencyShelterCommand.Id, UtilityTradeCommand.Id,
+            ServiceFleetCommand.Id, TransitFareCommand.Id,
+            DaylightCommand.Id,
         };
 
         internal static void Register(MultiplayerSession session)
@@ -70,6 +82,29 @@ namespace CS2MultiplayerMod.Game
                 case DisasterEventCommand.Id: return "disaster-event";
                 case EntityNameCommand.Id: return "entity-name";
                 case GrowableLifecycleCommand.Id: return "growable-lifecycle";
+                case CityBudgetCommand.Id: return "city-budget";
+                case CustomNameCommand.Id: return "custom-name";
+                case SimulationSpeedCommand.Id: return "simulation-speed";
+                case CityLoanCommand.Id: return "city-loan";
+                case MilestoneCommand.Id: return "milestone-progression";
+                case UtilityGridCommand.Id: return "utility-grid";
+                case PollutionCommand.Id: return "pollution-state";
+                case WeatherControlCommand.Id: return "weather-climate";
+                case GhostPlacementCommand.Id: return "ghost-preview";
+                case DistrictClaimCommand.Id: return "district-claim";
+                case ChecksumCommand.Id: return "simulation-checksum";
+                case TrafficLightCommand.Id: return "traffic-control";
+                case TransitLineDetailCommand.Id: return "transit-line-detail";
+                case BuildingToggleCommand.Id: return "building-toggle";
+                case ParkFeeCommand.Id: return "park-fee";
+                case ServiceDistrictCommand.Id: return "service-district";
+                case TransitColorCommand.Id: return "transit-color";
+                case ChirperCommand.Id: return "chirper-message";
+                case EmergencyShelterCommand.Id: return "emergency-shelter";
+                case UtilityTradeCommand.Id: return "utility-trade";
+                case ServiceFleetCommand.Id: return "service-fleet";
+                case TransitFareCommand.Id: return "transit-fare";
+                case DaylightCommand.Id: return "daylight-control";
                 default: return "unknown";
             }
         }

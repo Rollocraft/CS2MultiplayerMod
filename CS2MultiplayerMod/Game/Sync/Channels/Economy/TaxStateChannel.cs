@@ -42,7 +42,8 @@ namespace CS2MultiplayerMod.Game.Sync.Channels
             int count = reader.ReadByte();
             for (int i = 0; i < count && i < Areas.Length; i++)
             {
-                int rate = reader.ReadInt();
+                int rawRate = reader.ReadInt();
+                int rate = System.Math.Max(-100, System.Math.Min(100, rawRate));
                 if (tax.GetTaxRate(Areas[i]) != rate) tax.SetTaxRate(Areas[i], rate);
             }
         }

@@ -38,6 +38,7 @@ namespace CS2MultiplayerMod.Game
         private bool _hostAfterWorldLoad;
         private bool _hostWorldLoadStarted;
         private ValueBinding<bool> _multiplayerMenuActiveBinding;
+        private Sync.Players.PlayerCompassSystem _compassSystem;
 
         protected override void OnCreate()
         {
@@ -120,8 +121,9 @@ namespace CS2MultiplayerMod.Game
                 () => Mod.Service != null ? Mod.Service.Session.AverageQualityRating : "Unknown"));
             AddUpdateBinding(new GetterValueBinding<int>(Group, "playerBearingsCount",
                 () => {
-                    var sys = World.DefaultGameObjectInjectionWorld?.GetExistingSystemManaged<Sync.Players.PlayerCompassSystem>();
-                    return sys != null ? sys.Bearings.Count : 0;
+                    if (_compassSystem == null && World != null)
+                        _compassSystem = World.GetExistingSystemManaged<Sync.Players.PlayerCompassSystem>();
+                    return _compassSystem != null ? _compassSystem.Bearings.Count : 0;
                 }));
 
             // Untested game-version warning: localized sentence when the running build
@@ -175,7 +177,7 @@ namespace CS2MultiplayerMod.Game
                     if (!string.IsNullOrEmpty(password)) Mod.Setting.JoinPassword = password;
                     Mod.Setting.ApplyAndSave();
                 }
-                Mod.Service?.ClientFromSettings(Mod.Setting);
+                Mod.Service?.JoinFromSettings(Mod.Setting);
             }));
 
             // -- In-game hub panel (right-menu button above the Chirper) ----------

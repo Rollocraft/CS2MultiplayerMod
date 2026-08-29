@@ -472,6 +472,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             MultiplayerSession session = service.Session;
             ApplyLocalAuthority(session);
 
+            if ((_simulationSystem.frameIndex & (UpdateIntervalFrames - 1)) != 0) return;
+
             int bucket = (int)(SimulationUtils.GetUpdateFrameWithInterval(
                 _simulationSystem.frameIndex, UpdateIntervalFrames, UpdatePartitions) %
                 UpdatePartitions);

@@ -24,3 +24,10 @@ tests/
 # MkDocs build output
 site/
 .venv/
+
+# Build binary outputs
+*.dll
+*.pdb
+*.mjs
+*.mjs.LICENSE.txt
+/CS2MultiplayerMod.css

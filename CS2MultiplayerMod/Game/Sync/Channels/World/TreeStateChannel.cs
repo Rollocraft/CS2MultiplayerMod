@@ -99,19 +99,25 @@ namespace CS2MultiplayerMod.Game.Sync.Channels
             // this channel costs the host. Prioritized trees still go out on every snapshot.
             if (_captureTick++ % SnapshotsPerSweep == 0)
             {
-                NativeArray<Entity> trees = _trees.ToEntityArray(Allocator.Temp);
+                NativeArray<ArchetypeChunk> chunks = _trees.ToArchetypeChunkArray(Allocator.Temp);
                 try
                 {
-                    if (trees.Length > 0)
+                    if (chunks.Length > 0)
                     {
-                        if (_cursor >= trees.Length) _cursor = 0;
-                        int scanned = 0;
-                        while (scanned < trees.Length && records.Count < TreeStateBatch.MaxRecords)
+                        EntityTypeHandle entityType = em.GetEntityTypeHandle();
+                        if (_cursor >= chunks.Length) _cursor = 0;
+                        int scannedChunks = 0;
+                        while (scannedChunks < chunks.Length && records.Count < TreeStateBatch.MaxRecords)
                         {
-                            Entity entity = trees[_cursor];
-                            _cursor = (_cursor + 1) % trees.Length;
-                            scanned++;
-                            if (included.Add(entity)) TryCapture(em, entity, records);
+                            ArchetypeChunk chunk = chunks[_cursor];
+                            NativeArray<Entity> chunkEntities = chunk.GetNativeArray(entityType);
+                            for (int i = 0; i < chunkEntities.Length && records.Count < TreeStateBatch.MaxRecords; i++)
+                            {
+                                Entity entity = chunkEntities[i];
+                                if (included.Add(entity)) TryCapture(em, entity, records);
+                            }
+                            _cursor = (_cursor + 1) % chunks.Length;
+                            scannedChunks++;
                         }
                     }
                     else
@@ -121,7 +127,7 @@ namespace CS2MultiplayerMod.Game.Sync.Channels
                 }
                 finally
                 {
-                    trees.Dispose();
+                    chunks.Dispose();
                 }
             }
 

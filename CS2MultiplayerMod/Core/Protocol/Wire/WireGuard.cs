@@ -1,10 +1,11 @@
+using System;
 using System.Text;
 
 namespace CS2MultiplayerMod.Core.Protocol
 {
     /// <summary>
     /// Validation helpers for wire values. Everything a remote peer controls - counts,
-    /// lengths, floats, names - must pass through here. All failures throw
+    /// lengths, floats, names, quaternions - must pass through here. All failures throw
     /// <see cref="ProtocolException"/>, which every receive path treats as drop message
     /// / disconnect sender, never crash.
     /// </summary>
@@ -58,6 +59,59 @@ namespace CS2MultiplayerMod.Core.Protocol
             return value;
         }
 
+        /// <summary>Read 3D world coordinates (X, Y, Z) with finite and boundary checks.</summary>
+        public static void ReadCoordinate3(NetworkReader reader, out float x, out float y, out float z)
+        {
+            x = ReadCoordinate(reader);
+            y = ReadCoordinate(reader);
+            z = ReadCoordinate(reader);
+        }
+
+        /// <summary>Read and validate a normalized 3D rotation quaternion.</summary>
+        public static void ReadQuaternion(NetworkReader reader, out float x, out float y, out float z, out float w)
+        {
+            x = ReadFinite(reader);
+            y = ReadFinite(reader);
+            z = ReadFinite(reader);
+            w = ReadFinite(reader);
+
+            float sqrMag = x * x + y * y + z * z + w * w;
+            if (sqrMag < 0.0001f || Math.Abs(sqrMag - 1.0f) > 0.1f)
+            {
+                // Re-normalize or reject non-normalized quaternion
+                if (sqrMag >= 0.0001f)
+                {
+                    float inv = 1.0f / (float)Math.Sqrt(sqrMag);
+                    x *= inv;
+                    y *= inv;
+                    z *= inv;
+                    w *= inv;
+                }
+                else
+                {
+                    throw new ProtocolException("Degenerate zero quaternion on the wire.");
+                }
+            }
+        }
+
+        /// <summary>Read an integer strictly within [min, max].</summary>
+        public static int ReadRangedInt(NetworkReader reader, int min, int max)
+        {
+            int val = reader.ReadInt();
+            if (val < min || val > max)
+                throw new ProtocolException("Integer " + val + " outside range [" + min + ", " + max + "].");
+            return val;
+        }
+
+        /// <summary>Read a float strictly within [min, max].</summary>
+        public static float ReadRangedFloat(NetworkReader reader, float min, float max)
+        {
+            float val = ReadFinite(reader);
+            if (val < min || val > max)
+                throw new ProtocolException("Float " + val + " outside range [" + min + ", " + max + "].");
+            return val;
+        }
+
         /// <summary>Read a prefab-style name: required, sane length, no control characters.</summary>
         public static string ReadName(NetworkReader reader)
         {
@@ -75,12 +129,26 @@ namespace CS2MultiplayerMod.Core.Protocol
         /// <summary>
         /// Sanitize free text for display/logging: strip control characters (kills log
         /// injection via embedded newlines/ANSI), collapse to the length cap, and never
-        /// return null. Used for player names and chat lines rather than rejecting, so a
-        /// sloppy-but-honest client still works.
+        /// return null. Employs a zero-allocation fast path for clean strings.
         /// </summary>
         public static string SanitizeText(string value, int maxLength)
         {
             if (string.IsNullOrEmpty(value)) return string.Empty;
+
+            // Fast-path scan: if no control chars and within length, return without allocating a StringBuilder
+            bool needsCleaning = value.Length > maxLength;
+            if (!needsCleaning)
+            {
+                for (int i = 0; i < value.Length; i++)
+                {
+                    if (char.IsControl(value[i]))
+                    {
+                        needsCleaning = true;
+                        break;
+                    }
+                }
+                if (!needsCleaning) return value.Trim();
+            }
 
             var sb = new StringBuilder(value.Length < maxLength ? value.Length : maxLength);
             for (int i = 0; i < value.Length && sb.Length < maxLength; i++)

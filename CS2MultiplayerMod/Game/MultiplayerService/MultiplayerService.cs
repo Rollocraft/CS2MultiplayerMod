@@ -81,6 +81,7 @@ namespace CS2MultiplayerMod.Game
         }
 
         public MultiplayerSession Session => _session;
+        public int LocalPlayerId => _session != null ? _session.LocalPlayerId : 0;
 
         /// <summary>Monotonic millisecond clock shared with systems that need timing.</summary>
         public long NowMs => _clock.ElapsedMilliseconds;
@@ -352,11 +353,12 @@ namespace CS2MultiplayerMod.Game
                         for (int i = 0; i < peers.Count; i++)
                         {
                             Peer peer = peers[i];
+                            int lat = peer.LatencyMs >= 0 ? peer.LatencyMs : 0;
                             sb.Append(",{\"id\":").Append(peer.PlayerId).Append(",\"name\":");
                             AppendJsonString(sb, peer.Name);
                             sb.Append(",\"isHost\":false,\"isYou\":false,\"isSpectator\":")
                               .Append(peer.IsSpectator ? "true" : "false")
-                              .Append(",\"latency\":").Append(peer.LatencyMs)
+                              .Append(",\"latency\":").Append(lat)
                               .Append('}');
                         }
                         sb.Append(']');
@@ -367,17 +369,21 @@ namespace CS2MultiplayerMod.Game
 
                 if (_session.Role == SessionRole.Client)
                 {
+                    int clientLatency = _session.AverageLatencyMs >= 0 ? _session.AverageLatencyMs : 0;
                     var sb = new System.Text.StringBuilder(128);
                     sb.Append("[{\"id\":").Append(_session.LocalPlayerId).Append(",\"name\":");
                     AppendJsonString(sb, _session.LocalPlayerName);
-                    sb.Append(",\"isHost\":false,\"isYou\":true,\"isSpectator\":false,\"latency\":0}");
+                    sb.Append(",\"isHost\":false,\"isYou\":true,\"isSpectator\":").Append(IsLocalSpectator ? "true" : "false")
+                      .Append(",\"latency\":").Append(clientLatency).Append("}");
 
                     foreach (var player in _remotePlayers.Values)
                     {
+                        int pLat = player.PlayerId == 0 ? clientLatency : 0;
                         sb.Append(",{\"id\":").Append(player.PlayerId).Append(",\"name\":");
                         AppendJsonString(sb, player.Name ?? ("Player #" + player.PlayerId));
                         sb.Append(",\"isHost\":").Append(player.PlayerId == 0 ? "true" : "false");
-                        sb.Append(",\"isYou\":false,\"isSpectator\":false,\"latency\":-1}");
+                        sb.Append(",\"isYou\":false,\"isSpectator\":").Append(player.IsSpectator ? "true" : "false")
+                          .Append(",\"latency\":").Append(pLat).Append("}");
                     }
                     sb.Append(']');
                     _playerListJson = sb.ToString();
@@ -385,16 +391,19 @@ namespace CS2MultiplayerMod.Game
             }
         }
 
+        public bool IsLocalSpectator { get; set; } = false;
+
         public void SetPlayerRoleFromUi(int playerId, bool isSpectator)
         {
             if (_session.Role != SessionRole.Host) return;
             _session.SetPeerSpectator(playerId, isSpectator);
             RefreshPlayerListJson();
+            _session.SendChat("/roleset " + playerId + " " + (isSpectator ? "1" : "0"));
             RemotePlayer target = FindRemotePlayer(playerId);
             string name = target != null && !string.IsNullOrEmpty(target.Name) ? target.Name : ("Player #" + playerId);
             string roleMsg = isSpectator
-                ? "🔒 " + name + " is now a Spectator (read-only mode)."
-                : "🔨 " + name + " is now a Builder (edit permissions granted).";
+                ? name + " is now a Spectator (view-only)."
+                : name + " is now a Player (active).";
             _session.SendChat(roleMsg);
             AppendChatEntry(null, roleMsg);
         }
@@ -406,7 +415,7 @@ namespace CS2MultiplayerMod.Game
             {
                 Sync.Players.PlayerCursorSyncSystem.FollowPlayerId = -1;
                 Sync.Players.PlayerCursorSyncSystem.TeleportCameraTo(new Unity.Mathematics.float3(target.X, target.Y, target.Z));
-                AppendChatEntry(null, "🎥 Teleported camera to " + (target.Name ?? ("Player #" + target.PlayerId)) + ".");
+                AppendChatEntry(null, "Teleported camera to " + (target.Name ?? ("Player #" + target.PlayerId)) + ".");
             }
         }
 
@@ -415,15 +424,10 @@ namespace CS2MultiplayerMod.Game
             RemotePlayer target = FindRemotePlayer(playerId);
             if (target != null)
             {
-                Sync.Players.PlayerCursorSyncSystem.FollowPlayerId = target.PlayerId;
-                Sync.Players.PlayerCursorSyncSystem.TeleportCameraTo(new Unity.Mathematics.float3(target.X, target.Y, target.Z));
-                AppendChatEntry(null, "🎥 Now following " + (target.Name ?? ("Player #" + target.PlayerId)) + ". Move camera to stop following.");
+                Sync.Players.PlayerCursorSyncSystem.StartFollowing(target.PlayerId);
+                AppendChatEntry(null, "Now following " + (target.Name ?? ("Player #" + target.PlayerId)) + ". Move camera to stop following.");
             }
         }
-
-
-
-
 
         private struct ChatLogEntry
         {
@@ -585,6 +589,25 @@ namespace CS2MultiplayerMod.Game
             public override void OnChatReceived(string sender, string text)
             {
                 _log.Info("[MP] " + (sender ?? "system") + ": " + text);
+                if (text != null && text.StartsWith("/roleset ", System.StringComparison.OrdinalIgnoreCase))
+                {
+                    string[] parts = text.Substring(9).Trim().Split(new[] { ' ' }, 2, System.StringSplitOptions.RemoveEmptyEntries);
+                    if (parts.Length == 2 && int.TryParse(parts[0], out int targetId) && int.TryParse(parts[1], out int roleVal))
+                    {
+                        bool isSpec = roleVal == 1;
+                        if (targetId == _service.LocalPlayerId)
+                        {
+                            _service.IsLocalSpectator = isSpec;
+                        }
+                        RemotePlayer rp = _service.FindRemotePlayer(targetId);
+                        if (rp != null)
+                        {
+                            rp.IsSpectator = isSpec;
+                        }
+                        _service.RefreshPlayerListJson();
+                        return;
+                    }
+                }
                 if (text != null && text.StartsWith("/ping ", System.StringComparison.OrdinalIgnoreCase))
                 {
                     string[] parts = text.Substring(6).Trim().Split(new[] { ' ' }, 5, System.StringSplitOptions.RemoveEmptyEntries);
@@ -600,7 +623,7 @@ namespace CS2MultiplayerMod.Game
                         HasMapPingPosition = true;
                         OnMapPingReceived?.Invoke(pos, sender, label, pColor);
                         CoopAudio.PlayCue(CoopAudio.CueType.Ping);
-                        string display = "📍 Pinged map at (" + (int)px + ", " + (int)pz + ")" +
+                        string display = "Pinged map at (" + (int)px + ", " + (int)pz + ")" +
                                          (string.IsNullOrEmpty(label) ? "" : ": " + label);
                         _service.AppendChatEntry(sender, display);
                         return;
@@ -635,6 +658,8 @@ namespace CS2MultiplayerMod.Game
     public sealed class RemotePlayer
     {
         public int PlayerId;
+        public string Name;
+        public bool IsSpectator;
         // Camera focus on the ground.
         public float X;
         public float Y;

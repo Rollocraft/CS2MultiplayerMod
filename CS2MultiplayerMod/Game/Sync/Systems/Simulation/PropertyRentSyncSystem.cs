@@ -60,6 +60,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         private readonly ConcurrentQueue<PropertyRentIdentity> _pendingOrder =
             new ConcurrentQueue<PropertyRentIdentity>();
         private readonly List<Entity> _cacheScratch = new List<Entity>();
+        private readonly HashSet<PropertyRentIdentity> _captureIdentitiesScratch = new HashSet<PropertyRentIdentity>();
 
         // Host-side change priority. The rolling baseline is always sent; these entries merely
         // shorten the time from a newly changed rent to the next page that carries it.
@@ -204,6 +205,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             _syncWasReady = true;
 
             MultiplayerSession session = service.Session;
+            if ((_simulationSystem.frameIndex & (RentUpdateInterval - 1)) != 0) return;
+
             uint updateFrame = SimulationUtils.GetUpdateFrame(
                 _simulationSystem.frameIndex, UpdatePartitions, 16);
             int bucket = (int)(updateFrame % UpdatePartitions);
@@ -311,8 +314,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 SweepId = _captureSweepId,
                 PageIndex = _capturePageIndex,
             };
-            var identities = new HashSet<PropertyRentIdentity>();
-            AddPriorityEntries(snapshot, identities);
+            _captureIdentitiesScratch.Clear();
+            AddPriorityEntries(snapshot, _captureIdentitiesScratch);
 
             int index = _captureCursor;
             while (index < _hostSweepEntities.Length &&
@@ -321,7 +324,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 PropertyRentEntry entry;
                 if (TryCaptureEntry(_hostSweepEntities[index], out entry))
                 {
-                    if (identities.Add(entry.Identity)) snapshot.Entries.Add(entry);
+                    if (_captureIdentitiesScratch.Add(entry.Identity)) snapshot.Entries.Add(entry);
                     else _localIdentityCollisions++;
                 }
                 else _localCaptureSkips++;

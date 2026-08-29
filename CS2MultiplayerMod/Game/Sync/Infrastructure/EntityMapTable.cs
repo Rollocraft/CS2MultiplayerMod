@@ -27,6 +27,33 @@ namespace CS2MultiplayerMod.Game.Sync.Infrastructure
             return RemoteToLocal.TryGetValue(MakeKey(remoteIndex, remoteVersion), out localEntity);
         }
 
+        public static bool Unregister(int remoteIndex, int remoteVersion)
+        {
+            return RemoteToLocal.TryRemove(MakeKey(remoteIndex, remoteVersion), out _);
+        }
+
+        public static void UnregisterLocal(Entity localEntity)
+        {
+            foreach (var kvp in RemoteToLocal)
+            {
+                if (kvp.Value == localEntity)
+                {
+                    RemoteToLocal.TryRemove(kvp.Key, out _);
+                }
+            }
+        }
+
+        public static void PruneDeadEntities(EntityManager em)
+        {
+            foreach (var kvp in RemoteToLocal)
+            {
+                if (!em.Exists(kvp.Value))
+                {
+                    RemoteToLocal.TryRemove(kvp.Key, out _);
+                }
+            }
+        }
+
         public static void Clear()
         {
             RemoteToLocal.Clear();

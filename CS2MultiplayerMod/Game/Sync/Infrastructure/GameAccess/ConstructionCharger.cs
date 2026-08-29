@@ -58,26 +58,32 @@ namespace CS2MultiplayerMod.Game.Sync.Infrastructure
         public static void ChargeAmount(EntityManager em, long amount, string what) =>
             Charge(em, amount, what);
 
+        private static EntityQuery _moneyQuery;
+        private static bool _queryInitialized;
+
+        private static EntityQuery GetMoneyQuery(EntityManager em)
+        {
+            if (!_queryInitialized)
+            {
+                _moneyQuery = em.CreateEntityQuery(ComponentType.ReadWrite<PlayerMoney>());
+                _queryInitialized = true;
+            }
+            return _moneyQuery;
+        }
+
         private static void Charge(EntityManager em, long amount, string what)
         {
             if (amount <= 0 || !IsChargingHost()) return;
 
-            EntityQuery query = em.CreateEntityQuery(ComponentType.ReadWrite<PlayerMoney>());
-            try
-            {
-                if (query.CalculateEntityCount() == 0) return;
-                Entity city = query.GetSingletonEntity();
-                PlayerMoney money = em.GetComponentData<PlayerMoney>(city);
-                if (money.m_Unlimited) return;
+            EntityQuery query = GetMoneyQuery(em);
+            if (query.CalculateEntityCount() == 0) return;
+            Entity city = query.GetSingletonEntity();
+            PlayerMoney money = em.GetComponentData<PlayerMoney>(city);
+            if (money.m_Unlimited) return;
 
-                money.Subtract((int)math.min(amount, int.MaxValue));
-                em.SetComponentData(city, money);
-                Mod.Verbose("[MP] Charged " + amount + " for remote build: " + what + ".");
-            }
-            finally
-            {
-                query.Dispose();
-            }
+            money.Subtract((int)math.min(amount, int.MaxValue));
+            em.SetComponentData(city, money);
+            Mod.Verbose("[MP] Charged " + amount + " for remote build: " + what + ".");
         }
 
         private static bool IsChargingHost()

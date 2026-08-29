@@ -1,4 +1,5 @@
 using System;
+using System.Runtime.InteropServices;
 
 namespace CS2MultiplayerMod.Core.Protocol
 {
@@ -8,6 +9,9 @@ namespace CS2MultiplayerMod.Core.Protocol
     /// </summary>
     public static class VectorQuantizer
     {
+        private const double TwoPi = 2.0 * Math.PI;
+        private const float TwoPiF = (float)(2.0 * Math.PI);
+
         public static ushort FloatToHalf(float val)
         {
             return HalfHelper.SingleToHalf(val);
@@ -21,21 +25,31 @@ namespace CS2MultiplayerMod.Core.Protocol
         public static ushort QuantizeYaw(float radians)
         {
             // Normalize radians (-PI to PI) into 0 to 65535
-            float normalized = (float)((radians % (2 * Math.PI) + 2 * Math.PI) % (2 * Math.PI));
-            return (ushort)(normalized / (2 * Math.PI) * 65535f);
+            float normalized = (float)((radians % TwoPi + TwoPi) % TwoPi);
+            return (ushort)(normalized / TwoPiF * 65535f);
         }
 
         public static float DequantizeYaw(ushort val)
         {
-            return (float)(val / 65535f * (2 * Math.PI));
+            return (float)(val / 65535f * TwoPiF);
         }
 
-        // IEEE 754 half-precision float conversion helper
+        // IEEE 754 half-precision float conversion helper with zero-allocation struct union
         private static class HalfHelper
         {
+            [StructLayout(LayoutKind.Explicit)]
+            private struct FloatIntUnion
+            {
+                [FieldOffset(0)] public float FloatVal;
+                [FieldOffset(0)] public uint UIntVal;
+            }
+
             public static ushort SingleToHalf(float val)
             {
-                uint valBits = (uint)BitConverter.ToInt32(BitConverter.GetBytes(val), 0);
+                FloatIntUnion u = default;
+                u.FloatVal = val;
+                uint valBits = u.UIntVal;
+
                 uint sign = (valBits >> 16) & 0x00008000;
                 int exp = (int)((valBits >> 23) & 0x000000FF) - (127 - 15);
                 uint mant = valBits & 0x007FFFFF;
@@ -91,7 +105,9 @@ namespace CS2MultiplayerMod.Core.Protocol
                 }
 
                 uint resultBits = sign | (exp << 23) | mant;
-                return BitConverter.ToSingle(BitConverter.GetBytes((int)resultBits), 0);
+                FloatIntUnion u = default;
+                u.UIntVal = resultBits;
+                return u.FloatVal;
             }
         }
     }

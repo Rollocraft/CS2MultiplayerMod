@@ -105,12 +105,27 @@ namespace CS2MultiplayerMod.Core.Networking.Tcp
             try
             {
                 socket.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.KeepAlive, true);
-                // Windows TCP Keepalive settings: 5000ms idle, 1000ms interval
+            }
+            catch { }
+
+            // Tier 1: Windows Winsock IOControl (SIO_KEEPALIVE_VALS)
+            try
+            {
                 byte[] keepAlive = new byte[12];
                 BitConverter.GetBytes(1).CopyTo(keepAlive, 0); // on
                 BitConverter.GetBytes(5000).CopyTo(keepAlive, 4); // 5 sec keepalive time
                 BitConverter.GetBytes(1000).CopyTo(keepAlive, 8); // 1 sec interval
                 socket.IOControl(IOControlCode.KeepAliveValues, keepAlive, null);
+                return;
+            }
+            catch { }
+
+            // Tier 2: TCP Level Option Fallback (for virtual NICs / Wine / Linux compatibility)
+            try
+            {
+                // 3 = TCP_KEEPALIVE / TCP_KEEPIDLE, 17 = TCP_KEEPINTVL
+                socket.SetSocketOption(SocketOptionLevel.Tcp, (SocketOptionName)3, 5);
+                socket.SetSocketOption(SocketOptionLevel.Tcp, (SocketOptionName)17, 1);
             }
             catch { }
         }
@@ -153,16 +168,37 @@ namespace CS2MultiplayerMod.Core.Networking.Tcp
         {
             try
             {
+                byte[] smallBuffer = new byte[8192 + 4];
+
                 foreach (byte[] payload in _sendQueue.GetConsumingEnumerable())
                 {
                     try
                     {
                         Stream stream = _stream;
                         if (stream == null) continue; // closed before the stream was ready
-                        WriteLength(payload.Length);
-                        stream.Write(_sendPrefix, 0, 4);
-                        stream.Write(payload, 0, payload.Length);
-                        stream.Flush();
+                        
+                        int len = payload.Length;
+                        if (len <= 8192)
+                        {
+                            // Pack 4-byte length prefix + payload into a single buffer to eliminate TCP packet splitting and TLS record fragmentation
+                            smallBuffer[0] = (byte)(len & 0xFF);
+                            smallBuffer[1] = (byte)((len >> 8) & 0xFF);
+                            smallBuffer[2] = (byte)((len >> 16) & 0xFF);
+                            smallBuffer[3] = (byte)((len >> 24) & 0xFF);
+                            Buffer.BlockCopy(payload, 0, smallBuffer, 4, len);
+                            stream.Write(smallBuffer, 0, len + 4);
+                        }
+                        else
+                        {
+                            WriteLength(len);
+                            stream.Write(_sendPrefix, 0, 4);
+                            stream.Write(payload, 0, len);
+                        }
+
+                        if (_sendQueue.Count == 0)
+                        {
+                            stream.Flush();
+                        }
                     }
                     finally
                     {
@@ -262,8 +298,10 @@ namespace CS2MultiplayerMod.Core.Networking.Tcp
             }
         }
 
+        private const SslProtocols SupportedTlsProtocols = SslProtocols.Tls12 | (SslProtocols)12288;
+
         /// <summary>
-        /// Establish the application stream: plain TCP, or TLS 1.2 when configured.
+        /// Establish the application stream: plain TCP, or TLS 1.2/1.3 when configured.
         /// Runs on the read thread so a slow/hostile TLS handshake never blocks the
         /// accept loop or the game thread. The server presents its ephemeral
         /// certificate; the client accepts any certificate but records its hash as the
@@ -276,9 +314,11 @@ namespace CS2MultiplayerMod.Core.Networking.Tcp
             if (_serverCertificate != null)
             {
                 raw.ReadTimeout = 15000; // a peer that stalls the TLS handshake gets dropped
+                raw.WriteTimeout = 15000;
                 var ssl = new SslStream(raw, false);
-                ssl.AuthenticateAsServer(_serverCertificate, false, SslProtocols.Tls12, false);
+                ssl.AuthenticateAsServer(_serverCertificate, false, SupportedTlsProtocols, false);
                 raw.ReadTimeout = Timeout.Infinite;
+                raw.WriteTimeout = Timeout.Infinite;
                 _channelBinding = TlsCertificate.HashOf(_serverCertificate);
                 _stream = ssl;
                 return true;
@@ -286,12 +326,16 @@ namespace CS2MultiplayerMod.Core.Networking.Tcp
 
             if (_clientTls)
             {
+                raw.ReadTimeout = 15000; // a host that stalls the TLS handshake gets dropped
+                raw.WriteTimeout = 15000;
                 var ssl = new SslStream(raw, false, (sender, cert, chain, errors) =>
                 {
                     _channelBinding = TlsCertificate.HashOf(cert);
                     return true; // trust is established by the password proof over this hash
                 });
-                ssl.AuthenticateAsClient("CS2MultiplayerMod", null, SslProtocols.Tls12, false);
+                ssl.AuthenticateAsClient("CS2MultiplayerMod", null, SupportedTlsProtocols, false);
+                raw.ReadTimeout = Timeout.Infinite;
+                raw.WriteTimeout = Timeout.Infinite;
                 _stream = ssl;
                 return true;
             }

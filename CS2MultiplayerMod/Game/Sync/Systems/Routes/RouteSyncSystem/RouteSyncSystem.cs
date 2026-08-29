@@ -53,7 +53,6 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             public uint Rgba;
             public int RouteNumber;
             public bool IsComplete;
-            public string VehicleModelPrefabName;
         }
 
         private sealed class PendingRouteCommand
@@ -76,7 +75,6 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             public HashSet<Entity> PreexistingShapeMatches;
             public int RouteNumber;
             public uint Rgba;
-            public string VehicleModelPrefabName;
             public long DeadlineMs;
             public RouteCreateCommand Source;
             public int OriginPlayerId;
@@ -185,7 +183,6 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 {
                     MaxBodyBytes = RouteCreateCommand.MaxEncodedBytes,
                 };
-                Mod.Service.Session.AddObserver(_observer);
             }
             SyncInbox.RegisterDrain(DrainQueue);
         }
@@ -193,10 +190,12 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         protected override void OnDestroy()
         {
             SyncInbox.UnregisterDrain(DrainQueue);
-            if (_observer != null && Mod.Service != null)
+            if (_observer != null && Mod.Service?.Session != null)
                 Mod.Service.Session.RemoveObserver(_observer);
             base.OnDestroy();
         }
+
+        private bool _registered;
 
         protected override void OnUpdate()
         {
@@ -206,12 +205,19 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             MultiplayerSession session = service.Session;
             if (!service.GameplaySyncReady)
             {
+                _registered = false;
                 _wasGameplaySyncReady = false;
                 if (_knownRoutes.Count > 0) _knownRoutes.Clear();
                 if (_nextRoutes.Count > 0) _nextRoutes.Clear();
                 if (_needsCreateCapture.Count > 0) _needsCreateCapture.Clear();
                 if (_baselinePendingRoutes.Count > 0) _baselinePendingRoutes.Clear();
                 return;
+            }
+
+            if (!_registered && session != null)
+            {
+                session.AddObserver(_observer);
+                _registered = true;
             }
 
             long now = service.NowMs;

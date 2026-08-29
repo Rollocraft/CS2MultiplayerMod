@@ -1,4 +1,4 @@
-﻿using System.Collections.Concurrent;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using Game;
 using Game.Common;
@@ -630,11 +630,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                 },
             });
 
-            if (Mod.Service != null)
-            {
-                _observer = new Observer(_incoming);
-                Mod.Service.Session.AddObserver(_observer);
-            }
+            _observer = new Observer(_incoming);
             SyncInbox.RegisterDrain(DrainNetQueues);
         }
 
@@ -642,7 +638,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
         {
             SyncInbox.UnregisterDrain(DrainNetQueues);
             ReleaseAllIsolation();
-            if (_observer != null && Mod.Service != null)
+            if (_observer != null && Mod.Service?.Session != null)
                 Mod.Service.Session.RemoveObserver(_observer);
             base.OnDestroy();
         }
@@ -752,6 +748,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
             DeferForTerrain = false;
         }
 
+        private bool _registered;
+
         protected override void OnUpdate()
         {
             MultiplayerService service = Mod.Service;
@@ -760,8 +758,15 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
             MultiplayerSession session = service.Session;
             if (!service.GameplaySyncReady)
             {
+                _registered = false;
                 DrainNetQueues();
                 return;
+            }
+
+            if (!_registered && session != null)
+            {
+                session.AddObserver(_observer);
+                _registered = true;
             }
 
             long now = service.NowMs;

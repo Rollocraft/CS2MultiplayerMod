@@ -170,6 +170,8 @@ namespace CS2MultiplayerMod.Game
         /// <summary>Remove the transient world so the joining player keeps no local copy.</summary>
         public static void DeleteTransient(IModLogger log)
         {
+            _lastStagedSaveBytes = null;
+
             // Remove the index registration(s) first: deleting the asset drops the .cok
             // (and its .cid guid sidecar) from disk together with the entry, so the next
             // join re-registers from a clean slate.

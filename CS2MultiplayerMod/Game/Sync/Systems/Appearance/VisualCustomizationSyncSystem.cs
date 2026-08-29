@@ -263,23 +263,21 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 Options = EntityQueryOptions.IgnoreComponentEnabledState,
             });
 
-            if (Mod.Service != null)
-            {
-                _observer = new CommandObserver(
-                    _incoming, VisualCustomizationCommand.Id, ColorPaletteCommand.Id);
-                _observer.MaxBodyBytes = VisualCustomizationCommand.MaxEncodedBytes;
-                Mod.Service.Session.AddObserver(_observer);
-            }
+            _observer = new CommandObserver(
+                _incoming, VisualCustomizationCommand.Id, ColorPaletteCommand.Id);
+            _observer.MaxBodyBytes = VisualCustomizationCommand.MaxEncodedBytes;
             SyncInbox.RegisterDrain(DrainQueue);
         }
 
         protected override void OnDestroy()
         {
             SyncInbox.UnregisterDrain(DrainQueue);
-            if (_observer != null && Mod.Service != null)
+            if (_observer != null && Mod.Service?.Session != null)
                 Mod.Service.Session.RemoveObserver(_observer);
             base.OnDestroy();
         }
+
+        private bool _registered;
 
         private void DrainQueue()
         {
@@ -295,10 +293,17 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             MultiplayerSession session = service.Session;
             if (!service.GameplaySyncReady)
             {
+                _registered = false;
                 ResetTracking();
                 if (session.Status != SessionStatus.Connected)
                     SyncInbox.Clear(_incoming);
                 return;
+            }
+
+            if (!_registered && session != null)
+            {
+                session.AddObserver(_observer);
+                _registered = true;
             }
 
             long now = service.NowMs;

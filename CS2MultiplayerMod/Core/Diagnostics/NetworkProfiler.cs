@@ -1,5 +1,5 @@
-using System;
 using System.Collections.Concurrent;
+using System.Threading;
 
 namespace CS2MultiplayerMod.Core.Diagnostics
 {
@@ -14,28 +14,28 @@ namespace CS2MultiplayerMod.Core.Diagnostics
         public static void RecordSent(ushort commandId, int bytes)
         {
             CommandStats stat = Stats.GetOrAdd(commandId, _ => new CommandStats());
-            stat.SentCount++;
-            stat.SentBytes += bytes;
+            Interlocked.Increment(ref stat.SentCount);
+            Interlocked.Add(ref stat.SentBytes, bytes);
         }
 
         public static void RecordReceived(ushort commandId, int bytes)
         {
             CommandStats stat = Stats.GetOrAdd(commandId, _ => new CommandStats());
-            stat.RecvCount++;
-            stat.RecvBytes += bytes;
+            Interlocked.Increment(ref stat.RecvCount);
+            Interlocked.Add(ref stat.RecvBytes, bytes);
         }
 
         public static long GetTotalBytesSent()
         {
             long total = 0;
-            foreach (var s in Stats.Values) total += s.SentBytes;
+            foreach (var s in Stats.Values) total += Interlocked.Read(ref s.SentBytes);
             return total;
         }
 
         public static long GetTotalBytesReceived()
         {
             long total = 0;
-            foreach (var s in Stats.Values) total += s.RecvBytes;
+            foreach (var s in Stats.Values) total += Interlocked.Read(ref s.RecvBytes);
             return total;
         }
 

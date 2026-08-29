@@ -125,7 +125,7 @@ namespace CS2MultiplayerMod.Core.Networking.Discovery
             }
             catch (Exception ex)
             {
-                _log.Verbose("[MP] LAN beacon broadcast error: " + ex.Message);
+                _log.Debug("[MP] LAN beacon broadcast error: " + ex.Message);
             }
         }
 
@@ -231,7 +231,7 @@ namespace CS2MultiplayerMod.Core.Networking.Discovery
                 }
                 catch (Exception ex)
                 {
-                    _log.Verbose("[MP] LAN discovery listen loop warning: " + ex.Message);
+                    _log.Debug("[MP] LAN discovery listen loop warning: " + ex.Message);
                 }
             }
         }

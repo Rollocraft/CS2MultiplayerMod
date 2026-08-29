@@ -1,5 +1,5 @@
 using System;
-using System.Buffers;
+using System.Collections.Concurrent;
 
 namespace CS2MultiplayerMod.Core.Networking
 {
@@ -9,7 +9,17 @@ namespace CS2MultiplayerMod.Core.Networking
     /// </summary>
     public static class BufferPool
     {
-        private static readonly ArrayPool<byte> Pool = ArrayPool<byte>.Shared;
+        private static readonly ConcurrentQueue<byte[]> PoolSmall = new ConcurrentQueue<byte[]>();
+        private static readonly ConcurrentQueue<byte[]> PoolMedium = new ConcurrentQueue<byte[]>();
+        private static readonly ConcurrentQueue<byte[]> PoolLarge = new ConcurrentQueue<byte[]>();
+
+        private static int _smallCount;
+        private static int _medCount;
+        private static int _largeCount;
+
+        private const int SmallThreshold = 4 * 1024;       // 4 KB
+        private const int MediumThreshold = 64 * 1024;     // 64 KB
+        private const int LargeThreshold = 256 * 1024;     // 256 KB (BlobChunkBytes)
 
         /// <summary>
         /// Rent a byte array of at least <paramref name="minimumLength"/> bytes.
@@ -17,7 +27,34 @@ namespace CS2MultiplayerMod.Core.Networking
         /// </summary>
         public static byte[] Rent(int minimumLength)
         {
-            return Pool.Rent(minimumLength);
+            if (minimumLength <= SmallThreshold)
+            {
+                if (PoolSmall.TryDequeue(out byte[] buf))
+                {
+                    System.Threading.Interlocked.Decrement(ref _smallCount);
+                    return buf;
+                }
+                return new byte[SmallThreshold];
+            }
+            if (minimumLength <= MediumThreshold)
+            {
+                if (PoolMedium.TryDequeue(out byte[] buf))
+                {
+                    System.Threading.Interlocked.Decrement(ref _medCount);
+                    return buf;
+                }
+                return new byte[MediumThreshold];
+            }
+            if (minimumLength <= LargeThreshold)
+            {
+                if (PoolLarge.TryDequeue(out byte[] buf))
+                {
+                    System.Threading.Interlocked.Decrement(ref _largeCount);
+                    return buf;
+                }
+                return new byte[LargeThreshold];
+            }
+            return new byte[minimumLength];
         }
 
         /// <summary>
@@ -26,13 +63,28 @@ namespace CS2MultiplayerMod.Core.Networking
         public static void Return(byte[] array, bool clearArray = false)
         {
             if (array == null) return;
-            try
+            if (clearArray) Array.Clear(array, 0, array.Length);
+
+            if (array.Length == SmallThreshold)
             {
-                Pool.Return(array, clearArray);
+                if (System.Threading.Interlocked.Increment(ref _smallCount) <= 64)
+                    PoolSmall.Enqueue(array);
+                else
+                    System.Threading.Interlocked.Decrement(ref _smallCount);
             }
-            catch
+            else if (array.Length == MediumThreshold)
             {
-                // Defensive guard: ignore if pool was disposed or array was not from pool
+                if (System.Threading.Interlocked.Increment(ref _medCount) <= 32)
+                    PoolMedium.Enqueue(array);
+                else
+                    System.Threading.Interlocked.Decrement(ref _medCount);
+            }
+            else if (array.Length == LargeThreshold)
+            {
+                if (System.Threading.Interlocked.Increment(ref _largeCount) <= 16)
+                    PoolLarge.Enqueue(array);
+                else
+                    System.Threading.Interlocked.Decrement(ref _largeCount);
             }
         }
 
@@ -58,7 +110,7 @@ namespace CS2MultiplayerMod.Core.Networking
                     }
                 }
             }
-            return Pool.Rent(minimumLength);
+            return Rent(minimumLength);
         }
 
         public static void ReturnLargeSlab(byte[] slab)

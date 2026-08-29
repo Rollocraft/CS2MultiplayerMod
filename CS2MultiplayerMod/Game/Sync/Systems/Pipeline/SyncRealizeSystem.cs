@@ -1,7 +1,7 @@
 using System;
 using System.Collections.Generic;
 using Game;
-
+using CS2MultiplayerMod.Game.Sync.Infrastructure;
 using CS2MultiplayerMod.Game.Sync.Systems.Net;
 namespace CS2MultiplayerMod.Game.Sync.Systems
 {
@@ -49,6 +49,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
         private const int FaultReportThrottleMs = 10000;
         private readonly Dictionary<string, int> _lastFaultTick = new Dictionary<string, int>();
+        private int _lastEntityPruneMs;
 
         /// <summary>
         /// Run one stage in isolation. The stages are ordered but not dependent: letting a
@@ -79,6 +80,13 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
         protected override void OnUpdate()
         {
+            int nowTicks = Environment.TickCount;
+            if (unchecked(nowTicks - _lastEntityPruneMs) > 5000)
+            {
+                _lastEntityPruneMs = nowTicks;
+                EntityMapTable.PruneDeadEntities(EntityManager);
+            }
+
             // Reset the net pipeline's per-frame state (the one-preview-wipe-per-frame guard) before
             // any feeder runs — DeleteSync/NetReplaceSync may hijack the frame before NetSync does.
             _netSync.BeginRealizeFrame();

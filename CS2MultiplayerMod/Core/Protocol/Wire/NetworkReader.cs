@@ -1,4 +1,5 @@
 using System;
+using System.Runtime.InteropServices;
 using System.Text;
 
 namespace CS2MultiplayerMod.Core.Protocol
@@ -62,12 +63,23 @@ namespace CS2MultiplayerMod.Core.Protocol
             return value;
         }
 
+        [StructLayout(LayoutKind.Explicit)]
+        private struct FloatConverter
+        {
+            [FieldOffset(0)] public float FloatValue;
+            [FieldOffset(0)] public int IntValue;
+        }
+
         public float ReadFloat()
         {
             Require(4);
-            float value = BitConverter.ToSingle(_buffer, _position);
+            int intVal = _buffer[_position]
+                         | (_buffer[_position + 1] << 8)
+                         | (_buffer[_position + 2] << 16)
+                         | (_buffer[_position + 3] << 24);
             _position += 4;
-            return value;
+            var conv = new FloatConverter { IntValue = intVal };
+            return conv.FloatValue;
         }
 
         public string ReadString()

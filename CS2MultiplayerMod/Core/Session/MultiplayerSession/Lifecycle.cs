@@ -54,6 +54,7 @@ namespace CS2MultiplayerMod.Core.Session
             LocalPlayerName = WireGuard.SanitizePlayerName(config.PlayerName);
             LocalPlayerId = HostPlayerId;
             Role = SessionRole.Host;
+            ClearReplayBuffer();
 
             EncryptionActive = false;
             _certificate = null;
@@ -282,6 +283,8 @@ namespace CS2MultiplayerMod.Core.Session
             _blobs.Clear();
             _blobTransferIds.Clear();
             ClearBlobProgress();
+            ClearReplayBuffer();
+            _commandDeduplicator.Clear();
             _outgoingBlobActive = false;
             _outgoingBlobTotal = 0;
             _outgoingBlobSent = 0;

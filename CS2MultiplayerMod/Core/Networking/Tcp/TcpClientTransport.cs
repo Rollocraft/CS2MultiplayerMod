@@ -61,51 +61,72 @@ namespace CS2MultiplayerMod.Core.Networking.Tcp
             var elapsed = Stopwatch.StartNew();
             _log.Info("Connecting to " + host + ":" + port + (useTls ? " (TLS)..." : " (plaintext)..."));
 
-            IPAddress literal;
-            if (!IPAddress.TryParse(host, out literal))
+            IPAddress[] candidates;
+            if (IPAddress.TryParse(host, out IPAddress literal))
             {
-                // Name the DNS step explicitly: when it fails, Connect would report the
-                // same root cause less readably; when it succeeds, the log shows which
-                // address is actually being dialed.
+                candidates = new[] { literal };
+            }
+            else
+            {
                 try
                 {
-                    IPAddress[] resolved = Dns.GetHostAddresses(host);
+                    candidates = Dns.GetHostAddresses(host);
                     _log.Info("Resolved '" + host + "' to " +
-                              string.Join(", ", Array.ConvertAll(resolved, a => a.ToString())) + ".");
+                              string.Join(", ", Array.ConvertAll(candidates, a => a.ToString())) + ".");
                 }
                 catch (Exception ex)
                 {
                     _log.Warn("DNS lookup for '" + host + "' failed: " + ex.Message);
+                    candidates = Array.Empty<IPAddress>();
                 }
             }
 
-            TcpClient client;
-            if (Socket.OSSupportsIPv6)
+            TcpClient client = null;
+            Exception lastEx = null;
+
+            foreach (var targetIp in candidates)
             {
-                client = new TcpClient(AddressFamily.InterNetworkV6);
-                try { client.Client.DualMode = true; } catch { }
-            }
-            else
-            {
-                client = new TcpClient();
+                if (!_active) break;
+                try
+                {
+                    var attemptClient = new TcpClient(targetIp.AddressFamily);
+                    if (targetIp.AddressFamily == AddressFamily.InterNetworkV6)
+                    {
+                        try { attemptClient.Client.DualMode = true; } catch { }
+                    }
+                    _dialing = attemptClient;
+                    var asyncResult = attemptClient.BeginConnect(targetIp, port, null, null);
+                    bool success = asyncResult.AsyncWaitHandle.WaitOne(TimeSpan.FromSeconds(6));
+                    if (!success)
+                    {
+                        try { attemptClient.Close(); } catch { }
+                        throw new SocketException((int)SocketError.TimedOut);
+                    }
+                    attemptClient.EndConnect(asyncResult);
+                    client = attemptClient;
+                    lastEx = null;
+                    break;
+                }
+                catch (Exception ex)
+                {
+                    lastEx = ex;
+                    try { _dialing?.Close(); } catch { }
+                    _dialing = null;
+                }
             }
 
-            _dialing = client; // lets Shutdown() abort a dial that is still in flight
-            try
-            {
-                client.Connect(host, port);
-            }
-            catch (Exception ex)
+            if (client == null || !client.Connected)
             {
                 _dialing = null;
                 bool canceled = !_active; // Shutdown() closed the socket under us
                 _active = false;
-                try { client.Close(); } catch { /* ignore */ }
+                try { client?.Close(); } catch { /* ignore */ }
                 if (canceled)
                 {
                     _log.Info("Join canceled while connecting to " + host + ":" + port + ".");
                     return;
                 }
+                var ex = lastEx ?? new SocketException((int)SocketError.HostNotFound);
                 var socketEx = ex as SocketException;
                 string errorCode = socketEx != null ? " [" + socketEx.SocketErrorCode + "]" : "";
                 Enqueue(TransportEvent.Disconnected(ConnectionId.Server,

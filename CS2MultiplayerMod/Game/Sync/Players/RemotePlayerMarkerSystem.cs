@@ -114,8 +114,10 @@ namespace CS2MultiplayerMod.Game.Sync.Players
 
                 // Ground ring where the partner is looking.
                 if (ringVisible)
+                {
                     buffer.DrawCircle(color, fill, RingOutlineWidth, default,
                         new float2(0f, 1f), focus, RingDiameter);
+                }
 
                 // A line from that point up towards their camera, so you can see how high they
                 // are "flying" (and roughly where they are when zoomed out).

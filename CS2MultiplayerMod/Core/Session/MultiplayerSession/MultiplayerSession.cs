@@ -41,6 +41,14 @@ namespace CS2MultiplayerMod.Core.Session
             }
         }
 
+        public int HandshakedPeerCount()
+        {
+            int count = 0;
+            foreach (var p in _peers.Values)
+                if (p.Handshaked) count++;
+            return count;
+        }
+
         public int AverageJitterMs
         {
             get
@@ -95,6 +103,7 @@ namespace CS2MultiplayerMod.Core.Session
         private readonly HashSet<int> _administrativeRemovals = new HashSet<int>();
         private readonly HashSet<string> _hostBannedAddresses = new HashSet<string>();
         private readonly FailedAuthTracker _failedAuth = new FailedAuthTracker();
+        private readonly CommandDeduplicator _commandDeduplicator = new CommandDeduplicator();
 
         private ITransport _transport;
         private MultiplayerConfig _config;
@@ -176,6 +185,15 @@ namespace CS2MultiplayerMod.Core.Session
         public long OutgoingBlobSent => _outgoingBlobSent;
 
         public IReadOnlyCollection<Peer> Peers => _peers.Values;
+
+        public Peer FindPeer(int playerId)
+        {
+            foreach (var peer in _peers.Values)
+            {
+                if (peer.PlayerId == playerId) return peer;
+            }
+            return null;
+        }
 
         /// <summary>
         /// Client-only: the host acknowledged the join and it is waiting for the host to

@@ -32,11 +32,21 @@ namespace CS2MultiplayerMod.Game
         private HostWorldSyncUiStage _hostWorldSyncUiStage;
         private string _hostWorldSyncJoiningName;
         private int _hostWorldSyncJoiningCount;
+        private long _lastWorldSyncCompletedMs;
+        private bool _lastWorldSyncSuccess;
         private const int RequiredClientQuiescenceFrames = 2;
 
         /// <summary>True while all gameplay traffic and local tools are quiesced for a snapshot.</summary>
         public bool WorldSyncBarrierActive => _worldSyncBarrierActive;
         public long ActiveWorldSyncEpoch => _activeWorldSyncEpoch;
+        public long LastWorldSyncCompletedMs => _lastWorldSyncCompletedMs;
+        public bool LastWorldSyncSuccess => _lastWorldSyncSuccess;
+
+        internal void NoteSoloWorldSyncCompleted()
+        {
+            _lastWorldSyncCompletedMs = NowMs;
+            _lastWorldSyncSuccess = true;
+        }
 
         /// <summary>
         /// Capture which newly connected players caused this epoch. Periodic/manual
@@ -96,6 +106,8 @@ namespace CS2MultiplayerMod.Game
             if (!_worldSyncBarrierActive || epoch != _activeWorldSyncEpoch) return;
             _worldSyncResumeSpeed = SanitizeSpeed(resumeSpeed);
             ResetWorldSyncState(restoreSpeed: true);
+            _lastWorldSyncCompletedMs = NowMs;
+            _lastWorldSyncSuccess = true;
             _log.Info("[MP] World sync epoch " + epoch + " completed; gameplay resumed.");
             Diagnostics.FlightRecorder.Note("world-sync resume epoch=" + epoch);
         }
@@ -105,6 +117,8 @@ namespace CS2MultiplayerMod.Game
             if (!_worldSyncBarrierActive || epoch != _activeWorldSyncEpoch) return;
             _worldSyncResumeSpeed = SanitizeSpeed(resumeSpeed);
             ResetWorldSyncState(restoreSpeed: true);
+            _lastWorldSyncCompletedMs = NowMs;
+            _lastWorldSyncSuccess = false;
             _log.Warn("[MP] World sync epoch " + epoch +
                       " aborted before a snapshot was installed; previous world resumed.");
             Diagnostics.FlightRecorder.Note("world-sync abort epoch=" + epoch);
@@ -157,6 +171,9 @@ namespace CS2MultiplayerMod.Game
                 if (_worldInstallGeneration < long.MaxValue) _worldInstallGeneration++;
                 ResetWorldSyncState(restoreSpeed: true);
                 SetPhase(ClientWorldPhase.InSession);
+                _lastWorldSyncCompletedMs = NowMs;
+                _lastWorldSyncSuccess = true;
+                _session.NotifyChat(null, "World sync complete - city synchronized and simulation resumed.");
                 _log.Info("[MP] World sync epoch " + epoch +
                           " resumed after the authoritative snapshot was installed.");
                 Diagnostics.FlightRecorder.Note("world-sync client resumed epoch=" + epoch);
@@ -281,6 +298,6 @@ namespace CS2MultiplayerMod.Game
         }
 
         private static float SanitizeSpeed(float speed) =>
-            float.IsNaN(speed) || float.IsInfinity(speed) || speed < 0f ? 0f : speed;
+            float.IsNaN(speed) || float.IsInfinity(speed) || speed < 0f ? 0f : Math.Min(speed, 8f);
     }
 }

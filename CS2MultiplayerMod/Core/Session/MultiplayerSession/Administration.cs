@@ -21,6 +21,11 @@ namespace CS2MultiplayerMod.Core.Session
             while (_commandReplayBuffer.Count > MaxReplayBufferSize && _commandReplayBuffer.TryDequeue(out _)) { }
         }
 
+        public static void ClearReplayBuffer()
+        {
+            while (_commandReplayBuffer.TryDequeue(out _)) { }
+        }
+
         public void ReplayCommandsToPeer(ConnectionId connection)
         {
             if (Role != SessionRole.Host || Status != SessionStatus.Connected) return;

@@ -1,4 +1,5 @@
 using System;
+using System.Runtime.InteropServices;
 using System.Text;
 
 namespace CS2MultiplayerMod.Core.Protocol
@@ -59,12 +60,22 @@ namespace CS2MultiplayerMod.Core.Protocol
             }
         }
 
+        [StructLayout(LayoutKind.Explicit)]
+        private struct FloatConverter
+        {
+            [FieldOffset(0)] public float FloatValue;
+            [FieldOffset(0)] public int IntValue;
+        }
+
         public void WriteFloat(float value)
         {
-            // BitConverter is little-endian on every supported (x86/ARM) target, matching
-            // the manual little-endian integer writes above.
-            byte[] bytes = BitConverter.GetBytes(value);
-            WriteBytes(bytes, 0, 4);
+            EnsureCapacity(4);
+            var conv = new FloatConverter { FloatValue = value };
+            int intVal = conv.IntValue;
+            _buffer[_length++] = (byte)(intVal & 0xFF);
+            _buffer[_length++] = (byte)((intVal >> 8) & 0xFF);
+            _buffer[_length++] = (byte)((intVal >> 16) & 0xFF);
+            _buffer[_length++] = (byte)((intVal >> 24) & 0xFF);
         }
 
         public void WriteString(string value)

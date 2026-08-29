@@ -125,8 +125,12 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                         // normal reference and sub-element systems can remove every upgrade,
                         // extension network, and area without leaving an orphan behind.
                         for (int i = ownedDeleteGraph.Count - 1; i >= 0; i--)
+                        {
                             EntityManager.AddComponent<Deleted>(ownedDeleteGraph[i]);
+                            EntityMapTable.UnregisterLocal(ownedDeleteGraph[i]);
+                        }
                         EntityManager.AddComponent<Deleted>(best);
+                        EntityMapTable.UnregisterLocal(best);
                         if (attachParent != Entity.Null) NetAttachment.TagParentUpdated(EntityManager, attachParent);
                         taken.Add(best);
                         deletedOwned += ownedDeleteGraph.Count;

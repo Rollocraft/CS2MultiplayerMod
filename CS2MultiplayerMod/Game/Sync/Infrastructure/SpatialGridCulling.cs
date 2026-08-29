@@ -14,7 +14,7 @@ namespace CS2MultiplayerMod.Game.Sync.Infrastructure
 
         public static int2 GetCell(float3 worldPos, float cellSize = DefaultCellSize)
         {
-            return new int2((int)Math.Floor(worldPos.x / cellSize), (int)Math.Floor(worldPos.z / cellSize));
+            return new int2((int)math.floor(worldPos.x / cellSize), (int)math.floor(worldPos.z / cellSize));
         }
 
         public static bool IsWithinCullingDistance(float3 observerPos, float3 targetPos, float maxDistance = MaxVisibleDistanceMeters)

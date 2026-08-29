@@ -107,24 +107,21 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
             Mod.log.Info(nameof(CityStateSyncSystem) + " ready with " + _channels.Count +
                          " state channel(s), " + _editable.Count + " player-editable.");
-
-            if (Mod.Service != null)
-            {
-                _observer = new Observer(_incoming, _incomingEdits, RequestOrderedPoison,
-                    channelId => _editable.Contains(channelId));
-                Mod.Service.Session.AddObserver(_observer);
-            }
+            _observer = new Observer(_incoming, _incomingEdits, RequestOrderedPoison,
+                channelId => _editable.Contains(channelId));
             SyncInbox.RegisterDrain(DrainQueues);
         }
 
         protected override void OnDestroy()
         {
             SyncInbox.UnregisterDrain(DrainQueues);
-            if (_observer != null && Mod.Service != null)
+            if (_observer != null && Mod.Service?.Session != null)
                 Mod.Service.Session.RemoveObserver(_observer);
             if (_treeStateChannel != null) _treeStateChannel.Dispose();
             base.OnDestroy();
         }
+
+        private bool _registered;
 
         /// <summary>Ensure a newly placed host tree is included in the next bounded snapshot.</summary>
         internal void PrioritizeTree(Entity entity)
@@ -156,6 +153,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             MultiplayerSession session = service.Session;
             if (!service.GameplaySyncReady)
             {
+                _registered = false;
                 // Leaving a session invalidates everything we knew about the host's state.
                 if (_lastHostPayload.Count > 0) { _lastHostPayload.Clear(); _pendingEdits.Clear(); }
                 for (int i = 0; i < _pumped.Count; i++) _pumped[i].ResetPending();
@@ -167,6 +165,12 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 _orderedInvalidated = false;
                 Interlocked.Exchange(ref _orderedPoisonRequested, 0);
                 return;
+            }
+
+            if (!_registered && session != null)
+            {
+                session.AddObserver(_observer);
+                _registered = true;
             }
 
             if (session.Role == SessionRole.Host)

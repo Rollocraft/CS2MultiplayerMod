@@ -103,14 +103,10 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 },
             });
 
-            if (Mod.Service != null)
+            _observer = new CommandObserver(_incoming, DisasterEventCommand.Id)
             {
-                _observer = new CommandObserver(_incoming, DisasterEventCommand.Id)
-                {
-                    MaxBodyBytes = DisasterEventCommand.MaxEncodedBytes,
-                };
-                Mod.Service.Session.AddObserver(_observer);
-            }
+                MaxBodyBytes = DisasterEventCommand.MaxEncodedBytes,
+            };
             SyncInbox.RegisterDrain(DrainQueue);
         }
 
@@ -118,19 +114,28 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         {
             SyncInbox.UnregisterDrain(DrainQueue);
             SuppressLocalRolls(false);
-            if (_observer != null && Mod.Service != null)
+            if (_observer != null && Mod.Service?.Session != null)
                 Mod.Service.Session.RemoveObserver(_observer);
             base.OnDestroy();
         }
+
+        private bool _registered;
 
         protected override void OnUpdate()
         {
             MultiplayerService service = Mod.Service;
             if (service == null || !service.GameplaySyncReady)
             {
+                _registered = false;
                 SuppressLocalRolls(false);
                 if (_justRealized.Count > 0) _justRealized.Clear();
                 return;
+            }
+
+            if (!_registered && service.Session != null)
+            {
+                service.Session.AddObserver(_observer);
+                _registered = true;
             }
 
             MultiplayerSession session = service.Session;
@@ -359,7 +364,12 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             uint endFrame = startFrame + (uint)command.DurationFrames;
 
             EventData eventData = EntityManager.GetComponentData<EventData>(prefab);
-            Entity entity = EntityManager.CreateEntity(eventData.m_Archetype);
+            Entity entity;
+            using (var batch = new Unity.Collections.NativeArray<Entity>(1, Unity.Collections.Allocator.Temp))
+            {
+                EntityManager.CreateEntity(eventData.m_Archetype, batch);
+                entity = batch[0];
+            }
             if (!EntityManager.HasComponent<PrefabRef>(entity) ||
                 !EntityManager.HasComponent<global::Game.Events.Duration>(entity) ||
                 !HasKindComponent(entity, command.Kind))

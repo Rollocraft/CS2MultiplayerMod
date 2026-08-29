@@ -129,6 +129,7 @@ namespace CS2MultiplayerMod.Core.Networking.Steam
         private readonly Dictionary<uint, Endpoint> _byHandle = new Dictionary<uint, Endpoint>();
 
         private readonly IntPtr[] _receiveBuffer = new IntPtr[ReceiveBatch];
+        private readonly List<Endpoint> _openEndpointsScratch = new List<Endpoint>();
 
         private readonly System.Diagnostics.Stopwatch _probe = System.Diagnostics.Stopwatch.StartNew();
         private readonly System.Diagnostics.Stopwatch _govern = System.Diagnostics.Stopwatch.StartNew();
@@ -734,14 +735,15 @@ namespace CS2MultiplayerMod.Core.Networking.Steam
 
         private void PumpAllSends()
         {
-            Endpoint[] open;
             lock (_gate)
             {
                 if (_byId.Count == 0) return;
-                open = new Endpoint[_byId.Count];
-                _byId.Values.CopyTo(open, 0);
+                _openEndpointsScratch.Clear();
+                foreach (var endpoint in _byId.Values)
+                    _openEndpointsScratch.Add(endpoint);
             }
-            foreach (Endpoint endpoint in open) PumpSends(endpoint);
+            for (int i = 0; i < _openEndpointsScratch.Count; i++)
+                PumpSends(_openEndpointsScratch[i]);
         }
 
         private enum SendOutcome

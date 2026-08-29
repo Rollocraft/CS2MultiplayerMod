@@ -18,6 +18,7 @@ namespace CS2MultiplayerMod.Game.Sync.Players
         private const long SendIntervalMs = 100; // ~10 Hz
 
         public static int FollowPlayerId = -1;
+        public static long FollowStartedMs = 0;
         private float3 _lastFollowTargetPivot;
 
         private readonly Stopwatch _clock = Stopwatch.StartNew();
@@ -39,11 +40,35 @@ namespace CS2MultiplayerMod.Game.Sync.Players
             }
         }
 
+        public static void StartFollowing(int playerId)
+        {
+            FollowPlayerId = playerId;
+            var service = Mod.Service;
+            if (service != null)
+            {
+                FollowStartedMs = service.NowMs;
+                RemotePlayer target = service.FindRemotePlayer(playerId);
+                if (target != null)
+                {
+                    TeleportCameraTo(new float3(target.X, target.Y, target.Z));
+                }
+            }
+        }
+
         protected override void OnCreate()
         {
             base.OnCreate();
+            FollowPlayerId = -1;
+            FollowStartedMs = 0;
             Mod.log.Info(nameof(PlayerCursorSyncSystem) + " ready.");
             _camera = World.GetExistingSystemManaged<CameraUpdateSystem>();
+        }
+
+        protected override void OnDestroy()
+        {
+            FollowPlayerId = -1;
+            FollowStartedMs = 0;
+            base.OnDestroy();
         }
 
         protected override void OnUpdate()
@@ -77,24 +102,27 @@ namespace CS2MultiplayerMod.Game.Sync.Players
                     if (controller != null)
                     {
                         float3 targetPos = new float3(target.X, target.Y, target.Z);
-                        // If player manually moved away from followed target, break follow
-                        if (math.distancesq(controller.pivot, _lastFollowTargetPivot) > 49f &&
-                            math.lengthsq(_lastFollowTargetPivot) > 0.01f)
+                        bool gracePeriod = (now - FollowStartedMs) < 1500;
+                        bool keyboardMovementPressed = UnityEngine.Input.GetKey(UnityEngine.KeyCode.W) ||
+                                                       UnityEngine.Input.GetKey(UnityEngine.KeyCode.A) ||
+                                                       UnityEngine.Input.GetKey(UnityEngine.KeyCode.S) ||
+                                                       UnityEngine.Input.GetKey(UnityEngine.KeyCode.D) ||
+                                                       UnityEngine.Input.GetKey(UnityEngine.KeyCode.UpArrow) ||
+                                                       UnityEngine.Input.GetKey(UnityEngine.KeyCode.DownArrow) ||
+                                                       UnityEngine.Input.GetKey(UnityEngine.KeyCode.LeftArrow) ||
+                                                       UnityEngine.Input.GetKey(UnityEngine.KeyCode.RightArrow);
+
+                        // Only break follow if a keyboard movement key is explicitly pressed
+                        if (!gracePeriod && keyboardMovementPressed)
                         {
                             FollowPlayerId = -1;
-                            service.AppendSystemChat("🎥 Camera moved. Stopped following " + (target.Name ?? "player") + ".");
+                            service.AppendSystemChat("Stopped following " + (target.Name ?? "player") + ".");
                         }
                         else
                         {
-                            // High-order Catmull-Rom spline interpolation for buttery-smooth follow
                             float dt = UnityEngine.Time.deltaTime;
-                            float t = math.clamp(dt * 8f, 0.05f, 0.45f);
-                            controller.pivot = Core.Protocol.SplineInterpolator.CatmullRom(
-                                controller.pivot,
-                                controller.pivot,
-                                targetPos,
-                                targetPos,
-                                t);
+                            float t = math.clamp(dt * 8f, 0.05f, 0.5f);
+                            controller.pivot = math.lerp(controller.pivot, targetPos, t);
                             _lastFollowTargetPivot = controller.pivot;
                         }
                     }

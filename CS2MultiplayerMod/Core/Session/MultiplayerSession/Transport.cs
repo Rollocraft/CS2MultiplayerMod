@@ -104,6 +104,10 @@ namespace CS2MultiplayerMod.Core.Session
             if (_peers.TryGetValue(connection.Value, out peer))
             {
                 _peers.Remove(connection.Value);
+                if (peer.PlayerId > 0)
+                {
+                    _commandDeduplicator.RemovePeer(peer.PlayerId);
+                }
                 bool removedByHost = _administrativeRemovals.Remove(connection.Value);
                 if (peer.Handshaked)
                 {

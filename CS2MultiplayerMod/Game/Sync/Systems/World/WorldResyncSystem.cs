@@ -75,23 +75,21 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             Mod.log.Info(nameof(WorldResyncSystem) + " ready (atomic epoch barrier).");
             _netSync = World.GetOrCreateSystemManaged<NetSyncSystem>();
 
-            if (Mod.Service != null)
-            {
-                _observer = new Observer(_requests, _controls, _leaves);
-                Mod.Service.Session.AddObserver(_observer);
-            }
+            _observer = new Observer(_requests, _controls, _leaves);
         }
 
         protected override void OnDestroy()
         {
             MultiplayerService service = Mod.Service;
-            if (_observer != null && service != null)
+            if (_observer != null && service?.Session != null)
                 service.Session.RemoveObserver(_observer);
             if (_state != RecoveryState.Idle && service != null &&
                 service.Session.Role == SessionRole.Host)
                 AbortEpoch(service, "world-sync system was destroyed");
             base.OnDestroy();
         }
+
+        private bool _registered;
 
         protected override void OnUpdate()
         {
@@ -100,8 +98,15 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             MultiplayerSession session = service.Session;
             if (session.Role != SessionRole.Host || session.Status != SessionStatus.Connected)
             {
+                _registered = false;
                 ResetInactiveState();
                 return;
+            }
+
+            if (!_registered && session != null)
+            {
+                session.AddObserver(_observer);
+                _registered = true;
             }
 
             long now = service.NowMs;
@@ -217,7 +222,11 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             _participants.Clear();
             foreach (Peer peer in session.Peers)
                 if (peer.Handshaked) _participants.Add(peer.Connection);
-            if (_participants.Count == 0) return;
+            if (_participants.Count == 0)
+            {
+                service.NoteSoloWorldSyncCompleted();
+                return;
+            }
 
             _joiningParticipants.Clear();
             for (int i = 0; i < _participants.Count; i++)
@@ -363,6 +372,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             // Resume-before-command order on every TCP connection.
             session.ResumeWorldSync(_epoch, _resumeSpeed, targets);
             service.CompleteHostWorldSync(_epoch, _resumeSpeed);
+            session.NotifyChat(null, "World sync complete - all players are in sync and simulation has resumed.");
             Mod.log.Info("[MP] World sync epoch " + _epoch + " completed for " +
                          targets.Count + " participant(s).");
             ResetEpoch(now);

@@ -30,12 +30,11 @@ namespace CS2MultiplayerMod.Game.Sync.Infrastructure
         {
             if (queue == null) throw new ArgumentNullException(nameof(queue));
             if (cap <= 0) throw new ArgumentOutOfRangeException(nameof(cap));
-            lock (queue)
-            {
-                queue.Enqueue(item);
-                if (queue.Count <= cap) return true;
-                Clear(queue);
-            }
+            
+            queue.Enqueue(item);
+            if (queue.Count <= cap) return true;
+
+            Clear(queue);
             RequestResync("sync inbox overflow");
             Action<string> warn = LogWarn;
             if (warn != null)
@@ -69,11 +68,7 @@ namespace CS2MultiplayerMod.Game.Sync.Infrastructure
         public static void Clear<T>(ConcurrentQueue<T> queue)
         {
             if (queue == null) return;
-            lock (queue)
-            {
-                T dropped;
-                while (queue.TryDequeue(out dropped)) { }
-            }
+            while (queue.TryDequeue(out _)) { }
         }
 
         /// <summary>

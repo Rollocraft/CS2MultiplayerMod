@@ -59,7 +59,7 @@ namespace CS2MultiplayerMod.Core.Session
                 catch (Exception ex) { LogObserverError("OnPeerLeft", ex); }
         }
 
-        private void NotifyChat(string sender, string text)
+        internal void NotifyChat(string sender, string text)
         {
             for (int i = 0; i < _observers.Count; i++)
                 try { _observers[i].OnChatReceived(sender, text); }

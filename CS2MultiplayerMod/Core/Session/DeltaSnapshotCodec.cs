@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using CS2MultiplayerMod.Core.Networking;
 
 namespace CS2MultiplayerMod.Core.Session
 {
@@ -11,15 +12,31 @@ namespace CS2MultiplayerMod.Core.Session
     {
         private static readonly byte[] DeltaMagic = new byte[] { 0x44, 0x45, 0x4C, 0x54 }; // "DELT"
 
+        private static uint ComputeCrc32(byte[] data, int length)
+        {
+            if (data == null || length <= 0) return 0;
+            uint crc = 0xFFFFFFFF;
+            for (int i = 0; i < length && i < data.Length; i++)
+            {
+                crc ^= data[i];
+                for (int j = 0; j < 8; j++)
+                    crc = (crc >> 1) ^ (0xEDB88320 & ~((crc & 1) - 1));
+            }
+            return ~crc;
+        }
+
         public static byte[] ComputeDelta(byte[] baseline, byte[] current)
         {
             if (baseline == null || current == null || baseline.Length == 0) return current;
+
+            uint targetCrc = ComputeCrc32(current, current.Length);
 
             using (var ms = new MemoryStream(current.Length / 4))
             using (var w = new BinaryWriter(ms))
             {
                 w.Write(DeltaMagic);
                 w.Write(current.Length);
+                w.Write(targetCrc);
 
                 int minLen = Math.Min(baseline.Length, current.Length);
                 int i = 0;
@@ -67,12 +84,13 @@ namespace CS2MultiplayerMod.Core.Session
                 }
 
                 // Append any trailing new bytes beyond baseline length
-                if (current.Length > minLen)
+                while (minLen < current.Length)
                 {
-                    int extra = current.Length - minLen;
+                    int chunk = Math.Min(current.Length - minLen, (int)ushort.MaxValue);
                     w.Write((byte)2); // 2 = Append
-                    w.Write((ushort)Math.Min(extra, (int)ushort.MaxValue));
-                    w.Write(current, minLen, extra);
+                    w.Write((ushort)chunk);
+                    w.Write(current, minLen, chunk);
+                    minLen += chunk;
                 }
 
                 return ms.ToArray();
@@ -81,7 +99,7 @@ namespace CS2MultiplayerMod.Core.Session
 
         public static byte[] ApplyDelta(byte[] baseline, byte[] delta)
         {
-            if (delta == null || delta.Length < 8) return delta;
+            if (delta == null || delta.Length < 12) return delta;
             if (delta[0] != DeltaMagic[0] || delta[1] != DeltaMagic[1] ||
                 delta[2] != DeltaMagic[2] || delta[3] != DeltaMagic[3])
             {
@@ -90,13 +108,14 @@ namespace CS2MultiplayerMod.Core.Session
             }
 
             int targetLen = delta[4] | (delta[5] << 8) | (delta[6] << 16) | (delta[7] << 24);
+            uint expectedCrc = (uint)(delta[8] | (delta[9] << 8) | (delta[10] << 16) | (delta[11] << 24));
             if (targetLen <= 0 || targetLen > 256 * 1024 * 1024) return delta;
 
             var result = new byte[targetLen];
             int outIdx = 0;
             int baseIdx = 0;
 
-            using (var ms = new MemoryStream(delta, 8, delta.Length - 8, writable: false))
+            using (var ms = new MemoryStream(delta, 12, delta.Length - 12, writable: false))
             using (var r = new BinaryReader(ms))
             {
                 while (ms.Position < ms.Length && outIdx < targetLen)
@@ -115,21 +134,34 @@ namespace CS2MultiplayerMod.Core.Session
                     }
                     else if (op == 1) // XOR Diff against baseline
                     {
-                        byte[] diffBytes = r.ReadBytes(len);
-                        for (int k = 0; k < len && outIdx < targetLen; k++)
+                        byte[] diffBytes = BufferPool.Rent(len);
+                        try
                         {
-                            byte bVal = (baseline != null && baseIdx + k < baseline.Length) ? baseline[baseIdx + k] : (byte)0;
-                            result[outIdx++] = (byte)(bVal ^ diffBytes[k]);
+                            int read = r.Read(diffBytes, 0, len);
+                            for (int k = 0; k < read && outIdx < targetLen; k++)
+                            {
+                                byte bVal = (baseline != null && baseIdx + k < baseline.Length) ? baseline[baseIdx + k] : (byte)0;
+                                result[outIdx++] = (byte)(bVal ^ diffBytes[k]);
+                            }
+                        }
+                        finally
+                        {
+                            BufferPool.Return(diffBytes);
                         }
                         baseIdx += len;
                     }
-                    else if (op == 2) // Append raw bytes
+                    else if (op == 2) // Append raw bytes directly into output buffer
                     {
-                        byte[] extra = r.ReadBytes(len);
-                        Buffer.BlockCopy(extra, 0, result, outIdx, extra.Length);
-                        outIdx += extra.Length;
+                        int read = r.Read(result, outIdx, len);
+                        outIdx += read;
                     }
                 }
+            }
+
+            // Verify checksum
+            if (ComputeCrc32(result, result.Length) != expectedCrc)
+            {
+                return delta; // Patch corrupted or failed checksum, fall back
             }
 
             return result;

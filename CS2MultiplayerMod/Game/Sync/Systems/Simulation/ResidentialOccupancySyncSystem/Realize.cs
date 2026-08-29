@@ -2108,6 +2108,15 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
         // ---- Creation and retirement -------------------------------------------
 
+        private static Entity CreateEntityFromArchetype(EntityManager em, EntityArchetype archetype)
+        {
+            using (var batch = new Unity.Collections.NativeArray<Entity>(1, Unity.Collections.Allocator.Temp))
+            {
+                em.CreateEntity(archetype, batch);
+                return batch[0];
+            }
+        }
+
         private Entity CreateHousehold(Entity property, OccupancyHousehold wanted)
         {
             if (!CanEnqueueRentAction()) return Entity.Null;
@@ -2116,7 +2125,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             if (!ResolvePrefab<HouseholdData>(wanted.PrefabName, out prefab, out archetype))
                 return Entity.Null;
 
-            Entity household = EntityManager.CreateEntity(archetype);
+            Entity household = CreateEntityFromArchetype(EntityManager, archetype);
             SetOrAdd(household, new PrefabRef(prefab));
             // No CurrentBuilding: that component is what asks the game to populate a household with
             // a randomly drawn family. The roster already says who lives here.
@@ -2183,7 +2192,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             if (!TryGetCitizenCreationPrefab(out prefab, out archetype))
                 return Entity.Null;
 
-            Entity citizen = EntityManager.CreateEntity(archetype);
+            Entity citizen = CreateEntityFromArchetype(EntityManager, archetype);
             SetOrAdd(citizen, new PrefabRef(prefab));
             SetOrAdd(citizen, new HouseholdMember { m_Household = household });
             SetOrAdd(citizen, new CurrentBuilding
@@ -2226,7 +2235,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             if (!ResolvePrefab<HouseholdPetData>(prefabName, out prefab, out archetype))
                 return Entity.Null;
 
-            Entity pet = EntityManager.CreateEntity(archetype);
+            Entity pet = CreateEntityFromArchetype(EntityManager, archetype);
             SetOrAdd(pet, new PrefabRef(prefab));
             SetOrAdd(pet, new HouseholdPet { m_Household = household });
             SetOrAdd(pet, new CurrentBuilding
@@ -2252,7 +2261,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 EntityManager.GetComponentData<MovingObjectData>(prefab).m_StoppedArchetype;
             if (!archetype.Valid) return Entity.Null;
 
-            Entity vehicle = EntityManager.CreateEntity(archetype);
+            Entity vehicle = CreateEntityFromArchetype(EntityManager, archetype);
             SetOrAdd(vehicle,
                 EntityManager.GetComponentData<global::Game.Objects.Transform>(source));
             SetOrAdd(vehicle, new global::Game.Vehicles.PersonalCar(

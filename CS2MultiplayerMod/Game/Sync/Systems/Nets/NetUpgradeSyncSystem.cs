@@ -204,19 +204,17 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 },
             });
 
-            if (Mod.Service != null)
-            {
-                _observer = new CommandObserver(_incoming, NetUpgradeCommand.Id);
-                Mod.Service.Session.AddObserver(_observer);
-            }
+            _observer = new CommandObserver(_incoming, NetUpgradeCommand.Id);
         }
 
         protected override void OnDestroy()
         {
-            if (_observer != null && Mod.Service != null)
+            if (_observer != null && Mod.Service?.Session != null)
                 Mod.Service.Session.RemoveObserver(_observer);
             base.OnDestroy();
         }
+
+        private bool _registered;
 
         protected override void OnUpdate()
         {
@@ -226,9 +224,16 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             MultiplayerSession session = service.Session;
             if (!service.GameplaySyncReady)
             {
+                _registered = false;
                 if (_lastSeen.Count > 0) { _lastSeen.Clear(); _retry.Clear(); }
                 _seeded = false;
                 return;
+            }
+
+            if (!_registered && session != null)
+            {
+                session.AddObserver(_observer);
+                _registered = true;
             }
 
             if (!_seeded) { SeedLastSeen(); _seeded = true; }

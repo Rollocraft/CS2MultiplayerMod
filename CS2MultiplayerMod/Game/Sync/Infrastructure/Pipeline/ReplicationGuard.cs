@@ -16,7 +16,10 @@ namespace CS2MultiplayerMod.Game.Sync.Infrastructure
     public sealed class ReplicationGuard
     {
         private const long TtlMs = 15000;
+        private const long PruneIntervalMs = 500;
+        private long _lastPruneMs;
         private readonly Dictionary<string, long> _expiry = new Dictionary<string, long>();
+        private readonly List<string> _deadScratch = new List<string>();
 
         public void Mark(string key, long nowMs) => _expiry[key] = nowMs + TtlMs;
 
@@ -31,16 +34,20 @@ namespace CS2MultiplayerMod.Game.Sync.Infrastructure
 
         public void Prune(long nowMs)
         {
-            if (_expiry.Count == 0) return;
-            List<string> dead = null;
+            if (_expiry.Count == 0 || (nowMs - _lastPruneMs < PruneIntervalMs)) return;
+            _lastPruneMs = nowMs;
+            _deadScratch.Clear();
             foreach (var pair in _expiry)
-                if (pair.Value < nowMs) (dead ?? (dead = new List<string>())).Add(pair.Key);
-            if (dead == null) return;
-            for (int i = 0; i < dead.Count; i++) _expiry.Remove(dead[i]);
+                if (pair.Value < nowMs) _deadScratch.Add(pair.Key);
+            for (int i = 0; i < _deadScratch.Count; i++) _expiry.Remove(_deadScratch[i]);
         }
 
         /// <summary>Forget every marker when a world/session boundary invalidates spatial keys.</summary>
-        public void Clear() => _expiry.Clear();
+        public void Clear()
+        {
+            _expiry.Clear();
+            _deadScratch.Clear();
+        }
 
         /// <summary>Spatial key: prefab name + position rounded to 0.5 m buckets.</summary>
         public static string Key(string prefabName, float3 position)

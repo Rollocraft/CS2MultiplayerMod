@@ -9,7 +9,6 @@ namespace CS2MultiplayerMod.Game
         public static event Action<Unity.Mathematics.float3, string, string, int> OnMapPingReceived;
         public static Unity.Mathematics.float3 LastMapPingPosition;
         public static bool HasMapPingPosition;
-        private static readonly VoteSession _voteSession = new VoteSession();
 
         /// <summary>
         /// Chat send from the hub panel. The session never echoes our own line back
@@ -23,20 +22,20 @@ namespace CS2MultiplayerMod.Game
             text = text.Trim();
             if (text.Length == 0) return;
 
-            text = text.Replace(":thumb:", "👍")
-                       .Replace(":warn:", "⚠️")
-                       .Replace(":build:", "🏗️")
-                       .Replace(":fire:", "🚨")
-                       .Replace(":idea:", "💡")
-                       .Replace(":heart:", "❤️")
-                       .Replace(":car:", "🚗")
-                       .Replace(":train:", "🚆");
+            text = text.Replace(":thumb:", "[Thumb]")
+                       .Replace(":warn:", "[Warning]")
+                       .Replace(":build:", "[Build]")
+                       .Replace(":fire:", "[Alert]")
+                       .Replace(":idea:", "[Idea]")
+                       .Replace(":heart:", "[Heart]")
+                       .Replace(":car:", "[Car]")
+                       .Replace(":train:", "[Train]");
 
-            if (text.StartsWith("/ping", StringComparison.OrdinalIgnoreCase))
+            if (text.Equals("/ping", StringComparison.OrdinalIgnoreCase) || text.StartsWith("/ping ", StringComparison.OrdinalIgnoreCase))
             {
                 string label = text.Length > 5 ? text.Substring(5).Trim() : "";
                 Unity.Mathematics.float3 pivot = Unity.Mathematics.float3.zero;
-                var camera = Unity.Entities.World.DefaultGameObjectInjectionWorld?.GetExistingSystemManaged<Game.Rendering.CameraUpdateSystem>();
+                var camera = Unity.Entities.World.DefaultGameObjectInjectionWorld?.GetExistingSystemManaged<global::Game.Rendering.CameraUpdateSystem>();
                 if (camera?.gamePlayController != null)
                 {
                     pivot = camera.gamePlayController.pivot;
@@ -46,68 +45,55 @@ namespace CS2MultiplayerMod.Game
                     pivot = camera.position;
                 }
 
-                int localId = _session.LocalPeer != null ? _session.LocalPeer.PlayerId : 0;
-                string wire = string.Format(System.Globalization.CultureInfo.InvariantCulture,
-                    "/ping {0:F1} {1:F1} {2:F1} {3}{4}",
-                    pivot.x, pivot.y, pivot.z, localId, string.IsNullOrEmpty(label) ? "" : " " + label);
-
-                _session.SendChat(wire);
-                LastMapPingPosition = pivot;
-                HasMapPingPosition = true;
-                OnMapPingReceived?.Invoke(pivot, _session.LocalPlayerName, label, localId);
-                string echo = "📍 Pinged map at (" + (int)pivot.x + ", " + (int)pivot.z + ")" +
-                              (string.IsNullOrEmpty(label) ? "" : ": " + label);
-                AppendChatEntry(_session.LocalPlayerName, echo);
+                SendPing(pivot, label);
                 return;
             }
 
-            if (text.Equals("/clear", StringComparison.OrdinalIgnoreCase))
+            if (text.Equals("/clear", StringComparison.OrdinalIgnoreCase) || text.Equals("/cls", StringComparison.OrdinalIgnoreCase))
             {
                 lock (_chatLock)
                 {
                     _chatLog.Clear();
                     _chatLogJson = "[]";
                 }
-                AppendChatEntry(null, "🧹 Chat cleared.");
+                AppendChatEntry(null, "Chat cleared.");
                 return;
             }
 
-            if (text.Equals("/help", StringComparison.OrdinalIgnoreCase))
+            if (text.Equals("/help", StringComparison.OrdinalIgnoreCase) || text.Equals("/?", StringComparison.OrdinalIgnoreCase) || text.Equals("/commands", StringComparison.OrdinalIgnoreCase))
             {
-                AppendChatEntry(null, "📜 Multiplayer Commands:");
-                AppendChatEntry(null, "📍 Navigation: /ping [msg], /goto [player], /follow <player>, /unfollow");
-                AppendChatEntry(null, "⚙️ Session: /sync, /clear");
+                AppendChatEntry(null, "=== Multiplayer Commands ===");
+                AppendChatEntry(null, "- /ping [msg] - Ping map location with coordinates");
+                AppendChatEntry(null, "- /goto <player> - Teleport camera to a player");
+                AppendChatEntry(null, "- /goto ping - Teleport camera to latest ping");
+                AppendChatEntry(null, "- /follow <player> - Follow a player in real-time");
+                AppendChatEntry(null, "- /unfollow - Stop following a player");
+                AppendChatEntry(null, "- /sync - Manually trigger simulation resync");
+                AppendChatEntry(null, "- /clear - Clear chat messages");
                 if (_session.Role == SessionRole.Host)
                 {
-                    AppendChatEntry(null, "👑 Host: /lock, /unlock, /motd [msg], /banlist, /unban <ip>, /spectator <player>, /builder <player>");
+                    AppendChatEntry(null, "--- Host Commands ---");
+                    AppendChatEntry(null, "- /spectator <player> [on/off] - Toggle spectator mode for player");
+                    AppendChatEntry(null, "- /lock - Lock lobby from new joins");
+                    AppendChatEntry(null, "- /unlock - Unlock lobby for new joins");
+                    AppendChatEntry(null, "- /motd [msg] - Set/clear message of the day");
+                    AppendChatEntry(null, "- /banlist - View banned IP addresses");
+                    AppendChatEntry(null, "- /unban <ip> - Unban an IP address");
                 }
                 return;
             }
 
-            if (text.Equals("/goto", StringComparison.OrdinalIgnoreCase))
+            if (text.Equals("/goto", StringComparison.OrdinalIgnoreCase) || text.Equals("/goto ping", StringComparison.OrdinalIgnoreCase))
             {
                 if (HasMapPingPosition)
                 {
                     Sync.Players.PlayerCursorSyncSystem.FollowPlayerId = -1;
                     Sync.Players.PlayerCursorSyncSystem.TeleportCameraTo(LastMapPingPosition);
-                    AppendChatEntry(null, "🎥 Teleported camera to last map ping.");
+                    AppendChatEntry(null, "Teleported camera to last map ping.");
                 }
                 else
                 {
-                    AppendChatEntry(null, "No map pings yet. Use '/goto <player>' or '/ping'.");
-                }
-                return;
-            }
-
-            if (text.StartsWith("/mark ", StringComparison.OrdinalIgnoreCase))
-            {
-                string markName = text.Substring(6).Trim();
-                var camera = Unity.Entities.World.DefaultGameObjectInjectionWorld?.GetExistingSystemManaged<Game.Rendering.CameraUpdateSystem>();
-                var bookmarkSystem = Unity.Entities.World.DefaultGameObjectInjectionWorld?.GetExistingSystemManaged<Sync.Systems.CityBookmarkSyncSystem>();
-                if (camera?.gamePlayController != null && bookmarkSystem != null && !string.IsNullOrEmpty(markName))
-                {
-                    bookmarkSystem.SaveBookmark(markName, camera.gamePlayController.pivot);
-                    AppendChatEntry(null, "📍 Saved bookmark '" + markName + "'. Use '/goto " + markName + "'.");
+                    AppendChatEntry(null, "No map pings yet. Use '/ping' or '/goto <player>'.");
                 }
                 return;
             }
@@ -115,25 +101,31 @@ namespace CS2MultiplayerMod.Game
             if (text.StartsWith("/goto ", StringComparison.OrdinalIgnoreCase))
             {
                 string targetName = text.Substring(6).Trim();
+                if (targetName.Equals("ping", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (HasMapPingPosition)
+                    {
+                        Sync.Players.PlayerCursorSyncSystem.FollowPlayerId = -1;
+                        Sync.Players.PlayerCursorSyncSystem.TeleportCameraTo(LastMapPingPosition);
+                        AppendChatEntry(null, "Teleported camera to last map ping.");
+                    }
+                    else
+                    {
+                        AppendChatEntry(null, "No map pings yet. Use '/ping' or '/goto <player>'.");
+                    }
+                    return;
+                }
+
                 RemotePlayer target = FindRemotePlayerByName(targetName);
                 if (target != null)
                 {
                     Sync.Players.PlayerCursorSyncSystem.FollowPlayerId = -1;
                     Sync.Players.PlayerCursorSyncSystem.TeleportCameraTo(new Unity.Mathematics.float3(target.X, target.Y, target.Z));
-                    AppendChatEntry(null, "🎥 Teleported camera to " + (target.Name ?? ("Player #" + target.PlayerId)) + ".");
+                    AppendChatEntry(null, "Teleported camera to " + (target.Name ?? ("Player #" + target.PlayerId)) + ".");
                     return;
                 }
 
-                var bookmarkSystem = Unity.Entities.World.DefaultGameObjectInjectionWorld?.GetExistingSystemManaged<Sync.Systems.CityBookmarkSyncSystem>();
-                if (bookmarkSystem != null && bookmarkSystem.TryGetBookmark(targetName, out var pos))
-                {
-                    Sync.Players.PlayerCursorSyncSystem.FollowPlayerId = -1;
-                    Sync.Players.PlayerCursorSyncSystem.TeleportCameraTo(pos);
-                    AppendChatEntry(null, "📍 Teleported camera to bookmark '" + targetName + "'.");
-                    return;
-                }
-
-                AppendChatEntry(null, "Player or bookmark '" + targetName + "' not found.");
+                AppendChatEntry(null, "Player '" + targetName + "' not found.");
                 return;
             }
 
@@ -145,7 +137,7 @@ namespace CS2MultiplayerMod.Game
                 {
                     Sync.Players.PlayerCursorSyncSystem.FollowPlayerId = target.PlayerId;
                     Sync.Players.PlayerCursorSyncSystem.TeleportCameraTo(new Unity.Mathematics.float3(target.X, target.Y, target.Z));
-                    AppendChatEntry(null, "🎥 Now following " + (target.Name ?? ("Player #" + target.PlayerId)) + ". Move camera to stop following.");
+                    AppendChatEntry(null, "Now following " + (target.Name ?? ("Player #" + target.PlayerId)) + ". Move camera to stop following.");
                 }
                 else
                 {
@@ -157,43 +149,38 @@ namespace CS2MultiplayerMod.Game
             if (text.Equals("/unfollow", StringComparison.OrdinalIgnoreCase))
             {
                 Sync.Players.PlayerCursorSyncSystem.FollowPlayerId = -1;
-                AppendChatEntry(null, "🎥 Stopped following.");
+                AppendChatEntry(null, "Stopped following.");
                 return;
             }
 
-            if (text.StartsWith("/spectator ", StringComparison.OrdinalIgnoreCase) ||
-                text.StartsWith("/guest ", StringComparison.OrdinalIgnoreCase))
+            if (text.StartsWith("/spectator ", StringComparison.OrdinalIgnoreCase))
             {
                 if (_session.Role != SessionRole.Host)
                 {
                     AppendChatEntry(null, "Only the host can change player roles.");
                     return;
                 }
-                string targetName = text.Substring(text.IndexOf(' ') + 1).Trim();
-                RemotePlayer target = FindRemotePlayerByName(targetName);
-                if (target != null)
-                {
-                    SetPlayerRoleFromUi(target.PlayerId, isSpectator: true);
-                }
-                else
-                {
-                    AppendChatEntry(null, "Player '" + targetName + "' not found.");
-                }
-                return;
-            }
+                string args = text.Substring(11).Trim();
+                bool isSpectator = true;
+                string targetName = args;
 
-            if (text.StartsWith("/builder ", StringComparison.OrdinalIgnoreCase))
-            {
-                if (_session.Role != SessionRole.Host)
+                if (args.EndsWith(" off", StringComparison.OrdinalIgnoreCase) || args.EndsWith(" false", StringComparison.OrdinalIgnoreCase))
                 {
-                    AppendChatEntry(null, "Only the host can change player roles.");
-                    return;
+                    isSpectator = false;
+                    int lastSpace = args.LastIndexOf(' ');
+                    targetName = lastSpace > 0 ? args.Substring(0, lastSpace).Trim() : args;
                 }
-                string targetName = text.Substring(9).Trim();
+                else if (args.EndsWith(" on", StringComparison.OrdinalIgnoreCase) || args.EndsWith(" true", StringComparison.OrdinalIgnoreCase))
+                {
+                    isSpectator = true;
+                    int lastSpace = args.LastIndexOf(' ');
+                    targetName = lastSpace > 0 ? args.Substring(0, lastSpace).Trim() : args;
+                }
+
                 RemotePlayer target = FindRemotePlayerByName(targetName);
                 if (target != null)
                 {
-                    SetPlayerRoleFromUi(target.PlayerId, isSpectator: false);
+                    SetPlayerRoleFromUi(target.PlayerId, isSpectator: isSpectator);
                 }
                 else
                 {
@@ -210,7 +197,7 @@ namespace CS2MultiplayerMod.Game
                     return;
                 }
                 _session.IsLobbyLocked = true;
-                AppendChatEntry(null, "🔒 Session locked. New players cannot join.");
+                AppendChatEntry(null, "Session locked. New players cannot join.");
                 return;
             }
 
@@ -222,7 +209,7 @@ namespace CS2MultiplayerMod.Game
                     return;
                 }
                 _session.IsLobbyLocked = false;
-                AppendChatEntry(null, "🔓 Session unlocked. New players can join.");
+                AppendChatEntry(null, "Session unlocked. New players can join.");
                 return;
             }
 
@@ -237,12 +224,12 @@ namespace CS2MultiplayerMod.Game
                 _session.Motd = msg;
                 if (!string.IsNullOrEmpty(msg))
                 {
-                    AppendChatEntry(null, "📜 MOTD updated: " + msg);
-                    _session.SendChat("📜 MOTD: " + msg);
+                    AppendChatEntry(null, "MOTD updated: " + msg);
+                    _session.SendChat("MOTD: " + msg);
                 }
                 else
                 {
-                    AppendChatEntry(null, "📜 MOTD cleared.");
+                    AppendChatEntry(null, "MOTD cleared.");
                 }
                 return;
             }
@@ -257,11 +244,11 @@ namespace CS2MultiplayerMod.Game
                 var bans = _session.BannedAddresses;
                 if (bans == null || bans.Count == 0)
                 {
-                    AppendChatEntry(null, "🛡️ No active bans.");
+                    AppendChatEntry(null, "No active bans.");
                 }
                 else
                 {
-                    AppendChatEntry(null, "🛡️ Active bans: " + string.Join(", ", bans));
+                    AppendChatEntry(null, "Active bans: " + string.Join(", ", bans));
                 }
                 return;
             }
@@ -276,7 +263,7 @@ namespace CS2MultiplayerMod.Game
                 string addr = text.Substring(7).Trim();
                 if (_session.UnbanAddress(addr))
                 {
-                    AppendChatEntry(null, "🛡️ Unbanned address: " + addr);
+                    AppendChatEntry(null, "Unbanned address: " + addr);
                 }
                 else
                 {
@@ -292,7 +279,7 @@ namespace CS2MultiplayerMod.Game
                 if (chirperSys != null && !string.IsNullOrEmpty(chirpText))
                 {
                     chirperSys.PostChirp("Mayor", chirpText);
-                    AppendChatEntry(null, "🐦 Chirped: \"" + chirpText + "\"");
+                    AppendChatEntry(null, "Chirped: \"" + chirpText + "\"");
                 }
                 return;
             }
@@ -302,46 +289,16 @@ namespace CS2MultiplayerMod.Game
                 var recent = AuditLog.GetRecent(5);
                 if (recent.Count == 0)
                 {
-                    AppendChatEntry(null, "📋 Municipal audit log is empty.");
+                    AppendChatEntry(null, "Municipal audit log is empty.");
                 }
                 else
                 {
-                    AppendChatEntry(null, "📋 Recent municipal actions:");
+                    AppendChatEntry(null, "Recent municipal actions:");
                     foreach (var e in recent)
                     {
                         AppendChatEntry(null, $"  • [{e.PlayerName}] {e.Action}: {e.Details}");
                     }
                 }
-                return;
-            }
-
-            if (text.StartsWith("/votekick ", StringComparison.OrdinalIgnoreCase))
-            {
-                string targetName = text.Substring(10).Trim();
-                RemotePlayer target = FindRemotePlayerByName(targetName);
-                if (target != null)
-                {
-                    _voteSession.StartVote(target.PlayerId, target.Name, "Player");
-                    AppendChatEntry(null, $"🗳️ Vote-kick started against {target.Name}! Type '/vote yes' or '/vote no' within 30s.");
-                }
-                else
-                {
-                    AppendChatEntry(null, "Player '" + targetName + "' not found.");
-                }
-                return;
-            }
-
-            if (text.Equals("/vote yes", StringComparison.OrdinalIgnoreCase) || text.Equals("/vote no", StringComparison.OrdinalIgnoreCase))
-            {
-                if (!_voteSession.IsActive)
-                {
-                    AppendChatEntry(null, "No active vote.");
-                    return;
-                }
-                bool voteYes = text.EndsWith("yes", StringComparison.OrdinalIgnoreCase);
-                _voteSession.CastVote(LocalPlayerId, voteYes);
-                var (yes, no) = _voteSession.GetTally();
-                AppendChatEntry(null, $"🗳️ Vote recorded! Current tally: Yes={yes}, No={no}");
                 return;
             }
 
@@ -372,7 +329,11 @@ namespace CS2MultiplayerMod.Game
                     case '–': // en dash
                     case '—': // em dash
                     case '―': // horizontal bar
+                    case '•': // bullet
+                    case '·': // middle dot
                         replacement = "-"; break;
+                    case '₡': // colon currency
+                        replacement = "$"; break;
                     case '‘': // left single quote
                     case '’': // right single quote
                         replacement = "'"; break;
@@ -464,5 +425,21 @@ namespace CS2MultiplayerMod.Game
             sb.Append('"');
         }
 
+        public void SendPing(Unity.Mathematics.float3 pivot, string label = "")
+        {
+            if (_session == null || _session.Role == SessionRole.None) return;
+            int localId = _session.LocalPlayerId;
+            string wire = string.Format(System.Globalization.CultureInfo.InvariantCulture,
+                "/ping {0:F1} {1:F1} {2:F1} {3}{4}",
+                pivot.x, pivot.y, pivot.z, localId, string.IsNullOrEmpty(label) ? "" : " " + label);
+
+            _session.SendChat(wire);
+            LastMapPingPosition = pivot;
+            HasMapPingPosition = true;
+            OnMapPingReceived?.Invoke(pivot, _session.LocalPlayerName, label, localId);
+            string echo = "Pinged map at (" + (int)pivot.x + ", " + (int)pivot.z + ")" +
+                          (string.IsNullOrEmpty(label) ? "" : ": " + label);
+            AppendChatEntry(_session.LocalPlayerName, echo);
+        }
     }
 }

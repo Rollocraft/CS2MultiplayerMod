@@ -112,13 +112,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 },
             });
 
-            if (Mod.Service != null)
-            {
-                _observer = new CommandObserver(_incoming, AreaCreateCommand.Id,
-                    AreaUpdateCommand.Id, AreaDeleteCommand.Id,
-                    OwnedAreaSnapshotCommand.Id);
-                Mod.Service.Session.AddObserver(_observer);
-            }
+            _observer = new CommandObserver(_incoming, AreaCreateCommand.Id,
+                AreaUpdateCommand.Id, AreaDeleteCommand.Id,
+                OwnedAreaSnapshotCommand.Id);
         }
 
         private static EntityQueryDesc AreaQuery(ComponentType lifecycleTag) => new EntityQueryDesc
@@ -141,10 +137,12 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
         protected override void OnDestroy()
         {
-            if (_observer != null && Mod.Service != null)
+            if (_observer != null && Mod.Service?.Session != null)
                 Mod.Service.Session.RemoveObserver(_observer);
             base.OnDestroy();
         }
+
+        private bool _registered;
 
         protected override void OnUpdate()
         {
@@ -154,10 +152,17 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             MultiplayerSession session = service.Session;
             if (!service.GameplaySyncReady)
             {
+                _registered = false;
                 if (_knownRings.Count > 0) _knownRings.Clear();
                 _ownedAreaRetry.Clear();
                 SyncInbox.Clear(_incoming);
                 return;
+            }
+
+            if (!_registered && session != null)
+            {
+                session.AddObserver(_observer);
+                _registered = true;
             }
 
             long now = service.NowMs;

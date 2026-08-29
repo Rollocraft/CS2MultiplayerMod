@@ -70,18 +70,14 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             _objectSearch = new ObjectSearch(
                 World.GetOrCreateSystemManaged<global::Game.Objects.SearchSystem>());
 
-            if (Mod.Service != null)
-            {
-                _observer = new CommandObserver(_incoming, ObjectMoveCommand.Id);
-                Mod.Service.Session.AddObserver(_observer);
-            }
+            _observer = new CommandObserver(_incoming, ObjectMoveCommand.Id);
             SyncInbox.RegisterDrain(DrainQueue);
         }
 
         protected override void OnDestroy()
         {
             SyncInbox.UnregisterDrain(DrainQueue);
-            if (_observer != null && Mod.Service != null)
+            if (_observer != null && Mod.Service?.Session != null)
                 Mod.Service.Session.RemoveObserver(_observer);
             base.OnDestroy();
         }
@@ -95,13 +91,25 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             DeferForTerrain = false;
         }
 
+        private bool _registered;
+
         protected override void OnUpdate()
         {
             MultiplayerService service = Mod.Service;
             if (service == null) return;
 
             MultiplayerSession session = service.Session;
-            if (!service.GameplaySyncReady) return;
+            if (!service.GameplaySyncReady)
+            {
+                _registered = false;
+                return;
+            }
+
+            if (!_registered && session != null)
+            {
+                session.AddObserver(_observer);
+                _registered = true;
+            }
 
             long now = service.NowMs;
             _guard.Prune(now);

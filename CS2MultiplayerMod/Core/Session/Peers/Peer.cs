@@ -15,13 +15,13 @@ namespace CS2MultiplayerMod.Core.Session
 
         public string Name;
 
-        public PlayerRole Role = PlayerRole.Builder;
+        public PlayerRole Role = PlayerRole.Player;
 
         /// <summary>Host-side permission: true if the peer is in spectator/read-only mode.</summary>
         public bool IsSpectator
         {
             get => Role == PlayerRole.Spectator;
-            set { if (value) Role = PlayerRole.Spectator; else if (Role == PlayerRole.Spectator) Role = PlayerRole.Builder; }
+            set { Role = value ? PlayerRole.Spectator : PlayerRole.Player; }
         }
 
         /// <summary>True once the handshake has succeeded for this peer.</summary>

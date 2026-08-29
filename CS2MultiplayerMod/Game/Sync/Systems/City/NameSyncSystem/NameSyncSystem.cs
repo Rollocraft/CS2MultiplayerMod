@@ -200,22 +200,20 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 None = new[] { ComponentType.ReadOnly<Temp>(), ComponentType.ReadOnly<Deleted>() },
             });
 
-            if (Mod.Service != null)
-            {
-                _observer = new CommandObserver(_incoming, EntityNameCommand.Id);
-                _observer.MaxBodyBytes = EntityNameCommand.MaxEncodedBytes;
-                Mod.Service.Session.AddObserver(_observer);
-            }
+            _observer = new CommandObserver(_incoming, EntityNameCommand.Id);
+            _observer.MaxBodyBytes = EntityNameCommand.MaxEncodedBytes;
             SyncInbox.RegisterDrain(DrainQueue);
         }
 
         protected override void OnDestroy()
         {
             SyncInbox.UnregisterDrain(DrainQueue);
-            if (_observer != null && Mod.Service != null)
+            if (_observer != null && Mod.Service?.Session != null)
                 Mod.Service.Session.RemoveObserver(_observer);
             base.OnDestroy();
         }
+
+        private bool _registered;
 
         private void DrainQueue()
         {
@@ -239,10 +237,17 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             MultiplayerSession session = service.Session;
             if (!service.GameplaySyncReady)
             {
+                _registered = false;
                 // Anything queued while a world is loading is already part of that world; holding it
                 // would only fill the inbox until it overflowed.
                 DrainQueue();
                 return;
+            }
+
+            if (!_registered && session != null)
+            {
+                session.AddObserver(_observer);
+                _registered = true;
             }
 
             long now = service.NowMs;

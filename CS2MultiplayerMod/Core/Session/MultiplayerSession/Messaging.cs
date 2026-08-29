@@ -152,9 +152,19 @@ namespace CS2MultiplayerMod.Core.Session
             }
             else if (Role == SessionRole.Host)
             {
-                _log.Info("Host requested world sync for all clients.");
-                NotifyResyncRequested(LocalPlayerId, ConnectionId.None);
-                NotifyChat(null, "World sync started - streaming the city to all players.");
+                int peerCount = HandshakedPeerCount();
+                if (peerCount == 0)
+                {
+                    _log.Info("Host requested world sync but no peers are connected.");
+                    NotifyChat(null, "World sync: Your city is in sync (no other players connected).");
+                    NotifyResyncRequested(LocalPlayerId, ConnectionId.None);
+                }
+                else
+                {
+                    _log.Info("Host requested world sync for " + peerCount + " client(s).");
+                    NotifyResyncRequested(LocalPlayerId, ConnectionId.None);
+                    NotifyChat(null, "World sync started - streaming the city to all players.");
+                }
             }
         }
 
@@ -191,9 +201,9 @@ namespace CS2MultiplayerMod.Core.Session
             if (Status != SessionStatus.Connected || _worldSyncSuspended) return;
 
             var message = new SimulationCommandMessage(LocalPlayerId, tick, commandId, body);
+            NotifyCommand(message);
             if (Role == SessionRole.Host)
             {
-                NotifyCommand(message);
                 RecordReplayableCommand(message);
                 BroadcastToAll(message, ConnectionId.None); // host applies locally AND fans out
             }

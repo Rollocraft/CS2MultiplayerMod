@@ -88,8 +88,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     return RealizeResult.Retry;
                 _mutatedRoutesThisFrame.Add(existing);
                 if (!TryApplyMetadata(existing, prefab, command.RouteNumber,
-                        PackColor(command.ColorR, command.ColorG, command.ColorB, command.ColorA),
-                        command.VehicleModelPrefabName))
+                        PackColor(command.ColorR, command.ColorG, command.ColorB, command.ColorA)))
                 {
                     SyncInbox.RequestResync("route metadata conflict during idempotent creation");
                     return RealizeResult.Rejected;
@@ -140,7 +139,6 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     RouteNumber = command.RouteNumber,
                     Rgba = PackColor(command.ColorR, command.ColorG,
                         command.ColorB, command.ColorA),
-                    VehicleModelPrefabName = command.VehicleModelPrefabName,
                     DeadlineMs = now + RetryWindowMs,
                     Source = command,
                     OriginPlayerId = originPlayerId,
@@ -289,7 +287,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
                 // GenerateRoutesSystem retains the original route color during an edit, so metadata
                 // is applied explicitly even when the waypoint graph is rebuilt in the same frame.
-                if (!TryApplyMetadata(route, prefab, command.RouteNumber, rgba, command.VehicleModelPrefabName))
+                if (!TryApplyMetadata(route, prefab, command.RouteNumber, rgba))
                 {
                     SyncInbox.RequestResync("route number conflict during update");
                     Mod.log.Warn("[MP] RouteSync update: requested number " +
@@ -339,7 +337,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     if (definition != Entity.Null && EntityManager.Exists(definition))
                         EntityManager.DestroyEntity(definition);
                     if (_netSync != null) _netSync.CancelPreparedDefinitionFrame();
-                    TryApplyMetadata(route, prefab, local.RouteNumber, local.Rgba, local.VehicleModelPrefabName);
+                    TryApplyMetadata(route, prefab, local.RouteNumber, local.Rgba);
                 }
                 SyncInbox.RequestResync("route update failed");
                 Mod.log.Error("[MP] RouteSync update FAILED for '" +
@@ -796,7 +794,6 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         }
 
         private bool TryApplyMetadata(Entity route, Entity prefab, int routeNumber, uint rgba,
-            string vehicleModelPrefabName = null,
             HashSet<Entity> ignoredNumberConflicts = null)
         {
             if (!RouteNumberAvailable(route, prefab, routeNumber,
@@ -817,22 +814,6 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 EntityManager.SetComponentData(route, new Color { m_Color = color });
             else
                 EntityManager.AddComponentData(route, new Color { m_Color = color });
-
-            if (!string.IsNullOrEmpty(vehicleModelPrefabName) && EntityManager.HasComponent<TransportLine>(route))
-            {
-                Entity vehiclePrefab;
-                if (_prefabIndex.TryResolve(vehicleModelPrefabName, out vehiclePrefab) &&
-                    vehiclePrefab != Entity.Null && EntityManager.Exists(vehiclePrefab))
-                {
-                    TransportLine tl = EntityManager.GetComponentData<TransportLine>(route);
-                    if (tl.m_VehicleModel != vehiclePrefab)
-                    {
-                        tl.m_VehicleModel = vehiclePrefab;
-                        EntityManager.SetComponentData(route, tl);
-                    }
-                }
-            }
-
             if (!EntityManager.HasComponent<Updated>(route))
                 EntityManager.AddComponent<Updated>(route);
             return true;
@@ -899,7 +880,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 Entity route = pair.Value;
                 _mutatedRoutesThisFrame.Add(route);
                 if (!TryApplyMetadata(route, pending.Prefab,
-                        pending.RouteNumber, pending.Rgba, pending.VehicleModelPrefabName, readyRoutes))
+                        pending.RouteNumber, pending.Rgba, readyRoutes))
                 {
                     SyncInbox.RequestResync("route number conflict after creation");
                     Mod.log.Warn("[MP] RouteSync could not assign number " +

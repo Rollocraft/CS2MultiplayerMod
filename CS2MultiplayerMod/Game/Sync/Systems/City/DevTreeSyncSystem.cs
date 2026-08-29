@@ -58,19 +58,17 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             _unlockArchetype = EntityManager.CreateArchetype(
                 ComponentType.ReadWrite<Unlock>(), ComponentType.ReadWrite<global::Game.Common.Event>());
 
-            if (Mod.Service != null)
-            {
-                _observer = new CommandObserver(_incoming, DevTreePurchaseCommand.Id);
-                Mod.Service.Session.AddObserver(_observer);
-            }
+            _observer = new CommandObserver(_incoming, DevTreePurchaseCommand.Id);
         }
 
         protected override void OnDestroy()
         {
-            if (_observer != null && Mod.Service != null)
+            if (_observer != null && Mod.Service?.Session != null)
                 Mod.Service.Session.RemoveObserver(_observer);
             base.OnDestroy();
         }
+
+        private bool _registered;
 
         protected override void OnUpdate()
         {
@@ -80,8 +78,15 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             MultiplayerSession session = service.Session;
             if (!service.GameplaySyncReady)
             {
+                _registered = false;
                 _initialized = false;
                 return;
+            }
+
+            if (!_registered && session != null)
+            {
+                session.AddObserver(_observer);
+                _registered = true;
             }
 
             long now = service.NowMs;
@@ -194,7 +199,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 {
                     int cost = EntityManager.GetComponentData<DevTreeNodeData>(node).m_Cost;
                     DevTreePoints points = _pointsQuery.GetSingleton<DevTreePoints>();
-                    points.m_Points -= cost;
+                    points.m_Points = System.Math.Max(0, points.m_Points - cost);
                     _pointsQuery.SetSingleton(points);
                 }
 

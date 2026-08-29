@@ -139,6 +139,9 @@ interface PlayerEntry {
     id: number;
     name: string;
     isHost: boolean;
+    isYou?: boolean;
+    isSpectator?: boolean;
+    latency?: number;
 }
 
 interface PendingJoin {
@@ -227,92 +230,39 @@ const styles: Record<string, CSSProperties> = {
         border: "1rem solid rgba(0, 0, 0, 0.5)",
         pointerEvents: "none",
     },
-    unreadBadge: {
-        position: "absolute",
-        left: "-3rem",
-        top: "-3rem",
-        minWidth: "16rem",
-        height: "16rem",
-        padding: "0 4rem",
-        borderRadius: "8rem",
-        backgroundColor: "#ff8a7a",
-        color: "#1a2233",
-        fontSize: "11rem",
-        fontWeight: "bold",
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        pointerEvents: "none",
-    },
-    toastAnchor: {
-        position: "absolute",
-        right: "100%",
-        marginRight: "12rem",
-        top: "50%",
-        transform: "translateY(-50%)",
-        width: "320rem",
-        display: "flex",
-        flexDirection: "column",
-        alignItems: "flex-end",
-        pointerEvents: "none",
-    },
-    toast: {
-        maxWidth: "320rem",
-        backgroundColor: "rgba(24, 33, 51, 0.95)",
-        borderLeft: "3rem solid #72c8f0",
-        borderRadius: "3rem",
-        padding: "6rem 10rem",
-        marginTop: "4rem",
-        boxShadow: "0 4rem 12rem rgba(0, 0, 0, 0.4)",
-        fontSize: "13rem",
-        color: "#ffffff",
-    },
-    toastSender: {
-        color: "#9dc1de",
-        textTransform: "uppercase",
-        fontSize: "11rem",
-        marginRight: "6rem",
-    },
-    toastSystem: {
-        color: "rgba(255, 255, 255, 0.75)",
-        fontStyle: "italic",
-    },
     panel: {
         position: "fixed",
         right: "64rem",
-        // Centred by a negative margin, not translateY: a transform moves the panel
-        // without moving its layout box, and the drag code reads that box - starting
-        // a drag then dropped the panel half its own height down the screen.
         top: "50%",
-        marginTop: "-330rem",
-        width: "460rem",
-        // Definite height: everything inside anchors to the panel's edges, so this
-        // is the one number that decides how much room the chat gets.
-        height: "660rem",
-        backgroundColor: "rgba(24, 33, 51, 0.97)",
-        borderRadius: "4rem",
-        boxShadow: "0 16rem 48rem rgba(0, 0, 0, 0.45)",
+        marginTop: "-290rem",
+        width: "440rem",
+        maxWidth: "92vw",
+        height: "580rem",
+        maxHeight: "88vh",
+        backgroundColor: "rgba(16, 25, 36, 0.94)",
+        borderRadius: "8rem",
+        border: "1rem solid rgba(255, 255, 255, 0.08)",
+        boxShadow: "0 18rem 48rem rgba(0, 0, 0, 0.65)",
         zIndex: 900,
         pointerEvents: "auto",
-        // Content must never paint outside the panel background — when the user
-        // resizes below the natural content height, the inner areas scroll instead.
         overflow: "hidden",
     },
-    // Fixed height, matching styles.body's top inset: 12rem padding + a 32rem icon
-    // button + 12rem padding + the 1rem rule.
     header: {
-        height: "57rem",
+        height: "54rem",
         boxSizing: "border-box",
         display: "flex",
         alignItems: "center",
-        padding: "12rem 14rem",
-        borderBottom: "1rem solid rgba(157, 193, 222, 0.2)",
+        padding: "0 16rem",
+        backgroundColor: "#101824",
+        borderBottom: "1rem solid rgba(255, 255, 255, 0.08)",
         flexShrink: 0,
     },
     headerTitle: {
         flex: 1,
-        fontSize: "16rem",
-        color: "#ffffff",
+        fontSize: "15.5rem",
+        fontWeight: "bold",
+        letterSpacing: "0.6rem",
+        color: "#38bdf8",
         textTransform: "uppercase",
     },
     headerButton: {
@@ -325,43 +275,34 @@ const styles: Record<string, CSSProperties> = {
         borderRadius: "50%",
         transition: "background-color 120ms ease, opacity 120ms ease",
     },
-    // Anchored, not distributed: a column flex child does not reliably take the
-    // panel's leftover height in the game's UI runtime, which left the action
-    // buttons floating with dead space under them. Both insets are definite, so
-    // this box is exactly the panel minus its header (see PanelBody).
     body: {
         position: "absolute",
-        top: "57rem",
+        top: "54rem",
         left: 0,
         right: 0,
         bottom: 0,
+        boxSizing: "border-box",
+        display: "flex",
+        flexDirection: "column",
+        padding: "12rem 14rem",
+        overflow: "hidden",
+        backgroundColor: "transparent",
+    },
+    bodyTop: {
+        flexShrink: 0,
+        marginBottom: "8rem",
+    },
+    bodyMiddle: {
+        flex: 1,
+        minHeight: 0,
+        display: "flex",
+        flexDirection: "column",
         overflow: "hidden",
     },
-    // Natural height at the panel's top edge. No "overflow: hidden" here: it reads
-    // back as a zero height, which put the chat on top of the player list. The
-    // padding is what keeps a last child's bottom margin inside the measured box.
-    bodyTop: {
-        position: "absolute",
-        top: "12rem",
-        left: "14rem",
-        right: "14rem",
-        paddingBottom: "1rem",
-    },
-    // Everything between the two blocks; its insets are computed from them.
-    bodyMiddle: {
-        position: "absolute",
-        left: "14rem",
-        right: "14rem",
-    },
-    // Natural height at the panel's bottom edge - where the buttons live.
     bodyBottom: {
-        position: "absolute",
-        bottom: "12rem",
-        left: "14rem",
-        right: "14rem",
+        flexShrink: 0,
+        marginTop: "8rem",
     },
-    // Fields live in here so a small panel scrolls them while the footer
-    // (action buttons) stays pinned to the panel bottom.
     scrollArea: {
         height: "100%",
         overflowY: "auto",
@@ -369,20 +310,20 @@ const styles: Record<string, CSSProperties> = {
     playerCountRow: {
         marginBottom: "6rem",
         flexShrink: 0,
-        fontSize: "13rem",
+        fontSize: "12.5rem",
+        fontWeight: "bold",
+        letterSpacing: "0.5rem",
         color: "#9dc1de",
         textTransform: "uppercase",
     },
-    // Fills the whole middle block, which is what is left of the panel once the
-    // player list and the buttons have taken their own height.
     chatList: {
         height: "100%",
         boxSizing: "border-box",
         overflowY: "auto",
-        backgroundColor: "rgba(0, 0, 0, 0.3)",
-        border: "1rem solid rgba(157, 193, 222, 0.2)",
-        borderRadius: "3rem",
-        padding: "8rem 10rem",
+        backgroundColor: "rgba(10, 16, 24, 0.4)",
+        border: "1rem solid rgba(157, 193, 222, 0.15)",
+        borderRadius: "4rem",
+        padding: "10rem 14rem",
     },
     chatEmpty: {
         fontSize: "13rem",
@@ -392,26 +333,63 @@ const styles: Record<string, CSSProperties> = {
         marginTop: "12rem",
     },
     chatLine: {
-        fontSize: "14rem",
+        fontSize: "13.5rem",
         color: "#ffffff",
         marginBottom: "4rem",
-        wordBreak: "break-word",
+        whiteSpace: "normal",
+        wordBreak: "normal",
+        overflowWrap: "break-word",
+        lineHeight: "1.4",
     },
     chatTime: {
-        color: "rgba(255, 255, 255, 0.4)",
+        color: "rgba(255, 255, 255, 0.35)",
         fontSize: "11rem",
         marginRight: "6rem",
     },
     chatSender: {
-        color: "#9dc1de",
+        color: "#38bdf8",
+        fontWeight: "bold",
     },
     systemLine: {
         fontSize: "12.5rem",
-        color: "#72c8f0",
-        fontStyle: "italic",
-        margin: "3rem 0 5rem 0",
-        textAlign: "center",
-        wordBreak: "break-word",
+        color: "#cbd5e1",
+        margin: "3rem 0",
+        textAlign: "left",
+        whiteSpace: "normal",
+        wordBreak: "normal",
+        overflowWrap: "break-word",
+        lineHeight: "1.4",
+    },
+    syncStatusCard: {
+        backgroundColor: "rgba(16, 26, 38, 0.92)",
+        border: "1.5rem solid #38bdf8",
+        borderRadius: "4rem",
+        padding: "8rem 10rem",
+        marginBottom: "8rem",
+    },
+    syncStatusHeader: {
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "space-between",
+        fontSize: "12rem",
+        fontWeight: "bold",
+        letterSpacing: "0.5rem",
+        color: "#38bdf8",
+        textTransform: "uppercase",
+        marginBottom: "4rem",
+    },
+    syncCompleteCard: {
+        backgroundColor: "rgba(16, 26, 38, 0.92)",
+        border: "1.5rem solid #05a065",
+        borderRadius: "4rem",
+        padding: "8rem 10rem",
+        marginBottom: "8rem",
+        display: "flex",
+        alignItems: "center",
+        color: "#10b981",
+        fontSize: "12rem",
+        fontWeight: "bold",
+        letterSpacing: "0.3rem",
     },
     inputRow: {
         display: "flex",
@@ -423,14 +401,22 @@ const styles: Record<string, CSSProperties> = {
         flex: 1,
         fontSize: "14rem",
         color: "#ffffff",
-        backgroundColor: "rgba(0, 0, 0, 0.35)",
-        border: "1rem solid rgba(157, 193, 222, 0.35)",
-        borderRadius: "3rem",
-        padding: "6rem 10rem",
+        backgroundColor: "rgba(10, 16, 24, 0.55)",
+        border: "1.5rem solid rgba(157, 193, 222, 0.25)",
+        borderRadius: "4rem",
+        padding: "7rem 12rem",
     },
     sendButton: {
         marginLeft: "8rem",
-        padding: "6rem 14rem",
+        padding: "8rem 18rem",
+        backgroundColor: "#05a065",
+        border: "1.5rem solid #15c07b",
+        color: "#ffffff",
+        fontWeight: "bold",
+        fontSize: "13.5rem",
+        borderRadius: "4rem",
+        letterSpacing: "0.5rem",
+        textTransform: "uppercase",
     },
     footer: {
         display: "flex",
@@ -439,7 +425,12 @@ const styles: Record<string, CSSProperties> = {
     },
     footerButton: {
         marginLeft: "10rem",
-        padding: "7rem 16rem",
+        padding: "8rem 18rem",
+        borderRadius: "4rem",
+        fontWeight: "bold",
+        fontSize: "13.5rem",
+        letterSpacing: "0.5rem",
+        textTransform: "uppercase",
     },
     hint: {
         fontSize: "12.5rem",
@@ -520,6 +511,7 @@ const styles: Record<string, CSSProperties> = {
     toggleCheck: {
         width: "14rem",
         height: "14rem",
+        filter: "brightness(0) invert(1)",
     },
     resizeHandle: {
         position: "absolute",
@@ -580,11 +572,41 @@ const styles: Record<string, CSSProperties> = {
         textOverflow: "ellipsis",
         whiteSpace: "nowrap",
     },
+    playerLatency: {
+        marginLeft: "auto",
+        marginRight: "8rem",
+        color: "#38bdf8",
+        fontSize: "12rem",
+        fontWeight: "bold",
+    },
     playerBadge: {
         marginLeft: "6rem",
         color: "rgba(255, 255, 255, 0.62)",
         fontSize: "10.5rem",
         textTransform: "uppercase",
+    },
+    spectatorBadge: {
+        marginLeft: "6rem",
+        color: "#fbbf24",
+        fontSize: "10.5rem",
+        textTransform: "uppercase",
+        fontWeight: "bold",
+    },
+    playerActionBtn: {
+        marginLeft: "4rem",
+        padding: "2rem 6rem",
+        fontSize: "11rem",
+        backgroundColor: "rgba(56, 189, 248, 0.15)",
+        color: "#38bdf8",
+        borderRadius: "2rem",
+    },
+    playerRoleBtn: {
+        marginLeft: "4rem",
+        padding: "2rem 6rem",
+        fontSize: "11rem",
+        backgroundColor: "rgba(255, 255, 255, 0.08)",
+        color: "#e2e8f0",
+        borderRadius: "2rem",
     },
     kickButton: {
         marginLeft: "7rem",
@@ -725,65 +747,16 @@ const styles: Record<string, CSSProperties> = {
 
 // ---- Panel body layout ----------------------------------------------------------
 
-const blockHeight = (element: HTMLDivElement | null): number => {
-    if (element === null) return 0;
-    const box = element.offsetHeight;
-    const content = element.scrollHeight;
-    return box > content ? box : content;
-};
-
-/**
- * A panel view laid out against the panel's own edges: the top and bottom blocks
- * keep their natural height where they are pinned, and the middle block takes
- * exactly what is left. The blocks are measured because their height is content
- * (a player list grows, a transfer bar comes and goes) - nothing here relies on
- * the runtime handing a flex child the container's leftover space, which is what
- * previously stranded the buttons mid-panel.
- */
 const PanelBody = ({ top, middle, bottom }: {
     top?: ReactNode;
     middle: ReactNode;
     bottom?: ReactNode;
 }) => {
-    const topRef = useRef<HTMLDivElement | null>(null);
-    const bottomRef = useRef<HTMLDivElement | null>(null);
-    const [topHeight, setTopHeight] = useState(0);
-    const [bottomHeight, setBottomHeight] = useState(0);
-
-    // Re-measured after every render AND on the following frames: this runtime
-    // lays out asynchronously, so the read right after the commit still answers 0
-    // on a freshly opened panel — which is what put the chat over the player list
-    // until some unrelated re-render happened to measure again. A zero for a block
-    // that has content is kept out, and identical values do not re-render, so this
-    // settles within a frame or two of opening.
-    useLayoutEffect(() => {
-        const measure = () => {
-            const measuredTop = blockHeight(topRef.current);
-            const measuredBottom = blockHeight(bottomRef.current);
-            if (measuredTop > 0 || !top) setTopHeight(measuredTop);
-            if (measuredBottom > 0 || !bottom) setBottomHeight(measuredBottom);
-        };
-
-        measure();
-        let frame = requestAnimationFrame(function settle() {
-            measure();
-            frame = requestAnimationFrame(measure);
-        });
-        return () => cancelAnimationFrame(frame);
-    });
-
-    const middleStyle: CSSProperties = {
-        ...styles.bodyMiddle,
-        // 12rem is the panel's own inset; the extra 10rem is the gap to the buttons.
-        top: top ? `calc(12rem + ${topHeight}px)` : "12rem",
-        bottom: bottom ? `calc(22rem + ${bottomHeight}px)` : "12rem",
-    };
-
     return (
         <div style={styles.body}>
-            {top ? <div ref={topRef} style={styles.bodyTop}>{top}</div> : null}
-            <div style={middleStyle}>{middle}</div>
-            {bottom ? <div ref={bottomRef} style={styles.bodyBottom}>{bottom}</div> : null}
+            {top ? <div style={styles.bodyTop}>{top}</div> : null}
+            <div style={styles.bodyMiddle}>{middle}</div>
+            {bottom ? <div style={styles.bodyBottom}>{bottom}</div> : null}
         </div>
     );
 };
@@ -1067,16 +1040,7 @@ const SettingsView = () => {
 
 const HostPlayerList = ({ players }: { players: PlayerEntry[] }) => {
     const t = useT();
-    const [pendingAction, setPendingAction] = useState<{
-        playerId: number;
-        action: "kick" | "ban";
-    } | null>(null);
-
-    useEffect(() => {
-        if (pendingAction !== null &&
-            !players.some((player) => player.id === pendingAction.playerId))
-            setPendingAction(null);
-    }, [players, pendingAction]);
+    const isHost = useValue(isHost$);
 
     return (
         <div style={styles.playerSection}>
@@ -1086,74 +1050,63 @@ const HostPlayerList = ({ players }: { players: PlayerEntry[] }) => {
             </div>
             <div style={styles.playerList}>
                 {players.map((player) => {
-                    const pendingKind = pendingAction !== null &&
-                        pendingAction.playerId === player.id
-                        ? pendingAction.action
-                        : null;
-                    const confirming = pendingKind !== null;
                     return (
                         <div key={player.id} style={styles.playerRow}>
                             <div style={styles.playerName}>{player.name}</div>
+                            {player.latency !== undefined && player.latency >= 0 ? (
+                                <span style={{
+                                    display: "inline-flex",
+                                    alignItems: "center",
+                                    marginLeft: "auto",
+                                    marginRight: "8rem",
+                                    fontSize: "12rem",
+                                    fontWeight: "bold",
+                                    color: player.latency < 60 ? "#4ade80" : player.latency < 140 ? "#fbbf24" : "#f87171",
+                                }}>
+                                    <span style={{
+                                        width: "6rem",
+                                        height: "6rem",
+                                        borderRadius: "50%",
+                                        backgroundColor: player.latency < 60 ? "#4ade80" : player.latency < 140 ? "#fbbf24" : "#f87171",
+                                        display: "inline-block",
+                                        marginRight: "4rem",
+                                    }} />
+                                    {player.latency + " ms"}
+                                </span>
+                            ) : null}
                             {player.isHost ? (
-                                <>
-                                    <span style={styles.playerBadge}>{t(LOC.host, "Host")}</span>
-                                    <span style={styles.playerBadge}>{t(LOC.you, "You")}</span>
-                                </>
-                            ) : confirming ? (
-                                <>
-                                    <Button
-                                        variant="flat"
-                                        style={styles.confirmKickButton}
-                                        onSelect={() => {
-                                            trigger(
-                                                GROUP,
-                                                pendingKind === "ban"
-                                                    ? "banPlayer"
-                                                    : "kickPlayer",
-                                                player.id,
-                                            );
-                                            setPendingAction(null);
-                                        }}>
-                                        {pendingKind === "ban"
-                                            ? t(LOC.confirmBan, "Ban?")
-                                            : t(LOC.confirmKick, "Remove?")}
-                                    </Button>
-                                    <Button
-                                        variant="flat"
-                                        style={styles.confirmKickButton}
-                                        onSelect={() => setPendingAction(null)}>
-                                        {t(LOC.cancelKick, "Cancel")}
-                                    </Button>
-                                </>
-                            ) : (
+                                <span style={styles.playerBadge}>{t(LOC.host, "Host")}</span>
+                            ) : null}
+                            {player.isSpectator ? (
+                                <span style={styles.spectatorBadge}>Spectator</span>
+                            ) : null}
+                            {player.isYou ? (
+                                <span style={styles.playerBadge}>{t(LOC.you, "You")}</span>
+                            ) : null}
+                            {!player.isYou ? (
                                 <>
                                     <Button
                                         variant="flat"
-                                        style={styles.kickButton}
-                                        onSelect={() => setPendingAction({
-                                            playerId: player.id,
-                                            action: "kick",
-                                        })}>
-                                        {t(LOC.kick, "Kick")}
+                                        style={styles.playerActionBtn}
+                                        onSelect={() => trigger(GROUP, "teleportToPlayer", player.id)}>
+                                        Goto
                                     </Button>
-                                    <Tooltip
-                                        tooltip={t(
-                                            LOC.banHint,
-                                            "Remove this player and prevent them from rejoining until hosting stops.",
-                                        )}
-                                        direction="down">
-                                        <Button
-                                            variant="flat"
-                                            style={styles.banButton}
-                                            onSelect={() => setPendingAction({
-                                                playerId: player.id,
-                                                action: "ban",
-                                            })}>
-                                            {t(LOC.ban, "Ban")}
-                                        </Button>
-                                    </Tooltip>
+                                    <Button
+                                        variant="flat"
+                                        style={styles.playerActionBtn}
+                                        onSelect={() => trigger(GROUP, "followPlayer", player.id)}>
+                                        Follow
+                                    </Button>
                                 </>
-                            )}
+                            ) : null}
+                            {isHost && !player.isHost ? (
+                                <Button
+                                    variant="flat"
+                                    style={styles.playerRoleBtn}
+                                    onSelect={() => trigger(GROUP, "setPlayerRole", player.id, !player.isSpectator)}>
+                                    {player.isSpectator ? "Play" : "Spectate"}
+                                </Button>
+                            ) : null}
                         </div>
                     );
                 })}
@@ -1220,51 +1173,41 @@ const ClientWorldSaveDialog = ({ onClose }: { onClose: () => void }) => {
                 statusText = t(LOC.saveCopyFailed,
                     "The copy could not be saved. Try another name and check free disk space.");
                 break;
+            default:
+                break;
         }
-    } else if (!canSave) {
-        statusText = t(LOC.saveCopyUnavailable,
-            "Wait until the host world has fully loaded before saving a copy.");
     }
-    const showProblemHelp = Boolean(statusText) && !saving && !saved;
+
+    const showProblemHelp = submitted && (saveStatus === "exists" || saveStatus === "unavailable");
 
     return (
         <Portal>
             <InputActionBarrier>
                 <AutoNavigationScope
-                    debugName="CS2MP Save World Copy"
+                    focusKey="cs2mp-save-dialog-scope"
+                    debugName="CS2MP Save Dialog"
                     direction={NavigationDirection.Both}
-                    initialFocused={saved ? "close" : "save-copy"}
+                    initialFocused="name-input"
                     allowLooping>
-                <BackConsumer disabled={saving} onAction={onClose}>
-                <div
-                    style={styles.saveDialogOverlay}
-                    onMouseDown={(event) => event.stopPropagation()}>
-                    <div style={styles.saveDialog}>
-                        <div style={styles.saveDialogTitle}>
-                            {t(LOC.saveCopyTitle, "Save a World Copy")}
-                        </div>
-                        <div style={styles.saveDialogBody}>
+                <BackConsumer onAction={onClose}>
+                <div style={styles.saveDialogOverlay} onMouseDown={(e) => e.stopPropagation()}>
+                    <div style={styles.saveDialogPanel}>
+                        <div style={styles.saveDialogTitle}>{t(LOC.saveCopyTitle, "Save Local Copy")}</div>
+                        <div style={styles.saveDialogHelp}>
                             {t(LOC.saveCopyBody,
-                                "Keep the current shared city on this PC so you can continue it later in single-player.")}
-                        </div>
-                        <div style={styles.saveDialogLabel}>
-                            {t(LOC.worldName, "World Name")}
+                                "Save the current state of this host's world into your local saves folder so you can load it in singleplayer anytime.")}
                         </div>
                         <input
                             ref={inputRef}
                             type="text"
+                            style={styles.saveDialogInput}
                             value={draft}
-                            maxLength={85}
-                            disabled={saving || saved}
+                            disabled={!canSave || saving || saved}
                             spellCheck={false}
                             autoComplete="off"
-                            style={styles.saveDialogInput}
+                            maxLength={85}
+                            onChange={(event) => setDraft((event.target as HTMLInputElement).value)}
                             onMouseDown={(event) => event.stopPropagation()}
-                            onChange={(event) => {
-                                setDraft((event.target as HTMLInputElement).value);
-                                setSubmitted(false);
-                                trigger(GROUP, "resetClientWorldSaveStatus");
-                            }}
                             onKeyDown={(event) => {
                                 event.stopPropagation();
                                 if (event.key === "Enter") submit();
@@ -1320,6 +1263,139 @@ const ClientWorldSaveDialog = ({ onClose }: { onClose: () => void }) => {
     );
 };
 
+const renderCommandTokens = (cmdStr: string) => {
+    const tokens = cmdStr.split(" ");
+    return (
+        <span style={{ whiteSpace: "nowrap" }}>
+            {tokens.map((token, idx) => {
+                const space = idx < tokens.length - 1 ? " " : "";
+                if (token.startsWith("/")) {
+                    return (
+                        <span key={idx} style={{ color: "#38bdf8", fontWeight: "bold" }}>
+                            {token}{space}
+                        </span>
+                    );
+                }
+                if (token.startsWith("<") || token.startsWith("[")) {
+                    return (
+                        <span key={idx} style={{ color: "#7dd3fc", fontStyle: "normal" }}>
+                            {token}{space}
+                        </span>
+                    );
+                }
+                return (
+                    <span key={idx} style={{ color: "#38bdf8" }}>
+                        {token}{space}
+                    </span>
+                );
+            })}
+        </span>
+    );
+};
+
+const renderColoredChatText = (rawText: string) => {
+    if (!rawText) return null;
+    const text = rawText.replace("[on|off]", "[on/off]");
+
+    // 1. Headers like === Multiplayer Commands === or --- Host Commands ---
+    if (text.startsWith("===") || text.startsWith("---")) {
+        return (
+            <div style={{
+                color: "#facc15",
+                fontWeight: "bold",
+                fontSize: "12.5rem",
+                letterSpacing: "0.6rem",
+                margin: "8rem 0 4rem 0",
+                paddingBottom: "2rem",
+                borderBottom: "1rem solid rgba(250, 204, 21, 0.25)",
+                display: "block",
+            }}>
+                {text}
+            </div>
+        );
+    }
+
+    // 2. Command listing line e.g. "- /ping [msg] - Ping map location..."
+    if (text.startsWith("- /") || text.startsWith("/ping") || text.startsWith("/goto") || text.startsWith("/follow") ||
+        text.startsWith("/unfollow") || text.startsWith("/sync") || text.startsWith("/clear") ||
+        text.startsWith("/spectator") || text.startsWith("/lock") || text.startsWith("/unlock") || text.startsWith("/motd") ||
+        text.startsWith("/banlist") || text.startsWith("/unban")) {
+        const clean = text.startsWith("- ") ? text.slice(2) : text;
+        const firstDash = clean.indexOf(" - ");
+        if (firstDash !== -1) {
+            const cmd = clean.slice(0, firstDash);
+            const desc = clean.slice(firstDash + 3);
+            return (
+                <div style={{
+                    display: "flex",
+                    flexDirection: "row",
+                    alignItems: "baseline",
+                    margin: "3rem 0",
+                    lineHeight: "1.35",
+                }}>
+                    <span style={{ flexShrink: 0, whiteSpace: "nowrap" }}>
+                        {renderCommandTokens(cmd)}
+                    </span>
+                    <span style={{ color: "rgba(255, 255, 255, 0.35)", margin: "0 6rem", flexShrink: 0 }}>
+                        {"-"}
+                    </span>
+                    <span style={{ color: "#e2e8f0", flex: 1, minWidth: 0, wordBreak: "normal", overflowWrap: "break-word" }}>
+                        {desc}
+                    </span>
+                </div>
+            );
+        }
+    }
+
+    // 3. Map Ping notifications: "[Ping] Pinged map at (X, Z)..." or "Pinged map at (X, Z)..."
+    if (text.includes("Pinged map at")) {
+        const cleanText = text.replace(/[\uD800-\uDBFF][\uDC00-\uDFFF]/g, "").trim();
+        const coordMatch = cleanText.match(/\((-?[0-9]+),\s*(-?[0-9]+)\)/);
+        if (coordMatch) {
+            const before = cleanText.slice(0, coordMatch.index);
+            const coords = coordMatch[0];
+            const after = cleanText.slice((coordMatch.index || 0) + coords.length);
+            return (
+                <span>
+                    <span style={{ color: "#f59e0b", fontWeight: "bold" }}>{"[Ping] "}</span>
+                    <span style={{ color: "#e2e8f0" }}>{before.replace("[Ping]", "").trim() + " "}</span>
+                    <span style={{ color: "#38bdf8", fontWeight: "bold" }}>{coords}</span>
+                    <span style={{ color: "#e2e8f0" }}>{after}</span>
+                </span>
+            );
+        }
+    }
+
+    // 4. Teleport / Follow camera notifications
+    if (text.includes("Teleported camera") || text.includes("Now following") || text.includes("Stopped following")) {
+        const cleanText = text.replace(/[\uD800-\uDBFF][\uDC00-\uDFFF]/g, "").replace("[Camera]", "").trim();
+        return (
+            <span>
+                <span style={{ color: "#38bdf8", fontWeight: "bold" }}>{"[Camera] "}</span>
+                <span style={{ color: "#e2e8f0" }}>{cleanText}</span>
+            </span>
+        );
+    }
+
+    // 5. General Chat with /commands or plain text
+    const cleanText = text.replace(/[\uD800-\uDBFF][\uDC00-\uDFFF]/g, "");
+    if (!cleanText.includes("/")) {
+        return cleanText;
+    }
+    const words = cleanText.split(" ");
+    return (
+        <span>
+            {words.map((word, wIdx) => {
+                const space = wIdx < words.length - 1 ? " " : "";
+                if (word.startsWith("/") && word.length > 1) {
+                    return <span key={wIdx}><span style={{ color: "#38bdf8", fontWeight: "bold" }}>{word}</span>{space}</span>;
+                }
+                return word + space;
+            })}
+        </span>
+    );
+};
+
 // Active session: player count, chat feed (player lines + "X joined." event
 // lines), send box, world sync, local client copy and disconnect.
 const SessionView = ({ entries, players }: { entries: ChatEntry[]; players: PlayerEntry[] }) => {
@@ -1331,14 +1407,48 @@ const SessionView = ({ entries, players }: { entries: ChatEntry[]; players: Play
     const progressMode = useValue(progressMode$);
     const statusTitle = useValue(statusTitle$);
     const statusDetail = useValue(statusDetail$);
+    const statusKind = useValue(statusKind$);
     const canSaveClientWorld = useValue(canSaveClientWorld$);
     const [draft, setDraft] = useState("");
     const [typing, setTyping] = useState(false);
     const [saveDialogOpen, setSaveDialogOpen] = useState(false);
+    const [history, setHistory] = useState<string[]>([]);
+    const [historyIndex, setHistoryIndex] = useState<number>(-1);
+    const draftBeforeHistoryRef = useRef<string>("");
     const listRef = useRef<HTMLDivElement | null>(null);
-    // The panel unmounts this view when it closes, so "first pass after mount" is
-    // exactly "the player just opened the chat".
     const openedRef = useRef(true);
+
+    const isSyncing = statusKind === "syncing" || progressMode !== "none";
+    const [syncJustFinished, setSyncJustFinished] = useState(false);
+    const wasSyncingRef = useRef(false);
+
+    const AVAILABLE_COMMANDS = useMemo(() => [
+        "/ping",
+        "/goto",
+        "/goto ping",
+        "/follow",
+        "/unfollow",
+        "/sync",
+        "/clear",
+        "/help",
+        "/spectator",
+        "/lock",
+        "/unlock",
+        "/motd",
+        "/banlist",
+        "/unban",
+    ], []);
+
+    useEffect(() => {
+        if (isSyncing) {
+            wasSyncingRef.current = true;
+        } else if (wasSyncingRef.current) {
+            wasSyncingRef.current = false;
+            setSyncJustFinished(true);
+            const timer = window.setTimeout(() => setSyncJustFinished(false), 4000);
+            return () => window.clearTimeout(timer);
+        }
+    }, [isSyncing]);
 
     // Keep the newest line in view (only auto-stick when already near the bottom,
     // so scrolling back through history is not yanked away by new messages).
@@ -1349,9 +1459,6 @@ const SessionView = ({ entries, players }: { entries: ChatEntry[]; players: Play
         if (openedRef.current) {
             openedRef.current = false;
             el.scrollTop = el.scrollHeight;
-            // Repeated over the next frames: the panel's own geometry is still
-            // settling on this one, and the list shrinking afterwards would leave
-            // this first jump short of the newest line.
             let frame = requestAnimationFrame(function toNewest() {
                 const list = listRef.current;
                 if (list) list.scrollTop = list.scrollHeight;
@@ -1371,45 +1478,87 @@ const SessionView = ({ entries, players }: { entries: ChatEntry[]; players: Play
         const text = draft.trim();
         if (!text) return;
         trigger(GROUP, "sendChat", text);
+        setHistory((prev) => [...prev.filter((h) => h !== text), text]);
+        setHistoryIndex(-1);
         setDraft("");
     };
 
     const activityPercent = isHost ? worldSendPercent : mapTransferPercent;
-    const showActivity = progressMode !== "none";
+    const isLocalSpectator = players.some((p) => p.isYou && p.isSpectator);
 
     const topBlock = (
         <>
-            {/* Single string child: Gameface puts each adjacent bare text node on
-                its own line, which split "Players: 3" into three lines. */}
-            {isHost
-                ? <HostPlayerList players={players} />
-                : <div style={styles.playerCountRow}>{t(LOC.players, "Players") + ": " + playerCount}</div>}
-            {showActivity ? (
-                <>
+            {isLocalSpectator ? (
+                <div style={{
+                    backgroundColor: "rgba(245, 158, 11, 0.18)",
+                    border: "1rem solid rgba(245, 158, 11, 0.5)",
+                    borderRadius: "4rem",
+                    padding: "8rem 12rem",
+                    marginBottom: "10rem",
+                    display: "flex",
+                    alignItems: "center",
+                    color: "#fbbf24",
+                    fontSize: "13rem",
+                    fontWeight: "bold",
+                }}>
+                    <span style={{ marginRight: "8rem", fontSize: "16rem" }}>{"👁️"}</span>
+                    <span>{"SPECTATOR MODE — View-only mode active"}</span>
+                </div>
+            ) : null}
+
+            <HostPlayerList players={players} />
+
+            {isSyncing ? (
+                <div style={styles.syncStatusCard}>
+                    <div style={styles.syncStatusHeader}>
+                        <span>{"🔄 " + (statusTitle || t(LOC.syncWorld, "Syncing World..."))}</span>
+                        {activityPercent >= 0 && progressMode === "percent" ? <span>{Math.round(activityPercent)}%</span> : null}
+                    </div>
                     <TransferProgress
                         percent={activityPercent}
-                        label={statusTitle}
-                        indeterminate={progressMode === "indeterminate"}
+                        label=""
+                        indeterminate={progressMode === "indeterminate" || activityPercent < 0}
                     />
-                    {statusDetail ? <div style={styles.activityDetail}>{statusDetail}</div> : null}
-                </>
+                    {statusDetail ? <div style={styles.activityDetail}>{statusDetail}</div> : (
+                        <div style={styles.activityDetail}>{"Synchronizing simulation state with all connected players..."}</div>
+                    )}
+                </div>
+            ) : null}
+
+            {syncJustFinished && !isSyncing ? (
+                <div style={styles.syncCompleteCard}>
+                    <span>{"✓ World in sync • All simulation state synchronized"}</span>
+                </div>
             ) : null}
         </>
     );
 
+    const filteredEntries = useMemo(() => {
+        const result: ChatEntry[] = [];
+        for (let i = 0; i < entries.length; i++) {
+            const curr = entries[i];
+            const prev = result[result.length - 1];
+            if (curr.sender === null && prev && prev.sender === null && prev.text === curr.text) {
+                continue;
+            }
+            result.push(curr);
+        }
+        return result;
+    }, [entries]);
+
     const chatFeed = (
         <div ref={listRef} style={styles.chatList}>
-            {entries.length === 0 ? (
+            {filteredEntries.length === 0 ? (
                 <div style={styles.chatEmpty}>{t(LOC.noMessages, "No messages yet.")}</div>
             ) : (
-                entries.map((entry) =>
+                filteredEntries.map((entry) =>
                     entry.sender === null ? (
-                        <div key={entry.id} style={styles.systemLine}>{entry.text}</div>
+                        <div key={entry.id} style={styles.systemLine}>{renderColoredChatText(entry.text)}</div>
                     ) : (
                         <div key={entry.id} style={styles.chatLine}>
                             <span style={styles.chatTime}>{entry.time + " "}</span>
                             <span style={styles.chatSender}>{entry.sender + ": "}</span>
-                            <span>{entry.text}</span>
+                            <span>{renderColoredChatText(entry.text)}</span>
                         </div>
                     )
                 )
@@ -1438,9 +1587,47 @@ const SessionView = ({ entries, players }: { entries: ChatEntry[]; players: Play
                             } else if (e.key === "Escape") {
                                 e.preventDefault();
                                 e.currentTarget.blur();
+                            } else if (e.key === "ArrowUp") {
+                                e.preventDefault();
+                                if (history.length > 0) {
+                                    if (historyIndex === -1) {
+                                        draftBeforeHistoryRef.current = draft;
+                                        const nextIdx = history.length - 1;
+                                        setHistoryIndex(nextIdx);
+                                        setDraft(history[nextIdx]);
+                                    } else if (historyIndex > 0) {
+                                        const nextIdx = historyIndex - 1;
+                                        setHistoryIndex(nextIdx);
+                                        setDraft(history[nextIdx]);
+                                    }
+                                }
+                            } else if (e.key === "ArrowDown") {
+                                e.preventDefault();
+                                if (historyIndex !== -1) {
+                                    if (historyIndex < history.length - 1) {
+                                        const nextIdx = historyIndex + 1;
+                                        setHistoryIndex(nextIdx);
+                                        setDraft(history[nextIdx]);
+                                    } else {
+                                        setHistoryIndex(-1);
+                                        setDraft(draftBeforeHistoryRef.current);
+                                    }
+                                }
+                            } else if (e.key === "Tab") {
+                                e.preventDefault();
+                                if (draft.startsWith("/")) {
+                                    const prefix = draft.toLowerCase();
+                                    const match = AVAILABLE_COMMANDS.find((cmd) => cmd.toLowerCase().startsWith(prefix));
+                                    if (match) {
+                                        setDraft(match + " ");
+                                    }
+                                }
                             }
                         }}
-                        onChange={(e) => setDraft((e.target as HTMLInputElement).value)}
+                        onChange={(e) => {
+                            setDraft((e.target as HTMLInputElement).value);
+                            setHistoryIndex(-1);
+                        }}
                     />
                 </InputActionBarrier>
                 <Button variant="primary" style={styles.sendButton} onSelect={send}>
@@ -1448,24 +1635,26 @@ const SessionView = ({ entries, players }: { entries: ChatEntry[]; players: Play
                 </Button>
             </div>
             <div style={styles.footer}>
-                <Button variant="flat" style={styles.footerButton} onSelect={() => trigger(GROUP, "syncNow")}>
-                    {t(LOC.syncWorld, "Sync World")}
-                </Button>
-                {!isHost ? (
-                    <Button
-                        variant="flat"
-                        style={styles.footerButton}
-                        disabled={!canSaveClientWorld}
-                        onSelect={() => {
-                            trigger(GROUP, "resetClientWorldSaveStatus");
-                            setSaveDialogOpen(true);
-                        }}>
-                        {t(LOC.saveCopy, "Save Copy")}
-                    </Button>
-                ) : null}
                 <Button
                     variant="flat"
-                    style={styles.footerButton}
+                    style={{
+                        ...styles.footerButton,
+                        backgroundColor: syncJustFinished ? "#05a065" : isSyncing ? "#0369a1" : "#223347",
+                        border: syncJustFinished ? "1.5rem solid #15c07b" : isSyncing ? "1.5rem solid #38bdf8" : "1.5rem solid #3a5068",
+                        color: "#ffffff",
+                    }}
+                    disabled={isSyncing}
+                    onSelect={() => trigger(GROUP, "syncNow")}>
+                    {isSyncing ? "Syncing..." : syncJustFinished ? "✓ Synced" : t(LOC.syncWorld, "Sync World")}
+                </Button>
+                <Button
+                    variant="flat"
+                    style={{
+                        ...styles.footerButton,
+                        backgroundColor: "#d33b5c",
+                        border: "1.5rem solid #e44d6e",
+                        color: "#ffffff",
+                    }}
                     onSelect={() => trigger(GROUP, "requestDisconnect")}>
                     {isHost
                         ? t(LOC.closeSession, "Close Session")
@@ -1495,8 +1684,8 @@ export interface PanelGeometry {
     size: { w: number; h: number } | null;
 }
 
-const MIN_W = 360;
-const MIN_H = 300;
+const MIN_W = 320;
+const MIN_H = 260;
 
 interface DragState {
     mode: "move" | "resize";

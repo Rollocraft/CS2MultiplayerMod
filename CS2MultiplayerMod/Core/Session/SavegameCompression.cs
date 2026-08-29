@@ -31,6 +31,13 @@ namespace CS2MultiplayerMod.Core.Session
                     {
                         deflate.Write(rawData, 0, rawData.Length);
                     }
+
+                    // If compression did not actually reduce size, return raw data
+                    if (output.Length >= rawData.Length)
+                    {
+                        return rawData;
+                    }
+
                     return output.ToArray();
                 }
             }
@@ -38,6 +45,22 @@ namespace CS2MultiplayerMod.Core.Session
             {
                 // Fallback to raw uncompressed data on any compression failure
                 return rawData;
+            }
+        }
+
+        public static void CompressStream(Stream source, Stream destination)
+        {
+            if (source == null || destination == null) return;
+            destination.Write(Magic, 0, 4);
+            long len = source.CanSeek ? source.Length : 0;
+            destination.WriteByte((byte)(len & 0xFF));
+            destination.WriteByte((byte)((len >> 8) & 0xFF));
+            destination.WriteByte((byte)((len >> 16) & 0xFF));
+            destination.WriteByte((byte)((len >> 24) & 0xFF));
+
+            using (var deflate = new DeflateStream(destination, CompressionLevel.Fastest, leaveOpen: true))
+            {
+                source.CopyTo(deflate);
             }
         }
 
@@ -62,10 +85,10 @@ namespace CS2MultiplayerMod.Core.Session
             try
             {
                 var result = new byte[uncompressedLength];
+                int totalRead = 0;
                 using (var input = new MemoryStream(data, 8, data.Length - 8, writable: false))
                 using (var deflate = new DeflateStream(input, CompressionMode.Decompress))
                 {
-                    int totalRead = 0;
                     while (totalRead < uncompressedLength)
                     {
                         int read = deflate.Read(result, totalRead, uncompressedLength - totalRead);
@@ -73,12 +96,28 @@ namespace CS2MultiplayerMod.Core.Session
                         totalRead += read;
                     }
                 }
+
+                if (totalRead != uncompressedLength)
+                {
+                    // Truncated or incomplete stream - discard to prevent feeding corrupt save package to game loader
+                    return data;
+                }
+
                 return result;
             }
             catch
             {
                 // If decompression fails, return raw data
                 return data;
+            }
+        }
+
+        public static void DecompressStream(Stream source, Stream destination)
+        {
+            if (source == null || destination == null) return;
+            using (var deflate = new DeflateStream(source, CompressionMode.Decompress, leaveOpen: true))
+            {
+                deflate.CopyTo(destination);
             }
         }
     }

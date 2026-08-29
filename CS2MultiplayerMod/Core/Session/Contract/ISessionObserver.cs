@@ -71,4 +71,7 @@ namespace CS2MultiplayerMod.Core.Session
         public virtual void OnResyncRequested(int playerId, ConnectionId connection) { }
         public virtual void OnError(string message) { }
     }
+
+    /// <summary>Alias base class for sync system observers.</summary>
+    public abstract class SessionObserverBase : SessionObserver { }
 }

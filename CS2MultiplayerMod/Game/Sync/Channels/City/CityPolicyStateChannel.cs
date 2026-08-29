@@ -106,6 +106,7 @@ namespace CS2MultiplayerMod.Game.Sync.Channels
             buffer.Clear();
             for (int i = 0; i < resolved.Count; i++) buffer.Add(resolved[i]);
             em.AddComponent<global::Game.Common.Updated>(city);
+            em.AddComponent<global::Game.Common.BatchesUpdated>(city);
         }
 
         private EntityQuery _policyPrefabs;
