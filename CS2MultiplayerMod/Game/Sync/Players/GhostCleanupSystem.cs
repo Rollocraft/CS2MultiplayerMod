@@ -2,7 +2,7 @@ using System;
 using Game;
 using Unity.Entities;
 
-namespace CS2MultiplayerMod.Game.Sync.Systems
+namespace CS2MultiplayerMod.Game.Sync.Players
 {
     /// <summary>
     /// Automatic cleanup system that sweeps and prunes unreferenced building and road
