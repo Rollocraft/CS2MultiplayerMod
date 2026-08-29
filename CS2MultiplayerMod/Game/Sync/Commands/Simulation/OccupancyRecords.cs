@@ -1,7 +1,6 @@
 using System;
 using System.Collections.Generic;
 using System.Text;
-using CS2MultiplayerMod.Core.Protocol;
 
 namespace CS2MultiplayerMod.Game.Sync.Commands
 {

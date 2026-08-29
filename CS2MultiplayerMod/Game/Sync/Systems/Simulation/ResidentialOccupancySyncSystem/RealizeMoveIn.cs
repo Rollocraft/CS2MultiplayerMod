@@ -4,7 +4,6 @@ using System.Diagnostics;
 using CS2MultiplayerMod.Core.Session;
 using CS2MultiplayerMod.Game.Diagnostics;
 using CS2MultiplayerMod.Game.Sync.Commands;
-using CS2MultiplayerMod.Game.Sync.Infrastructure;
 using Game.Agents;
 using Game.Buildings;
 using Game.Citizens;

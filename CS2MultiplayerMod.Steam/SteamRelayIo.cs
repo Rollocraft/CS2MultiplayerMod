@@ -3,8 +3,6 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Runtime.InteropServices;
 using System.Threading;
-using CS2MultiplayerMod.Core.Diagnostics;
-using CS2MultiplayerMod.Core.Networking.Tcp;
 using CS2MultiplayerMod.Core.Protocol;
 using Steamworks;
 

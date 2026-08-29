@@ -1,6 +1,4 @@
 using System;
-using CS2MultiplayerMod.Core.Protocol;
-using CS2MultiplayerMod.Core.Sync;
 
 namespace CS2MultiplayerMod.Game.Sync.Commands
 {

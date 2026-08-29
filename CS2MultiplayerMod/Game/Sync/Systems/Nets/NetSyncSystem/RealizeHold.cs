@@ -10,7 +10,6 @@ using Unity.Entities;
 using Unity.Jobs;
 using Unity.Mathematics;
 using CS2MultiplayerMod.Core.Protocol.Messages;
-using CS2MultiplayerMod.Core.Session;
 
 using CS2MultiplayerMod.Game.Sync.Infrastructure;
 using CS2MultiplayerMod.Game.Sync.Commands;
