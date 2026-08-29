@@ -167,8 +167,7 @@ namespace CS2MultiplayerMod.Game.Sync.Players
             if (now - _lastLogMs >= 30000)
             {
                 _lastLogMs = now;
-                int remote = 0;
-                foreach (var _ in service.RemotePlayers) remote++;
+                int remote = service.RemotePlayerCount;
                 Mod.Verbose("[MP] Cursors: sent " + _sent + " position(s)/30s; tracking " + remote + " remote player(s).");
                 _sent = 0;
             }

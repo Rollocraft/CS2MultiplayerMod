@@ -5,8 +5,8 @@ using Game.Prefabs;
 using Unity.Collections;
 using Unity.Entities;
 using CS2MultiplayerMod.Core.Protocol;
-
 using CS2MultiplayerMod.Game.Sync.Infrastructure;
+
 namespace CS2MultiplayerMod.Game.Sync.Channels
 {
     /// <summary>

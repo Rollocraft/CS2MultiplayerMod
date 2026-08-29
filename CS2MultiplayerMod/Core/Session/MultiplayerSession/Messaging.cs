@@ -220,12 +220,6 @@ namespace CS2MultiplayerMod.Core.Session
             // recreate the very drift this transaction is meant to repair.
             if (_worldSyncSuspended) return;
 
-            // If the peer is marked as a spectator, do not apply or relay simulation commands
-            if (Role == SessionRole.Host && peer != null && peer.IsSpectator)
-            {
-                return;
-            }
-
             // Only command ids the game layer registered are legitimate; anything else
             // is a peer probing the surface.
             if (_allowedCommandIds.Count > 0 && !_allowedCommandIds.Contains(command.CommandId))
@@ -244,19 +238,6 @@ namespace CS2MultiplayerMod.Core.Session
             {
                 RecordReplayableCommand(command);
                 BroadcastToAll(command, from); // relay to the other clients
-            }
-        }
-
-        public void SetPeerSpectator(int playerId, bool isSpectator)
-        {
-            if (Role != SessionRole.Host) return;
-            foreach (var peer in _peers.Values)
-            {
-                if (peer.PlayerId == playerId)
-                {
-                    peer.IsSpectator = isSpectator;
-                    break;
-                }
             }
         }
 

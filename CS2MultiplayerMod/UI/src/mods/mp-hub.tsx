@@ -140,7 +140,6 @@ interface PlayerEntry {
     name: string;
     isHost: boolean;
     isYou?: boolean;
-    isSpectator?: boolean;
     latency?: number;
 }
 
@@ -585,27 +584,12 @@ const styles: Record<string, CSSProperties> = {
         fontSize: "10.5rem",
         textTransform: "uppercase",
     },
-    spectatorBadge: {
-        marginLeft: "6rem",
-        color: "#fbbf24",
-        fontSize: "10.5rem",
-        textTransform: "uppercase",
-        fontWeight: "bold",
-    },
     playerActionBtn: {
         marginLeft: "4rem",
         padding: "2rem 6rem",
         fontSize: "11rem",
         backgroundColor: "rgba(56, 189, 248, 0.15)",
         color: "#38bdf8",
-        borderRadius: "2rem",
-    },
-    playerRoleBtn: {
-        marginLeft: "4rem",
-        padding: "2rem 6rem",
-        fontSize: "11rem",
-        backgroundColor: "rgba(255, 255, 255, 0.08)",
-        color: "#e2e8f0",
         borderRadius: "2rem",
     },
     kickButton: {
@@ -1077,9 +1061,6 @@ const HostPlayerList = ({ players }: { players: PlayerEntry[] }) => {
                             {player.isHost ? (
                                 <span style={styles.playerBadge}>{t(LOC.host, "Host")}</span>
                             ) : null}
-                            {player.isSpectator ? (
-                                <span style={styles.spectatorBadge}>Spectator</span>
-                            ) : null}
                             {player.isYou ? (
                                 <span style={styles.playerBadge}>{t(LOC.you, "You")}</span>
                             ) : null}
@@ -1098,14 +1079,6 @@ const HostPlayerList = ({ players }: { players: PlayerEntry[] }) => {
                                         Follow
                                     </Button>
                                 </>
-                            ) : null}
-                            {isHost && !player.isHost ? (
-                                <Button
-                                    variant="flat"
-                                    style={styles.playerRoleBtn}
-                                    onSelect={() => trigger(GROUP, "setPlayerRole", player.id, !player.isSpectator)}>
-                                    {player.isSpectator ? "Play" : "Spectate"}
-                                </Button>
                             ) : null}
                         </div>
                     );
@@ -1318,7 +1291,7 @@ const renderColoredChatText = (rawText: string) => {
     // 2. Command listing line e.g. "- /ping [msg] - Ping map location..."
     if (text.startsWith("- /") || text.startsWith("/ping") || text.startsWith("/goto") || text.startsWith("/follow") ||
         text.startsWith("/unfollow") || text.startsWith("/sync") || text.startsWith("/clear") ||
-        text.startsWith("/spectator") || text.startsWith("/lock") || text.startsWith("/unlock") || text.startsWith("/motd") ||
+        text.startsWith("/lock") || text.startsWith("/unlock") || text.startsWith("/motd") ||
         text.startsWith("/banlist") || text.startsWith("/unban")) {
         const clean = text.startsWith("- ") ? text.slice(2) : text;
         const firstDash = clean.indexOf(" - ");
@@ -1431,7 +1404,6 @@ const SessionView = ({ entries, players }: { entries: ChatEntry[]; players: Play
         "/sync",
         "/clear",
         "/help",
-        "/spectator",
         "/lock",
         "/unlock",
         "/motd",
@@ -1484,28 +1456,9 @@ const SessionView = ({ entries, players }: { entries: ChatEntry[]; players: Play
     };
 
     const activityPercent = isHost ? worldSendPercent : mapTransferPercent;
-    const isLocalSpectator = players.some((p) => p.isYou && p.isSpectator);
 
     const topBlock = (
         <>
-            {isLocalSpectator ? (
-                <div style={{
-                    backgroundColor: "rgba(245, 158, 11, 0.18)",
-                    border: "1rem solid rgba(245, 158, 11, 0.5)",
-                    borderRadius: "4rem",
-                    padding: "8rem 12rem",
-                    marginBottom: "10rem",
-                    display: "flex",
-                    alignItems: "center",
-                    color: "#fbbf24",
-                    fontSize: "13rem",
-                    fontWeight: "bold",
-                }}>
-                    <span style={{ marginRight: "8rem", fontSize: "16rem" }}>{"👁️"}</span>
-                    <span>{"SPECTATOR MODE — View-only mode active"}</span>
-                </div>
-            ) : null}
-
             <HostPlayerList players={players} />
 
             {isSyncing ? (

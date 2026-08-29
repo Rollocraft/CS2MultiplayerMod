@@ -28,7 +28,6 @@ namespace CS2MultiplayerMod.Game
     {
         public const string TransientName = "_MP_JoinSession";
         private const string SaveExtension = ".cok";
-        private static byte[] _lastStagedSaveBytes;
 
         /// <summary>
         /// Write the received world to the fixed transient path and kick off loading it.
@@ -53,13 +52,10 @@ namespace CS2MultiplayerMod.Game
                 // the fresh one when we look it up below.
                 DeleteTransient(log);
 
-                byte[] decompressed = Core.Session.SavegameCompression.DecompressIfNeeded(saveBytes);
-                byte[] finalBytes = Core.Session.DeltaSnapshotCodec.ApplyDelta(_lastStagedSaveBytes, decompressed);
-                _lastStagedSaveBytes = finalBytes;
-
+                byte[] finalBytes = Core.Session.SavegameCompression.DecompressIfNeeded(saveBytes);
                 if (finalBytes != saveBytes)
                 {
-                    log.Info("[MP] Decompressed/patched host world from " + (saveBytes.Length / 1024) +
+                    log.Info("[MP] Decompressed host world from " + (saveBytes.Length / 1024) +
                              " KB to " + (finalBytes.Length / 1024) + " KB.");
                 }
 
@@ -170,8 +166,6 @@ namespace CS2MultiplayerMod.Game
         /// <summary>Remove the transient world so the joining player keeps no local copy.</summary>
         public static void DeleteTransient(IModLogger log)
         {
-            _lastStagedSaveBytes = null;
-
             // Remove the index registration(s) first: deleting the asset drops the .cok
             // (and its .cid guid sidecar) from disk together with the entry, so the next
             // join re-registers from a clean slate.

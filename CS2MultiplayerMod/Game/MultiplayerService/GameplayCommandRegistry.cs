@@ -29,14 +29,13 @@ namespace CS2MultiplayerMod.Game
             SimulationSpeedCommand.Id, CityLoanCommand.Id,
             MilestoneCommand.Id, UtilityGridCommand.Id,
             PollutionCommand.Id, WeatherControlCommand.Id,
-            GhostPlacementCommand.Id, DistrictClaimCommand.Id,
-            ChecksumCommand.Id, TrafficLightCommand.Id,
-            TransitLineDetailCommand.Id, BuildingToggleCommand.Id,
-            ParkFeeCommand.Id, ServiceDistrictCommand.Id,
-            TransitColorCommand.Id, ChirperCommand.Id,
-            EmergencyShelterCommand.Id, UtilityTradeCommand.Id,
-            ServiceFleetCommand.Id, TransitFareCommand.Id,
-            DaylightCommand.Id,
+            DistrictClaimCommand.Id, ChecksumCommand.Id,
+            TrafficLightCommand.Id, TransitLineDetailCommand.Id,
+            BuildingToggleCommand.Id, ParkFeeCommand.Id,
+            ServiceDistrictCommand.Id, TransitColorCommand.Id,
+            ChirperCommand.Id, EmergencyShelterCommand.Id,
+            UtilityTradeCommand.Id, ServiceFleetCommand.Id,
+            TransitFareCommand.Id, DaylightCommand.Id,
         };
 
         internal static void Register(MultiplayerSession session)
@@ -90,7 +89,6 @@ namespace CS2MultiplayerMod.Game
                 case UtilityGridCommand.Id: return "utility-grid";
                 case PollutionCommand.Id: return "pollution-state";
                 case WeatherControlCommand.Id: return "weather-climate";
-                case GhostPlacementCommand.Id: return "ghost-preview";
                 case DistrictClaimCommand.Id: return "district-claim";
                 case ChecksumCommand.Id: return "simulation-checksum";
                 case TrafficLightCommand.Id: return "traffic-control";

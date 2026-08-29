@@ -73,7 +73,6 @@ namespace CS2MultiplayerMod.Game
                 if (_session.Role == SessionRole.Host)
                 {
                     AppendChatEntry(null, "--- Host Commands ---");
-                    AppendChatEntry(null, "- /spectator <player> [on/off] - Toggle spectator mode for player");
                     AppendChatEntry(null, "- /lock - Lock lobby from new joins");
                     AppendChatEntry(null, "- /unlock - Unlock lobby for new joins");
                     AppendChatEntry(null, "- /motd [msg] - Set/clear message of the day");
@@ -150,42 +149,6 @@ namespace CS2MultiplayerMod.Game
             {
                 Sync.Players.PlayerCursorSyncSystem.FollowPlayerId = -1;
                 AppendChatEntry(null, "Stopped following.");
-                return;
-            }
-
-            if (text.StartsWith("/spectator ", StringComparison.OrdinalIgnoreCase))
-            {
-                if (_session.Role != SessionRole.Host)
-                {
-                    AppendChatEntry(null, "Only the host can change player roles.");
-                    return;
-                }
-                string args = text.Substring(11).Trim();
-                bool isSpectator = true;
-                string targetName = args;
-
-                if (args.EndsWith(" off", StringComparison.OrdinalIgnoreCase) || args.EndsWith(" false", StringComparison.OrdinalIgnoreCase))
-                {
-                    isSpectator = false;
-                    int lastSpace = args.LastIndexOf(' ');
-                    targetName = lastSpace > 0 ? args.Substring(0, lastSpace).Trim() : args;
-                }
-                else if (args.EndsWith(" on", StringComparison.OrdinalIgnoreCase) || args.EndsWith(" true", StringComparison.OrdinalIgnoreCase))
-                {
-                    isSpectator = true;
-                    int lastSpace = args.LastIndexOf(' ');
-                    targetName = lastSpace > 0 ? args.Substring(0, lastSpace).Trim() : args;
-                }
-
-                RemotePlayer target = FindRemotePlayerByName(targetName);
-                if (target != null)
-                {
-                    SetPlayerRoleFromUi(target.PlayerId, isSpectator: isSpectator);
-                }
-                else
-                {
-                    AppendChatEntry(null, "Player '" + targetName + "' not found.");
-                }
                 return;
             }
 
@@ -280,24 +243,6 @@ namespace CS2MultiplayerMod.Game
                 {
                     chirperSys.PostChirp("Mayor", chirpText);
                     AppendChatEntry(null, "Chirped: \"" + chirpText + "\"");
-                }
-                return;
-            }
-
-            if (text.StartsWith("/audit", StringComparison.OrdinalIgnoreCase))
-            {
-                var recent = AuditLog.GetRecent(5);
-                if (recent.Count == 0)
-                {
-                    AppendChatEntry(null, "Municipal audit log is empty.");
-                }
-                else
-                {
-                    AppendChatEntry(null, "Recent municipal actions:");
-                    foreach (var e in recent)
-                    {
-                        AppendChatEntry(null, $"  • [{e.PlayerName}] {e.Action}: {e.Details}");
-                    }
                 }
                 return;
             }

@@ -40,7 +40,7 @@ namespace CS2MultiplayerMod.Game.Sync.Players
         private const float BeamCameraClearance = 80f;
 
         // Distinct, readable colours cycled by player id so each partner is recognisable.
-        public static readonly Color[] Palette =
+        private static readonly Color[] Palette =
         {
             new Color(0.36f, 0.78f, 1.00f), // blue
             new Color(1.00f, 0.69f, 0.26f), // orange

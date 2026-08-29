@@ -152,8 +152,7 @@ namespace CS2MultiplayerMod.Game
                 if (age > oldestPeerAge) oldestPeerAge = age;
             }
 
-            int remotePlayers = 0;
-            foreach (RemotePlayer ignored in service.RemotePlayers) remotePlayers++;
+            int remotePlayers = service.RemotePlayerCount;
 
             bool gameLoading = false;
             try { gameLoading = GameManager.instance != null && GameManager.instance.isGameLoading; }

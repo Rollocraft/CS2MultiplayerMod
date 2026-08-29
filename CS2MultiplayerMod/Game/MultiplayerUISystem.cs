@@ -269,8 +269,6 @@ namespace CS2MultiplayerMod.Game
                 playerId => { if (Mod.Service != null) Mod.Service.KickPlayerFromUi(playerId); }));
             AddBinding(new TriggerBinding<int>(Group, "banPlayer",
                 playerId => { if (Mod.Service != null) Mod.Service.BanPlayerFromUi(playerId); }));
-            AddBinding(new TriggerBinding<int, bool>(Group, "setPlayerSpectator",
-                (playerId, isSpectator) => { if (Mod.Service != null) Mod.Service.SetPlayerRoleFromUi(playerId, isSpectator); }));
             AddBinding(new TriggerBinding<int>(Group, "teleportToPlayer",
                 playerId => { if (Mod.Service != null) Mod.Service.TeleportToPlayerFromUi(playerId); }));
             AddBinding(new TriggerBinding<int>(Group, "followPlayer",

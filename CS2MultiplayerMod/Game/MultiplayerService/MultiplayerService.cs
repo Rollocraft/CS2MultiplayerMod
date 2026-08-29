@@ -89,6 +89,9 @@ namespace CS2MultiplayerMod.Game
         /// <summary>Latest known positions of the other players, for rendering their cursors.</summary>
         public IEnumerable<RemotePlayer> RemotePlayers => _remotePlayers.Values;
 
+        /// <summary>Number of remote players currently tracked without enumerator allocations.</summary>
+        public int RemotePlayerCount => _remotePlayers.Count;
+
         public RemotePlayer FindRemotePlayer(int playerId)
         {
             RemotePlayer player;
@@ -345,7 +348,7 @@ namespace CS2MultiplayerMod.Game
                     var sb = new System.Text.StringBuilder((peers.Count + 1) * 80 + 2);
                     sb.Append("[{\"id\":").Append(_session.LocalPlayerId).Append(",\"name\":");
                     AppendJsonString(sb, _session.LocalPlayerName);
-                    sb.Append(",\"isHost\":true,\"isYou\":true,\"isSpectator\":false,\"latency\":0}]");
+                    sb.Append(",\"isHost\":true,\"isYou\":true,\"latency\":0}]");
 
                     if (peers.Count > 0)
                     {
@@ -356,8 +359,7 @@ namespace CS2MultiplayerMod.Game
                             int lat = peer.LatencyMs >= 0 ? peer.LatencyMs : 0;
                             sb.Append(",{\"id\":").Append(peer.PlayerId).Append(",\"name\":");
                             AppendJsonString(sb, peer.Name);
-                            sb.Append(",\"isHost\":false,\"isYou\":false,\"isSpectator\":")
-                              .Append(peer.IsSpectator ? "true" : "false")
+                            sb.Append(",\"isHost\":false,\"isYou\":false")
                               .Append(",\"latency\":").Append(lat)
                               .Append('}');
                         }
@@ -373,7 +375,7 @@ namespace CS2MultiplayerMod.Game
                     var sb = new System.Text.StringBuilder(128);
                     sb.Append("[{\"id\":").Append(_session.LocalPlayerId).Append(",\"name\":");
                     AppendJsonString(sb, _session.LocalPlayerName);
-                    sb.Append(",\"isHost\":false,\"isYou\":true,\"isSpectator\":").Append(IsLocalSpectator ? "true" : "false")
+                    sb.Append(",\"isHost\":false,\"isYou\":true")
                       .Append(",\"latency\":").Append(clientLatency).Append("}");
 
                     foreach (var player in _remotePlayers.Values)
@@ -382,30 +384,13 @@ namespace CS2MultiplayerMod.Game
                         sb.Append(",{\"id\":").Append(player.PlayerId).Append(",\"name\":");
                         AppendJsonString(sb, player.Name ?? ("Player #" + player.PlayerId));
                         sb.Append(",\"isHost\":").Append(player.PlayerId == 0 ? "true" : "false");
-                        sb.Append(",\"isYou\":false,\"isSpectator\":").Append(player.IsSpectator ? "true" : "false")
+                        sb.Append(",\"isYou\":false")
                           .Append(",\"latency\":").Append(pLat).Append("}");
                     }
                     sb.Append(']');
                     _playerListJson = sb.ToString();
                 }
             }
-        }
-
-        public bool IsLocalSpectator { get; set; } = false;
-
-        public void SetPlayerRoleFromUi(int playerId, bool isSpectator)
-        {
-            if (_session.Role != SessionRole.Host) return;
-            _session.SetPeerSpectator(playerId, isSpectator);
-            RefreshPlayerListJson();
-            _session.SendChat("/roleset " + playerId + " " + (isSpectator ? "1" : "0"));
-            RemotePlayer target = FindRemotePlayer(playerId);
-            string name = target != null && !string.IsNullOrEmpty(target.Name) ? target.Name : ("Player #" + playerId);
-            string roleMsg = isSpectator
-                ? name + " is now a Spectator (view-only)."
-                : name + " is now a Player (active).";
-            _session.SendChat(roleMsg);
-            AppendChatEntry(null, roleMsg);
         }
 
         public void TeleportToPlayerFromUi(int playerId)
@@ -589,25 +574,6 @@ namespace CS2MultiplayerMod.Game
             public override void OnChatReceived(string sender, string text)
             {
                 _log.Info("[MP] " + (sender ?? "system") + ": " + text);
-                if (text != null && text.StartsWith("/roleset ", System.StringComparison.OrdinalIgnoreCase))
-                {
-                    string[] parts = text.Substring(9).Trim().Split(new[] { ' ' }, 2, System.StringSplitOptions.RemoveEmptyEntries);
-                    if (parts.Length == 2 && int.TryParse(parts[0], out int targetId) && int.TryParse(parts[1], out int roleVal))
-                    {
-                        bool isSpec = roleVal == 1;
-                        if (targetId == _service.LocalPlayerId)
-                        {
-                            _service.IsLocalSpectator = isSpec;
-                        }
-                        RemotePlayer rp = _service.FindRemotePlayer(targetId);
-                        if (rp != null)
-                        {
-                            rp.IsSpectator = isSpec;
-                        }
-                        _service.RefreshPlayerListJson();
-                        return;
-                    }
-                }
                 if (text != null && text.StartsWith("/ping ", System.StringComparison.OrdinalIgnoreCase))
                 {
                     string[] parts = text.Substring(6).Trim().Split(new[] { ' ' }, 5, System.StringSplitOptions.RemoveEmptyEntries);
@@ -659,7 +625,6 @@ namespace CS2MultiplayerMod.Game
     {
         public int PlayerId;
         public string Name;
-        public bool IsSpectator;
         // Camera focus on the ground.
         public float X;
         public float Y;

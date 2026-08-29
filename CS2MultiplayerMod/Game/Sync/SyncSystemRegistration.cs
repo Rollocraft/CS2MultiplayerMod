@@ -43,8 +43,6 @@ namespace CS2MultiplayerMod.Game.Sync
             updateSystem.UpdateAt<RemotePlayerMarkerSystem>(SystemUpdatePhase.Rendering);
             updateSystem.UpdateAt<PlayerCursorRenderSystem>(SystemUpdatePhase.Rendering);
             updateSystem.UpdateAt<MapPingSystem>(SystemUpdatePhase.Rendering);
-            updateSystem.UpdateAt<GhostPreviewSyncSystem>(SystemUpdatePhase.Rendering);
-            updateSystem.UpdateAt<PlayerSpectatorSystem>(SystemUpdatePhase.Rendering);
         }
 
         private static void RegisterCityAndEconomySystems(UpdateSystem updateSystem)
@@ -113,7 +111,6 @@ namespace CS2MultiplayerMod.Game.Sync
             updateSystem.UpdateBefore<WorldRepairSystem>(SystemUpdatePhase.ToolUpdate);
             updateSystem.UpdateBefore<TerrainReadbackBarrierSystem>(SystemUpdatePhase.ToolUpdate);
             updateSystem.UpdateAt<SyncRealizeSystem>(SystemUpdatePhase.ToolUpdate);
-            updateSystem.UpdateAt<GhostCleanupSystem>(SystemUpdatePhase.ToolUpdate);
 
             updateSystem.UpdateBefore<ObjectToolApplyCaptureSystem, global::Game.Tools.ToolOutputSystem>(
                 SystemUpdatePhase.ToolUpdate);
