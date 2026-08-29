@@ -129,6 +129,7 @@ namespace CS2MultiplayerMod.Game
             int pendingPeers = 0;
             int latencyMin = int.MaxValue;
             int latencyMax = -1;
+            int jitterMax = 0;
             long latencyTotal = 0;
             int latencySamples = 0;
             long oldestPeerAge = 0;
@@ -146,6 +147,7 @@ namespace CS2MultiplayerMod.Game
                     if (peer.LatencyMs < latencyMin) latencyMin = peer.LatencyMs;
                     if (peer.LatencyMs > latencyMax) latencyMax = peer.LatencyMs;
                     latencyTotal += peer.LatencyMs;
+                    if (peer.JitterMs > jitterMax) jitterMax = peer.JitterMs;
                     latencySamples++;
                 }
                 long age = now - peer.LastSeenUnixMs;
@@ -159,9 +161,13 @@ namespace CS2MultiplayerMod.Game
             try { gameLoading = GameManager.instance != null && GameManager.instance.isGameLoading; }
             catch { }
 
+            // min/avg/max of the smoothed round-trip, then the worst peer's variation. A link
+            // reads as fine on the average right up until the variation is what is hurting it,
+            // and that is the number a stuttering session is actually about.
             string latency = latencySamples == 0
                 ? "?"
-                : latencyMin + "/" + (latencyTotal / latencySamples) + "/" + latencyMax;
+                : latencyMin + "/" + (latencyTotal / latencySamples) + "/" + latencyMax +
+                  " +/-" + jitterMax;
             string incomingChannel = string.IsNullOrEmpty(session.IncomingBlobChannel)
                 ? "none"
                 : session.IncomingBlobChannel;
