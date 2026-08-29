@@ -1,4 +1,5 @@
 using System;
+using System.Runtime.InteropServices;
 using System.Text;
 
 namespace CS2MultiplayerMod.Core.Protocol
@@ -59,12 +60,33 @@ namespace CS2MultiplayerMod.Core.Protocol
             }
         }
 
+        /// <summary>
+        /// Reinterprets the float's bits through an overlaid int and writes them in the same
+        /// explicit little-endian order as <see cref="WriteInt"/>.
+        ///
+        /// The previous <c>BitConverter.GetBytes</c> allocated a four-byte array per float and
+        /// relied on the runtime's own endianness matching the manual writes above. Floats are the
+        /// densest thing on this wire - a terrain brush or a road curve is little else - so that
+        /// allocation was the protocol's hottest, and the assumption was the one thing here not
+        /// written out. Bit-for-bit identical output on a little-endian host, so the wire format
+        /// is unchanged.
+        /// </summary>
         public void WriteFloat(float value)
         {
-            // BitConverter is little-endian on every supported (x86/ARM) target, matching
-            // the manual little-endian integer writes above.
-            byte[] bytes = BitConverter.GetBytes(value);
-            WriteBytes(bytes, 0, 4);
+            EnsureCapacity(4);
+            int bits = new FloatBits { Float = value }.Int;
+            _buffer[_length++] = (byte)(bits & 0xFF);
+            _buffer[_length++] = (byte)((bits >> 8) & 0xFF);
+            _buffer[_length++] = (byte)((bits >> 16) & 0xFF);
+            _buffer[_length++] = (byte)((bits >> 24) & 0xFF);
+        }
+
+        /// <summary>IEEE-754 reinterpretation without allocating. Shared shape with the reader.</summary>
+        [StructLayout(LayoutKind.Explicit)]
+        private struct FloatBits
+        {
+            [FieldOffset(0)] public float Float;
+            [FieldOffset(0)] public int Int;
         }
 
         public void WriteString(string value)
