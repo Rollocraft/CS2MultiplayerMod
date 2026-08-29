@@ -25,6 +25,7 @@ namespace CS2MultiplayerMod.Game
             VisualCustomizationCommand.Id, ColorPaletteCommand.Id,
             DisasterEventCommand.Id, EntityNameCommand.Id,
             GrowableLifecycleCommand.Id,
+            MapPingCommand.Id,
         };
 
         internal static void Register(MultiplayerSession session)
@@ -64,6 +65,7 @@ namespace CS2MultiplayerMod.Game
                 case DisasterEventCommand.Id: return "disaster-event";
                 case EntityNameCommand.Id: return "entity-name";
                 case GrowableLifecycleCommand.Id: return "growable-lifecycle";
+                case MapPingCommand.Id: return "map-ping";
                 default: return "unknown";
             }
         }

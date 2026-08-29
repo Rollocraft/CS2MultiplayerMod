@@ -4,7 +4,13 @@ namespace CS2MultiplayerMod.Core.Protocol
     {
         /// <summary>
         /// Wire-format version. Bump when message layout changes to refuse handshake on mismatch.
-        /// Current v50 adds a reason string to ResyncRequest. It is log text only - nothing
+        /// Current v51 adds command id 29, a map ping: a transient "look here" beacon with an
+        /// optional note. It mutates nothing, so it is never replayed, snapshotted or resynced -
+        /// a ping that does not arrive is simply a ping nobody saw. It is a command rather than a
+        /// chat line so that the sender's identity comes from the message envelope the session
+        /// already authenticates; encoded into chat, anyone could drop a marker signed with
+        /// another player's name.
+        /// v50 adds a reason string to ResyncRequest. It is log text only - nothing
         /// branches on it - but without it the host's log cannot tell a player pressing the sync
         /// button apart from a client whose pipeline gave up on an edit, which is the single most
         /// useful distinction when reading a session that kept reloading its world.
@@ -119,7 +125,7 @@ namespace CS2MultiplayerMod.Core.Protocol
         /// islands) reattach on the receiver.
         /// See <see cref="Messages.HandshakeRequest"/> and version notes in doc/internals.
         /// </summary>
-        public const int ProtocolVersion = 50;
+        public const int ProtocolVersion = 51;
 
         /// <summary>
         /// Hard cap on a single payload, guarding against corrupt length prefixes.

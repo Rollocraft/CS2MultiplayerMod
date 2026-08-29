@@ -16,7 +16,7 @@ namespace CS2MultiplayerMod.Game.Sync.Players
     /// This system also owns every camera move the mod makes, because it holds the only
     /// reference to <see cref="CameraUpdateSystem"/>. The chat commands do not touch the
     /// camera themselves; they record an intent on <see cref="MultiplayerService"/>
-    /// (<see cref="MultiplayerService.CameraJumpTarget"/> and
+    /// (<see cref="MultiplayerService.RequestCameraJump"/> and
     /// <see cref="MultiplayerService.FollowPlayerId"/>) and this system consumes it on the
     /// next frame, on the thread that may safely do so.
     /// </summary>
@@ -131,6 +131,10 @@ namespace CS2MultiplayerMod.Game.Sync.Players
                 _lastSentEye = eye;
                 _lastSentYaw = yaw;
                 _everSent = true;
+
+                // Chat commands need a point on the map and hold no camera reference; this is
+                // the only place that has one.
+                service.LocalCameraFocus = focus;
 
                 session.SendPlayerState(focus.x, focus.y, focus.z, eye.x, eye.y, eye.z, yaw);
                 _sent++;
