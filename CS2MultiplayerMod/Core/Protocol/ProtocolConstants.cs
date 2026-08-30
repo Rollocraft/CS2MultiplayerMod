@@ -4,7 +4,12 @@ namespace CS2MultiplayerMod.Core.Protocol
     {
         /// <summary>
         /// Wire-format version. Bump when message layout changes to refuse handshake on mismatch.
-        /// Current v51 adds command id 29, a map ping: a transient "look here" beacon with an
+        /// Current v52 adds command id 30, a transport line's ticket price. The price lives on the
+        /// line's runtime TransportLine component rather than in its Policy buffer, so the policy
+        /// scan never saw it and no state channel carried it: geometry, stops, colour and name all
+        /// replicated while the two cities disagreed about fare revenue, which compounds every
+        /// transport tick and shows up as budget drift rather than as anything on the map.
+        /// v51 adds command id 29, a map ping: a transient "look here" beacon with an
         /// optional note. It mutates nothing, so it is never replayed, snapshotted or resynced -
         /// a ping that does not arrive is simply a ping nobody saw. It is a command rather than a
         /// chat line so that the sender's identity comes from the message envelope the session
@@ -125,7 +130,7 @@ namespace CS2MultiplayerMod.Core.Protocol
         /// islands) reattach on the receiver.
         /// See <see cref="Messages.HandshakeRequest"/> and version notes in doc/internals.
         /// </summary>
-        public const int ProtocolVersion = 51;
+        public const int ProtocolVersion = 52;
 
         /// <summary>
         /// Hard cap on a single payload, guarding against corrupt length prefixes.

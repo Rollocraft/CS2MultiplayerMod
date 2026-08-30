@@ -219,6 +219,10 @@ namespace CS2MultiplayerMod
             updateSystem.UpdateAt<Game.Sync.Systems.NetUpgradeSyncSystem>(SystemUpdatePhase.ModificationEnd);
             updateSystem.UpdateAt<Game.Sync.Systems.AreaSyncSystem>(SystemUpdatePhase.ModificationEnd);
             updateSystem.UpdateAt<Game.Sync.Systems.RouteSyncSystem>(SystemUpdatePhase.ModificationEnd);
+            // UIUpdate, for the same reason as the policy scan: fares are dragged in a panel that
+            // works while the game is paused, and a GameSimulation-phase scan stops ticking at
+            // speed 0 - so it would neither see a change made while paused nor apply one.
+            updateSystem.UpdateAt<Game.Sync.Systems.TransitFareSyncSystem>(SystemUpdatePhase.UIUpdate);
             updateSystem.UpdateAt<Game.Sync.Systems.TilePurchaseSyncSystem>(SystemUpdatePhase.ModificationEnd);
             // ModificationEnd, after the game's event initialization at Modification2: that pass is
             // what turns a bare disaster event into a placed one (position, radius, duration), and
