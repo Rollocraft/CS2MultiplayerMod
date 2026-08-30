@@ -3,7 +3,9 @@ using Game.Prefabs;
 using Unity.Collections;
 using Unity.Entities;
 using Unity.Mathematics;
+using CS2MultiplayerMod.Core.Diagnostics;
 using CS2MultiplayerMod.Core.Session;
+using CS2MultiplayerMod.Game.Diagnostics;
 using CS2MultiplayerMod.Game.Sync.Commands;
 
 namespace CS2MultiplayerMod.Game.Sync.Systems
@@ -115,8 +117,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 Adjustment = adjustment,
             };
             session.SendCommand(0, EntityPolicyCommand.Id, command.Encode());
-            Mod.Verbose("[MP] PolicySync captured '" + policyName + "' (" + (active ? "on" : "off") +
-                         ", " + adjustment + ") on " + KindName(kind) + " '" + targetName + "'.");
+            SyncLog.Detail(LogTopic.City, "PolicySync captured '" + policyName + "' (" +
+                (active ? "on" : "off") + ", " + adjustment + ") on " + KindName(kind) + " '" +
+                targetName + "'.");
         }
 
     }

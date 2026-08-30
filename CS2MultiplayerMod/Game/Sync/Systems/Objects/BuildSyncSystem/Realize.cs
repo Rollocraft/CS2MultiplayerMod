@@ -7,8 +7,10 @@ using Game.Tools;
 using Unity.Collections;
 using Unity.Entities;
 using Unity.Mathematics;
+using CS2MultiplayerMod.Core.Diagnostics;
 using CS2MultiplayerMod.Core.Protocol.Messages;
 using CS2MultiplayerMod.Core.Session;
+using CS2MultiplayerMod.Game.Diagnostics;
 using CS2MultiplayerMod.Game.Sync.Infrastructure;
 using CS2MultiplayerMod.Game.Sync.Commands;
 
@@ -102,7 +104,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     int held = _incoming.Count + _nativeObjectReplayPrefix.Count;
                     if (held > 0) note.Append(" held=").Append(held);
                     AppendRealizedNames(note);
-                    Diagnostics.FlightRecorder.Note(note.ToString());
+                    SyncLog.Trace(LogTopic.Buildings, note.ToString());
                 }
             }
             finally
@@ -128,8 +130,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 if (message.CommandId == ObjectToolOperationCommand.Id ||
                     message.CommandId == AssetStampCommand.Id)
                 {
-                    Diagnostics.FlightRecorder.Note("object command received origin=" +
-                                                      message.OriginPlayerId);
+                    SyncLog.Trace(LogTopic.Buildings, "object command received origin=" +
+                        message.OriginPlayerId);
                     NativeObjectResult result = TryRealizeRemoteObjectMessage(message, now);
                     if (result == NativeObjectResult.Retry)
                     {
@@ -142,15 +144,16 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
                 ObjectPlacementCommand command;
                 try { command = ObjectPlacementCommand.Decode(message.Body); }
-                catch (System.Exception ex) { Mod.log.Warn("[MP] BuildSync: dropping malformed command: " + ex.Message); continue; }
+                catch (System.Exception ex) { SyncLog.Warn(LogTopic.Buildings, "BuildSync: dropping malformed command: " + ex.Message); continue; }
 
                 Entity prefab;
                 if (!_prefabIndex.TryResolve(command.PrefabName,
                         candidate => EntityManager.HasComponent<ObjectData>(candidate),
                         out prefab))
                 {
-                    Mod.log.Warn("[MP] BuildSync realize: unknown prefab '" + command.PrefabName +
-                                 "' from player " + message.OriginPlayerId + "; skipping.");
+                    SyncLog.Warn(LogTopic.Buildings, "BuildSync realize: unknown prefab '" +
+                        command.PrefabName + "' from player " + message.OriginPlayerId +
+                        "; skipping.");
                     continue;
                 }
 
@@ -167,9 +170,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     // A reduced command can't represent a building's owned graph; the native
                     // object-tool path owns those. This should not be emitted by v38 senders; if it
                     // arrives, recover rather than silently accepting a missing building.
-                    Mod.log.Warn("[MP] BuildSync realize: reduced placement for spatial object '" +
-                                 command.PrefabName +
-                                 "' was rejected; requesting world recovery.");
+                    SyncLog.Warn(LogTopic.Buildings,
+                        "BuildSync realize: reduced placement for spatial object '" +
+                        command.PrefabName + "' was rejected; requesting world recovery.");
                     SyncInbox.RequestResync(CS2MultiplayerMod.Game.Diagnostics.ResyncReport
                         .Create("reduced spatial object placement rejected", "object",
                             CS2MultiplayerMod.Game.Diagnostics.ResyncEvidence.Contradiction)
@@ -185,10 +188,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     if (_attachRetry.Count >= MaxPendingAttachments)
                     {
                         _attachRetry.Clear();
-                        Mod.log.Warn("[MP] BuildSync: attachment retry queue overflowed; dropping the " +
-                                     "incomplete backlog and requesting world recovery.");
-                        Diagnostics.FlightRecorder.Note(
-                            "attachment retry queue overflow; recovery requested");
+                        SyncLog.Warn(LogTopic.Buildings,
+                            "BuildSync: attachment retry queue overflowed; dropping the " +
+                            "incomplete backlog and requesting world recovery.");
                         SyncInbox.RequestResync(CS2MultiplayerMod.Game.Diagnostics.ResyncReport
                             .Create("object attachment retry queue overflow", "object",
                                 CS2MultiplayerMod.Game.Diagnostics.ResyncEvidence.StreamLoss)
@@ -233,11 +235,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     // The parent road never reached us. The prop cannot safely be created without
                     // it, but silently dropping it leaves known divergence.
                     _attachRetry.RemoveAt(i);
-                    Mod.log.Warn("[MP] BuildSync realize: no local road for '" + pending.command.PrefabName +
-                                 "' after " + (AttachRetryWindowMs / 1000) +
-                                 " s; requesting world recovery.");
-                    Diagnostics.FlightRecorder.Note(
-                        "attachment target expired; recovery requested");
+                    SyncLog.Warn(LogTopic.Buildings, "BuildSync realize: no local road for '" +
+                        pending.command.PrefabName + "' after " + (AttachRetryWindowMs / 1000) +
+                        " s; requesting world recovery.");
                     SyncInbox.RequestResync(CS2MultiplayerMod.Game.Diagnostics.ResyncReport
                         .Create("object attachment target did not resolve", "object",
                             CS2MultiplayerMod.Game.Diagnostics.ResyncEvidence.MissingTarget)
@@ -275,15 +275,14 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 _rzFrameSpawned++;
                 _rzRealizedThisFrame.Add((prefab, position, command.RandomSeed, rotation,
                     command.AttachKind));
-                Mod.Verbose("[MP] BuildSync realize: spawned '" + command.PrefabName + "' from player " +
-                            originPlayerId + " at (" + position.x.ToString("F1") + "," +
-                            position.z.ToString("F1") + ").");
+                SyncLog.Detail(LogTopic.Buildings, "BuildSync realize: spawned '" +
+                    command.PrefabName + "' from player " + originPlayerId + " at (" +
+                    position.x.ToString("F1") + "," + position.z.ToString("F1") + ").");
             }
             catch (System.Exception ex)
             {
-                Mod.log.Error("[MP] BuildSync realize FAILED for '" + command.PrefabName + "': " + ex);
-                Diagnostics.FlightRecorder.Note("build realize FAILED '" + command.PrefabName + "': "
-                    + ex.GetType().Name + "; recovery requested");
+                SyncLog.Error(LogTopic.Buildings, "BuildSync realize FAILED for '" +
+                    command.PrefabName + "': " + ex);
                 SyncInbox.RequestResync(CS2MultiplayerMod.Game.Diagnostics.ResyncReport
                     .Create("object placement realization failed", "object",
                         CS2MultiplayerMod.Game.Diagnostics.ResyncEvidence.Contradiction)

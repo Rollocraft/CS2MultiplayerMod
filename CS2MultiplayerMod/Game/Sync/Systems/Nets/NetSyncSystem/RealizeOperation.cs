@@ -9,9 +9,10 @@ using Unity.Collections;
 using Unity.Entities;
 using Unity.Jobs;
 using Unity.Mathematics;
+using CS2MultiplayerMod.Core.Diagnostics;
 using CS2MultiplayerMod.Core.Protocol.Messages;
 using CS2MultiplayerMod.Core.Session;
-
+using CS2MultiplayerMod.Game.Diagnostics;
 using CS2MultiplayerMod.Game.Sync.Infrastructure;
 using CS2MultiplayerMod.Game.Sync.Commands;
 namespace CS2MultiplayerMod.Game.Sync.Systems.Net
@@ -108,8 +109,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                         try { mixedOperation = NetToolOperationCommand.Decode(message.Body); }
                         catch (System.Exception ex)
                         {
-                            Mod.log.Warn("[MP] NetSync: dropping malformed mixed net operation: " +
-                                         ex.Message);
+                            SyncLog.Warn(LogTopic.Nets,
+                                "NetSync: dropping malformed mixed net operation: " + ex.Message);
                             SyncInbox.RequestResync(Diagnostics.ResyncReport
                                 .Create("malformed mixed net operation", "net",
                                     Diagnostics.ResyncEvidence.StreamLoss)
@@ -130,8 +131,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                 }
                 if (message.CommandId != NetPlacementCommand.Id)
                 {
-                    Mod.log.Warn("[MP] NetSync: dropping unsupported queued command " +
-                                 message.CommandId + ".");
+                    SyncLog.Warn(LogTopic.Nets, "NetSync: dropping unsupported queued command " +
+                        message.CommandId + ".");
                     continue;
                 }
 
@@ -139,7 +140,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                 try { command = NetPlacementCommand.Decode(message.Body); }
                 catch (System.Exception ex)
                 {
-                    Mod.log.Warn("[MP] NetSync: dropping malformed command: " + ex.Message);
+                    SyncLog.Warn(LogTopic.Nets, "NetSync: dropping malformed command: " +
+                        ex.Message);
                     continue;
                 }
 
@@ -160,8 +162,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                     continue;
                 if (command.CourseCount != expected)
                 {
-                    Mod.log.Warn("[MP] NetSync: dropping inconsistent course count for op=" +
-                                 key.Operation + " from player " + key.Origin + ".");
+                    SyncLog.Warn(LogTopic.Nets,
+                        "NetSync: dropping inconsistent course count for op=" + key.Operation +
+                        " from player " + key.Origin + ".");
                     continue;
                 }
 
@@ -205,7 +208,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                         later.Add(scanned[i]);
                 }
                 RequeueAtFront(later);
-                Diagnostics.FlightRecorder.Note("net incomplete op dropped=" + key.Operation +
+                SyncLog.Trace(LogTopic.Nets, "net incomplete op dropped=" + key.Operation +
                     " courses=" + received + "/" + expected);
                 SyncInbox.RequestResync(Diagnostics.ResyncReport
                     .Create("incomplete net operation expired", "net",
@@ -254,8 +257,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
             // from smuggling a partially native operation into per-course fallback realization.
             if ((hasNativeCourse && hasGeometryOnlyCourse) || (expected > 1 && !nativeOperation))
             {
-                Diagnostics.FlightRecorder.Note("net incompatible multi-course op dropped=" +
-                                                  key.Operation);
+                SyncLog.Trace(LogTopic.Nets, "net incompatible multi-course op dropped=" +
+                    key.Operation);
                 SyncInbox.RequestResync(Diagnostics.ResyncReport
                     .Create("incompatible net operation rejected", "net",
                         Diagnostics.ResyncEvidence.StreamLoss)

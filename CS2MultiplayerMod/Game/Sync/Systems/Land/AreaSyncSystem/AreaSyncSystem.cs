@@ -7,9 +7,10 @@ using Game.Prefabs;
 using Game.Tools;
 using Unity.Entities;
 using Unity.Mathematics;
+using CS2MultiplayerMod.Core.Diagnostics;
 using CS2MultiplayerMod.Core.Protocol.Messages;
 using CS2MultiplayerMod.Core.Session;
-
+using CS2MultiplayerMod.Game.Diagnostics;
 using CS2MultiplayerMod.Game.Sync.Infrastructure;
 using CS2MultiplayerMod.Game.Sync.Commands;
 namespace CS2MultiplayerMod.Game.Sync.Systems
@@ -49,7 +50,6 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         {
             base.OnCreate();
 
-            Mod.log.Info(nameof(AreaSyncSystem) + " ready.");
             // A specialized placement's lot must not be published ahead of its building, which
             // BuildSync holds until the polygon closes (see the redraw scan).
             _buildSync = World.GetOrCreateSystemManaged<BuildSyncSystem>();
@@ -168,7 +168,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                                 now + OwnedAreaRetryWindowMs);
                     }
                 }
-                catch (System.Exception ex) { Mod.log.Warn("[MP] AreaSync: dropping malformed command: " + ex.Message); }
+                catch (System.Exception ex) { SyncLog.Warn(LogTopic.Land, "AreaSync: dropping malformed command: " + ex.Message); }
             }
             if (deletes != null) RealizeDeletes(deletes, now);
         }

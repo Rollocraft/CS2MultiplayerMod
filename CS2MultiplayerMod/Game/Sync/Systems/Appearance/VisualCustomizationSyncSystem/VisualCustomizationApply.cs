@@ -2,8 +2,10 @@ using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using Colossal.Entities;
+using CS2MultiplayerMod.Core.Diagnostics;
 using CS2MultiplayerMod.Core.Protocol.Messages;
 using CS2MultiplayerMod.Core.Session;
+using CS2MultiplayerMod.Game.Diagnostics;
 using CS2MultiplayerMod.Game.Sync.Commands;
 using CS2MultiplayerMod.Game.Sync.Infrastructure;
 using Game;
@@ -43,8 +45,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 }
                 catch (Exception ex)
                 {
-                    Mod.log.Warn("[MP] VisualCustomizationSync: dropping malformed command: " +
-                                 ex.Message);
+                    SyncLog.Warn(LogTopic.Buildings,
+                        "VisualCustomizationSync: dropping malformed command: " + ex.Message);
                     SyncInbox.RequestResync(CS2MultiplayerMod.Game.Diagnostics.ResyncReport
                         .Create("malformed visual-customization command", "appearance",
                             CS2MultiplayerMod.Game.Diagnostics.ResyncEvidence.StreamLoss)
@@ -92,8 +94,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             }
             if (expiredTargets > 0)
             {
-                Mod.log.Warn("[MP] VisualCustomizationSync: " + expiredTargets +
-                             " target(s) did not appear before the retry deadline.");
+                SyncLog.Warn(LogTopic.Buildings, "VisualCustomizationSync: " + expiredTargets +
+                    " target(s) did not appear before the retry deadline.");
                 SyncInbox.RequestResync(CS2MultiplayerMod.Game.Diagnostics.ResyncReport
                     .Create("visual-customization target did not resolve", "appearance",
                         CS2MultiplayerMod.Game.Diagnostics.ResyncEvidence.MissingTarget)

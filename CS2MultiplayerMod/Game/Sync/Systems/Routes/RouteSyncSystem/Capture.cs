@@ -6,7 +6,9 @@ using Game.Routes;
 using Unity.Collections;
 using Unity.Entities;
 using Unity.Mathematics;
+using CS2MultiplayerMod.Core.Diagnostics;
 using CS2MultiplayerMod.Core.Session;
+using CS2MultiplayerMod.Game.Diagnostics;
 using CS2MultiplayerMod.Game.Sync.Commands;
 
 namespace CS2MultiplayerMod.Game.Sync.Systems
@@ -44,8 +46,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             }
 
             if (Mod.Service != null) _lastEditScanMs = Mod.Service.NowMs;
-            Diagnostics.FlightRecorder.Note("route baseline live=" + _knownRoutes.Count +
-                                              " pending=" + _baselinePendingRoutes.Count);
+            SyncLog.Trace(LogTopic.Routes, "route baseline live=" + _knownRoutes.Count + " pending=" +
+                _baselinePendingRoutes.Count);
         }
 
         private bool TryCaptureSnapshot(Entity route, out RouteSnapshot snapshot)
@@ -304,9 +306,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     Waypoints = snapshot.Waypoints,
                 };
                 session.SendCommand(0, RouteCreateCommand.Id, command.Encode());
-                Mod.Verbose("[MP] RouteSync captured line '" + name + "' (" +
-                            DescribeShape(snapshot.Waypoints) + ", number " +
-                            snapshot.RouteNumber + ").");
+                SyncLog.Detail(LogTopic.Routes, "RouteSync captured line '" + name + "' (" +
+                    DescribeShape(snapshot.Waypoints) + ", number " + snapshot.RouteNumber + ").");
             }
             _knownRoutes[entity] = snapshot;
         }
@@ -526,9 +527,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                         Waypoints = snapshot.Waypoints,
                     };
                     session.SendCommand(0, RouteUpdateCommand.Id, command.Encode());
-                    Mod.Verbose("[MP] RouteSync captured edit of line '" + name + "' (" +
-                                DescribeShape(snapshot.Waypoints) + ", number " +
-                                snapshot.RouteNumber + ").");
+                    SyncLog.Detail(LogTopic.Routes, "RouteSync captured edit of line '" + name +
+                        "' (" + DescribeShape(snapshot.Waypoints) + ", number " +
+                        snapshot.RouteNumber + ").");
                 }
             }
             finally

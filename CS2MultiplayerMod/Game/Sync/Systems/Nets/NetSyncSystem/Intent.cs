@@ -7,6 +7,8 @@ using Game.Tools;
 using Unity.Collections;
 using Unity.Entities;
 using Unity.Mathematics;
+using CS2MultiplayerMod.Core.Diagnostics;
+using CS2MultiplayerMod.Game.Diagnostics;
 using CS2MultiplayerMod.Game.Sync.Commands;
 
 namespace CS2MultiplayerMod.Game.Sync.Systems.Net
@@ -194,8 +196,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                 _cachedFallbackOriginalEdges.Clear();
                 _cachedNeedsFinalEdgeFallback = false;
                 _cachedLocalMixedOperation.AddRange(mixed);
-                Diagnostics.FlightRecorder.Note("net atomic mixed capture cached items=" +
-                    mixed.Count + " placements=" + next.Count + " mutations=" + mutations +
+                SyncLog.Trace(LogTopic.Nets, "net atomic mixed capture cached items=" + mixed.Count +
+                    " placements=" + next.Count + " mutations=" + mutations +
                     (hiddenSubNets > 0 ? " hiddenSubNets=" + hiddenSubNets : string.Empty));
                 return;
             }
@@ -207,14 +209,12 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
             _cachedFallbackOriginalEdges.AddRange(rejectedOriginalEdges);
             _cachedNeedsFinalEdgeFallback = true;
 
-            Mod.log.Warn("[MP] NetSync: local mixed net operation cannot be encoded atomically (" +
-                         rejected + " of " + (rejected + next.Count) + " courses " + rejection +
-                         "; " + hiddenSubNets + " generated connector(s) skipped); the legacy " +
-                         "fragmented fallback is disabled and world recovery will be requested " +
-                         "after Apply.");
-            Diagnostics.FlightRecorder.Note("net native capture voided rejected=" + rejected + "/" +
-                                              (rejected + next.Count) +
-                                              " hiddenSubNets=" + hiddenSubNets);
+            SyncLog.Warn(LogTopic.Nets,
+                "NetSync: local mixed net operation cannot be encoded atomically (" + rejected +
+                " of " + (rejected + next.Count) + " courses " + rejection + "; " + hiddenSubNets +
+                " generated connector(s) skipped); the legacy " +
+                "fragmented fallback is disabled and world recovery will be requested " +
+                "after Apply.");
         }
 
         /// <summary>
@@ -284,7 +284,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                     _atomicMixedOriginals.Add(_cachedFallbackOriginalEdges[i]);
                 service.RequestAutomaticWorldRecovery(
                     "mixed road operation could not be encoded atomically");
-                Diagnostics.FlightRecorder.Note("net mixed capture rejected; recovery requested" +
+                SyncLog.Trace(LogTopic.Nets, "net mixed capture rejected; recovery requested" +
                     (barrierRecovery ? " source=barrier" : string.Empty));
                 _cachedFallbackOriginalEdges.Clear();
                 _cachedNeedsFinalEdgeFallback = false;
@@ -325,8 +325,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
             catch (System.Exception ex)
             {
                 _cachedLocalCourses.Clear();
-                Mod.log.Warn("[MP] NetSync intent capture could not encode operation; " +
-                             "using final-edge capture: " + ex.Message);
+                SyncLog.Warn(LogTopic.Nets, "NetSync intent capture could not encode operation; " +
+                    "using final-edge capture: " + ex.Message);
                 return;
             }
 
@@ -342,8 +342,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                 }
                 catch (System.Exception ex)
                 {
-                    Mod.log.Warn("[MP] NetSync intent capture dropped course " + i + "/" + count +
-                                 ": " + ex.Message);
+                    SyncLog.Warn(LogTopic.Nets, "NetSync intent capture dropped course " + i + "/" +
+                        count + ": " + ex.Message);
                 }
             }
 
@@ -353,9 +353,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
             // enabled to provide a complete geometry fallback for this local apply.
             if (sent == count) _nativeApplyCapturedFrame = _realizeFrame;
             if (sent > 0)
-                Diagnostics.FlightRecorder.Note("net intent apply op=" + operationId + " courses=" +
-                                                  sent + "/" + count +
-                                                  (barrierRecovery ? " source=barrier" : string.Empty));
+                SyncLog.Trace(LogTopic.Nets, "net intent apply op=" + operationId + " courses=" +
+                    sent + "/" + count + (barrierRecovery ? " source=barrier" : string.Empty));
         }
 
         /// <summary>
@@ -447,7 +446,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                 // A fragmented fallback is exactly the failure this envelope prevents. Suppress
                 // every legacy echo even when encoding/sending fails, and repair the peer from a
                 // world snapshot instead of racing delete/replace/place streams again.
-                Mod.log.Warn("[MP] NetSync atomic mixed apply could not be sent: " + ex.Message);
+                SyncLog.Warn(LogTopic.Nets, "NetSync atomic mixed apply could not be sent: " +
+                    ex.Message);
                 service.RequestAutomaticWorldRecovery("atomic mixed road operation could not be sent");
             }
             finally
@@ -460,10 +460,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                 _atomicMixedApplyCapturedFrame = _realizeFrame;
             }
 
-            Diagnostics.FlightRecorder.Note("net atomic mixed apply op=" + operationId +
-                                              " items=" + itemCount +
-                                              " status=" + (sent ? "sent" : "recovery") +
-                                              (barrierRecovery ? " source=barrier" : string.Empty));
+            SyncLog.Trace(LogTopic.Nets, "net atomic mixed apply op=" + operationId + " items=" +
+                itemCount + " status=" + (sent ? "sent" : "recovery") +
+                (barrierRecovery ? " source=barrier" : string.Empty));
         }
 
         /// <summary>

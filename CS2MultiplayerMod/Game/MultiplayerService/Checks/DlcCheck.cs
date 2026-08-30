@@ -71,8 +71,8 @@ namespace CS2MultiplayerMod.Game
             }
             catch (Exception ex)
             {
-                log.Warn("[MP] Could not enumerate DLCs (" + ex.Message + "); " +
-                         "reporting no DLCs, so peers reporting DLC content will be rejected.");
+                log.Warn(LogTopic.Startup, "Could not enumerate DLCs (" + ex.Message + "); " +
+                    "reporting no DLCs, so peers reporting DLC content will be rejected.");
                 return Array.Empty<string>();
             }
         }

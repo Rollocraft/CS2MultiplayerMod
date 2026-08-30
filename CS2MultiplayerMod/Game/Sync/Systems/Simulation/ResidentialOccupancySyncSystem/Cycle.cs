@@ -1,7 +1,9 @@
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using CS2MultiplayerMod.Core.Diagnostics;
 using CS2MultiplayerMod.Core.Session;
+using CS2MultiplayerMod.Game.Diagnostics;
 using CS2MultiplayerMod.Game.Sync.Commands;
 using CS2MultiplayerMod.Game.Sync.Infrastructure;
 using Game;
@@ -307,38 +309,33 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             {
                 int clients = 0;
                 foreach (Peer peer in session.Peers) if (peer.Handshaked) clients++;
-                Diagnostics.SyncLog.Write(Diagnostics.LogTopic.Residential, "Occupancy/30s host: pages=" + _sentPages + ", properties=" +
-                            _sentProperties + ", bytes=" + _sentBytes + ", clients=" + clients +
-                            ", estimatedFanoutBytes=" + _sentBytes * clients +
-                            ", transportPendingBytes=" + session.PendingSendBytes +
-                            ", changedPriority=" + _priorityChanges + ", priorityQueued=" +
-                            _priority.Count + ", priorityDropped=" + _priorityDrops +
-                            ", departuresTracked=" + _hostDepartures.Count +
-                            ", citizenDeparturesTracked=" + _hostCitizenDepartures.Count +
-                            ", captureSkipped=" + _captureSkips + ", observed=" +
-                            _observedProperties + ".");
+                Diagnostics.SyncLog.Detail(LogTopic.Residential, "Occupancy/30s host: pages=" +
+                    _sentPages + ", properties=" + _sentProperties + ", bytes=" + _sentBytes +
+                    ", clients=" + clients + ", estimatedFanoutBytes=" + _sentBytes * clients +
+                    ", transportPendingBytes=" + session.PendingSendBytes + ", changedPriority=" +
+                    _priorityChanges + ", priorityQueued=" + _priority.Count + ", priorityDropped=" +
+                    _priorityDrops + ", departuresTracked=" + _hostDepartures.Count +
+                    ", citizenDeparturesTracked=" + _hostCitizenDepartures.Count +
+                    ", captureSkipped=" + _captureSkips + ", observed=" + _observedProperties +
+                    ".");
             }
             else
             {
-                Diagnostics.SyncLog.Write(Diagnostics.LogTopic.Residential, "Occupancy/30s client: pages=" + _receivedPages +
-                            ", queueDropped=" + _droppedPages + ", cached=" + _cache.Count +
-                            ", pending=" + _pending.Count + ", resolved=" + _resolved +
-                            ", unresolved=" + _unresolved + ", ambiguous=" + _ambiguous +
-                            ", expired=" + _expired + ", stale=" + _stalePages +
-                            ", pruned=" + _pruned + ", cacheDropped=" + _cacheDrops +
-                            ", appliedProperties=" + _appliedProperties + ", households +" +
-                            _createdHouseholds + "/-" + _retiredHouseholds + ", citizens +" +
-                            _createdCitizens + "/-" + _removedCitizens + "/~" +
-                            _rewrittenCitizens + ", pets +" + _createdPets + ", renamed=" +
-                            _renamedEntities + ", vehicles +" + _createdVehicles +
-                            ", rentActions=" + _rentActions +
-                            ", refusedMoveIns=" + _refusedMoveIns + ", buildRatesAligned=" +
-                            _alignedBuildRates + ", forcedCompletions=" + _forcedCompletions +
-                            ", deferredForConstruction=" + _deferredForConstruction +
-                            ", economyCorrections=" + _economyCorrections +
-                            "/deferred " + _economyDeferred +
-                            ", pendingMoveIns=" + _pendingMoveIns.Count + ", dirty=" +
-                            _dirty.Count + ".");
+                Diagnostics.SyncLog.Detail(LogTopic.Residential, "Occupancy/30s client: pages=" +
+                    _receivedPages + ", queueDropped=" + _droppedPages + ", cached=" + _cache.Count +
+                    ", pending=" + _pending.Count + ", resolved=" + _resolved + ", unresolved=" +
+                    _unresolved + ", ambiguous=" + _ambiguous + ", expired=" + _expired + ", stale=" +
+                    _stalePages + ", pruned=" + _pruned + ", cacheDropped=" + _cacheDrops +
+                    ", appliedProperties=" + _appliedProperties + ", households +" +
+                    _createdHouseholds + "/-" + _retiredHouseholds + ", citizens +" +
+                    _createdCitizens + "/-" + _removedCitizens + "/~" + _rewrittenCitizens +
+                    ", pets +" + _createdPets + ", renamed=" + _renamedEntities + ", vehicles +" +
+                    _createdVehicles + ", rentActions=" + _rentActions + ", refusedMoveIns=" +
+                    _refusedMoveIns + ", buildRatesAligned=" + _alignedBuildRates +
+                    ", forcedCompletions=" + _forcedCompletions + ", deferredForConstruction=" +
+                    _deferredForConstruction + ", economyCorrections=" + _economyCorrections +
+                    "/deferred " + _economyDeferred + ", pendingMoveIns=" + _pendingMoveIns.Count +
+                    ", dirty=" + _dirty.Count + ".");
             }
             _sentPages = _sentProperties = _priorityChanges = _priorityDrops = _captureSkips = 0;
             _observedProperties = 0;

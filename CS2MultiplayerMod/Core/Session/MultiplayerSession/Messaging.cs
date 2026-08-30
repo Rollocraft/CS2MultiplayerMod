@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using CS2MultiplayerMod.Core.Diagnostics;
 using CS2MultiplayerMod.Core.Networking;
 using CS2MultiplayerMod.Core.Protocol;
 using CS2MultiplayerMod.Core.Protocol.Messages;
@@ -66,7 +67,8 @@ namespace CS2MultiplayerMod.Core.Session
             if (dead != null)
                 foreach (Peer peer in dead)
                 {
-                    _log.Warn((peer.Handshaked ? "Peer timed out: " : "Handshake timed out: ") + peer);
+                    _log.Warn(LogTopic.Session,
+                        (peer.Handshaked ? "Peer timed out: " : "Handshake timed out: ") + peer);
                     _transport.Disconnect(peer.Connection);
                     // The transport will also raise Disconnected; removal/notify happens there.
                 }
@@ -139,15 +141,15 @@ namespace CS2MultiplayerMod.Core.Session
             if (reason.Length == 0) reason = ManualSyncReason;
             if (_worldSyncSuspended)
             {
-                _log.Info("World sync request coalesced into active epoch " + _worldSyncEpoch +
-                          " (" + reason + ").");
+                _log.Detail(LogTopic.Session, "World sync request coalesced into active epoch " +
+                    _worldSyncEpoch + " (" + reason + ").");
                 return;
             }
 
             if (Role == SessionRole.Client)
             {
                 SendTo(ConnectionId.Server, new ResyncRequestMessage(LocalPlayerId, reason));
-                _log.Info("World sync request sent to host (" + reason + ").");
+                _log.Event(LogTopic.Session, "World sync request sent to host (" + reason + ").");
                 NotifyChat(null, "World sync requested - the host will stream you its city.");
             }
             else if (Role == SessionRole.Host)
@@ -155,7 +157,8 @@ namespace CS2MultiplayerMod.Core.Session
                 // With nobody connected the epoch opens, finds no participants and closes again,
                 // which from the button looked identical to a sync that had failed silently.
                 int peers = HandshakedPeerCount();
-                _log.Info("Host requested world sync for " + peers + " client(s) (" + reason + ").");
+                _log.Event(LogTopic.Session, "Host requested world sync for " + peers +
+                    " client(s) (" + reason + ").");
                 NotifyResyncRequested(LocalPlayerId, ConnectionId.None);
                 NotifyChat(null, peers == 0
                     ? "Nothing to sync - no other players are connected."
@@ -182,8 +185,9 @@ namespace CS2MultiplayerMod.Core.Session
             // host in a permanent save+stream loop. (Per-peer budgets run on top.)
             if (nowUnixMs - _lastResyncAcceptedUnixMs < ResyncRequestCooldownMs)
             {
-                _log.Warn("Ignoring /sync from " + (peer != null ? peer.ToString() : from.ToString()) +
-                          " (" + reason + "): a world sync ran moments ago.");
+                _log.Warn(LogTopic.Session, "Ignoring /sync from " +
+                    (peer != null ? peer.ToString() : from.ToString()) + " (" + reason +
+                    "): a world sync ran moments ago.");
                 return;
             }
             _lastResyncAcceptedUnixMs = nowUnixMs;
@@ -194,7 +198,7 @@ namespace CS2MultiplayerMod.Core.Session
             // Why the other machine gave up belongs in THIS log too. Without it the host's log
             // reads "someone asked for a sync" for both a player pressing the button and a client
             // pipeline that could not apply an edit - the two cases that need telling apart most.
-            _log.Info("World sync requested by " + name + ": " + reason + ".");
+            _log.Event(LogTopic.Session, "World sync requested by " + name + ": " + reason + ".");
 
             // Tell everyone the world is about to snap, then let the game layer stream it.
             string notice = name + " requested a world sync.";

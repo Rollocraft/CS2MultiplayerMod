@@ -1,4 +1,6 @@
 using Colossal.Mathematics;
+using CS2MultiplayerMod.Core.Diagnostics;
+using CS2MultiplayerMod.Game.Diagnostics;
 using Game;
 using Game.Rendering;
 using Unity.Jobs;
@@ -59,7 +61,6 @@ namespace CS2MultiplayerMod.Game.Sync.Players
             base.OnCreate();
             _overlay = World.GetOrCreateSystemManaged<OverlayRenderSystem>();
             _camera = World.GetExistingSystemManaged<CameraUpdateSystem>();
-            Mod.log.Info(nameof(RemotePlayerMarkerSystem) + " ready.");
         }
 
         protected override void OnUpdate()

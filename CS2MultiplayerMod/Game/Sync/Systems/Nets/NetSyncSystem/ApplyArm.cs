@@ -6,6 +6,8 @@ using Game.Tools;
 using Unity.Collections;
 using Unity.Entities;
 
+using CS2MultiplayerMod.Core.Diagnostics;
+using CS2MultiplayerMod.Game.Diagnostics;
 using CS2MultiplayerMod.Game.Sync.Infrastructure;
 namespace CS2MultiplayerMod.Game.Sync.Systems.Net
 {
@@ -22,8 +24,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
         {
             int cleared = ClearTempEntities(ActiveTransactionQuery());
             if (cleared <= 0) return;
-            Mod.log.Warn("[MP] SyncApply: discarded " + cleared + " uncommitted Temp(s) - " + why + ".");
-            Diagnostics.FlightRecorder.Note("transaction temps discarded=" + cleared + " (" + why + ")");
+            SyncLog.Warn(LogTopic.Nets, "SyncApply: discarded " + cleared +
+                " uncommitted Temp(s) - " + why + ".");
         }
 
         /// <summary>
@@ -58,7 +60,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
             _pendingNetConstructionChargeCourses = 0;
             _onCommitLost = onCommitLost;
             _onCommitComplete = onCommitComplete;
-            Diagnostics.FlightRecorder.Note("net " + source + " batch armed");
+            SyncLog.Trace(LogTopic.Nets, "net " + source + " batch armed");
             return true;
         }
 
@@ -82,7 +84,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
             _pendingNetConstructionChargeCourses = 0;
             _onCommitLost = onCommitLost;
             _onCommitComplete = onCommitComplete;
-            Diagnostics.FlightRecorder.Note("route " + source + " operation armed");
+            SyncLog.Trace(LogTopic.Nets, "route " + source + " operation armed");
             return true;
         }
 
@@ -108,8 +110,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
             _pendingNetConstructionChargeCourses = 0;
             _onCommitLost = onCommitLost;
             _onCommitComplete = onCommitComplete;
-            Diagnostics.FlightRecorder.Note((rootlessAssetStamp ? "asset stamp " : "object ") +
-                                               source + " operation armed");
+            SyncLog.Trace(LogTopic.Nets, (rootlessAssetStamp ? "asset stamp " : "object ") + source +
+                " operation armed");
             return true;
         }
 
@@ -130,7 +132,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
             {
                 // Charging is accounting, not geometry. Never destabilize a successfully committed
                 // network transaction merely because the money singleton changed unexpectedly.
-                Mod.log.Warn("[MP] NetSync: remote net charge failed: " + ex.Message);
+                SyncLog.Warn(LogTopic.Nets, "NetSync: remote net charge failed: " + ex.Message);
             }
         }
 

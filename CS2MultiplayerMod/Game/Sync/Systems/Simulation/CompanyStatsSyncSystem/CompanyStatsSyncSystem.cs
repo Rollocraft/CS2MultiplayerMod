@@ -1,8 +1,10 @@
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using CS2MultiplayerMod.Core.Diagnostics;
 using CS2MultiplayerMod.Core.Protocol;
 using CS2MultiplayerMod.Core.Session;
+using CS2MultiplayerMod.Game.Diagnostics;
 using CS2MultiplayerMod.Game.Sync.Commands;
 using CS2MultiplayerMod.Game.Sync.Infrastructure;
 using Game;
@@ -12,7 +14,6 @@ using Game.Companies;
 using Game.Prefabs;
 using Game.Simulation;
 using Game.Tools;
-using CS2MultiplayerMod.Game.Diagnostics;
 using Unity.Collections;
 using Unity.Entities;
 
@@ -235,8 +236,6 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             });
 
             SyncInbox.RegisterDrain(DrainForWorldChange);
-            Mod.log.Info(nameof(CompanyStatsSyncSystem) +
-                         " ready (host-authoritative workplace tenancy and figures).");
         }
 
         protected override void OnDestroy()
@@ -470,16 +469,16 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             bool office = SyncLog.IsZoneEnabled(SyncZone.Office);
             if (!commercial && !industrial && !office) return;
             string line = "CompanyStats/30s: " + body;
-            if (commercial) SyncLog.WriteZone(SyncZone.Commercial, line);
-            if (industrial) SyncLog.WriteZone(SyncZone.Industrial, line);
-            if (office) SyncLog.WriteZone(SyncZone.Office, line);
+            if (commercial) SyncLog.DetailZone(SyncZone.Commercial, line);
+            if (industrial) SyncLog.DetailZone(SyncZone.Industrial, line);
+            if (office) SyncLog.DetailZone(SyncZone.Office, line);
         }
 
         private void ReportZone(SyncZone zone)
         {
             if (!SyncLog.IsZoneEnabled(zone)) return;
             int index = (int)zone;
-            SyncLog.WriteZone(zone, "corrected=" + _zoneApplied[index] + ", opened=" +
+            SyncLog.DetailZone(zone, "corrected=" + _zoneApplied[index] + ", opened=" +
                                     _zoneOpened[index] + ", closed=" + _zoneClosed[index] + ".");
         }
     }

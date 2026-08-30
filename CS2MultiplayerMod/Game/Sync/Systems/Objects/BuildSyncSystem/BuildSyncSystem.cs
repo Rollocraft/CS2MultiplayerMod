@@ -10,9 +10,10 @@ using Game.Tools;
 using Unity.Collections;
 using Unity.Entities;
 using Unity.Mathematics;
+using CS2MultiplayerMod.Core.Diagnostics;
 using CS2MultiplayerMod.Core.Protocol.Messages;
 using CS2MultiplayerMod.Core.Session;
-
+using CS2MultiplayerMod.Game.Diagnostics;
 using CS2MultiplayerMod.Game.Sync.Infrastructure;
 using CS2MultiplayerMod.Game.Sync.Commands;
 using CS2MultiplayerMod.Game.Sync.Systems.Net;
@@ -119,7 +120,6 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         {
             base.OnCreate();
 
-            Mod.log.Info(nameof(BuildSyncSystem) + " ready.");
             _prefabSystem = World.GetOrCreateSystemManaged<PrefabSystem>();
             _cityStateSync = World.GetOrCreateSystemManaged<CityStateSyncSystem>();
             _toolSystem = World.GetOrCreateSystemManaged<ToolSystem>();
@@ -215,11 +215,10 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             // specialized placement went missing on one machine with nothing in the log.
             if (_pendingSpecializedObjectOperation != null)
             {
-                Mod.log.Warn("[MP] BuildSync: discarding a held specialized placement (" +
-                             _pendingSpecializedObjectOperation.Definitions.Length +
-                             " definitions) that was still waiting for its polygon.");
-                Diagnostics.FlightRecorder.Note("specialized handoff discarded by reset defs=" +
-                    _pendingSpecializedObjectOperation.Definitions.Length);
+                SyncLog.Warn(LogTopic.Buildings,
+                    "BuildSync: discarding a held specialized placement (" +
+                    _pendingSpecializedObjectOperation.Definitions.Length +
+                    " definitions) that was still waiting for its polygon.");
             }
             ClearSpecializedAreaCapture();
             _nativeLifecycleCapturedThisFrame = false;
@@ -246,9 +245,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
                 bool ready = service.GameplaySyncReady;
                 _hbUpdates++;
-                // These probes walk broad Created queries. They are troubleshooting-only work,
-                // so keep them off the normal frame path unless their verbose summary is enabled.
-                if (ready && Mod.Setting != null && Mod.Setting.VerboseLogging)
+                // These probes walk broad Created queries. They are troubleshooting-only work, so
+                // keep them off the normal frame path unless the summary they feed is switched on.
+                if (ready && SyncLog.IsEnabled(LogTopic.Buildings))
                 {
                     _hbAnyCreated = System.Math.Max(_hbAnyCreated, _diagAnyCreated.CalculateEntityCount());
                     _hbCreatedPrefab = System.Math.Max(_hbCreatedPrefab, _diagCreatedPrefab.CalculateEntityCount());
@@ -370,7 +369,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             _localLifecycleApplyThisFrame = _localObjectApplyThisFrame;
 
             if (objectToOwnedAreaHandoff && applying)
-                Diagnostics.FlightRecorder.Note(
+                SyncLog.Trace(LogTopic.Buildings,
                     "object lifecycle apply retained across owned-area handoff");
         }
 
@@ -428,7 +427,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             if (connected || _hbAnyCreated > 0 || _diagTotal > 0)
             {
                 var sb = new StringBuilder();
-                sb.Append("[MP] BuildSync/5s: updates=").Append(_hbUpdates)
+                sb.Append("BuildSync/5s: updates=").Append(_hbUpdates)
                   .Append(" created[any/+prefab/+transform/filtered]=")
                   .Append(_hbAnyCreated).Append('/').Append(_hbCreatedPrefab).Append('/')
                   .Append(_hbCreatedTransform).Append('/').Append(_hbFiltered)
@@ -445,13 +444,13 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     }
                     sb.Append(']');
                 }
-                Mod.Verbose(sb.ToString());
+                SyncLog.Detail(LogTopic.Buildings, sb.ToString());
             }
 
             if (_refusedTotal > 0)
             {
                 var sb = new StringBuilder();
-                sb.Append("[MP] BuildSync realize: refused ").Append(_refusedTotal)
+                sb.Append("BuildSync realize: refused ").Append(_refusedTotal)
                   .Append(" simulation-only placement(s) in the last 5s [");
                 int n = 0;
                 foreach (KeyValuePair<string, int> pair in _refused)
@@ -461,7 +460,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     if (++n >= 10) { sb.Append(", ..."); break; }
                 }
                 sb.Append(']');
-                Mod.log.Warn(sb.ToString());
+                SyncLog.Warn(LogTopic.Buildings, sb.ToString());
                 _refused.Clear();
                 _refusedTotal = 0;
             }
@@ -531,10 +530,11 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                         if (!_partialPlacementRecoveryRequested)
                         {
                             _partialPlacementRecoveryRequested = true;
-                            Mod.log.Error("[MP] BuildSync: complete lifecycle capture was missed for '" +
-                                          name + "'; requesting (debounced) world recovery instead of " +
-                                          "sending a partial object graph. " +
-                                          (_lastObjectGraphMissDetail ?? "no correlation detail"));
+                            SyncLog.Error(LogTopic.Buildings,
+                                "BuildSync: complete lifecycle capture was missed for '" + name +
+                                "'; requesting (debounced) world recovery instead of " +
+                                "sending a partial object graph. " +
+                                (_lastObjectGraphMissDetail ?? "no correlation detail"));
                             Mod.Service.RequestAutomaticWorldRecovery("building placement capture missed");
                         }
                         continue;

@@ -1,8 +1,10 @@
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using CS2MultiplayerMod.Core.Diagnostics;
 using CS2MultiplayerMod.Core.Protocol;
 using CS2MultiplayerMod.Core.Session;
+using CS2MultiplayerMod.Game.Diagnostics;
 using CS2MultiplayerMod.Game.Sync.Commands;
 using CS2MultiplayerMod.Game.Sync.Infrastructure;
 using Game;
@@ -400,8 +402,6 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 ComponentType.ReadOnly<global::Game.Common.Event>(),
                 ComponentType.ReadOnly<RentersUpdated>());
             SyncInbox.RegisterDrain(DrainForWorldChange);
-            Mod.log.Info(nameof(ResidentialOccupancySyncSystem) +
-                         " ready (host-authoritative residential occupancy).");
         }
 
         protected override void OnDestroy()

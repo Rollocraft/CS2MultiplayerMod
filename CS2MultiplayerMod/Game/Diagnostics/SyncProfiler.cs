@@ -143,7 +143,7 @@ namespace CS2MultiplayerMod.Game.Diagnostics
 
             double totalMs = totalTicks * MillisecondsPerTick;
             var text = new StringBuilder(256);
-            text.Append("[MP] SyncCost/").Append(windowMs / 1000).Append("s: total ")
+            text.Append("SyncCost/").Append(windowMs / 1000).Append("s: total ")
                 .Append(totalMs.ToString("F0")).Append(" ms");
             if (windowMs > 0)
                 text.Append(" (").Append((100.0 * totalMs / windowMs).ToString("F1"))

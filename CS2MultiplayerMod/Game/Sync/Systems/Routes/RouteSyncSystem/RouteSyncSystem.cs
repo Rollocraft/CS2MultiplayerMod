@@ -7,8 +7,10 @@ using Game.Routes;
 using Game.Tools;
 using Unity.Entities;
 using Unity.Mathematics;
+using CS2MultiplayerMod.Core.Diagnostics;
 using CS2MultiplayerMod.Core.Protocol.Messages;
 using CS2MultiplayerMod.Core.Session;
+using CS2MultiplayerMod.Game.Diagnostics;
 using CS2MultiplayerMod.Game.Sync.Infrastructure;
 using CS2MultiplayerMod.Game.Sync.Commands;
 using CS2MultiplayerMod.Game.Sync.Systems.Net;
@@ -111,7 +113,6 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         {
             base.OnCreate();
 
-            Mod.log.Info(nameof(RouteSyncSystem) + " ready.");
             _prefabSystem = World.GetOrCreateSystemManaged<PrefabSystem>();
             _prefabIndex = new PrefabIndex(_prefabSystem,
                 GetEntityQuery(ComponentType.ReadOnly<PrefabData>()));
@@ -334,7 +335,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                             CS2MultiplayerMod.Game.Diagnostics.ResyncEvidence.StreamLoss)
                         .About("malformed route command")
                         .Tried("nothing - the command could not be decoded"));
-                    Mod.log.Warn("[MP] RouteSync: dropping malformed command: " + ex.Message);
+                    SyncLog.Warn(LogTopic.Routes, "RouteSync: dropping malformed command: " +
+                        ex.Message);
                 }
             }
         }
@@ -360,8 +362,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             // attributable from the log instead of only visible as a missing line.
             if (_lastRealizeFailure == null) return result;
             if (pending.LastFailure == null)
-                Diagnostics.FlightRecorder.Note("route dependency unresolved: " +
-                                                  _lastRealizeFailure);
+                SyncLog.Trace(LogTopic.Routes, "route dependency unresolved: " +
+                    _lastRealizeFailure);
             pending.LastFailure = _lastRealizeFailure;
             return result;
         }
@@ -385,7 +387,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     CS2MultiplayerMod.Game.Diagnostics.ResyncEvidence.StreamLoss)
                 .About("route retry queue")
                 .Tried("nothing - the retry queue was full and was cleared"));
-            Mod.log.Warn("[MP] RouteSync retry queue overflowed; cleared it and requested a fresh world sync.");
+            SyncLog.Warn(LogTopic.Routes,
+                "RouteSync retry queue overflowed; cleared it and requested a fresh world sync.");
         }
 
         private void ExpirePending(PendingRouteCommand pending)
@@ -405,12 +408,10 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                         CS2MultiplayerMod.Game.Diagnostics.ResyncEvidence.MissingTarget)
                     .About("route dependency")
                     .Tried("retried with backoff for 30 s of attempts, not counting time this system was held back"));
-            Mod.log.Warn("[MP] RouteSync " + operation + " for '" + prefabName +
-                         "' did not resolve within " + (RetryWindowMs / 1000) + " s" +
-                         (pending.LastFailure != null ? " (" + pending.LastFailure + ")" : string.Empty) +
-                         (needsRecovery
-                             ? "; requested a fresh world sync."
-                             : "; line is already absent."));
+            SyncLog.Warn(LogTopic.Routes, "RouteSync " + operation + " for '" + prefabName +
+                "' did not resolve within " + (RetryWindowMs / 1000) + " s" +
+                (pending.LastFailure != null ? " (" + pending.LastFailure + ")" : string.Empty) +
+                (needsRecovery ? "; requested a fresh world sync." : "; line is already absent."));
         }
 
         private void DrainQueue()

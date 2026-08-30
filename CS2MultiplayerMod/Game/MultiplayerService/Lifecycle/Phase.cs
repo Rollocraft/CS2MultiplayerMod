@@ -1,8 +1,10 @@
 using System;
 using Game.SceneFlow;
+using CS2MultiplayerMod.Core.Diagnostics;
 using CS2MultiplayerMod.Core.Networking;
 using CS2MultiplayerMod.Core.Session;
 using CS2MultiplayerMod.Core.Protocol.Messages;
+using CS2MultiplayerMod.Game.Diagnostics;
 using CS2MultiplayerMod.Localization;
 using CS2MultiplayerMod.Game.Sync.Infrastructure;
 using Unity.Entities;
@@ -79,7 +81,8 @@ namespace CS2MultiplayerMod.Game
             if (_sawLoading)
             {
                 SetPhase(ClientWorldPhase.WaitingForResume);
-                _log.Info("[MP] Host world loaded - waiting for the epoch resume barrier.");
+                _log.Detail(LogTopic.Session,
+                    "Host world loaded - waiting for the epoch resume barrier.");
                 _session.SendWorldSyncStage(_activeWorldSyncEpoch, WorldSyncStage.Loaded);
                 return;
             }
@@ -91,8 +94,9 @@ namespace CS2MultiplayerMod.Game
                 SetPhase(ClientWorldPhase.WaitingForMap);
                 if (_worldSyncBarrierActive && _activeWorldSyncEpoch > 0)
                     _session.SendWorldSyncStage(_activeWorldSyncEpoch, WorldSyncStage.Failed);
-                _log.Warn("[MP] Host world never started loading. Still connected - use /sync to " +
-                          "request it again, or load '" + JoinMapLoader.TransientName + "' manually.");
+                _log.Warn(LogTopic.Session,
+                    "Host world never started loading. Still connected - use /sync to " +
+                    "request it again, or load '" + JoinMapLoader.TransientName + "' manually.");
             }
         }
 
@@ -102,8 +106,7 @@ namespace CS2MultiplayerMod.Game
             _phase = phase;
             _phaseChangedMs = NowMs;
             if (phase != ClientWorldPhase.LoadingMap) _sawLoading = false;
-            _log.Info("[MP] World phase: " + phase);
-            Diagnostics.FlightRecorder.Note("phase " + phase);
+            _log.Detail(LogTopic.Session, "World phase: " + phase);
 
             // A joined client plays in the host's (transient) world: autosaving it would
             // pile copies of the host's city into the local Saves folder and can collide
@@ -122,11 +125,12 @@ namespace CS2MultiplayerMod.Game
                 if (_autosaveWasEnabled) general.autoSave = false;
                 _autosaveSuppressed = true;
                 if (_autosaveWasEnabled)
-                    _log.Info("[MP] Autosave paused while playing in the host's session; it is restored on disconnect.");
+                    _log.Detail(LogTopic.Session,
+                        "Autosave paused while playing in the host's session; it is restored on disconnect.");
             }
             catch (Exception ex)
             {
-                _log.Warn("[MP] Could not pause autosave: " + ex.Message);
+                _log.Warn(LogTopic.Session, "Could not pause autosave: " + ex.Message);
             }
         }
 
@@ -138,11 +142,12 @@ namespace CS2MultiplayerMod.Game
             try
             {
                 GameManager.instance.settings.general.autoSave = true;
-                _log.Info("[MP] Autosave restored.");
+                _log.Detail(LogTopic.Session, "Autosave restored.");
             }
             catch (Exception ex)
             {
-                _log.Warn("[MP] Could not restore autosave - re-enable it in the game options: " + ex.Message);
+                _log.Warn(LogTopic.Session,
+                    "Could not restore autosave - re-enable it in the game options: " + ex.Message);
             }
         }
 
@@ -159,59 +164,54 @@ namespace CS2MultiplayerMod.Game
 
             if (Mod.Setting != null && Mod.Setting.IgnoreModCompatibilityChecks)
             {
-                _log.Warn("[MP] Ignoring the other-mod compatibility check while trying to " +
-                          action + " at the player's own risk: " + detail + ".");
+                _log.Warn(LogTopic.Session,
+                    "Ignoring the other-mod compatibility check while trying to " + action +
+                    " at the player's own risk: " + detail + ".");
                 return false;
             }
 
             _lastFault = detail;
-            _log.Warn("[MP] Cannot " + action + ": " + detail +
-                      ". Multiplayer runs only with CS2 Multiplayer Mod alone - disable the " +
-                      "others in the active playset and restart the game.");
+            _log.Warn(LogTopic.Session, "Cannot " + action + ": " + detail +
+                ". Multiplayer runs only with CS2 Multiplayer Mod alone - disable the " +
+                "others in the active playset and restart the game.");
             return true;
         }
 
         public void HostFromSettings(Setting settings)
         {
-            if (!ModEnabled) { _log.Warn("Cannot host: the mod is disabled in settings."); return; }
-            if (_session.Role != SessionRole.None) { _log.Warn("Cannot host: a session is already active."); return; }
+            if (!ModEnabled) { _log.Warn(LogTopic.Session, "Cannot host: the mod is disabled in settings."); return; }
+            if (_session.Role != SessionRole.None) { _log.Warn(LogTopic.Session, "Cannot host: a session is already active."); return; }
             if (RefuseForOtherMods("host")) return;
             _disconnectConfirmationRequested = false;
             ClearClientExitNotice();
             ResetCommandDiagnostics();
             _lastFault = null;
             var config = BuildConfig(settings, hosting: true);
-            _log.Info("[MP] Host requested: transport=" + config.Transport +
-                      (config.Transport == TransportMode.SteamRelay
-                          ? " joinCode=" + RelayProvider.LocalJoinCode
-                          : " port=" + config.Port) +
-                      " lanOnly=" + config.LanOnly +
-                      " password=" + (config.Password.Length > 0 ? "SET" : "NONE") +
-                      " maxPlayers=" + config.MaxPlayers +
-                      " name='" + config.PlayerName + "'" +
-                      " mod=" + config.ModVersion + " game=" + config.GameVersion +
-                      " dlcs=[" + string.Join(", ", config.DlcList) + "]");
+            _log.Event(LogTopic.Session, "Host requested: transport=" + config.Transport +
+                (config.Transport == TransportMode.SteamRelay ? " joinCode=" + RelayProvider.LocalJoinCode : " port=" + config.Port) +
+                " lanOnly=" + config.LanOnly + " password=" +
+                (config.Password.Length > 0 ? "SET" : "NONE") + " maxPlayers=" + config.MaxPlayers +
+                " name='" + config.PlayerName + "'" + " mod=" + config.ModVersion + " game=" +
+                config.GameVersion + " dlcs=[" + string.Join(", ", config.DlcList) + "]");
             _session.StartHost(config);
         }
 
         public void JoinFromSettings(Setting settings)
         {
-            if (!ModEnabled) { _log.Warn("Cannot join: the mod is disabled in settings."); return; }
-            if (_session.Role != SessionRole.None) { _log.Warn("Cannot join: a session is already active."); return; }
+            if (!ModEnabled) { _log.Warn(LogTopic.Session, "Cannot join: the mod is disabled in settings."); return; }
+            if (_session.Role != SessionRole.None) { _log.Warn(LogTopic.Session, "Cannot join: a session is already active."); return; }
             if (RefuseForOtherMods("join")) return;
             _disconnectConfirmationRequested = false;
             ClearClientExitNotice();
             ResetCommandDiagnostics();
             _lastFault = null;
             var config = BuildConfig(settings, hosting: false);
-            _log.Info("[MP] Join requested: transport=" + config.Transport +
-                      " target=" + (config.Transport == TransportMode.SteamRelay
-                          ? config.JoinCode
-                          : config.HostAddress + ":" + config.Port) +
-                      " password=" + (config.Password.Length > 0 ? "SET" : "NONE") +
-                      " name='" + config.PlayerName + "'" +
-                      " mod=" + config.ModVersion + " game=" + config.GameVersion +
-                      " dlcs=[" + string.Join(", ", config.DlcList) + "]");
+            _log.Event(LogTopic.Session, "Join requested: transport=" + config.Transport +
+                " target=" +
+                (config.Transport == TransportMode.SteamRelay ? config.JoinCode : config.HostAddress + ":" + config.Port) +
+                " password=" + (config.Password.Length > 0 ? "SET" : "NONE") + " name='" +
+                config.PlayerName + "'" + " mod=" + config.ModVersion + " game=" +
+                config.GameVersion + " dlcs=[" + string.Join(", ", config.DlcList) + "]");
             SetPhase(ClientWorldPhase.Connecting);
             _session.Join(config);
         }
@@ -226,10 +226,8 @@ namespace CS2MultiplayerMod.Game
             if (_session.Role == SessionRole.None) return;
             if (_disconnectConfirmationRequested) return;
             _disconnectConfirmationRequested = true;
-            _log.Info("[MP] Waiting for confirmation before " +
-                      (_session.Role == SessionRole.Host
-                          ? "closing the hosted session."
-                          : "disconnecting from the session."));
+            _log.Detail(LogTopic.Session, "Waiting for confirmation before " +
+                (_session.Role == SessionRole.Host ? "closing the hosted session." : "disconnecting from the session."));
         }
 
         public void CancelDisconnectRequest()
@@ -307,8 +305,9 @@ namespace CS2MultiplayerMod.Game
                 // thinks they configured is exactly the kind of failure nobody can debug.
                 // Relay sessions carry no port at all, so there is nothing to warn about.
                 if (!relay)
-                    _log.Warn("[MP] Invalid " + (hosting ? "host" : "join") + " port '" + portText +
-                              "' - using default " + DefaultPort + " instead. Enter a number from 1 to 65535.");
+                    _log.Warn(LogTopic.Session, "Invalid " + (hosting ? "host" : "join") + " port '" +
+                        portText + "' - using default " + DefaultPort +
+                        " instead. Enter a number from 1 to 65535.");
                 port = DefaultPort;
             }
 
@@ -316,8 +315,8 @@ namespace CS2MultiplayerMod.Game
             if (!int.TryParse((settings.MaxPlayers ?? "").Trim(), out maxPlayers) || maxPlayers < 2 || maxPlayers > 32)
             {
                 if (hosting)
-                    _log.Warn("[MP] Invalid max players '" + settings.MaxPlayers +
-                              "' - using default " + DefaultMaxPlayers + " instead (allowed: 2-32).");
+                    _log.Warn(LogTopic.Session, "Invalid max players '" + settings.MaxPlayers +
+                        "' - using default " + DefaultMaxPlayers + " instead (allowed: 2-32).");
                 maxPlayers = DefaultMaxPlayers;
             }
 

@@ -8,8 +8,10 @@ using Unity.Collections;
 using Unity.Entities;
 using Unity.Jobs;
 using Unity.Mathematics;
+using CS2MultiplayerMod.Core.Diagnostics;
 using CS2MultiplayerMod.Core.Protocol.Messages;
 using CS2MultiplayerMod.Core.Session;
+using CS2MultiplayerMod.Game.Diagnostics;
 using CS2MultiplayerMod.Game.Sync.Commands;
 
 namespace CS2MultiplayerMod.Game.Sync.Systems
@@ -39,7 +41,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 try { command = EntityNameCommand.Decode(message.Body); }
                 catch (System.Exception ex)
                 {
-                    Mod.log.Warn("[MP] NameSync: dropping malformed command: " + ex.Message);
+                    SyncLog.Warn(LogTopic.City, "NameSync: dropping malformed command: " +
+                        ex.Message);
                     continue;
                 }
 
@@ -62,9 +65,10 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 {
                     // A name is cosmetic: the world stays consistent without it, so this never
                     // escalates to a resync the way a missing build target does.
-                    Mod.log.Warn("[MP] NameSync: no local " + KindName(pending.cmd.TargetKind) +
-                                 " '" + pending.cmd.TargetPrefabName + "' appeared within " +
-                                 (TargetRetryWindowMs / 1000) + " s; dropping its name.");
+                    SyncLog.Warn(LogTopic.City, "NameSync: no local " +
+                        KindName(pending.cmd.TargetKind) + " '" + pending.cmd.TargetPrefabName +
+                        "' appeared within " + (TargetRetryWindowMs / 1000) +
+                        " s; dropping its name.");
                     _targetRetry.RemoveAt(i);
                     continue;
                 }
@@ -94,8 +98,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 }
                 catch (System.Exception ex)
                 {
-                    Mod.log.Warn("[MP] NameSync: naming " + KindName(command.TargetKind) + " '" +
-                                 command.TargetPrefabName + "' failed: " + ex.Message);
+                    SyncLog.Warn(LogTopic.City, "NameSync: naming " + KindName(command.TargetKind) +
+                        " '" + command.TargetPrefabName + "' failed: " + ex.Message);
                     return true;
                 }
 
@@ -115,11 +119,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             // What makes the rendered street/district label pick the new name up; it is also what the
             // game's own naming path adds.
             if (refresh) EntityManager.AddComponent<BatchesUpdated>(target);
-            Mod.Verbose("[MP] NameSync realize: " + KindName(command.TargetKind) + " '" +
-                        command.TargetPrefabName + "' from player " + origin +
-                        (command.SetsCustomName
-                            ? (name.Length == 0 ? " name cleared." : " named '" + name + "'.")
-                            : " auto-name applied."));
+            SyncLog.Detail(LogTopic.City, "NameSync realize: " + KindName(command.TargetKind) + " '" +
+                command.TargetPrefabName + "' from player " + origin +
+                (command.SetsCustomName ? (name.Length == 0 ? " name cleared." : " named '" + name + "'.") : " auto-name applied."));
             return true;
         }
 
@@ -136,7 +138,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             if (_targetRetry.Count >= MaxPendingTargets)
             {
                 _targetRetry.RemoveAt(0);
-                Mod.Verbose("[MP] NameSync: pending-name queue is full; dropped its oldest entry.");
+                SyncLog.Warn(LogTopic.City,
+                    "NameSync: pending-name queue is full; dropped its oldest entry.");
             }
             _targetRetry.Add((command, origin, now + TargetRetryWindowMs));
         }
@@ -200,8 +203,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 if (!ApplyRandomIndices(held.Target, held.Indices)) continue;
 
                 EntityManager.AddComponent<BatchesUpdated>(held.Target);
-                Mod.Verbose("[MP] NameSync: restored auto-name " + Describe(held.Indices) +
-                            " on a " + KindName(held.Kind) + " that regrouped locally.");
+                SyncLog.Detail(LogTopic.City, "NameSync: restored auto-name " +
+                    Describe(held.Indices) + " on a " + KindName(held.Kind) +
+                    " that regrouped locally.");
             }
         }
 

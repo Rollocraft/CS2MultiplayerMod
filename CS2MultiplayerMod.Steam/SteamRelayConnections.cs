@@ -3,6 +3,7 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Runtime.InteropServices;
 using System.Threading;
+using CS2MultiplayerMod.Core.Diagnostics;
 using Steamworks;
 
 namespace CS2MultiplayerMod.Core.Networking.Steam
@@ -63,8 +64,8 @@ namespace CS2MultiplayerMod.Core.Networking.Steam
                     if (endpoint != null && !endpoint.Announced)
                     {
                         endpoint.Announced = true;
-                        _log.Info("Steam relay connection " + endpoint.Id + " established with " +
-                                  endpoint.RemoteAddress + ".");
+                        _log.Detail(LogTopic.Transport, "Steam relay connection " + endpoint.Id +
+                            " established with " + endpoint.RemoteAddress + ".");
                         Enqueue(TransportEvent.Connected(endpoint.Id));
                     }
                     break;
@@ -89,7 +90,8 @@ namespace CS2MultiplayerMod.Core.Networking.Steam
             lock (_gate) { open = _byId.Count; }
             if (open >= MaxConnections)
             {
-                _log.Warn("Refused Steam relay connection from " + steamId + ": too many open connections.");
+                _log.Warn(LogTopic.Transport, "Refused Steam relay connection from " + steamId +
+                    ": too many open connections.");
                 SteamNetworkingSockets.CloseConnection(evt.m_hConn, 0, "too many connections", false);
                 return;
             }
@@ -97,7 +99,8 @@ namespace CS2MultiplayerMod.Core.Networking.Steam
             EResult accepted = SteamNetworkingSockets.AcceptConnection(evt.m_hConn);
             if (accepted != EResult.k_EResultOK)
             {
-                _log.Warn("Could not accept Steam relay connection from " + steamId + ": " + accepted + ".");
+                _log.Warn(LogTopic.Transport, "Could not accept Steam relay connection from " +
+                    steamId + ": " + accepted + ".");
                 SteamNetworkingSockets.CloseConnection(evt.m_hConn, 0, "accept failed", false);
                 return;
             }
@@ -108,13 +111,14 @@ namespace CS2MultiplayerMod.Core.Networking.Steam
             {
                 // Outside the poll group this connection is deaf; better to refuse it than
                 // to leave a peer that handshakes and then goes quiet forever.
-                _log.Warn("Could not add Steam relay connection " + id + " from " + steamId +
-                          " to the poll group; refusing it.");
+                _log.Warn(LogTopic.Transport, "Could not add Steam relay connection " + id +
+                    " from " + steamId + " to the poll group; refusing it.");
                 Close(endpoint, "poll group rejected the connection", linger: false);
                 return;
             }
 
-            _log.Info("Accepted Steam relay connection " + id + " from " + steamId + ".");
+            _log.Detail(LogTopic.Transport, "Accepted Steam relay connection " + id + " from " +
+                steamId + ".");
             // Connected is announced on the Connected state, so the session never talks to
             // a connection that is still negotiating.
         }

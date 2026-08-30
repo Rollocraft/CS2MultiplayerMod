@@ -1,4 +1,5 @@
 using System;
+using CS2MultiplayerMod.Core.Diagnostics;
 using CS2MultiplayerMod.Core.Networking;
 using CS2MultiplayerMod.Core.Protocol;
 using CS2MultiplayerMod.Core.Protocol.Messages;
@@ -29,7 +30,7 @@ namespace CS2MultiplayerMod.Core.Session
         private void SetStatus(SessionStatus status, string detail)
         {
             Status = status;
-            _log.Info("Session status: " + status + " (" + detail + ")");
+            _log.Event(LogTopic.Session, "Session status: " + status + " (" + detail + ")");
             for (int i = 0; i < _observers.Count; i++)
                 try { _observers[i].OnStatusChanged(status, detail); }
                 catch (Exception ex) { LogObserverError("OnStatusChanged", ex); }
@@ -37,7 +38,7 @@ namespace CS2MultiplayerMod.Core.Session
 
         private void Fault(string message)
         {
-            _log.Error("Session fault: " + message);
+            _log.Error(LogTopic.Session, "Session fault: " + message);
             SetStatus(SessionStatus.Faulted, message);
             for (int i = 0; i < _observers.Count; i++)
                 try { _observers[i].OnError(message); }
@@ -108,8 +109,8 @@ namespace CS2MultiplayerMod.Core.Session
 
         private void NotifyBlob(string channel, long transferId, byte[] data)
         {
-            _log.Info("Blob '" + channel + "' transfer " + transferId + " received (" +
-                      data.Length + " bytes).");
+            _log.Detail(LogTopic.Session, "Blob '" + channel + "' transfer " + transferId +
+                " received (" + data.Length + " bytes).");
             for (int i = 0; i < _observers.Count; i++)
                 try { _observers[i].OnBlobReceived(channel, transferId, data); }
                 catch (Exception ex) { LogObserverError("OnBlobReceived", ex); }
@@ -125,7 +126,8 @@ namespace CS2MultiplayerMod.Core.Session
 
         private void LogObserverError(string callback, Exception ex)
         {
-            _log.Error("Observer crashed in " + callback + " (session continues): " + ex);
+            _log.Error(LogTopic.Session, "Observer crashed in " + callback +
+                " (session continues): " + ex);
         }
 
     }

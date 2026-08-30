@@ -7,6 +7,8 @@ using Game.Tools;
 using Unity.Collections;
 using Unity.Entities;
 using Unity.Mathematics;
+using CS2MultiplayerMod.Core.Diagnostics;
+using CS2MultiplayerMod.Game.Diagnostics;
 using CS2MultiplayerMod.Game.Sync.Commands;
 using CS2MultiplayerMod.Game.Sync.Infrastructure;
 
@@ -45,8 +47,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     CS2MultiplayerMod.Game.Diagnostics.ResyncEvidence.Contradiction)
                 .About("line with no stops")
                 .Tried("nothing - a public transport line with no stops cannot be created"));
-            Mod.log.Warn("[MP] RouteSync rejected public-transport line '" + prefabName +
-                         "' because none of its waypoints is connected to a stop.");
+            SyncLog.Warn(LogTopic.Routes, "RouteSync rejected public-transport line '" + prefabName +
+                "' because none of its waypoints is connected to a stop.");
             return false;
         }
 

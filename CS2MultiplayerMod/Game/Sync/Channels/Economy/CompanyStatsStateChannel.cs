@@ -1,4 +1,6 @@
+using CS2MultiplayerMod.Core.Diagnostics;
 using CS2MultiplayerMod.Core.Protocol;
+using CS2MultiplayerMod.Game.Diagnostics;
 using CS2MultiplayerMod.Game.Sync.Commands;
 using CS2MultiplayerMod.Game.Sync.Infrastructure;
 using CS2MultiplayerMod.Game.Sync.Systems;
@@ -40,8 +42,9 @@ namespace CS2MultiplayerMod.Game.Sync.Channels
                 if (!_captureWarned)
                 {
                     _captureWarned = true;
-                    Mod.log.Warn("[MP] CompanyStats: host capture failed; page skipped " +
-                                 "(logged once until world reset): " + ex.Message);
+                    SyncLog.Warn(LogTopic.Commercial,
+                        "CompanyStats: host capture failed; page skipped " +
+                        "(logged once until world reset): " + ex.Message);
                 }
                 return false;
             }

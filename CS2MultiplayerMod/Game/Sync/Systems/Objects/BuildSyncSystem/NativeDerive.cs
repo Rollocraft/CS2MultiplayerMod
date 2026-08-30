@@ -5,6 +5,8 @@ using Unity.Collections;
 using Unity.Entities;
 using Unity.Jobs;
 using Unity.Mathematics;
+using CS2MultiplayerMod.Core.Diagnostics;
+using CS2MultiplayerMod.Game.Diagnostics;
 using CS2MultiplayerMod.Game.Sync.Infrastructure;
 
 namespace CS2MultiplayerMod.Game.Sync.Systems
@@ -103,8 +105,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 BindingFlags.Instance | BindingFlags.NonPublic);
 
             if (_createDefinitionsMethod == null || _randomSeedValueField == null)
-                Mod.log.Warn("[MP] BuildSync: the game's object definition generator is not " +
-                             "reachable; upgrades and building moves fall back to reduced replication.");
+                SyncLog.Warn(LogTopic.Buildings,
+                    "BuildSync: the game's object definition generator is not " +
+                    "reachable; upgrades and building moves fall back to reduced replication.");
             return _createDefinitionsMethod != null && _randomSeedValueField != null;
         }
 
@@ -225,9 +228,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 _nativeNetCoordinator.CancelPreparedDefinitionFrame();
                 // Reflection wraps whatever the generator threw; the inner one is the useful message.
                 System.Exception cause = ex.InnerException ?? ex;
-                Mod.log.Warn("[MP] BuildSync: the game's definition generator rejected " + source +
-                             "; dropping this edit: " + cause.Message);
-                Diagnostics.FlightRecorder.Note("native derive rejected=" + cause.GetType().Name);
+                SyncLog.Warn(LogTopic.Buildings,
+                    "BuildSync: the game's definition generator rejected " + source +
+                    "; dropping this edit: " + cause.Message);
                 return NativeDeriveResult.Failed;
             }
             finally
@@ -242,7 +245,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             if (derived == 0)
             {
                 _nativeNetCoordinator.CancelPreparedDefinitionFrame();
-                Diagnostics.FlightRecorder.Note("native derive produced no definitions (" + source + ")");
+                SyncLog.Trace(LogTopic.Buildings, "native derive produced no definitions (" + source +
+                    ")");
                 return NativeDeriveResult.Failed;
             }
 
@@ -256,7 +260,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 return NativeDeriveResult.Busy;
             }
 
-            Diagnostics.FlightRecorder.Note("native derive " + source + " defs=" + derived +
+            SyncLog.Trace(LogTopic.Buildings, "native derive " + source + " defs=" + derived +
                 " seed=" + toolSeed + " deriveMS=" + (System.Environment.TickCount - startTick));
             return NativeDeriveResult.Armed;
         }

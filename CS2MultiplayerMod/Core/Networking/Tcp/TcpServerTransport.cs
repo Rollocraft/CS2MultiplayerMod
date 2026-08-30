@@ -80,8 +80,9 @@ namespace CS2MultiplayerMod.Core.Networking.Tcp
             };
             _acceptThread.Start();
 
-            _log.Info("Host listening on " + _listener.LocalEndpoint + " (" + (lanOnly ? "LAN-only" : "PUBLIC") + ", " +
-                      (certificate != null ? "TLS" : "PLAINTEXT") + ").");
+            _log.Event(LogTopic.Transport, "Host listening on " + _listener.LocalEndpoint + " (" +
+                (lanOnly ? "LAN-only" : "PUBLIC") + ", " +
+                (certificate != null ? "TLS" : "PLAINTEXT") + ").");
             LogReachability(port, lanOnly);
         }
 
@@ -108,8 +109,8 @@ namespace CS2MultiplayerMod.Core.Networking.Tcp
                 try { remote = client.Client.RemoteEndPoint.ToString(); } catch { /* socket already dead */ }
 
                 var id = new ConnectionId(Interlocked.Increment(ref _nextConnectionId));
-                _log.Info("Accepted TCP connection " + id + " from " + remote +
-                          (_certificate != null ? "; starting TLS handshake." : "."));
+                _log.Detail(LogTopic.Transport, "Accepted TCP connection " + id + " from " + remote +
+                    (_certificate != null ? "; starting TLS handshake." : "."));
                 var connection = new FramedConnection(id, client, _certificate)
                 {
                     // Connected is announced only once the connection is actually usable
@@ -140,7 +141,8 @@ namespace CS2MultiplayerMod.Core.Networking.Tcp
 
             if (_lanOnly && !IsPrivateAddress(remote))
             {
-                _log.Warn("Refused connection from " + remote + ": session is LAN-only.");
+                _log.Warn(LogTopic.Transport, "Refused connection from " + remote +
+                    ": session is LAN-only.");
                 try { client.Close(); } catch { }
                 return false;
             }
@@ -149,7 +151,8 @@ namespace CS2MultiplayerMod.Core.Networking.Tcp
             {
                 // Coarse global cap: handshaked peers are bounded by the session's player
                 // limit, so runaway growth here means a pending-socket flood.
-                _log.Warn("Refused connection from " + remote + ": too many open connections.");
+                _log.Warn(LogTopic.Transport, "Refused connection from " + remote +
+                    ": too many open connections.");
                 try { client.Close(); } catch { }
                 return false;
             }
@@ -165,7 +168,8 @@ namespace CS2MultiplayerMod.Core.Networking.Tcp
                 Interlocked.Decrement(ref _queuedEvents);
                 // The game thread is not draining fast enough or someone is flooding;
                 // either way, shedding the producer beats unbounded memory growth.
-                _log.Warn("Transport event queue full; dropping connection " + from.Value + ".");
+                _log.Warn(LogTopic.Transport, "Transport event queue full; dropping connection " +
+                    from.Value + ".");
                 FramedConnection connection;
                 if (_connections.TryGetValue(from.Value, out connection))
                     connection.Close("event queue overflow");
@@ -241,7 +245,7 @@ namespace CS2MultiplayerMod.Core.Networking.Tcp
                 pair.Value.Close("host shutting down");
             _connections.Clear();
 
-            _log.Info("Host stopped.");
+            _log.Detail(LogTopic.Transport, "Host stopped.");
         }
 
         public void ShutdownAfterFlush(int timeoutMs)
@@ -263,14 +267,14 @@ namespace CS2MultiplayerMod.Core.Networking.Tcp
                 Thread.Sleep(5);
 
             if (!_connections.IsEmpty)
-                _log.Warn("Host stopping with " + _connections.Count +
-                          " connection(s) still draining after " + timeoutMs + " ms; closing them now.");
+                _log.Warn(LogTopic.Transport, "Host stopping with " + _connections.Count +
+                    " connection(s) still draining after " + timeoutMs + " ms; closing them now.");
 
             foreach (var pair in _connections)
                 pair.Value.Close("host shutting down");
             _connections.Clear();
 
-            _log.Info("Host stopped.");
+            _log.Detail(LogTopic.Transport, "Host stopped.");
         }
 
         public void Dispose() => Shutdown();

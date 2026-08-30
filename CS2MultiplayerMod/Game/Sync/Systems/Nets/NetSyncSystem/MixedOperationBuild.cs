@@ -8,7 +8,9 @@ using Game.Tools;
 using Unity.Collections;
 using Unity.Entities;
 using Unity.Mathematics;
+using CS2MultiplayerMod.Core.Diagnostics;
 using CS2MultiplayerMod.Core.Protocol.Messages;
+using CS2MultiplayerMod.Game.Diagnostics;
 using CS2MultiplayerMod.Game.Sync.Commands;
 using CS2MultiplayerMod.Game.Sync.Infrastructure;
 
@@ -186,8 +188,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                 {
                     CancelPreparedDefinitionFrame();
                     _completedNetOperations.Remember(key, now, 60000);
-                    Diagnostics.FlightRecorder.Note("net mixed operation already present op=" +
-                                                      operation.OperationId);
+                    SyncLog.Trace(LogTopic.Nets, "net mixed operation already present op=" +
+                        operation.OperationId);
                     return false;
                 }
 
@@ -204,8 +206,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                 {
                     long completedNow = Mod.Service != null ? Mod.Service.NowMs : now;
                     _completedNetOperations.Remember(key, completedNow, 60000);
-                    Diagnostics.FlightRecorder.Note("net mixed operation committed/drained op=" +
-                                                      operation.OperationId);
+                    SyncLog.Trace(LogTopic.Nets, "net mixed operation committed/drained op=" +
+                        operation.OperationId);
                 }, "mixed operation n=" + created.Count);
                 if (!armed)
                     throw new System.InvalidOperationException(
@@ -242,13 +244,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                     CancelPreparedDefinitionFrame();
                 }
                 _operationBuildFailures.Remove(key);
-                Mod.log.Warn("[MP] NetSync: mixed operation " + operation.OperationId +
-                             (commitArmed ? " failed after its atomic commit was armed: " :
-                                 " rolled back before generation: ") + ex.Message +
-                             "; requesting world recovery.");
-                Diagnostics.FlightRecorder.Note((commitArmed ?
-                    "net mixed operation post-arm failure/resync op=" :
-                    "net mixed operation rollback/resync op=") + operation.OperationId);
+                SyncLog.Warn(LogTopic.Nets, "NetSync: mixed operation " + operation.OperationId +
+                    (commitArmed ? " failed after its atomic commit was armed: " : " rolled back before generation: ") +
+                    ex.Message + "; requesting world recovery.");
                 SyncInbox.RequestResync(CS2MultiplayerMod.Game.Diagnostics.ResyncReport
                     .Create("mixed net operation could not be generated atomically", "net",
                         CS2MultiplayerMod.Game.Diagnostics.ResyncEvidence.Contradiction)
@@ -299,8 +297,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
             }
 
             _nativeOperationHolds.Remove(key);
-            Diagnostics.FlightRecorder.Note("net mixed operation rejected/resync op=" +
-                                              operation.OperationId);
+            SyncLog.Trace(LogTopic.Nets, "net mixed operation rejected/resync op=" +
+                operation.OperationId);
         }
     }
 }

@@ -1,6 +1,8 @@
 using Colossal.IO.AssetDatabase;
+using CS2MultiplayerMod.Core.Diagnostics;
 using CS2MultiplayerMod.Core.Networking;
 using CS2MultiplayerMod.Core.Session;
+using CS2MultiplayerMod.Game.Diagnostics;
 using CS2MultiplayerMod.Localization;
 using Game;
 using Game.Modding;
@@ -12,9 +14,13 @@ using Game.UI.Widgets;
 namespace CS2MultiplayerMod
 {
     [FileLocation(nameof(CS2MultiplayerMod))]
-    [SettingsUITabOrder(GeneralTab, JoinTab, HostTab)]
-    [SettingsUIGroupOrder(GeneralGroup, DiagnosticsGroup, StatusGroup, SessionGroup, JoinSetupGroup, JoinActionGroup, HostSetupGroup, HostActionGroup)]
-    [SettingsUIShowGroupName(GeneralGroup, DiagnosticsGroup, StatusGroup, SessionGroup, JoinSetupGroup, JoinActionGroup, HostSetupGroup, HostActionGroup)]
+    [SettingsUITabOrder(GeneralTab, JoinTab, HostTab, LoggingTab)]
+    [SettingsUIGroupOrder(GeneralGroup, StatusGroup, SessionGroup, JoinSetupGroup, JoinActionGroup,
+        HostSetupGroup, HostActionGroup,
+        LogAllGroup, LogConnectionGroup, LogWorldGroup, LogEconomyGroup, LogClientGroup)]
+    [SettingsUIShowGroupName(GeneralGroup, StatusGroup, SessionGroup, JoinSetupGroup, JoinActionGroup,
+        HostSetupGroup, HostActionGroup,
+        LogAllGroup, LogConnectionGroup, LogWorldGroup, LogEconomyGroup, LogClientGroup)]
     public class Setting : ModSetting
     {
         // The options UI exposes general/session state plus join and host setup.
@@ -25,14 +31,26 @@ namespace CS2MultiplayerMod
         public const string JoinTab = "Join";
         public const string HostTab = "Host";
 
+        // Its own tab, not a group on General: there is one switch per feature (see LogTopic),
+        // which is the point of them - but eighteen checkboxes wedged under the player-name field
+        // would be the first thing anyone sees when they open the mod's options.
+        public const string LoggingTab = "Logging";
+
         public const string GeneralGroup = "General";
-        public const string DiagnosticsGroup = "Diagnostics";
         public const string StatusGroup = "Status";
         public const string SessionGroup = "Session";
         public const string JoinSetupGroup = "JoinSetup";
         public const string JoinActionGroup = "JoinAction";
         public const string HostSetupGroup = "HostSetup";
         public const string HostActionGroup = "HostAction";
+
+        // The logging switches, grouped the way a player narrows a problem down: first "can I get
+        // in", then "is the city the same", then "are the numbers right", then "is it my client".
+        public const string LogAllGroup = "LogAll";
+        public const string LogConnectionGroup = "LogConnection";
+        public const string LogWorldGroup = "LogWorld";
+        public const string LogEconomyGroup = "LogEconomy";
+        public const string LogClientGroup = "LogClient";
 
         /// <summary>Values of <see cref="HostConnection"/>. Stored as strings so the UI binding is one plain value.</summary>
         public const string ConnectionRelay = "relay";
@@ -163,35 +181,138 @@ namespace CS2MultiplayerMod
             PlayerName = preset;
             PlayerNamePresetApplied = true;
             ApplyAndSave();
-            Mod.log.Info("Player name preset from the platform account: '" + preset + "'.");
+            SyncLog.Detail(LogTopic.Startup, "Player name preset from the platform account: '" +
+                preset + "'.");
         }
 
+        // ---- Logging tab --------------------------------------------------------
+        // One switch per feature rather than one "extra logging" switch, because the log that
+        // answers a question is the one about the thing that broke: a player chasing missing
+        // roads should get roads, not twenty thousand lines of everything else.
+        //
+        // None of them has to be on for a bug report to be worth reading. Connects,
+        // disconnects, world transfers, resyncs, dropped commands and every fault are written
+        // whatever is set here (see SyncLog); these only add the per-action detail underneath
+        // them. VerboseLogging below is the "I do not know which one" shortcut, not a
+        // different kind of logging.
+
         /// <summary>
-        /// Off: only the important lines (connect/disconnect, world transfer, faults).
-        /// On: also the per-action sync notices and periodic diagnostics. See <see cref="Mod.Verbose"/>.
+        /// The master switch: turns every topic below on at once, without disturbing which
+        /// individual ones the player had ticked.
+        ///
+        /// Safe to leave on - it makes the log longer, not the game slower, because the detail
+        /// lines sit behind a field read and the flight log only flushes them in batches. Turn it
+        /// on when you have been asked for a full log and do not want to guess which switch
+        /// covers the problem.
         /// </summary>
-        [SettingsUISection(GeneralTab, GeneralGroup)]
+        [SettingsUISection(LoggingTab, LogAllGroup)]
         public bool VerboseLogging { get; set; } = false;
+
+        /// <summary>Connecting, disconnecting, the handshake, and players joining or leaving.</summary>
+        [SettingsUISection(LoggingTab, LogConnectionGroup)]
+        public bool LogSession { get; set; } = false;
+
+        /// <summary>The wire underneath a session: sockets, the Steam relay, port forwarding, rates.</summary>
+        [SettingsUISection(LoggingTab, LogConnectionGroup)]
+        public bool LogTransport { get; set; } = false;
+
+        /// <summary>Sending, receiving, staging and loading the world a joining player downloads.</summary>
+        [SettingsUISection(LoggingTab, LogConnectionGroup)]
+        public bool LogWorldTransfer { get; set; } = false;
+
+        /// <summary>What diverged, what the arbiter decided about it, and what the repair did.</summary>
+        [SettingsUISection(LoggingTab, LogWorldGroup)]
+        public bool LogResync { get; set; } = false;
+
+        /// <summary>The command pipeline: inbox, observers, authority holds, realization.</summary>
+        [SettingsUISection(LoggingTab, LogWorldGroup)]
+        public bool LogPipeline { get; set; } = false;
+
+        /// <summary>Roads, tracks, pipes and wires.</summary>
+        [SettingsUISection(LoggingTab, LogWorldGroup)]
+        public bool LogNets { get; set; } = false;
+
+        /// <summary>Placed objects: buildings, props and trees.</summary>
+        [SettingsUISection(LoggingTab, LogWorldGroup)]
+        public bool LogBuildings { get; set; } = false;
+
+        /// <summary>Zoning, areas and districts, terrain, tile purchases.</summary>
+        [SettingsUISection(LoggingTab, LogWorldGroup)]
+        public bool LogLand { get; set; } = false;
+
+        /// <summary>City-wide state: names, policies, money, milestones, the development tree.</summary>
+        [SettingsUISection(LoggingTab, LogWorldGroup)]
+        public bool LogCity { get; set; } = false;
+
+        /// <summary>Transit lines, stops, vehicles and fares.</summary>
+        [SettingsUISection(LoggingTab, LogWorldGroup)]
+        public bool LogRoutes { get; set; } = false;
+
+        [SettingsUISection(LoggingTab, LogEconomyGroup)]
+        public bool LogResidential { get; set; } = false;
+
+        [SettingsUISection(LoggingTab, LogEconomyGroup)]
+        public bool LogCommercial { get; set; } = false;
+
+        [SettingsUISection(LoggingTab, LogEconomyGroup)]
+        public bool LogIndustrial { get; set; } = false;
+
+        [SettingsUISection(LoggingTab, LogEconomyGroup)]
+        public bool LogOffice { get; set; } = false;
+
+        /// <summary>The other players: their cursors, markers, map pings and chat.</summary>
+        [SettingsUISection(LoggingTab, LogClientGroup)]
+        public bool LogPlayers { get; set; } = false;
+
+        /// <summary>The mod's own screens: the main-menu button, the join dialog, the options page.</summary>
+        [SettingsUISection(LoggingTab, LogClientGroup)]
+        public bool LogUi { get; set; } = false;
+
+        /// <summary>Mod load, system registration, and the compatibility and DLC checks.</summary>
+        [SettingsUISection(LoggingTab, LogClientGroup)]
+        public bool LogStartup { get; set; } = false;
 
         /// <summary>
         /// Frame times and the mod's own main-thread cost, reported every 30 s together with a
         /// per-zone split. Cheap enough to leave on: the measurement itself is two timestamp reads
         /// per pass, and it is the only thing that can tell the mod's cost apart from the city's.
         /// </summary>
-        [SettingsUISection(GeneralTab, DiagnosticsGroup)]
+        [SettingsUISection(LoggingTab, LogClientGroup)]
         public bool LogPerformance { get; set; } = false;
 
-        [SettingsUISection(GeneralTab, DiagnosticsGroup)]
-        public bool LogResidential { get; set; } = false;
-
-        [SettingsUISection(GeneralTab, DiagnosticsGroup)]
-        public bool LogCommercial { get; set; } = false;
-
-        [SettingsUISection(GeneralTab, DiagnosticsGroup)]
-        public bool LogIndustrial { get; set; } = false;
-
-        [SettingsUISection(GeneralTab, DiagnosticsGroup)]
-        public bool LogOffice { get; set; } = false;
+        /// <summary>
+        /// Whether the player asked for detail about this topic. <see cref="VerboseLogging"/> is
+        /// applied by the caller (<see cref="Game.Diagnostics.SyncLog.IsEnabled"/>), so this stays
+        /// a plain per-topic answer.
+        ///
+        /// Unknown topics answer false: a topic added without a switch should be silent by
+        /// default rather than quietly chatty in every player's log.
+        /// </summary>
+        public bool IsTopicEnabled(LogTopic topic)
+        {
+            switch (topic)
+            {
+                case LogTopic.Startup: return LogStartup;
+                case LogTopic.Session: return LogSession;
+                case LogTopic.Transport: return LogTransport;
+                case LogTopic.WorldTransfer: return LogWorldTransfer;
+                case LogTopic.Resync: return LogResync;
+                case LogTopic.Pipeline: return LogPipeline;
+                case LogTopic.Nets: return LogNets;
+                case LogTopic.Buildings: return LogBuildings;
+                case LogTopic.Land: return LogLand;
+                case LogTopic.City: return LogCity;
+                case LogTopic.Routes: return LogRoutes;
+                case LogTopic.Residential: return LogResidential;
+                case LogTopic.Commercial: return LogCommercial;
+                case LogTopic.Industrial: return LogIndustrial;
+                case LogTopic.Office: return LogOffice;
+                case LogTopic.Players: return LogPlayers;
+                case LogTopic.Ui: return LogUi;
+                case LogTopic.Performance: return LogPerformance;
+                default: return false;
+            }
+        }
 
         /// <summary>
         /// The partner markers are the only thing this mod draws every rendered frame, so they are
@@ -467,6 +588,24 @@ namespace CS2MultiplayerMod
         {
             EnableMod = true;
             VerboseLogging = false;
+            LogSession = false;
+            LogTransport = false;
+            LogWorldTransfer = false;
+            LogResync = false;
+            LogPipeline = false;
+            LogNets = false;
+            LogBuildings = false;
+            LogLand = false;
+            LogCity = false;
+            LogRoutes = false;
+            LogResidential = false;
+            LogCommercial = false;
+            LogIndustrial = false;
+            LogOffice = false;
+            LogPlayers = false;
+            LogUi = false;
+            LogStartup = false;
+            LogPerformance = false;
             ShowPartnerMarkers = true;
             IgnoreModCompatibilityChecks = false;
             PlayerName = DefaultPlayerName;

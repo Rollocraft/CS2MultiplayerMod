@@ -1,30 +1,34 @@
 using System;
-using Colossal.Logging;
 using CS2MultiplayerMod.Core.Diagnostics;
 using CS2MultiplayerMod.Game.Diagnostics;
 
 namespace CS2MultiplayerMod.Game
 {
     /// <summary>
-    /// Adapts the core's game-agnostic <see cref="IModLogger"/> onto Colossal's
-    /// <see cref="ILog"/>. This is the single seam where the portable core meets the
-    /// game's logging; nothing under <c>Core/</c> references Colossal types.
+    /// Lets the portable core write through the mod's one logger.
+    ///
+    /// Nothing under <c>Core/</c> may reference a game assembly, so the networking and session code
+    /// logs against <see cref="IModLogger"/>. This is the single seam where that interface meets
+    /// <see cref="SyncLog"/> - the core names the same <see cref="LogTopic"/> values as the game
+    /// layer, so a transport line and a road line land in one log, tagged the same way, gated the
+    /// same way, and mirrored to the flight log by the same rules.
+    ///
+    /// It holds no state: the destinations are the mod's static log and flight recorder.
     /// </summary>
     public sealed class ColossalModLogger : IModLogger
     {
-        private readonly ILog _log;
+        public static readonly ColossalModLogger Instance = new ColossalModLogger();
 
-        public ColossalModLogger(ILog log)
-        {
-            _log = log;
-        }
+        private ColossalModLogger() { }
 
-        // Redacted here rather than at each call site: IO and asset faults quote the
-        // offending path, which sits under the player's profile.
-        public void Debug(string message) => _log.Debug(LogPaths.Redact(message));
-        public void Info(string message) => _log.Info(LogPaths.Redact(message));
-        public void Warn(string message) => _log.Warn(LogPaths.Redact(message));
-        public void Error(string message) => _log.Error(LogPaths.Redact(message));
-        public void Error(string message, Exception exception) => _log.Error(LogPaths.Redact(message + " :: " + exception));
+        public bool IsEnabled(LogTopic topic) => SyncLog.IsEnabled(topic);
+        public void Detail(LogTopic topic, string message) => SyncLog.Detail(topic, message);
+        public void Trace(LogTopic topic, string message) => SyncLog.Trace(topic, message);
+        public void Event(LogTopic topic, string message) => SyncLog.Event(topic, message);
+        public void Warn(LogTopic topic, string message) => SyncLog.Warn(topic, message);
+        public void Error(LogTopic topic, string message) => SyncLog.Error(topic, message);
+
+        public void Error(LogTopic topic, string message, Exception exception) =>
+            SyncLog.Error(topic, message, exception);
     }
 }

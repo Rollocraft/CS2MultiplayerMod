@@ -206,7 +206,8 @@ namespace CS2MultiplayerMod.Core.Networking.Steam
                     "Steam refused to create a relay poll group. Restart Steam and try again.");
             }
 
-            transport._log.Info("Hosting over the Steam relay on virtual port " + virtualPort +
+            transport._log.Detail(LogTopic.Transport,
+                "Hosting over the Steam relay on virtual port " + virtualPort +
                                 "; join code " + SteamRelayProvider.LocalSteamId() + ".");
             return transport;
         }
@@ -238,7 +239,7 @@ namespace CS2MultiplayerMod.Core.Networking.Steam
             // The client's single connection is the session's well-known Server id, bound
             // before any callback can fire so the first status change already resolves.
             transport.Bind(ConnectionId.Server, connection, steamId);
-            transport._log.Info("Connecting to " + steamId + " over the Steam relay.");
+            transport._log.Detail(LogTopic.Transport, "Connecting to " + steamId + " over the Steam relay.");
             return transport;
         }
 
@@ -247,7 +248,7 @@ namespace CS2MultiplayerMod.Core.Networking.Steam
             // Warming the relay network here means the first connection does not also pay
             // for fetching the relay topology.
             try { SteamNetworkingUtils.InitRelayNetworkAccess(); }
-            catch (Exception ex) { _log.Warn("Could not pre-warm the Steam relay network: " + ex.Message); }
+            catch (Exception ex) { _log.Warn(LogTopic.Transport, "Could not pre-warm the Steam relay network: " + ex.Message); }
 
             ConfigureForBulkTransfer();
 

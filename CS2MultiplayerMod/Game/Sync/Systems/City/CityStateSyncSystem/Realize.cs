@@ -1,5 +1,7 @@
+using CS2MultiplayerMod.Core.Diagnostics;
 using CS2MultiplayerMod.Core.Protocol;
 using CS2MultiplayerMod.Core.Protocol.Messages;
+using CS2MultiplayerMod.Game.Diagnostics;
 using CS2MultiplayerMod.Game.Sync.Infrastructure;
 
 namespace CS2MultiplayerMod.Game.Sync.Systems
@@ -16,8 +18,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 IStateChannel channel;
                 if (!_channels.TryGetValue(edit.ChannelId, out channel) || !_editable.Contains(edit.ChannelId))
                 {
-                    Mod.log.Warn("[MP] CityState: ignoring edit on non-editable channel " + edit.ChannelId +
-                                 " from player " + edit.OriginPlayerId + ".");
+                    SyncLog.Warn(LogTopic.City, "CityState: ignoring edit on non-editable channel " +
+                        edit.ChannelId + " from player " + edit.OriginPlayerId + ".");
                     continue;
                 }
 
@@ -25,14 +27,15 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 {
                     channel.Apply(EntityManager, new NetworkReader(edit.Data));
                     any = true;
-                    Mod.Verbose("[MP] CityState: player " + edit.OriginPlayerId + " edited channel " +
-                                 edit.ChannelId + "; applied and broadcasting.");
+                    SyncLog.Detail(LogTopic.City, "CityState: player " + edit.OriginPlayerId +
+                        " edited channel " + edit.ChannelId + "; applied and broadcasting.");
                 }
                 catch (System.Exception ex)
                 {
                     // Wire data must never take the host down — malformed or hostile
                     // edits are dropped, not crashed on.
-                    Mod.log.Warn("[MP] CityState: dropping bad edit on channel " + edit.ChannelId + ": " + ex.Message);
+                    SyncLog.Warn(LogTopic.City, "CityState: dropping bad edit on channel " +
+                        edit.ChannelId + ": " + ex.Message);
                 }
             }
 
@@ -72,8 +75,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     }
                     if (_orderedDeferred.Count >= OrderedDeferredCap)
                     {
-                        Mod.log.Warn("[MP] CityState: ordered-state deferred queue overflowed; " +
-                                     "requesting a fresh world sync.");
+                        SyncLog.Warn(LogTopic.City,
+                            "CityState: ordered-state deferred queue overflowed; " +
+                            "requesting a fresh world sync.");
                         PoisonOrderedStream("ordered state deferred overflow");
                         continue;
                     }
@@ -100,7 +104,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 }
                 catch (System.Exception ex)
                 {
-                    Mod.log.Warn("[MP] CityState: dropping bad state on channel " + newest.ChannelId + ": " + ex.Message);
+                    SyncLog.Warn(LogTopic.City, "CityState: dropping bad state on channel " +
+                        newest.ChannelId + ": " + ex.Message);
                 }
             }
 
@@ -110,8 +115,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             if (_applied > 0 && now - _lastLogMs >= 30000)
             {
                 _lastLogMs = now;
-                Mod.Verbose("[MP] CityState: applied " + _applied + " state snapshot(s) from host in last 30s" +
-                            (_superseded > 0 ? ", " + _superseded + " superseded before apply." : "."));
+                SyncLog.Detail(LogTopic.City, "CityState: applied " + _applied +
+                    " state snapshot(s) from host in last 30s" +
+                    (_superseded > 0 ? ", " + _superseded + " superseded before apply." : "."));
                 _applied = 0;
                 _superseded = 0;
             }
@@ -128,8 +134,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             }
             catch (System.Exception ex)
             {
-                Mod.log.Warn("[MP] CityState: dropping bad ordered state on channel " +
-                             snapshot.ChannelId + ": " + ex.Message);
+                SyncLog.Warn(LogTopic.City, "CityState: dropping bad ordered state on channel " +
+                    snapshot.ChannelId + ": " + ex.Message);
                 PoisonOrderedStream("malformed ordered household state");
             }
         }
@@ -142,7 +148,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 try { _pumped[i].Pump(EntityManager); }
                 catch (System.Exception ex)
                 {
-                    Mod.log.Warn("[MP] CityState: channel pump failed: " + ex.Message);
+                    SyncLog.Warn(LogTopic.City, "CityState: channel pump failed: " + ex.Message);
                 }
             }
         }

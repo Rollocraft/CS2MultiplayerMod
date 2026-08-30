@@ -6,8 +6,10 @@ using Game.Tools;
 using Unity.Collections;
 using Unity.Entities;
 using Unity.Mathematics;
+using CS2MultiplayerMod.Core.Diagnostics;
 using CS2MultiplayerMod.Core.Protocol.Messages;
 using CS2MultiplayerMod.Core.Session;
+using CS2MultiplayerMod.Game.Diagnostics;
 using CS2MultiplayerMod.Game.Sync.Commands;
 using CS2MultiplayerMod.Game.Sync.Infrastructure;
 
@@ -98,17 +100,18 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 try { command = GrowableLifecycleCommand.Decode(message.Body); }
                 catch (System.Exception ex)
                 {
-                    Mod.log.Warn("[MP] GrowableSync: dropping malformed command from player " +
-                                 message.OriginPlayerId + ": " + ex.Message);
+                    SyncLog.Warn(LogTopic.Buildings,
+                        "GrowableSync: dropping malformed command from player " +
+                        message.OriginPlayerId + ": " + ex.Message);
                     continue;
                 }
 
                 if (_applied.Contains(command.Sequence, now))
                 {
                     _duplicates++;
-                    Mod.Verbose("[MP] GrowableSync: ignoring duplicate " +
-                                GrowableLifecycleCommand.OpName(command.Op) + " seq=" +
-                                command.Sequence + " (already applied).");
+                    SyncLog.Detail(LogTopic.Buildings, "GrowableSync: ignoring duplicate " +
+                        GrowableLifecycleCommand.OpName(command.Op) + " seq=" + command.Sequence +
+                        " (already applied).");
                     continue;
                 }
 
@@ -148,8 +151,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 // is not a zoned building at all. Neither is retryable.
                 _unknownPrefab++;
                 _applied.Remember(command.Sequence, now, ReplayWindowMs);
-                Mod.log.Warn("[MP] GrowableSync: unknown zoned-building prefab '" +
-                             command.PrefabName + "' at " + Format(position) + "; spawn dropped.");
+                SyncLog.Warn(LogTopic.Buildings, "GrowableSync: unknown zoned-building prefab '" +
+                    command.PrefabName + "' at " + Format(position) + "; spawn dropped.");
                 return true;
             }
 
@@ -175,8 +178,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     }
                     _duplicates++;
                     _applied.Remember(command.Sequence, now, ReplayWindowMs);
-                    Mod.Verbose("[MP] GrowableSync: '" + command.PrefabName + "' already stands at " +
-                                Format(position) + "; spawn seq=" + command.Sequence + " ignored.");
+                    SyncLog.Detail(LogTopic.Buildings, "GrowableSync: '" + command.PrefabName +
+                        "' already stands at " + Format(position) + "; spawn seq=" +
+                        command.Sequence + " ignored.");
                     return true;
                 }
 
@@ -188,11 +192,10 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     // the two cities agreeing about the building that was deliberately placed.
                     _conflicts++;
                     _applied.Remember(command.Sequence, now, ReplayWindowMs);
-                    Mod.log.Warn("[MP] GrowableSync conflict: '" + command.PrefabName + "' at " +
-                                 Format(position) + " overlaps " +
-                                 DescribeBlocker(placedBlocker, now) +
-                                 "; spawn refused (seq=" + command.Sequence + ").");
-                    Diagnostics.FlightRecorder.Note("growable spawn refused (placed building)");
+                    SyncLog.Warn(LogTopic.Buildings, "GrowableSync conflict: '" + command.PrefabName +
+                        "' at " + Format(position) + " overlaps " +
+                        DescribeBlocker(placedBlocker, now) + "; spawn refused (seq=" +
+                        command.Sequence + ").");
                     return true;
                 }
 
@@ -202,11 +205,12 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 for (int i = 0; i < blockers.Length; i++)
                 {
                     _conflicts++;
-                    Mod.log.Warn("[MP] GrowableSync conflict: evicting locally grown " +
-                                 DescribeBlocker(blockers[i], now) + " for the host's '" +
-                                 command.PrefabName + "' at " + Format(position) + ".");
+                    SyncLog.Warn(LogTopic.Buildings,
+                        "GrowableSync conflict: evicting locally grown " +
+                        DescribeBlocker(blockers[i], now) + " for the host's '" + command.PrefabName +
+                        "' at " + Format(position) + ".");
                     EntityManager.AddComponent<Deleted>(blockers[i]);
-                    Diagnostics.FlightRecorder.Note("growable evicted for host spawn");
+                    SyncLog.Trace(LogTopic.Buildings, "growable evicted for host spawn");
                 }
             }
             finally
@@ -219,9 +223,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             NoteSelfRealized(prefab, position, command, now);
             _applied.Remember(command.Sequence, now, ReplayWindowMs);
             _gotSpawn++;
-            Mod.Verbose("[MP] GrowableSync realize: built '" + command.PrefabName + "' at " +
-                        Format(position) + " seed=" + command.RandomSeed + " seq=" +
-                        command.Sequence + ".");
+            SyncLog.Detail(LogTopic.Buildings, "GrowableSync realize: built '" + command.PrefabName +
+                "' at " + Format(position) + " seed=" + command.RandomSeed + " seq=" +
+                command.Sequence + ".");
             return true;
         }
 
@@ -241,8 +245,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             {
                 _unknownPrefab++;
                 _applied.Remember(command.Sequence, now, ReplayWindowMs);
-                Mod.log.Warn("[MP] GrowableSync: unknown level-change prefab '" +
-                             command.PrefabName + "' at " + Format(position) + "; skipped.");
+                SyncLog.Warn(LogTopic.Buildings, "GrowableSync: unknown level-change prefab '" +
+                    command.PrefabName + "' at " + Format(position) + "; skipped.");
                 return true;
             }
 
@@ -251,8 +255,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             {
                 _unmatched++;
                 _applied.Remember(command.Sequence, now, ReplayWindowMs);
-                Mod.Verbose("[MP] GrowableSync: no building at " + Format(position) +
-                            " to level to '" + command.PrefabName + "'; skipped.");
+                SyncLog.Detail(LogTopic.Buildings, "GrowableSync: no building at " +
+                    Format(position) + " to level to '" + command.PrefabName + "'; skipped.");
                 return true;
             }
 
@@ -270,9 +274,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     return true;
                 }
                 if (current.m_NewPrefab != Entity.Null)
-                    Mod.Verbose("[MP] GrowableSync: replacing this machine's own level-change target " +
-                                "at " + Format(position) + " with the host's '" +
-                                command.PrefabName + "'.");
+                    SyncLog.Detail(LogTopic.Buildings,
+                        "GrowableSync: replacing this machine's own level-change target " + "at " +
+                        Format(position) + " with the host's '" + command.PrefabName + "'.");
                 current.m_NewPrefab = prefab;
                 current.m_Progress = command.ConstructionProgress;
                 current.m_Speed = command.ConstructionSpeed;
@@ -292,8 +296,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             EntityManager.AddComponent<Updated>(building);
             _applied.Remember(command.Sequence, now, ReplayWindowMs);
             _gotLevel++;
-            Mod.Verbose("[MP] GrowableSync realize: level change to '" + command.PrefabName +
-                        "' at " + Format(position) + " seq=" + command.Sequence + ".");
+            SyncLog.Detail(LogTopic.Buildings, "GrowableSync realize: level change to '" +
+                command.PrefabName + "' at " + Format(position) + " seq=" + command.Sequence + ".");
             return true;
         }
 
@@ -310,16 +314,16 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 // built here (its spawn was refused), or a player already bulldozed it.
                 _unmatched++;
                 _applied.Remember(command.Sequence, now, ReplayWindowMs);
-                Mod.Verbose("[MP] GrowableSync: no building at " + Format(position) +
-                            " to remove ('" + command.PrefabName + "'); already gone.");
+                SyncLog.Detail(LogTopic.Buildings, "GrowableSync: no building at " +
+                    Format(position) + " to remove ('" + command.PrefabName + "'); already gone.");
                 return true;
             }
 
             EntityManager.AddComponent<Deleted>(building);
             _applied.Remember(command.Sequence, now, ReplayWindowMs);
             _gotRemove++;
-            Mod.Verbose("[MP] GrowableSync realize: removed '" + command.PrefabName + "' at " +
-                        Format(position) + " seq=" + command.Sequence + ".");
+            SyncLog.Detail(LogTopic.Buildings, "GrowableSync realize: removed '" +
+                command.PrefabName + "' at " + Format(position) + " seq=" + command.Sequence + ".");
             return true;
         }
 
