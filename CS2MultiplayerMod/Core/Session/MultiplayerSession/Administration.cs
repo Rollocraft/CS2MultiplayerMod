@@ -1,3 +1,4 @@
+using CS2MultiplayerMod.Core.Diagnostics;
 using CS2MultiplayerMod.Core.Networking;
 using CS2MultiplayerMod.Core.Protocol;
 using CS2MultiplayerMod.Core.Protocol.Messages;
@@ -25,7 +26,7 @@ namespace CS2MultiplayerMod.Core.Session
         {
             if (string.IsNullOrEmpty(address)) return false;
             bool removed = _hostBannedAddresses.Remove(address.Trim());
-            if (removed) _log.Info("[security] Ban lifted for " + address.Trim() + ".");
+            if (removed) _log.Event(LogTopic.Session, "Ban lifted for " + address.Trim() + ".");
             return removed;
         }
 
@@ -75,7 +76,8 @@ namespace CS2MultiplayerMod.Core.Session
             _administrativeRemovals.Add(selected.Connection.Value);
             SendTo(selected.Connection, new DisconnectNoticeMessage(reason));
             _transport.DisconnectAfterFlush(selected.Connection);
-            _log.Info("Host " + (ban ? "banned " : "removed ") + selected + " from the session.");
+            _log.Event(LogTopic.Session, "Host " + (ban ? "banned " : "removed ") + selected +
+                " from the session.");
             return true;
         }
 

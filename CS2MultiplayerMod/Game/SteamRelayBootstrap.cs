@@ -35,8 +35,9 @@ namespace CS2MultiplayerMod.Game
         {
             if (!HasSteamworks())
             {
-                log.Info("This copy of the game ships no Steam library (Microsoft Store / Game Pass), " +
-                         "so multiplayer will use direct connections only.");
+                log.Event(LogTopic.Transport,
+                    "This copy of the game ships no Steam library (Microsoft Store / Game Pass), " +
+                    "so multiplayer will use direct connections only.");
                 return;
             }
 
@@ -45,8 +46,9 @@ namespace CS2MultiplayerMod.Game
                 IRelayProvider provider = LoadProvider(modFolder);
                 if (provider == null)
                 {
-                    log.Warn("The Steam relay backend (" + BackendAssembly + ".dll) is not next to the mod, " +
-                             "so only direct connections are available. Reinstalling the mod restores it.");
+                    log.Warn(LogTopic.Transport, "The Steam relay backend (" + BackendAssembly +
+                        ".dll) is not next to the mod, " +
+                        "so only direct connections are available. Reinstalling the mod restores it.");
                     return;
                 }
 
@@ -56,16 +58,20 @@ namespace CS2MultiplayerMod.Game
                 RelayProvider.Current = provider;
 
                 if (reason == null)
-                    log.Info("Steam relay available; the join code for this machine is " + provider.LocalJoinCode + ".");
+                    log.Event(LogTopic.Transport,
+                        "Steam relay available; the join code for this machine is " +
+                        provider.LocalJoinCode + ".");
                 else
-                    log.Info("Steam relay not usable yet (" + reason + "). Hosting can still use a direct connection.");
+                    log.Event(LogTopic.Transport, "Steam relay not usable yet (" + reason +
+                        "). Hosting can still use a direct connection.");
             }
             catch (Exception ex)
             {
                 RelayProvider.Current = null;
                 // Redacted: a file-load fault puts the mod's full path in the message.
-                log.Warn("The Steam relay backend did not load (" + Diagnostics.LogPaths.Redact(ex.Message) +
-                         "); multiplayer will use direct connections only.");
+                log.Warn(LogTopic.Transport, "The Steam relay backend did not load (" +
+                    Diagnostics.LogPaths.Redact(ex.Message) +
+                    "); multiplayer will use direct connections only.");
             }
         }
 

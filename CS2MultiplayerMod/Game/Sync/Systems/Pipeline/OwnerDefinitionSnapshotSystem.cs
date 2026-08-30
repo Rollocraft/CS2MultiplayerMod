@@ -4,6 +4,8 @@ using Game.Tools;
 using Unity.Collections;
 using Unity.Entities;
 
+using CS2MultiplayerMod.Core.Diagnostics;
+using CS2MultiplayerMod.Game.Diagnostics;
 using CS2MultiplayerMod.Game.Sync.Infrastructure;
 using CS2MultiplayerMod.Game.Sync.Systems.Net;
 namespace CS2MultiplayerMod.Game.Sync.Systems
@@ -24,7 +26,6 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         protected override void OnCreate()
         {
             base.OnCreate();
-            Mod.log.Info(nameof(OwnerDefinitionSnapshotSystem) + " ready.");
             _netSync = World.GetOrCreateSystemManaged<NetSyncSystem>();
             _describedTemps = GetEntityQuery(new EntityQueryDesc
             {

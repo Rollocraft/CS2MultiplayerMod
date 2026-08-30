@@ -7,7 +7,9 @@ using Game.Tools;
 using Unity.Collections;
 using Unity.Entities;
 using Unity.Mathematics;
+using CS2MultiplayerMod.Core.Diagnostics;
 using CS2MultiplayerMod.Core.Protocol;
+using CS2MultiplayerMod.Game.Diagnostics;
 using CS2MultiplayerMod.Game.Sync.Commands;
 using CS2MultiplayerMod.Game.Sync.Infrastructure;
 
@@ -148,7 +150,8 @@ namespace CS2MultiplayerMod.Game.Sync.Channels
                 if (!_warnedCapture)
                 {
                     _warnedCapture = true;
-                    Mod.log.Warn("[MP] TreeState capture failed (logged once): " + ex.Message);
+                    SyncLog.Warn(LogTopic.Buildings, "TreeState capture failed (logged once): " +
+                        ex.Message);
                 }
                 return false;
             }
@@ -166,8 +169,8 @@ namespace CS2MultiplayerMod.Game.Sync.Channels
             _snapshots++;
             if (_snapshots % 30 == 0 && (_corrected > 0 || _unmatched > 0))
             {
-                Mod.Verbose("[MP] TreeState/30 snapshots: corrected=" + _corrected +
-                            " unmatched=" + _unmatched + ".");
+                SyncLog.Detail(LogTopic.Buildings, "TreeState/30 snapshots: corrected=" + _corrected +
+                    " unmatched=" + _unmatched + ".");
                 _corrected = 0;
                 _unmatched = 0;
             }

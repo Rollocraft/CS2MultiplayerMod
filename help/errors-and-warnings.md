@@ -283,7 +283,13 @@ Include:
 2. Whether each player used Steam Relay or Direct Connection.
 3. Whether Ignore Mod Compatibility Checks (Own Risk) was enabled and which other mods were active.
 4. The game and CS2 Multiplayer Mod versions from both computers.
-5. `%USERPROFILE%\AppData\LocalLow\Colossal Order\Cities Skylines II\Logs\Player.log` and `CS2MP-flight.log` from the affected computers. Send the files after the problem occurs and before repeatedly restarting, because later runs can rotate diagnostic history.
+5. `CS2MP-flight.log` from `%USERPROFILE%\AppData\LocalLow\Colossal Order\Cities Skylines II\Logs\` on the affected computers. Send it after the problem occurs and before repeatedly restarting, because later runs can rotate diagnostic history.
+
+`CS2MP-flight.log` is the one file to send. It carries every line the mod writes plus the crash detail the readable log cannot keep, and unlike the game's own log it is not wiped when the game restarts. `Player.log` and `CS2MultiplayerMod.log` are the readable versions of the same events, and are worth adding when someone asks for them.
+
+You do not have to switch anything on first. Connects, disconnects, world transfers, resyncs, dropped actions and every fault are logged whatever your settings are.
+
+If you are asked for more detail, the mod's **Logging** options tab has one switch per feature - Session, Connection, World Transfer, Resync, Roads & Networks, Buildings & Objects and so on. Turn on the one that matches the problem, or **Log Everything** if you are not sure, then reproduce the problem and send the file again.
 
 Never post a session password. Network addresses and profile paths are redacted by the mod where it controls the log line, but review files before sharing them publicly.
 

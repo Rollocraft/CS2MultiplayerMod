@@ -8,9 +8,10 @@ using Game.Tools;
 using Unity.Collections;
 using Unity.Entities;
 using Unity.Mathematics;
+using CS2MultiplayerMod.Core.Diagnostics;
 using CS2MultiplayerMod.Core.Protocol.Messages;
 using CS2MultiplayerMod.Core.Session;
-
+using CS2MultiplayerMod.Game.Diagnostics;
 using CS2MultiplayerMod.Game.Sync.Infrastructure;
 using CS2MultiplayerMod.Game.Sync.Commands;
 namespace CS2MultiplayerMod.Game.Sync.Systems
@@ -41,7 +42,6 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         {
             base.OnCreate();
 
-            Mod.log.Info(nameof(MoveSyncSystem) + " ready.");
             _prefabSystem = World.GetOrCreateSystemManaged<PrefabSystem>();
             _prefabIndex = new PrefabIndex(_prefabSystem, GetEntityQuery(ComponentType.ReadOnly<PrefabData>()));
 
@@ -154,15 +154,14 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     if (HasOwnedLifecycle(entity, prefab) &&
                         !command.DestinationAttachmentKnown)
                     {
-                        Mod.log.Warn("[MP] MoveSync: final-entity fallback for '" + name +
-                                     "' could not recover the applied road attachment; skipping " +
-                                     "the unsafe partial move.");
-                        Diagnostics.FlightRecorder.Note("relocation fallback lacked attachment prefab=" +
-                                                        name);
+                        SyncLog.Warn(LogTopic.Buildings, "MoveSync: final-entity fallback for '" +
+                            name + "' could not recover the applied road attachment; skipping " +
+                            "the unsafe partial move.");
                         continue;
                     }
                     session.SendCommand(0, ObjectMoveCommand.Id, command.Encode());
-                    Mod.Verbose("[MP] MoveSync captured relocation of '" + name + "'.");
+                    SyncLog.Detail(LogTopic.Buildings, "MoveSync captured relocation of '" + name +
+                        "'.");
                 }
             }
             finally
@@ -202,25 +201,24 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             {
                 // An owned upgrade is found on the peer through its host. Without that identity the
                 // move would name an object the peer cannot look up, so drop it here instead.
-                Mod.log.Warn("[MP] MoveSync: relocation of owned '" + name +
-                             "' could not describe its host building; skipping this move.");
-                Diagnostics.FlightRecorder.Note("relocation host identity unavailable prefab=" + name);
+                SyncLog.Warn(LogTopic.Buildings, "MoveSync: relocation of owned '" + name +
+                    "' could not describe its host building; skipping this move.");
                 return;
             }
             CaptureSourceAttachment(command, original);
             if (!CaptureDestinationAttachment(command, destinationParent, newPosition,
                     destinationAttachmentKnown))
             {
-                Diagnostics.FlightRecorder.Note("relocation destination attachment could not be encoded");
+                SyncLog.Trace(LogTopic.Buildings,
+                    "relocation destination attachment could not be encoded");
                 return;
             }
             // Also stops the MovedLocation sweep below from sending this same move again. Mark only
             // once encoding succeeded so the final-entity fallback remains available on failure.
             _guard.Mark(MoveKey(name, newPosition), service.NowMs);
             service.Session.SendCommand(0, ObjectMoveCommand.Id, command.Encode());
-            Mod.Verbose("[MP] MoveSync captured relocation of '" + name + "' from the tool definition.");
-            Diagnostics.FlightRecorder.Note("relocation captured prefab=" + name +
-                " seed=" + toolSeed);
+            SyncLog.Detail(LogTopic.Buildings, "MoveSync captured relocation of '" + name +
+                "' from the tool definition (seed " + toolSeed + ").");
         }
 
         private void RealizeIncoming(MultiplayerSession session, long now)
@@ -232,9 +230,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     if (now < _blockedMoveDeadline) return;
                     // The object to relocate never arrived here. Drop the relocation rather than
                     // loop the whole world through recovery (which re-failed every reload).
-                    Mod.log.Warn("[MP] MoveSync: relocation target did not resolve within the retry " +
-                                 "window; dropping this move (use /sync if the city drifts).");
-                    Diagnostics.FlightRecorder.Note("move dropped after retry window");
+                    SyncLog.Warn(LogTopic.Buildings,
+                        "MoveSync: relocation target did not resolve within the retry " +
+                        "window; dropping this move (use /sync if the city drifts).");
                     _hasBlockedMove = false;
                     _blockedMove = null;
                     return;
@@ -252,7 +250,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 _hasBlockedMove = true;
                 _blockedMove = message;
                 _blockedMoveDeadline = now + MoveRetryWindowMs;
-                Diagnostics.FlightRecorder.Note("move target retrying");
+                SyncLog.Trace(LogTopic.Buildings, "move target retrying");
                 return;
             }
         }
@@ -264,7 +262,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             catch (System.Exception ex)
             {
                 // A malformed peer command is not local corruption; drop it, do not resync.
-                Mod.log.Warn("[MP] MoveSync: dropping malformed command: " + ex.Message);
+                SyncLog.Warn(LogTopic.Buildings, "MoveSync: dropping malformed command: " +
+                    ex.Message);
                 return true;
             }
 
@@ -312,9 +311,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             bool requiresCompleteLifecycle = RequiresCompleteLifecycle(original, prefab, command);
             if (requiresCompleteLifecycle && !command.DestinationAttachmentKnown)
             {
-                Mod.log.Warn("[MP] MoveSync: relocation of '" + command.PrefabName +
-                             "' lacks an authoritative destination attachment; dropping it instead " +
-                             "of detaching its owned/roadside graph.");
+                SyncLog.Warn(LogTopic.Buildings, "MoveSync: relocation of '" + command.PrefabName +
+                    "' lacks an authoritative destination attachment; dropping it instead " +
+                    "of detaching its owned/roadside graph.");
                 return true;
             }
 
@@ -331,17 +330,16 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 if (derived == BuildSyncSystem.NativeDeriveResult.Armed)
                 {
                     _guard.Mark(MoveKey(command.PrefabName, newPos), now);
-                    Mod.Verbose("[MP] MoveSync realize: derived relocation of '" +
-                                command.PrefabName + "' from player " +
-                                message.OriginPlayerId + ".");
+                    SyncLog.Detail(LogTopic.Buildings, "MoveSync realize: derived relocation of '" +
+                        command.PrefabName + "' from player " + message.OriginPlayerId + ".");
                     return true;
                 }
                 if (derived == BuildSyncSystem.NativeDeriveResult.Failed) return true;
 
                 // A root-only compatibility move would strand an owned graph or bypass attachment /
                 // transport-stop lifecycle events, so unsupported native derivation is a hard stop.
-                Mod.log.Warn("[MP] MoveSync: relocation of '" + command.PrefabName +
-                             "' needs the game's object lifecycle generator; dropping this move.");
+                SyncLog.Warn(LogTopic.Buildings, "MoveSync: relocation of '" + command.PrefabName +
+                    "' needs the game's object lifecycle generator; dropping this move.");
                 return true;
             }
 
@@ -376,17 +374,16 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     });
                     EntityManager.AddComponent<Updated>(definition);
                     EntityManager.AddComponent<Deleted>(definition);
-                Mod.Verbose("[MP] MoveSync realize: moved '" + command.PrefabName + "' from player " +
-                             message.OriginPlayerId + " to (" + newPos.x.ToString("F1") + "," +
-                             newPos.z.ToString("F1") + ").");
+                SyncLog.Detail(LogTopic.Buildings, "MoveSync realize: moved '" + command.PrefabName +
+                    "' from player " + message.OriginPlayerId + " to (" + newPos.x.ToString("F1") +
+                    "," + newPos.z.ToString("F1") + ").");
             }
             catch (System.Exception ex)
             {
                 // The definition was rejected before commit; drop this move rather than freeze
                 // the world (the placer can /sync if the object looks out of place).
-                Mod.log.Error("[MP] MoveSync realize FAILED for '" + command.PrefabName +
-                              "'; dropping this move: " + ex);
-                Diagnostics.FlightRecorder.Note("move realize failed; dropped");
+                SyncLog.Error(LogTopic.Buildings, "MoveSync realize FAILED for '" +
+                    command.PrefabName + "'; dropping this move: " + ex);
             }
             return true;
         }

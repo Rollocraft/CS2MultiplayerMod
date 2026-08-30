@@ -1,5 +1,7 @@
 using System.Collections.Generic;
 using Colossal.Mathematics;
+using CS2MultiplayerMod.Core.Diagnostics;
+using CS2MultiplayerMod.Game.Diagnostics;
 using Game.Common;
 using Game.Net;
 using Game.Tools;
@@ -120,7 +122,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                 }
 
                 reason = null;
-                Diagnostics.FlightRecorder.Note("object transaction validated temps=" + temps.Length +
+                SyncLog.Trace(LogTopic.Nets, "object transaction validated temps=" + temps.Length +
                     (_relinkedOwners > 0 ? " ownersRelinked=" + _relinkedOwners : string.Empty));
                 return true;
             }

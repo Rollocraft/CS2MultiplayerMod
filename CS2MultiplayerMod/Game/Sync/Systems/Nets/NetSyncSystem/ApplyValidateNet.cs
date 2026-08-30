@@ -1,5 +1,7 @@
 using System.Collections.Generic;
 using Colossal.Mathematics;
+using CS2MultiplayerMod.Core.Diagnostics;
+using CS2MultiplayerMod.Game.Diagnostics;
 using Game.Common;
 using Game.Net;
 using Game.Tools;
@@ -117,9 +119,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
 
                 reason = null;
                 if (attachedObjectRoots > 0 || areaEntities > 0 || _relinkedOwners > 0)
-                    Diagnostics.FlightRecorder.Note("net side-effect graph validated temps=" +
-                        temps.Length + " attachedRoots=" + attachedObjectRoots +
-                        " areas=" + areaEntities +
+                    SyncLog.Trace(LogTopic.Nets, "net side-effect graph validated temps=" +
+                        temps.Length + " attachedRoots=" + attachedObjectRoots + " areas=" +
+                        areaEntities +
                         (_relinkedOwners > 0 ? " ownersRelinked=" + _relinkedOwners : string.Empty));
                 return true;
             }
@@ -222,7 +224,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                 // One line per orphan would be hundreds on a large placement; the pass reports a
                 // total, and the first member is enough to identify which graph needed repair.
                 if (_relinkedOwners++ == 0)
-                    Diagnostics.FlightRecorder.Note("transaction owner re-linked " +
+                    SyncLog.Trace(LogTopic.Nets, "transaction owner re-linked " +
                         DescribeTransactionEntity(entity) + " owner=#" + relinked.Index);
                 owner = relinked;
             }

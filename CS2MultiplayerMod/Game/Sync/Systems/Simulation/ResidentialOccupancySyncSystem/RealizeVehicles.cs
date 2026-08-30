@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using CS2MultiplayerMod.Core.Diagnostics;
 using CS2MultiplayerMod.Game.Diagnostics;
 using CS2MultiplayerMod.Game.Sync.Commands;
 using Game.Agents;
@@ -147,10 +148,10 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         private void TraceVehicleSpawn(ulong householdId, string prefabName, Entity vehicle,
             Entity property, Entity source, bool initial)
         {
-            Mod.log.Info("[MP][OCC-DEV] CAR-SPAWN family=0x" +
-                         householdId.ToString("X16") + " vehicle='" + prefabName +
-                         "' local=" + vehicle + " house='" + SafePrefabName(property) +
-                         "' origin='" + SafePrefabName(source) + "' initial=" + initial + ".");
+            SyncLog.Detail(LogTopic.Residential, "CAR-SPAWN family=0x" + householdId.ToString("X16") +
+                " vehicle='" + prefabName + "' local=" + vehicle + " house='" +
+                SafePrefabName(property) + "' origin='" + SafePrefabName(source) + "' initial=" +
+                initial + ".");
         }
 
         private void TraceVehicleSpawnFailure(ulong householdId, string prefabName,
@@ -158,9 +159,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         {
             string warningKey = householdId.ToString("X16") + "|" + prefabName;
             if (!_vehicleSpawnWarnings.Add(warningKey)) return;
-            Mod.Verbose("[MP] Occupancy: could not spawn owned vehicle '" + prefabName +
-                        "' for family 0x" + householdId.ToString("X16") + " at '" +
-                        SafePrefabName(property) + "' (from '" + SafePrefabName(source) + "').");
+            SyncLog.Warn(LogTopic.Residential, "Occupancy: could not spawn owned vehicle '" +
+                prefabName + "' for family 0x" + householdId.ToString("X16") + " at '" +
+                SafePrefabName(property) + "' (from '" + SafePrefabName(source) + "').");
         }
 
         /// <summary>

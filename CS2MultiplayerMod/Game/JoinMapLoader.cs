@@ -38,12 +38,12 @@ namespace CS2MultiplayerMod.Game
         {
             if (saveBytes == null || saveBytes.Length == 0)
             {
-                log.Warn("[MP] Received an empty host world; ignoring.");
+                log.Warn(LogTopic.WorldTransfer, "Received an empty host world; ignoring.");
                 return false;
             }
 
             string dir = SavesDirectory();
-            if (dir == null) { log.Warn("[MP] Saves folder not found; cannot load host map."); return false; }
+            if (dir == null) { log.Warn(LogTopic.WorldTransfer, "Saves folder not found; cannot load host map."); return false; }
 
             try
             {
@@ -55,8 +55,11 @@ namespace CS2MultiplayerMod.Game
                 Directory.CreateDirectory(dir);
                 string path = Path.Combine(dir, TransientName + SaveExtension);
                 File.WriteAllBytes(path, saveBytes);
-                log.Info("[MP] Host world staged at '" + Diagnostics.LogPaths.Redact(path) + "' (" + (saveBytes.Length / 1024) + " KB).");
-                log.Info("[MP] Host world received (" + (saveBytes.Length / 1024) + " KB); loading into game...");
+                log.Detail(LogTopic.WorldTransfer, "Host world staged at '" +
+                    Diagnostics.LogPaths.Redact(path) + "' (" + (saveBytes.Length / 1024) +
+                    " KB).");
+                log.Event(LogTopic.WorldTransfer, "Host world received (" +
+                    (saveBytes.Length / 1024) + " KB); loading into game...");
 
                 // Claim the load before starting it: the session watcher treats a world swap
                 // it did not ask for as the player walking out of the session. Claimed here
@@ -67,7 +70,7 @@ namespace CS2MultiplayerMod.Game
             }
             catch (Exception ex)
             {
-                log.Error("[MP] Failed to stage host map: " + ex.Message);
+                log.Error(LogTopic.WorldTransfer, "Failed to stage host map: " + ex.Message);
                 return false;
             }
         }
@@ -89,17 +92,19 @@ namespace CS2MultiplayerMod.Game
                 if (metadata != null)
                 {
                     GameManager.instance.Load(GameMode.Game, Purpose.LoadGame, metadata);
-                    log.Info("[MP] Loading host world - joining the session.");
+                    log.Event(LogTopic.WorldTransfer, "Loading host world - joining the session.");
                     return true;
                 }
 
-                log.Warn("[MP] Host world staged but could not be registered with the save index. " +
-                         "Run /sync to retry, or load '" + TransientName + "' from Load Game.");
+                log.Warn(LogTopic.WorldTransfer,
+                    "Host world staged but could not be registered with the save index. " +
+                    "Run /sync to retry, or load '" + TransientName + "' from Load Game.");
                 return false;
             }
             catch (Exception ex)
             {
-                log.Error("[MP] Auto-load failed: " + ex.Message + " - the world is staged as '" + TransientName + "' to load manually.");
+                log.Error(LogTopic.WorldTransfer, "Auto-load failed: " + ex.Message +
+                    " - the world is staged as '" + TransientName + "' to load manually.");
                 return false;
             }
         }
@@ -136,7 +141,8 @@ namespace CS2MultiplayerMod.Game
             {
                 // Non-fatal: if the engine's watcher later notices the file (e.g. on an
                 // alt-tab) the lookup can still succeed; otherwise the caller recovers.
-                log.Warn("[MP] Could not register the host world with the save index: " + ex.Message);
+                log.Warn(LogTopic.WorldTransfer,
+                    "Could not register the host world with the save index: " + ex.Message);
             }
         }
 
@@ -175,12 +181,13 @@ namespace CS2MultiplayerMod.Game
                 foreach (SaveGameMetadata md in doomed)
                 {
                     try { AssetDatabase.user.DeleteAsset(md); removedViaIndex = true; }
-                    catch (Exception ex) { log.Warn("[MP] Could not remove transient save entry: " + ex.Message); }
+                    catch (Exception ex) { log.Warn(LogTopic.WorldTransfer, "Could not remove transient save entry: " + ex.Message); }
                 }
             }
             catch (Exception ex)
             {
-                log.Warn("[MP] Transient save index cleanup failed: " + ex.Message);
+                log.Warn(LogTopic.WorldTransfer, "Transient save index cleanup failed: " +
+                    ex.Message);
             }
 
             // Belt and braces: if the world was staged but never indexed, remove the raw
@@ -196,11 +203,12 @@ namespace CS2MultiplayerMod.Game
                 if (File.Exists(cid)) File.Delete(cid);
 
                 if (removedViaIndex || removedFile)
-                    log.Info("[MP] Removed transient host world (no local copy kept).");
+                    log.Detail(LogTopic.WorldTransfer,
+                        "Removed transient host world (no local copy kept).");
             }
             catch (Exception ex)
             {
-                log.Warn("[MP] Could not delete transient map: " + ex.Message);
+                log.Warn(LogTopic.WorldTransfer, "Could not delete transient map: " + ex.Message);
             }
         }
 

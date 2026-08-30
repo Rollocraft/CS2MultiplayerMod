@@ -7,6 +7,8 @@ using Game.Tools;
 using Unity.Collections;
 using Unity.Entities;
 using Unity.Mathematics;
+using CS2MultiplayerMod.Core.Diagnostics;
+using CS2MultiplayerMod.Game.Diagnostics;
 using CS2MultiplayerMod.Game.Sync.Commands;
 using CS2MultiplayerMod.Game.Sync.Infrastructure;
 
@@ -51,8 +53,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                         CS2MultiplayerMod.Game.Diagnostics.ResyncEvidence.StreamLoss)
                     .About("route prefab on creation")
                     .Tried("nothing - this game does not have the transport line prefab the other player used"));
-                Mod.log.Warn("[MP] RouteSync create: unknown prefab '" +
-                             command.PrefabName + "'; skipping.");
+                SyncLog.Warn(LogTopic.Routes, "RouteSync create: unknown prefab '" +
+                    command.PrefabName + "'; skipping.");
                 return RealizeResult.Rejected;
             }
             if (!ValidateRouteContract(prefab, command.Waypoints, command.PrefabName))
@@ -76,8 +78,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                             CS2MultiplayerMod.Game.Diagnostics.ResyncEvidence.Contradiction)
                         .About("pending line number")
                         .Tried("nothing - another line being created in this batch already claimed that number"));
-                    Mod.log.Warn("[MP] RouteSync create: two different pending lines claim number " +
-                                 command.RouteNumber + " for '" + command.PrefabName + "'.");
+                    SyncLog.Warn(LogTopic.Routes,
+                        "RouteSync create: two different pending lines claim number " +
+                        command.RouteNumber + " for '" + command.PrefabName + "'.");
                     return RealizeResult.Rejected;
                 }
                 // Two distinct lines may legitimately use the same stops. Serialize that shape so
@@ -95,9 +98,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                         CS2MultiplayerMod.Game.Diagnostics.ResyncEvidence.Contradiction)
                     .About("line number on creation")
                     .Tried("nothing - an established line here already uses that number"));
-                Mod.log.Warn("[MP] RouteSync create: route number " + command.RouteNumber +
-                             " for '" + command.PrefabName +
-                             "' already belongs to a different line; requested a fresh world sync.");
+                SyncLog.Warn(LogTopic.Routes, "RouteSync create: route number " +
+                    command.RouteNumber + " for '" + command.PrefabName +
+                    "' already belongs to a different line; requested a fresh world sync.");
                 return RealizeResult.Rejected;
             }
             if (existing != Entity.Null)
@@ -179,12 +182,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 }
 
                 MarkCreateGuards(command, now);
-                Diagnostics.FlightRecorder.Note("route create definition armed " +
-                                                  DescribeShape(command.Waypoints));
-                Mod.Verbose("[MP] RouteSync create: submitted line '" +
-                            command.PrefabName + "' (" + DescribeShape(command.Waypoints) +
-                            ", number " + command.RouteNumber + ") from player " +
-                            originPlayerId + ".");
+                SyncLog.Detail(LogTopic.Routes, "RouteSync create: submitted line '" +
+                    command.PrefabName + "' (" + DescribeShape(command.Waypoints) + ", number " +
+                    command.RouteNumber + ") from player " + originPlayerId + ".");
                 return RealizeResult.Applied;
             }
             catch (Exception ex)
@@ -201,8 +201,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                         CS2MultiplayerMod.Game.Diagnostics.ResyncEvidence.Contradiction)
                     .About("line creation")
                     .Tried("nothing - creation threw and was rolled back"));
-                Mod.log.Error("[MP] RouteSync create FAILED for '" +
-                              command.PrefabName + "': " + ex);
+                SyncLog.Error(LogTopic.Routes, "RouteSync create FAILED for '" + command.PrefabName +
+                    "': " + ex);
                 return RealizeResult.Rejected;
             }
         }
@@ -217,8 +217,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                         CS2MultiplayerMod.Game.Diagnostics.ResyncEvidence.StreamLoss)
                     .About("route prefab on update")
                     .Tried("nothing - this game does not have the transport line prefab the other player used"));
-                Mod.log.Warn("[MP] RouteSync update: unknown prefab '" +
-                             command.PrefabName + "'; skipping.");
+                SyncLog.Warn(LogTopic.Routes, "RouteSync update: unknown prefab '" +
+                    command.PrefabName + "'; skipping.");
                 return RealizeResult.Rejected;
             }
             if (!ValidateRouteContract(prefab, command.Waypoints, command.PrefabName))
@@ -231,10 +231,10 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             if (route == Entity.Null)
             {
                 if (ambiguous)
-                    Mod.Verbose("[MP] RouteSync update: multiple local candidates for '" +
-                                command.PrefabName + "' number " +
-                                command.AnchorRouteNumber +
-                                "; waiting instead of editing the wrong line.");
+                    SyncLog.Detail(LogTopic.Routes,
+                        "RouteSync update: multiple local candidates for '" + command.PrefabName +
+                        "' number " + command.AnchorRouteNumber +
+                        "; waiting instead of editing the wrong line.");
                 return RealizeResult.Retry;
             }
             if (_mutatedRoutesThisFrame.Contains(route))
@@ -257,9 +257,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                         CS2MultiplayerMod.Game.Diagnostics.ResyncEvidence.Contradiction)
                     .About("line number on update")
                     .Tried("nothing - another line here already uses the number this update assigns"));
-                Mod.log.Warn("[MP] RouteSync update: requested number " +
-                             command.RouteNumber + " is already in use for '" +
-                             command.PrefabName + "'.");
+                SyncLog.Warn(LogTopic.Routes, "RouteSync update: requested number " +
+                    command.RouteNumber + " is already in use for '" + command.PrefabName + "'.");
                 return RealizeResult.Rejected;
             }
             _mutatedRoutesThisFrame.Add(route);
@@ -328,9 +327,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                             CS2MultiplayerMod.Game.Diagnostics.ResyncEvidence.Contradiction)
                         .About("line number on update")
                         .Tried("nothing - another line here already uses the number this update assigns"));
-                    Mod.log.Warn("[MP] RouteSync update: requested number " +
-                                 command.RouteNumber + " is already in use for '" +
-                                 command.PrefabName + "'.");
+                    SyncLog.Warn(LogTopic.Routes, "RouteSync update: requested number " +
+                        command.RouteNumber + " is already in use for '" + command.PrefabName +
+                        "'.");
                     return RealizeResult.Rejected;
                 }
 
@@ -357,13 +356,12 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 }
                 else
                 {
-                    Diagnostics.FlightRecorder.Note("route update definition armed " +
-                                                      DescribeShape(command.Waypoints));
+                    SyncLog.Trace(LogTopic.Routes, "route update definition armed " +
+                        DescribeShape(command.Waypoints));
                 }
-                Mod.Verbose("[MP] RouteSync update: applied line '" +
-                            command.PrefabName + "' (" + DescribeShape(command.Waypoints) +
-                            ", number " + command.RouteNumber + ") from player " +
-                            originPlayerId + ".");
+                SyncLog.Detail(LogTopic.Routes, "RouteSync update: applied line '" +
+                    command.PrefabName + "' (" + DescribeShape(command.Waypoints) + ", number " +
+                    command.RouteNumber + ") from player " + originPlayerId + ".");
                 return RealizeResult.Applied;
             }
             catch (Exception ex)
@@ -382,8 +380,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                         CS2MultiplayerMod.Game.Diagnostics.ResyncEvidence.Contradiction)
                     .About("line update")
                     .Tried("nothing - the update threw and was rolled back"));
-                Mod.log.Error("[MP] RouteSync update FAILED for '" +
-                              command.PrefabName + "': " + ex);
+                SyncLog.Error(LogTopic.Routes, "RouteSync update FAILED for '" + command.PrefabName +
+                    "': " + ex);
                 return RealizeResult.Rejected;
             }
         }
@@ -398,8 +396,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                         CS2MultiplayerMod.Game.Diagnostics.ResyncEvidence.StreamLoss)
                     .About("route prefab on deletion")
                     .Tried("nothing - this game does not have the transport line prefab the other player used"));
-                Mod.log.Warn("[MP] RouteSync delete: unknown prefab '" +
-                             command.PrefabName + "'; skipping.");
+                SyncLog.Warn(LogTopic.Routes, "RouteSync delete: unknown prefab '" +
+                    command.PrefabName + "'; skipping.");
                 return RealizeResult.Rejected;
             }
 
@@ -411,9 +409,10 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             if (route == Entity.Null)
             {
                 if (ambiguous)
-                    Mod.Verbose("[MP] RouteSync delete: multiple local candidates for '" +
-                                command.PrefabName + "' number " + command.RouteNumber +
-                                "; waiting instead of deleting the wrong line.");
+                    SyncLog.Detail(LogTopic.Routes,
+                        "RouteSync delete: multiple local candidates for '" + command.PrefabName +
+                        "' number " + command.RouteNumber +
+                        "; waiting instead of deleting the wrong line.");
                 return RealizeResult.Retry;
             }
             if (_mutatedRoutesThisFrame.Contains(route))
@@ -426,8 +425,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             if (!EntityManager.HasComponent<Deleted>(route))
                 EntityManager.AddComponent<Deleted>(route);
             _knownRoutes.Remove(route);
-            Mod.Verbose("[MP] RouteSync deleted line '" + command.PrefabName +
-                        "' number " + command.RouteNumber + ".");
+            SyncLog.Detail(LogTopic.Routes, "RouteSync deleted line '" + command.PrefabName +
+                "' number " + command.RouteNumber + ".");
             return RealizeResult.Applied;
         }
     }

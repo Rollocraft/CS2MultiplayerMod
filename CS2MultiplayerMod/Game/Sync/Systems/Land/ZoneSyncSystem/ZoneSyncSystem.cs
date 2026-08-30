@@ -8,9 +8,10 @@ using Game.Zones;
 using Unity.Collections;
 using Unity.Entities;
 using Unity.Mathematics;
+using CS2MultiplayerMod.Core.Diagnostics;
 using CS2MultiplayerMod.Core.Protocol.Messages;
 using CS2MultiplayerMod.Core.Session;
-
+using CS2MultiplayerMod.Game.Diagnostics;
 using CS2MultiplayerMod.Game.Sync.Infrastructure;
 using CS2MultiplayerMod.Game.Sync.Commands;
 namespace CS2MultiplayerMod.Game.Sync.Systems
@@ -128,7 +129,6 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         {
             base.OnCreate();
 
-            Mod.log.Info(nameof(ZoneSyncSystem) + " ready.");
             _prefabSystem = World.GetOrCreateSystemManaged<PrefabSystem>();
 
             _updatedBlocks = GetEntityQuery(new EntityQueryDesc
@@ -234,7 +234,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 }
                 catch (System.Exception ex)
                 {
-                    Mod.log.Warn("[MP] ZoneSync: dropping malformed command: " + ex.Message);
+                    SyncLog.Warn(LogTopic.Land, "ZoneSync: dropping malformed command: " +
+                        ex.Message);
                 }
             }
 
@@ -253,8 +254,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 .Create(reason, "zone", CS2MultiplayerMod.Game.Diagnostics.ResyncEvidence.StreamLoss)
                 .About("zone latest-state queue")
                 .Tried("nothing - the bounded queue was full and its zoning changes were shed"));
-            Mod.log.Warn("[MP] ZoneSync overflowed its bounded latest-state queue; " +
-                         "requesting a fresh world sync.");
+            SyncLog.Warn(LogTopic.Land, "ZoneSync overflowed its bounded latest-state queue; " +
+                "requesting a fresh world sync.");
         }
 
         private void FlushDiagnostics(long now)
@@ -266,17 +267,12 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 _diagnosticDecoded > 0 || _diagnosticApplied > 0 ||
                 _diagnosticDeferred > 0 || _diagnosticExpired > 0)
             {
-                Mod.Verbose("[MP] ZoneSync/5s: captured=" + _diagnosticCaptured +
-                            " sent=" + _diagnosticSent +
-                            " decoded=" + _diagnosticDecoded +
-                            " coalesced=" + _diagnosticCoalesced +
-                            " applied=" + _diagnosticApplied +
-                            " deferred=" + _diagnosticDeferred +
-                            " expired=" + _diagnosticExpired +
-                            " queues(out=" + _outgoing.Count +
-                            ", inbox=" + _incoming.Count +
-                            ", ready=" + _ready.Count +
-                            ", retry=" + _pending.Count + ").");
+                SyncLog.Detail(LogTopic.Land, "ZoneSync/5s: captured=" + _diagnosticCaptured +
+                    " sent=" + _diagnosticSent + " decoded=" + _diagnosticDecoded + " coalesced=" +
+                    _diagnosticCoalesced + " applied=" + _diagnosticApplied + " deferred=" +
+                    _diagnosticDeferred + " expired=" + _diagnosticExpired + " queues(out=" +
+                    _outgoing.Count + ", inbox=" + _incoming.Count + ", ready=" + _ready.Count +
+                    ", retry=" + _pending.Count + ").");
             }
 
             _diagnosticCaptured = 0;

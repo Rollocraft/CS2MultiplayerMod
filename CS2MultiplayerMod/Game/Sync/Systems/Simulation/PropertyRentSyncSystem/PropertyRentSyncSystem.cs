@@ -1,7 +1,9 @@
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using CS2MultiplayerMod.Core.Diagnostics;
 using CS2MultiplayerMod.Core.Session;
+using CS2MultiplayerMod.Game.Diagnostics;
 using CS2MultiplayerMod.Game.Sync.Commands;
 using CS2MultiplayerMod.Game.Sync.Infrastructure;
 using Game;
@@ -179,8 +181,6 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 None = SyncQuery.ReadOnly<Temp, Deleted, Owner, StorageProperty>(),
             });
             SyncInbox.RegisterDrain(DrainForWorldChange);
-            Mod.log.Info(nameof(PropertyRentSyncSystem) +
-                         " ready (market and non-household rent authority). ");
         }
 
         protected override void OnDestroy()

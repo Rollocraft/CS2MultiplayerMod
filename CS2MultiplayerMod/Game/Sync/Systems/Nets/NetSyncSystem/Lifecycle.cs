@@ -6,9 +6,10 @@ using Game.Net;
 using Game.Prefabs;
 using Game.Tools;
 using Unity.Entities;
+using CS2MultiplayerMod.Core.Diagnostics;
 using CS2MultiplayerMod.Core.Protocol.Messages;
 using CS2MultiplayerMod.Core.Session;
-
+using CS2MultiplayerMod.Game.Diagnostics;
 using CS2MultiplayerMod.Game.Sync.Infrastructure;
 using CS2MultiplayerMod.Game.Sync.Commands;
 namespace CS2MultiplayerMod.Game.Sync.Systems.Net
@@ -21,7 +22,6 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
         {
             base.OnCreate();
 
-            Mod.log.Info(nameof(NetSyncSystem) + " ready.");
             // An owned connector re-cut beside an already-standing building names an owner that is
             // live, not part of the transaction. Owner resolution only ever matches a Temp to a
             // Temp, so that link has to be found by asking what stands at the described point.
@@ -297,7 +297,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                 // ModificationEnd where the one-frame Created/Updated/Deleted tags are still alive.
                 // Each count walks every matching chunk, and the only thing they feed is a verbose
                 // line - so they are not paid at all unless someone is reading it.
-                if (Mod.VerboseEnabled)
+                if (SyncLog.IsEnabled(LogTopic.Nets))
                 {
                     _peakCreated = System.Math.Max(_peakCreated, _createdEdges.CalculateEntityCount());
                     _peakUpdated = System.Math.Max(_peakUpdated, _updatedEdges.CalculateEntityCount());
@@ -326,8 +326,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                 if (command.Body == null || command.Body.Length > cap) return;
                 if (mixed && _sink.Count >= MixedNetInboxAdmissionCap)
                 {
-                    Mod.log.Warn("[MP] NetSync: mixed-operation inbox admission cap reached; " +
-                                 "requesting recovery instead of dropping an atomic edit silently.");
+                    SyncLog.Warn(LogTopic.Nets,
+                        "NetSync: mixed-operation inbox admission cap reached; " +
+                        "requesting recovery instead of dropping an atomic edit silently.");
                     SyncInbox.RequestResync(CS2MultiplayerMod.Game.Diagnostics.ResyncReport
                         .Create("mixed net operation inbox overflow", "net",
                             CS2MultiplayerMod.Game.Diagnostics.ResyncEvidence.StreamLoss)

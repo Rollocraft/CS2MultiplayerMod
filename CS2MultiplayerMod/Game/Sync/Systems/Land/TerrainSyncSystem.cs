@@ -7,9 +7,10 @@ using Game.Tools;
 using Unity.Collections;
 using Unity.Entities;
 using Unity.Mathematics;
+using CS2MultiplayerMod.Core.Diagnostics;
 using CS2MultiplayerMod.Core.Protocol.Messages;
 using CS2MultiplayerMod.Core.Session;
-
+using CS2MultiplayerMod.Game.Diagnostics;
 using CS2MultiplayerMod.Game.Sync.Infrastructure;
 using CS2MultiplayerMod.Game.Sync.Commands;
 using CS2MultiplayerMod.Game.Sync.Systems.Net;
@@ -100,7 +101,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         // used to be a silent `continue`, and a terraform that goes missing is not a small error:
         // one stroke is metres of height, and the roads placed near it afterwards resolve their
         // endpoints against a surface the other player does not have. Counted here and reported at
-        // the production level, because this is the thing a session that "keeps de-syncing" needs
+        // ungated, because this is the thing a session that "keeps de-syncing" needs
         // its log to say out loud.
         private int _dropSendNoToolName, _dropSendNoBrushName, _dropSendOpacity, _dropSendBadFrame;
         private int _dropApplyUnknownPrefab, _dropApplyUnusablePrefab, _dropApplyCreateFailed;
@@ -111,7 +112,6 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         {
             base.OnCreate();
 
-            Mod.log.Info(nameof(TerrainSyncSystem) + " ready.");
             _prefabSystem = World.GetOrCreateSystemManaged<PrefabSystem>();
             _prefabIndex = new PrefabIndex(_prefabSystem, GetEntityQuery(ComponentType.ReadOnly<PrefabData>()));
             _netSync = World.GetOrCreateSystemManaged<NetSyncSystem>();
@@ -194,14 +194,15 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 _terrainSystem.GetHeightData(waitForPending: true);
                 _terrainSystem.GetHeightData(waitForPending: true);
                 _awaitingHeightReadback = false;
-                Diagnostics.FlightRecorder.Note("terrain height readback complete");
+                SyncLog.Trace(LogTopic.Land, "terrain height readback complete");
             }
             catch (System.Exception ex)
             {
                 // Do not wedge all subsequent construction forever if a future game build changes
                 // the readback contract. The next authoritative world sync remains the repair path.
                 _awaitingHeightReadback = false;
-                Mod.log.Warn("[MP] TerrainSync: height readback barrier failed: " + ex.Message);
+                SyncLog.Warn(LogTopic.Land, "TerrainSync: height readback barrier failed: " +
+                    ex.Message);
             }
         }
 
@@ -231,7 +232,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 catch (System.Exception ex)
                 {
                     _dropApplyMalformed++;
-                    Mod.log.Warn("[MP] TerrainSync: dropping malformed command: " + ex.Message);
+                    SyncLog.Warn(LogTopic.Land, "TerrainSync: dropping malformed command: " +
+                        ex.Message);
                     continue;
                 }
 
@@ -292,8 +294,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     // HasBacklog true forever, and that flag holds back every other realize in the
                     // mod - a lost stroke turned into a session that could apply nothing at all.
                     _dropApplyCreateFailed++;
-                    Mod.log.Warn("[MP] TerrainSync: dropping a brush sample that could not be " +
-                                 "created: " + ex.Message);
+                    SyncLog.Warn(LogTopic.Land,
+                        "TerrainSync: dropping a brush sample that could not be " + "created: " +
+                        ex.Message);
                 }
             }
 
@@ -320,8 +323,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 if (!_commitApplyFailureLogged)
                 {
                     _commitApplyFailureLogged = true;
-                    Mod.log.Warn("[MP] TerrainSync: brush apply unavailable; remote samples remain queued" +
-                                 (string.IsNullOrEmpty(commitError) ? "." : ": " + commitError));
+                    SyncLog.Warn(LogTopic.Land,
+                        "TerrainSync: brush apply unavailable; remote samples remain queued" +
+                        (string.IsNullOrEmpty(commitError) ? "." : ": " + commitError));
                 }
                 // Bounded. An apply that never becomes available is not something to wait out: the
                 // queue it blocks is the one every other sync system waits behind.
@@ -338,7 +342,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             _pending.RemoveRange(0, consumed);
             if (changesHeight) _awaitingHeightReadback = true;
             _diagRealized += created.Count;
-            Diagnostics.FlightRecorder.Note("terrain realize n=" + created.Count +
+            SyncLog.Trace(LogTopic.Land, "terrain realize n=" + created.Count +
                 (_pending.Count > 0 ? " held=" + _pending.Count : ""));
         }
 
@@ -355,9 +359,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             _commitApplyFailureLogged = false;
             _dropApplyUnavailable += abandoned;
 
-            Diagnostics.SyncLog.ProdWarn(
-                "Terrain sync: gave up on " + abandoned + " queued terraforming sample(s) after " +
-                MaxCommitFailureFrames + " frames without a usable apply pass" +
+            Diagnostics.SyncLog.Warn(LogTopic.Land, "Terrain sync: gave up on " + abandoned +
+                " queued terraforming sample(s) after " + MaxCommitFailureFrames +
+                " frames without a usable apply pass" +
                 (string.IsNullOrEmpty(commitError) ? "." : " (" + commitError + ").") +
                 " The ground here no longer matches the other player's.");
             SyncInbox.RequestResync(Diagnostics.ResyncReport
@@ -515,7 +519,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             if (_diagStartMs < 0) { _diagStartMs = now; return; }
             if (now - _diagStartMs < 5000) return;
             if (_diagCaptured > 0 || _diagRealized > 0)
-                Mod.Verbose("[MP] TerrainSync/5s: captured " + _diagCaptured + " sample(s), realized " + _diagRealized + ".");
+                SyncLog.Detail(LogTopic.Land, "TerrainSync/5s: captured " + _diagCaptured +
+                    " sample(s), realized " + _diagRealized + ".");
             ReportDroppedTerrain();
             _diagCaptured = _diagRealized = 0;
             _diagStartMs = now;
@@ -537,38 +542,34 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                              _dropApplyCreateFailed + _dropApplyMalformed;
 
             if (notSent > 0)
-                Diagnostics.SyncLog.ProdWarn(
-                    "Terrain sync: " + notSent + " terraforming sample(s) changed the ground here " +
-                    "but could not be sent (" + _dropSendNoToolName + " with no tool name, " +
-                    _dropSendNoBrushName + " with no brush name, " + _dropSendOpacity +
+                Diagnostics.SyncLog.Warn(LogTopic.Land, "Terrain sync: " + notSent +
+                    " terraforming sample(s) changed the ground here " + "but could not be sent (" +
+                    _dropSendNoToolName + " with no tool name, " + _dropSendNoBrushName +
+                    " with no brush name, " + _dropSendOpacity +
                     " outside the encodable range). The other player's ground is now different here.");
 
             if (notApplied > 0)
-                Diagnostics.SyncLog.ProdWarn(
-                    "Terrain sync: " + notApplied + " terraforming sample(s) arrived but could not " +
-                    "be applied (" + _dropApplyUnknownPrefab + " naming a tool or brush this game " +
+                Diagnostics.SyncLog.Warn(LogTopic.Land, "Terrain sync: " + notApplied +
+                    " terraforming sample(s) arrived but could not " + "be applied (" +
+                    _dropApplyUnknownPrefab + " naming a tool or brush this game " +
                     "does not have, " + _dropApplyUnusablePrefab + " naming one that cannot " +
                     "terraform, " + _dropApplyCreateFailed + " that failed to build, " +
                     _dropApplyMalformed + " malformed). The ground here is now different from the " +
                     "other player's.");
 
             if (_dropSendBadFrame > 0)
-                Diagnostics.SyncLog.ProdWarn(
-                    "Terrain sync: " + _dropSendBadFrame + " terraforming sample(s) were sent with " +
+                Diagnostics.SyncLog.Warn(LogTopic.Land, "Terrain sync: " + _dropSendBadFrame +
+                    " terraforming sample(s) were sent with " +
                     "a substitute frame time because this machine reported an implausible one. " +
                     "Their height change may be slightly off on the other player's map.");
 
             if (notSent > 0 || notApplied > 0 || _dropSendBadFrame > 0 || _dropApplyUnavailable > 0)
-                Diagnostics.FlightRecorder.Note(
-                    "terrain dropped sendNoTool=" + _dropSendNoToolName +
-                    " sendNoBrush=" + _dropSendNoBrushName +
-                    " sendOpacity=" + _dropSendOpacity +
-                    " sendBadFrame=" + _dropSendBadFrame +
-                    " applyUnknownPrefab=" + _dropApplyUnknownPrefab +
-                    " applyUnusablePrefab=" + _dropApplyUnusablePrefab +
-                    " applyCreateFailed=" + _dropApplyCreateFailed +
-                    " applyMalformed=" + _dropApplyMalformed +
-                    " applyUnavailable=" + _dropApplyUnavailable);
+                SyncLog.Trace(LogTopic.Land, "terrain dropped sendNoTool=" + _dropSendNoToolName +
+                    " sendNoBrush=" + _dropSendNoBrushName + " sendOpacity=" + _dropSendOpacity +
+                    " sendBadFrame=" + _dropSendBadFrame + " applyUnknownPrefab=" +
+                    _dropApplyUnknownPrefab + " applyUnusablePrefab=" + _dropApplyUnusablePrefab +
+                    " applyCreateFailed=" + _dropApplyCreateFailed + " applyMalformed=" +
+                    _dropApplyMalformed + " applyUnavailable=" + _dropApplyUnavailable);
 
             _dropSendNoToolName = _dropSendNoBrushName = _dropSendOpacity = _dropSendBadFrame = 0;
             _dropApplyUnknownPrefab = _dropApplyUnusablePrefab = _dropApplyCreateFailed = 0;

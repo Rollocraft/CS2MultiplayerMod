@@ -6,6 +6,8 @@ using Game.Tools;
 using Unity.Collections;
 using Unity.Entities;
 
+using CS2MultiplayerMod.Core.Diagnostics;
+using CS2MultiplayerMod.Game.Diagnostics;
 using CS2MultiplayerMod.Game.Sync.Infrastructure;
 namespace CS2MultiplayerMod.Game.Sync.Systems.Net
 {
@@ -73,7 +75,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
             }
             catch (System.Exception ex)
             {
-                Diagnostics.FlightRecorder.Note("net isolated apply failed: " + ex.GetType().Name);
+                SyncLog.Trace(LogTopic.Nets, "net isolated apply failed: " + ex.GetType().Name);
                 InvalidateArmedBatch("isolated apply failed (" + ex.GetType().Name + ")", count);
                 return;
             }
@@ -93,8 +95,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                     EntityManager.AddComponent<Disabled>(entity);
                     _protectedRemoteNetTemps.Add(entity);
                 }
-                Diagnostics.FlightRecorder.Note("net commit shielded from preview clear temps=" +
-                                                  _protectedRemoteNetTemps.Count);
+                SyncLog.Trace(LogTopic.Nets, "net commit shielded from preview clear temps=" +
+                    _protectedRemoteNetTemps.Count);
             }
 
             _pendingApply = false;
@@ -114,10 +116,10 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
             _drainRemainingTemps = int.MaxValue;
             _suppressCaptureThisFrame = true;
             _clearLocalNetIsolationAfterBarrier = true;
-            Diagnostics.FlightRecorder.Note("remote " +
+            SyncLog.Trace(LogTopic.Nets, "remote " +
                 _committingTransactionKind.ToString().ToLowerInvariant() +
-                " commit isolated (temps=" + count + ") validateMS=" + validateMs +
-                " applyMS=" + (System.Environment.TickCount - applyStartTick));
+                " commit isolated (temps=" + count + ") validateMS=" + validateMs + " applyMS=" +
+                (System.Environment.TickCount - applyStartTick));
         }
 
         /// <summary>Members named individually before the composition line is truncated.</summary>
@@ -135,7 +137,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
         /// </summary>
         private void NoteTransactionComposition(RemoteToolTransactionKind kind, List<Entity> members)
         {
-            if (!Diagnostics.FlightRecorder.Enabled) return;
+            if (!SyncLog.IsRecording(LogTopic.Nets)) return;
 
             int edges = 0, nodes = 0, lanes = 0, aggregates = 0, objects = 0, areas = 0;
             int deletedTagged = 0, missing = 0, sharedOriginals = 0;
@@ -195,11 +197,10 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
             int unnamed = members.Count - missing - structuralNamed - restNamed;
             if (unnamed > 0) detail.Append(" +").Append(unnamed).Append(" more");
 
-            Diagnostics.FlightRecorder.Note("commit composition kind=" +
-                kind.ToString().ToLowerInvariant() + " temps=" + members.Count +
-                " edge=" + edges + " node=" + nodes + " lane=" + lanes +
-                " aggr=" + aggregates + " obj=" + objects + " area=" + areas +
-                " deletedTag=" + deletedTagged + " missing=" + missing +
+            SyncLog.Trace(LogTopic.Nets, "commit composition kind=" +
+                kind.ToString().ToLowerInvariant() + " temps=" + members.Count + " edge=" + edges +
+                " node=" + nodes + " lane=" + lanes + " aggr=" + aggregates + " obj=" + objects +
+                " area=" + areas + " deletedTag=" + deletedTagged + " missing=" + missing +
                 " sharedOriginal=" + sharedOriginals + " members=[" + detail + "]");
         }
 
@@ -256,25 +257,16 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
             if (replay != null && !repeatsPreviousAttempt && _applyReplayBudget.TryConsume())
             {
                 _replayAfterInvalidatedDrain = replay;
-                Mod.log.Warn("[MP] NetApply: " + reason + "; draining rejected Temps before " +
-                             "re-queueing batch (attempt " +
-                             _applyReplayBudget.AttemptsUsed + "/" +
-                             _applyReplayBudget.MaximumAttempts + ").");
-                Diagnostics.FlightRecorder.Note("net batch invalidated; drain then replay " +
-                    _applyReplayBudget.AttemptsUsed + "/" + _applyReplayBudget.MaximumAttempts);
+                SyncLog.Warn(LogTopic.Nets, "NetApply: " + reason +
+                    "; draining rejected Temps before " + "re-queueing batch (attempt " +
+                    _applyReplayBudget.AttemptsUsed + "/" + _applyReplayBudget.MaximumAttempts +
+                    ").");
             }
             else
             {
                 _replayAfterInvalidatedDrain = null;
-                Mod.log.Warn("[MP] NetApply: " + reason + "; batch dropped" +
-                             (repeatsPreviousAttempt
-                                 ? " - the rejection repeated unchanged, so further replays cannot " +
-                                   "succeed."
-                                 : replay != null
-                                     ? " after " + _applyReplayBudget.AttemptsUsed + " replays."
-                                     : "."));
-                Diagnostics.FlightRecorder.Note("net batch invalidated; dropped" +
-                    (repeatsPreviousAttempt ? " (rejection is deterministic)" : string.Empty));
+                SyncLog.Warn(LogTopic.Nets, "NetApply: " + reason + "; batch dropped" +
+                    (repeatsPreviousAttempt ? " - the rejection repeated unchanged, so further replays cannot " + "succeed." : replay != null ? " after " + _applyReplayBudget.AttemptsUsed + " replays." : "."));
                 SyncInbox.RequestResync(Diagnostics.ResyncReport
                     .Create(repeatsPreviousAttempt
                             ? "remote transaction rejected deterministically"

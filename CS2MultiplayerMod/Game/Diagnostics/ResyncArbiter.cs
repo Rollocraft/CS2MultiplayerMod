@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using CS2MultiplayerMod.Core.Diagnostics;
 
 namespace CS2MultiplayerMod.Game.Diagnostics
 {
@@ -46,8 +47,8 @@ namespace CS2MultiplayerMod.Game.Diagnostics
     /// raised the report gets to retry against a world that is standing still. If it succeeds it
     /// withdraws the report; if nothing withdraws it, the hold elapses and the reload happens.
     ///
-    /// Every outcome - held, withdrawn, settled - is written at the production log level with the
-    /// full report, so the log says why the world was reloaded, or why it nearly was, even when no
+    /// Every outcome - held, withdrawn, settled - is written as an ungated event with the full
+    /// report, so the log says why the world was reloaded, or why it nearly was, even when no
     /// diagnostic switch was ever turned on.
     /// </summary>
     public static class ResyncArbiter
@@ -104,9 +105,9 @@ namespace CS2MultiplayerMod.Game.Diagnostics
 
             if (recovering)
             {
-                SyncLog.Prod("World sync: " + report.Reason +
-                             " while a world sync is already running; folded into it (" +
-                             report.Subsystem + "/" + report.Subject + ").");
+                SyncLog.Event(LogTopic.Resync, "World sync: " + report.Reason +
+                    " while a world sync is already running; folded into it (" + report.Subsystem +
+                    "/" + report.Subject + ").");
                 return ResyncVerdict.AlreadyRecovering;
             }
 
@@ -150,24 +151,23 @@ namespace CS2MultiplayerMod.Game.Diagnostics
             {
                 // States the VERDICT, not the action. Whether the reload actually runs is the
                 // service's call - it still has a cooldown - and it reports that itself.
-                SyncLog.ProdReport(
+                SyncLog.Event(LogTopic.Resync,
                     "World sync: this city and the host's have diverged and cannot be reconciled " +
                     "locally. Reason: " + report.Reason + ".",
                     Decorate(report, observations, heldForMs, settled: true));
                 return ResyncVerdict.Settled;
             }
 
-            SyncLog.ProdReport(
-                "World sync: holding off on a world reload for up to " + (HoldWindowMs / 1000) +
-                " s while this is confirmed. Reason: " + report.Reason + ".",
-                Decorate(report, observations, heldForMs, settled: false));
+            SyncLog.Event(LogTopic.Resync, "World sync: holding off on a world reload for up to " +
+                (HoldWindowMs / 1000) + " s while this is confirmed. Reason: " + report.Reason +
+                ".", Decorate(report, observations, heldForMs, settled: false));
             return ResyncVerdict.Held;
         }
 
         /// <summary>
         /// Tell the arbiter a held fault has cleared - the operation resolved, the graph drained.
         /// Withdrawing is the whole point of holding: it is a world reload that did not have to
-        /// happen, and it is written to the production log in the same shape as one that did.
+        /// happen, and it is logged in the same shape as one that did.
         ///
         /// This is the ONLY way a held report goes away without a reload. A subsystem that drops
         /// its work instead of retrying simply never calls it, and its report matures on schedule.
@@ -186,9 +186,8 @@ namespace CS2MultiplayerMod.Game.Diagnostics
             List<string> lines = held.Report.Lines();
             lines.Add("held for: " + (nowMs - held.Report.FirstSeenMs) + " ms");
             lines.Add("outcome: " + (outcome ?? "the fault cleared on its own"));
-            SyncLog.ProdReport(
-                "World sync: not needed after all - " + held.Report.Reason +
-                " resolved without reloading the world.", lines);
+            SyncLog.Event(LogTopic.Resync, "World sync: not needed after all - " +
+                held.Report.Reason + " resolved without reloading the world.", lines);
         }
 
         /// <summary>
@@ -223,8 +222,7 @@ namespace CS2MultiplayerMod.Game.Diagnostics
                 lines.Add("held for: " + (nowMs - report.FirstSeenMs) +
                           " ms with the net feeders standing down");
                 lines.Add("verdict: settled - nothing repaired it in that time");
-                SyncLog.ProdReport(
-                    "World sync: the hold expired and " + report.Reason +
+                SyncLog.Event(LogTopic.Resync, "World sync: the hold expired and " + report.Reason +
                     " is still unresolved, so this city has to be replaced by the host's.", lines);
                 reports.Add(report);
             }

@@ -1,5 +1,7 @@
 using System.Collections.Generic;
 using Colossal.Mathematics;
+using CS2MultiplayerMod.Core.Diagnostics;
+using CS2MultiplayerMod.Game.Diagnostics;
 using Game.Common;
 using Game.Net;
 using Game.Tools;
@@ -158,7 +160,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
             // driveway, or clear a subnet while leaving its owner behind.
             ReleaseTrackedTemps(_isolatedLocalTemps);
             _localToolOutputProtectedThisFrame = true;
-            Diagnostics.FlightRecorder.Note("net remote batch protected for local " + tool.applyMode +
+            SyncLog.Trace(LogTopic.Nets, "net remote batch protected for local " + tool.applyMode +
                 " (remote=" + _protectedRemoteNetTemps.Count + ")");
         }
 

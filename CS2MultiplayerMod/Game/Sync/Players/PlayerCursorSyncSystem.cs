@@ -2,7 +2,9 @@ using System.Diagnostics;
 using Game;
 using Game.Rendering;
 using Unity.Mathematics;
+using CS2MultiplayerMod.Core.Diagnostics;
 using CS2MultiplayerMod.Core.Session;
+using CS2MultiplayerMod.Game.Diagnostics;
 
 namespace CS2MultiplayerMod.Game.Sync.Players
 {
@@ -72,7 +74,6 @@ namespace CS2MultiplayerMod.Game.Sync.Players
         protected override void OnCreate()
         {
             base.OnCreate();
-            Mod.log.Info(nameof(PlayerCursorSyncSystem) + " ready.");
             _camera = World.GetExistingSystemManaged<CameraUpdateSystem>();
         }
 
@@ -142,8 +143,9 @@ namespace CS2MultiplayerMod.Game.Sync.Players
                 if (now - _lastLogMs >= 30000)
                 {
                     _lastLogMs = now;
-                    Mod.Verbose("[MP] Cursors: sent " + _sent + " position(s)/30s; tracking " +
-                                service.RemotePlayerCount + " remote player(s).");
+                    SyncLog.Detail(LogTopic.Players, "Cursors: sent " + _sent +
+                        " position(s)/30s; tracking " + service.RemotePlayerCount +
+                        " remote player(s).");
                     _sent = 0;
                 }
             }

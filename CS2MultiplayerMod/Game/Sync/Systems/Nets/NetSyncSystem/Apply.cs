@@ -5,8 +5,9 @@ using Game.Net;
 using Game.Tools;
 using Unity.Collections;
 using Unity.Entities;
+using CS2MultiplayerMod.Core.Diagnostics;
 using CS2MultiplayerMod.Core.Session;
-
+using CS2MultiplayerMod.Game.Diagnostics;
 using CS2MultiplayerMod.Game.Sync.Infrastructure;
 namespace CS2MultiplayerMod.Game.Sync.Systems.Net
 {
@@ -191,7 +192,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                         System.Action completed = _onCommitComplete;
                         _onCommitComplete = null;
                         if (completed != null) completed();
-                        Diagnostics.FlightRecorder.Note(
+                        SyncLog.Trace(LogTopic.Nets,
                             "remote transaction drain completed after clean-frame fence");
                         WithdrawDrainReport("the batch drained on its own");
                     }
@@ -225,9 +226,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                     _invalidatedDrainArmTick = System.Environment.TickCount;
                     _invalidatedCleanFrames = 0;
                     _invalidatedDrainTimedOut = false;
-                    Diagnostics.FlightRecorder.Note(
-                        "net isolated commit quarantined frames=" + _drainFrames +
-                        " tracked=" + trackedCount + " remaining=" + remainingTemps);
+                    SyncLog.Trace(LogTopic.Nets, "net isolated commit quarantined frames=" +
+                        _drainFrames + " tracked=" + trackedCount + " remaining=" + remainingTemps);
 
                     // The graph is quarantined either way - it may not be touched while native work
                     // is still scheduled against it. Whether that costs a world reload is a
@@ -275,11 +275,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
             double elapsedMs = (System.Diagnostics.Stopwatch.GetTimestamp() - startTicks) * 1000d /
                                System.Diagnostics.Stopwatch.Frequency;
             if (elapsedMs < SlowRealizeCycleMs) return;
-            Mod.log.Info("[MP] NetSync realize cycle took " + elapsedMs.ToString("F0") + " ms (" +
-                         _rzCycleCourses + " course(s), " + _rzCyclePool + " indexed net entities).");
-            Diagnostics.FlightRecorder.Note("net realize cycle ms=" + elapsedMs.ToString("F0") +
-                                              " courses=" + _rzCycleCourses +
-                                              " pool=" + _rzCyclePool);
+            SyncLog.Detail(LogTopic.Nets, "NetSync realize cycle took " + elapsedMs.ToString("F0") +
+                " ms (" + _rzCycleCourses + " course(s), " + _rzCyclePool +
+                " indexed net entities).");
         }
 
         /// <summary>
@@ -334,7 +332,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
             if (_isolatedLocalTemps.Count > 0) ReleaseTrackedTemps(_isolatedLocalTemps);
             DisableQueryEntities(_standingTemps, _isolatedLocalTemps);
             if (_isolatedLocalTemps.Count > 0)
-                Diagnostics.FlightRecorder.Note("tool preview isolated=" + _isolatedLocalTemps.Count);
+                SyncLog.Trace(LogTopic.Nets, "tool preview isolated=" + _isolatedLocalTemps.Count);
         }
 
         /// <summary>

@@ -7,6 +7,8 @@ using Game.Tools;
 using Unity.Collections;
 using Unity.Entities;
 using Unity.Mathematics;
+using CS2MultiplayerMod.Core.Diagnostics;
+using CS2MultiplayerMod.Game.Diagnostics;
 using CS2MultiplayerMod.Game.Sync.Commands;
 
 namespace CS2MultiplayerMod.Game.Sync.Systems
@@ -66,7 +68,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 if (!transformMatches) continue;
 
                 _playerPlacedSpawnableCreations.RemoveAt(i);
-                Diagnostics.FlightRecorder.Note("player-placed spawnable guard consumed");
+                SyncLog.Trace(LogTopic.Buildings, "player-placed spawnable guard consumed");
                 return true;
             }
 
@@ -126,8 +128,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             }
 
             if (remembered > 0)
-                Diagnostics.FlightRecorder.Note("player-placed spawnable guard armed=" +
-                                                  remembered);
+                SyncLog.Trace(LogTopic.Buildings, "player-placed spawnable guard armed=" +
+                    remembered);
         }
 
         private void PrunePlayerPlacedSpawnables(long now)

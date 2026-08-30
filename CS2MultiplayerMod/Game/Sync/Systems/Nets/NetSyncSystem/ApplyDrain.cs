@@ -6,6 +6,8 @@ using Game.Tools;
 using Unity.Collections;
 using Unity.Entities;
 
+using CS2MultiplayerMod.Core.Diagnostics;
+using CS2MultiplayerMod.Game.Diagnostics;
 using CS2MultiplayerMod.Game.Sync.Infrastructure;
 namespace CS2MultiplayerMod.Game.Sync.Systems.Net
 {
@@ -119,11 +121,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                 {
                     _invalidatedDrainTimedOut = true;
                     _replayAfterInvalidatedDrain = null;
-                    Diagnostics.SyncLog.ProdError(
+                    Diagnostics.SyncLog.Error(LogTopic.Nets,
                         "Road sync: a rejected road transaction is still held by the game's own " +
                         "apply pass; no further road work can run until it finishes.");
-                    Diagnostics.FlightRecorder.Note(
-                        "quarantined net temps failed to drain; native work remains blocked");
                     NoteDrainReport("quarantined graph");
                     SyncInbox.RequestResync(Diagnostics.ResyncReport
                         .Create(DrainFailedReason, "net", Diagnostics.ResyncEvidence.Timeout)
@@ -146,7 +146,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
             _invalidatedCleanFrames = 0;
             _invalidatedDrainTimedOut = false;
             _drainReleasedThisFrame = true;
-            Diagnostics.FlightRecorder.Note("invalidated net transaction fully drained");
+            SyncLog.Trace(LogTopic.Nets, "invalidated net transaction fully drained");
             // It drained after all. Withdraw the report before its hold matures: the window was
             // too short for this batch, which is a tuning fact, not a reason to reload a world.
             WithdrawDrainReport("the game's apply pass finished the batch after the window expired");

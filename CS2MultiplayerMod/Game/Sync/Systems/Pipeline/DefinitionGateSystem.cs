@@ -4,6 +4,8 @@ using Game.Tools;
 using Unity.Collections;
 using Unity.Entities;
 
+using CS2MultiplayerMod.Core.Diagnostics;
+using CS2MultiplayerMod.Game.Diagnostics;
 using CS2MultiplayerMod.Game.Sync.Infrastructure;
 using CS2MultiplayerMod.Game.Sync.Systems.Net;
 namespace CS2MultiplayerMod.Game.Sync.Systems
@@ -27,7 +29,6 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         protected override void OnCreate()
         {
             base.OnCreate();
-            Mod.log.Info(nameof(DefinitionGateSystem) + " ready.");
             _netSync = World.GetOrCreateSystemManaged<NetSyncSystem>();
             _buildSync = World.GetOrCreateSystemManaged<BuildSyncSystem>();
             _toolSystem = World.GetOrCreateSystemManaged<ToolSystem>();
@@ -115,7 +116,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 if (killed > 0)
                 {
                     _netSync.ForceActiveToolUpdate();
-                    Diagnostics.FlightRecorder.Note("def gate wiped defs=" + killed);
+                    SyncLog.Trace(LogTopic.Pipeline, "def gate wiped defs=" + killed);
                 }
             }
         }

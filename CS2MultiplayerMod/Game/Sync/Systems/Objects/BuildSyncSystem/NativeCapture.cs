@@ -7,6 +7,8 @@ using Game.Tools;
 using Unity.Collections;
 using Unity.Entities;
 using Unity.Mathematics;
+using CS2MultiplayerMod.Core.Diagnostics;
+using CS2MultiplayerMod.Game.Diagnostics;
 using CS2MultiplayerMod.Game.Sync.Commands;
 using CS2MultiplayerMod.Game.Sync.Infrastructure;
 
@@ -131,7 +133,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     _cachedLocalObjectOperation != null &&
                     TryBeginSpecializedAreaCapture(recreate))
                 {
-                    Diagnostics.FlightRecorder.Note("specialized object/area handoff tracked");
+                    SyncLog.Trace(LogTopic.Buildings, "specialized object/area handoff tracked");
                 }
 
                 if (_pendingSpecializedObjectOperation != null)
@@ -377,7 +379,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 if (string.IsNullOrEmpty(stampPrefabName))
                 {
                     _cachedLocalObjectOperation = null;
-                    Diagnostics.FlightRecorder.Note("asset stamp definitions lacked selected prefab");
+                    SyncLog.Trace(LogTopic.Buildings,
+                        "asset stamp definitions lacked selected prefab");
                     return;
                 }
                 // Any ObjectDefinitions in this output are independently placed stamp subobjects,
@@ -404,23 +407,22 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 AttachPlacementInput(undivided);
                 _cachedLocalObjectOperation = undivided;
                 RememberRecentLocalObjectOperation(undivided);
-                Diagnostics.FlightRecorder.Note("fixed-element net kept undivided defs=" +
+                SyncLog.Trace(LogTopic.Buildings, "fixed-element net kept undivided defs=" +
                     undivided.Definitions.Length + " divided=" + captured.Count);
                 return;
             }
             if (hasFixedElementCut)
-                Diagnostics.FlightRecorder.Note(
+                SyncLog.Trace(LogTopic.Buildings,
                     "fixed-element net has no undivided graph; publishing divided defs=" +
                     captured.Count);
 
             _cachedLocalObjectOperation = operation;
             RememberRecentLocalObjectOperation(_cachedLocalObjectOperation);
-            Diagnostics.FlightRecorder.Note(hasStampingNet
-                ? "asset stamp native definitions captured=" + captured.Count +
-                  " prefab=" + stampPrefabName
-                : "object native definitions captured=" + captured.Count +
-                  " root=" + captured[root].PrefabName +
-                  " seed=" + unchecked((ushort)captured[root].RandomSeed));
+            SyncLog.Trace(LogTopic.Buildings,
+                hasStampingNet ? "asset stamp native definitions captured=" + captured.Count +
+                " prefab=" + stampPrefabName : "object native definitions captured=" +
+                captured.Count + " root=" + captured[root].PrefabName + " seed=" +
+                unchecked((ushort)captured[root].RandomSeed));
         }
     }
 }

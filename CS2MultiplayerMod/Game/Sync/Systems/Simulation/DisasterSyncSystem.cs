@@ -9,9 +9,9 @@ using Game.Tools;
 using Unity.Collections;
 using Unity.Entities;
 using Unity.Mathematics;
+using CS2MultiplayerMod.Core.Diagnostics;
 using CS2MultiplayerMod.Core.Protocol.Messages;
 using CS2MultiplayerMod.Core.Session;
-
 using CS2MultiplayerMod.Game.Diagnostics;
 using CS2MultiplayerMod.Game.Sync.Commands;
 using CS2MultiplayerMod.Game.Sync.Infrastructure;
@@ -63,7 +63,6 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         {
             base.OnCreate();
 
-            Mod.log.Info(nameof(DisasterSyncSystem) + " ready.");
             _prefabSystem = World.GetOrCreateSystemManaged<PrefabSystem>();
             _prefabIndex = new PrefabIndex(_prefabSystem, GetEntityQuery(ComponentType.ReadOnly<PrefabData>()));
             _simulation = World.GetOrCreateSystemManaged<SimulationSystem>();
@@ -152,7 +151,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 try { command = DisasterEventCommand.Decode(message.Body); }
                 catch (System.Exception ex)
                 {
-                    Mod.log.Warn("[MP] DisasterSync: dropping malformed command: " + ex.Message);
+                    SyncLog.Warn(LogTopic.City, "DisasterSync: dropping malformed command: " +
+                        ex.Message);
                     continue;
                 }
 
@@ -214,12 +214,11 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                                     command.DurationFrames;
                     if (IsDamaging(prefab))
                     {
-                        Mod.log.Info("[MP] DisasterSync sent " + detail + ".");
-                        FlightRecorder.Note("disaster sent " + detail);
+                        SyncLog.Detail(LogTopic.City, "DisasterSync sent " + detail + ".");
                     }
                     else
                     {
-                        Mod.Verbose("[MP] DisasterSync sent weather " + detail + ".");
+                        SyncLog.Detail(LogTopic.City, "DisasterSync sent weather " + detail + ".");
                     }
                 }
             }
@@ -272,8 +271,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     string detail = "water surge '" + prefabName + "', intensity " +
                                     command.MaxIntensity + ", lasting " + command.DurationFrames +
                                     " frame(s)";
-                    Mod.log.Info("[MP] DisasterSync sent " + detail + ".");
-                    FlightRecorder.Note("disaster sent " + detail);
+                    SyncLog.Detail(LogTopic.City, "DisasterSync sent " + detail + ".");
                 }
             }
             finally
@@ -305,8 +303,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             }
             catch (System.Exception ex)
             {
-                Mod.log.Warn("[MP] DisasterSync: refusing to send " + label + " '" +
-                             command.PrefabName + "': " + ex.Message);
+                SyncLog.Warn(LogTopic.City, "DisasterSync: refusing to send " + label + " '" +
+                    command.PrefabName + "': " + ex.Message);
                 return false;
             }
         }
@@ -318,14 +316,14 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             Entity prefab;
             if (!_prefabIndex.TryResolve(command.PrefabName, out prefab))
             {
-                Mod.log.Warn("[MP] DisasterSync: no local event prefab named '" +
-                             command.PrefabName + "'; ignoring the disaster.");
+                SyncLog.Warn(LogTopic.City, "DisasterSync: no local event prefab named '" +
+                    command.PrefabName + "'; ignoring the disaster.");
                 return false;
             }
             if (!EntityManager.HasComponent<EventData>(prefab) || !MatchesKind(prefab, command.Kind))
             {
-                Mod.log.Warn("[MP] DisasterSync: prefab '" + command.PrefabName + "' is not a " +
-                             command.Kind + " event here; ignoring.");
+                SyncLog.Warn(LogTopic.City, "DisasterSync: prefab '" + command.PrefabName +
+                    "' is not a " + command.Kind + " event here; ignoring.");
                 return false;
             }
 
@@ -333,8 +331,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             // switched off never starts a damaging event, so it must not accept one either.
             if (IsDamaging(prefab) && !_cityConfiguration.naturalDisasters)
             {
-                Mod.Verbose("[MP] DisasterSync: natural disasters are off in this city; ignoring '" +
-                            command.PrefabName + "' from player " + originPlayerId + ".");
+                SyncLog.Detail(LogTopic.City,
+                    "DisasterSync: natural disasters are off in this city; ignoring '" +
+                    command.PrefabName + "' from player " + originPlayerId + ".");
                 return false;
             }
 
@@ -352,8 +351,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 !HasKindComponent(entity, command.Kind))
             {
                 EntityManager.DestroyEntity(entity);
-                Mod.log.Warn("[MP] DisasterSync: the event archetype for '" + command.PrefabName +
-                             "' is missing what a " + command.Kind + " needs; ignoring.");
+                SyncLog.Warn(LogTopic.City, "DisasterSync: the event archetype for '" +
+                    command.PrefabName + "' is missing what a " + command.Kind +
+                    " needs; ignoring.");
                 return false;
             }
 
@@ -372,12 +372,11 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                             originPlayerId + ", starting in " + command.StartDelayFrames + " frame(s)";
             if (IsDamaging(prefab))
             {
-                Mod.log.Info("[MP] DisasterSync realized " + detail + ".");
-                FlightRecorder.Note("disaster realized " + detail);
+                SyncLog.Detail(LogTopic.City, "DisasterSync realized " + detail + ".");
             }
             else
             {
-                Mod.Verbose("[MP] DisasterSync realized weather " + detail + ".");
+                SyncLog.Detail(LogTopic.City, "DisasterSync realized weather " + detail + ".");
             }
             return true;
         }
@@ -467,9 +466,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
             spawner.Enabled = !suppress;
             _rollsSuppressed = suppress;
-            Mod.log.Info("[MP] DisasterSync: local weather-hazard rolls " +
-                         (suppress ? "stopped; the host's disasters are replicated instead."
-                                   : "restored."));
+            SyncLog.Detail(LogTopic.City, "DisasterSync: local weather-hazard rolls " +
+                (suppress ? "stopped; the host's disasters are replicated instead." : "restored."));
         }
 
         // ---- Helpers ------------------------------------------------------------

@@ -5,8 +5,10 @@ using Game.Rendering;
 using Unity.Jobs;
 using Unity.Mathematics;
 using UnityEngine;
+using CS2MultiplayerMod.Core.Diagnostics;
 using CS2MultiplayerMod.Core.Protocol.Messages;
 using CS2MultiplayerMod.Core.Session;
+using CS2MultiplayerMod.Game.Diagnostics;
 using CS2MultiplayerMod.Game.Sync.Commands;
 using CS2MultiplayerMod.Game.Sync.Infrastructure;
 
@@ -68,7 +70,6 @@ namespace CS2MultiplayerMod.Game.Sync.Players
             _overlay = World.GetOrCreateSystemManaged<OverlayRenderSystem>();
             _observer = SyncObserverBinding.Bind(
                 () => new CommandObserver(_incoming, MapPingCommand.Id), DrainQueue);
-            Mod.log.Info(nameof(MapPingSystem) + " ready.");
         }
 
         protected override void OnDestroy()
@@ -140,7 +141,8 @@ namespace CS2MultiplayerMod.Game.Sync.Players
                 try { command = MapPingCommand.Decode(message.Body); }
                 catch (System.Exception ex)
                 {
-                    Mod.log.Warn("[MP] MapPing: dropping malformed ping: " + ex.Message);
+                    SyncLog.Warn(LogTopic.Players, "MapPing: dropping malformed ping: " +
+                        ex.Message);
                     continue;
                 }
 

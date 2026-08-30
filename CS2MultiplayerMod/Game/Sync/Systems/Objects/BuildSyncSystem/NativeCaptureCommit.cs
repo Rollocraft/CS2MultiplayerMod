@@ -7,6 +7,8 @@ using Game.Tools;
 using Unity.Collections;
 using Unity.Entities;
 using Unity.Mathematics;
+using CS2MultiplayerMod.Core.Diagnostics;
+using CS2MultiplayerMod.Game.Diagnostics;
 using CS2MultiplayerMod.Game.Sync.Commands;
 
 namespace CS2MultiplayerMod.Game.Sync.Systems
@@ -82,9 +84,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                         if (!TryPublishLocalObjectOperation(operation)) return false;
                         if (object.ReferenceEquals(_cachedLocalObjectOperation, operation))
                             _cachedLocalObjectOperation = null;
-                        Diagnostics.FlightRecorder.Note("object graph matched committed root op=" +
-                            operation.OperationId + " defs=" + definitionCount +
-                            " prefab=" + prefabName + " seed=" + randomSeed);
+                        SyncLog.Trace(LogTopic.Buildings, "object graph matched committed root op=" +
+                            operation.OperationId + " defs=" + definitionCount + " prefab=" +
+                            prefabName + " seed=" + randomSeed);
                         return true;
                     }
                     catch (System.Exception ex)
@@ -92,10 +94,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                         ForgetRecentLocalObjectOperation(operation);
                         if (object.ReferenceEquals(_cachedLocalObjectOperation, operation))
                             _cachedLocalObjectOperation = null;
-                        Mod.log.Warn("[MP] BuildSync: committed object graph was not sent: " +
-                                     ex.Message);
-                        Diagnostics.FlightRecorder.Note("committed object graph rejected=" +
-                                                          ex.GetType().Name);
+                        SyncLog.Warn(LogTopic.Buildings,
+                            "BuildSync: committed object graph was not sent: " + ex.Message);
                         if (Mod.Service != null)
                             Mod.Service.RequestAutomaticWorldRecovery(
                                 "committed building graph could not be sent");
@@ -211,7 +211,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             _lastObjectGraphMissDetail = "prefab=" + prefabName + " seed=" + seed +
                 " recent=" + _recentLocalObjectOperations.Count + " newest=" + newest +
                 matchingIdentity;
-            Diagnostics.FlightRecorder.Note("object graph match missed " + _lastObjectGraphMissDetail);
+            SyncLog.Trace(LogTopic.Buildings, "object graph match missed " +
+                _lastObjectGraphMissDetail);
         }
     }
 }

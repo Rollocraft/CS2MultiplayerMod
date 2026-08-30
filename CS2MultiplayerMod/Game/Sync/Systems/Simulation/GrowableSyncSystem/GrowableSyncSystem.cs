@@ -9,9 +9,11 @@ using Game.Simulation;
 using Game.Tools;
 using Unity.Entities;
 using Unity.Mathematics;
+using CS2MultiplayerMod.Core.Diagnostics;
 using CS2MultiplayerMod.Core.Protocol.Messages;
 using CS2MultiplayerMod.Core.Session;
 using CS2MultiplayerMod.Core.Sync;
+using CS2MultiplayerMod.Game.Diagnostics;
 using CS2MultiplayerMod.Game.Sync.Commands;
 using CS2MultiplayerMod.Game.Sync.Infrastructure;
 
@@ -180,7 +182,6 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         {
             base.OnCreate();
 
-            Mod.log.Info(nameof(GrowableSyncSystem) + " ready.");
             _prefabSystem = World.GetOrCreateSystemManaged<PrefabSystem>();
             _prefabIndex = new PrefabIndex(_prefabSystem, GetEntityQuery(ComponentType.ReadOnly<PrefabData>()));
             _objectSearch = new ObjectSearch(
@@ -335,9 +336,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             if (_buildSync != null && _buildSync.ConsumePlayerPlacedSpawnable(entity, now))
             {
                 _playerPlacedGrowables.Add(entity);
-                Mod.Verbose("[MP] GrowableSync: excluded player-placed spawnable '" +
-                            PrefabIndexSafeName(prefab) + "' from autonomous lifecycle sync.");
-                Diagnostics.FlightRecorder.Note("player-placed spawnable excluded from growables");
+                SyncLog.Detail(LogTopic.Buildings,
+                    "GrowableSync: excluded player-placed spawnable '" + PrefabIndexSafeName(prefab) +
+                    "' from autonomous lifecycle sync.");
                 return false;
             }
             return true;
@@ -390,8 +391,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             _lastStatsMs = now;
 
             if (_sentSpawn + _sentLevel + _sentRemove + _sentState == 0) return;
-            Mod.Verbose("[MP] GrowableSync/30s host: spawn=" + _sentSpawn + " level=" + _sentLevel +
-                        " remove=" + _sentRemove + " state=" + _sentState + ".");
+            SyncLog.Detail(LogTopic.Buildings, "GrowableSync/30s host: spawn=" + _sentSpawn +
+                " level=" + _sentLevel + " remove=" + _sentRemove + " state=" + _sentState + ".");
             _sentSpawn = _sentLevel = _sentRemove = _sentState = 0;
         }
 
@@ -403,11 +404,10 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
             if (_gotSpawn + _gotLevel + _gotRemove + _gotState + _duplicates + _conflicts +
                 _unmatched + _unknownPrefab + _rejectedLocal == 0) return;
-            Mod.Verbose("[MP] GrowableSync/30s client: spawn=" + _gotSpawn + " level=" + _gotLevel +
-                        " remove=" + _gotRemove + " state=" + _gotState +
-                        " duplicate=" + _duplicates + " conflict=" + _conflicts +
-                        " unmatched=" + _unmatched + " unknownPrefab=" + _unknownPrefab +
-                        " rejectedLocal=" + _rejectedLocal + ".");
+            SyncLog.Detail(LogTopic.Buildings, "GrowableSync/30s client: spawn=" + _gotSpawn +
+                " level=" + _gotLevel + " remove=" + _gotRemove + " state=" + _gotState +
+                " duplicate=" + _duplicates + " conflict=" + _conflicts + " unmatched=" + _unmatched +
+                " unknownPrefab=" + _unknownPrefab + " rejectedLocal=" + _rejectedLocal + ".");
             _gotSpawn = _gotLevel = _gotRemove = _gotState = 0;
             _duplicates = _conflicts = _unmatched = _unknownPrefab = _rejectedLocal = 0;
         }

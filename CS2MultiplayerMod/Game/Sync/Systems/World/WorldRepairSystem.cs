@@ -7,6 +7,8 @@ using Game.SceneFlow;
 using Game.Tools;
 using Unity.Collections;
 using Unity.Entities;
+using CS2MultiplayerMod.Core.Diagnostics;
+using CS2MultiplayerMod.Game.Diagnostics;
 using CS2MultiplayerMod.Game.Sync.Infrastructure;
 
 namespace CS2MultiplayerMod.Game.Sync.Systems
@@ -36,7 +38,6 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         protected override void OnCreate()
         {
             base.OnCreate();
-            Mod.log.Info(nameof(WorldRepairSystem) + " ready.");
             _prefabSystem = World.GetOrCreateSystemManaged<PrefabSystem>();
 
             // Top-level mover instances. Simulation-owned vehicles normally carry Owner;
@@ -182,8 +183,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             _sweepIndex = 0;
             _sweeping = false;
 
-            Diagnostics.FlightRecorder.Note("world repair scanned=" + scanned +
-                                              " removed=" + _sweepRemoved);
+            SyncLog.Trace(LogTopic.Resync, "world repair scanned=" + scanned + " removed=" +
+                _sweepRemoved);
             if (_sweepRemoved == 0) return;
 
             var detail = new StringBuilder();
@@ -198,9 +199,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     break;
                 }
             }
-            Mod.log.Info("[MP] World repair: removed " + _sweepRemoved +
-                         " stranded mover instance(s) left by an earlier session [" +
-                         detail + "].");
+            SyncLog.Event(LogTopic.Resync, "World repair: removed " + _sweepRemoved +
+                " stranded mover instance(s) left by an earlier session [" + detail + "].");
         }
 
         private void CancelSweep()

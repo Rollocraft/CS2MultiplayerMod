@@ -1,7 +1,9 @@
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using CS2MultiplayerMod.Core.Diagnostics;
 using CS2MultiplayerMod.Core.Session;
+using CS2MultiplayerMod.Game.Diagnostics;
 using CS2MultiplayerMod.Game.Sync.Commands;
 using CS2MultiplayerMod.Game.Sync.Infrastructure;
 using Game;
@@ -333,27 +335,23 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 foreach (Peer peer in session.Peers)
                     if (peer.Handshaked) clients++;
                 long estimatedFanoutBytes = _sentBytes * clients;
-                Mod.Verbose("[MP] PropertyRent/30s host: pages=" + _sentPages +
-                            ", entries=" + _sentEntries + ", bytes=" + _sentBytes +
-                            ", clients=" + clients + ", estimatedFanoutBytes=" +
-                            estimatedFanoutBytes + ", transportPendingBytes=" +
-                            session.PendingSendBytes +
-                            ", changedPriority=" + _priorityChanges +
-                            ", priorityQueued=" + _priority.Count +
-                            ", priorityDropped=" + _priorityDrops +
-                            ", captureSkipped=" + _localCaptureSkips +
-                            ", identityCollision=" + _localIdentityCollisions + ".");
+                SyncLog.Detail(LogTopic.Residential, "PropertyRent/30s host: pages=" + _sentPages +
+                    ", entries=" + _sentEntries + ", bytes=" + _sentBytes + ", clients=" + clients +
+                    ", estimatedFanoutBytes=" + estimatedFanoutBytes + ", transportPendingBytes=" +
+                    session.PendingSendBytes + ", changedPriority=" + _priorityChanges +
+                    ", priorityQueued=" + _priority.Count + ", priorityDropped=" + _priorityDrops +
+                    ", captureSkipped=" + _localCaptureSkips + ", identityCollision=" +
+                    _localIdentityCollisions + ".");
             }
             else
             {
-                Mod.Verbose("[MP] PropertyRent/30s client: pages=" + _receivedPages +
-                            ", queueDropped=" + _droppedPages + ", cached=" + _cache.Count +
-                            ", pending=" + _pending.Count + ", resolved=" + _resolved +
-                            ", unresolved=" + _unresolved + ", ambiguous=" + _ambiguous +
-                            ", expired=" + _expired + ", cacheDropped=" + _cacheDrops +
-                            ", pruned=" + _pruned + ", appliedProperties=" +
-                            _appliedProperties + ", renterWrites=" + _appliedRenters +
-                            ", marketWrites=" + _appliedMarkets + ".");
+                SyncLog.Detail(LogTopic.Residential, "PropertyRent/30s client: pages=" +
+                    _receivedPages + ", queueDropped=" + _droppedPages + ", cached=" + _cache.Count +
+                    ", pending=" + _pending.Count + ", resolved=" + _resolved + ", unresolved=" +
+                    _unresolved + ", ambiguous=" + _ambiguous + ", expired=" + _expired +
+                    ", cacheDropped=" + _cacheDrops + ", pruned=" + _pruned + ", appliedProperties=" +
+                    _appliedProperties + ", renterWrites=" + _appliedRenters + ", marketWrites=" +
+                    _appliedMarkets + ".");
             }
             _sentPages = _sentEntries = _priorityChanges = _priorityDrops = 0;
             _localCaptureSkips = _localIdentityCollisions = 0;

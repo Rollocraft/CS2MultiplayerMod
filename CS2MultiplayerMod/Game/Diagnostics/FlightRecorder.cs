@@ -13,11 +13,28 @@ using Game.SceneFlow;
 namespace CS2MultiplayerMod.Game.Diagnostics
 {
     /// <summary>
-    /// Crash forensics for public builds. The recorder appends compact, structured events
-    /// and periodic health snapshots to <c>Logs/CS2MP-flight.log</c>. The file is never
-    /// truncated on start (it rotates at 4 MB), and every event is flushed before returning.
-    /// Its tail therefore survives a hard process exit and shows the exact run, thread,
-    /// multiplayer operation and resource trend immediately before the failure.
+    /// Crash forensics for public builds: <c>Logs/CS2MP-flight.log</c>.
+    ///
+    /// This is the mod's second log file, and the only reason it is a second file rather than more
+    /// lines in the first one is that it can promise four things the game log cannot:
+    ///
+    ///  * <b>The tail survives.</b> The game's logger buffers; a hard exit - a native access
+    ///    violation, an out-of-memory kill, a GPU driver reset - takes the last seconds of it with
+    ///    it, which is exactly the part worth reading. Every line here that matters is flushed
+    ///    before <see cref="Note(string,bool)"/> returns.
+    ///  * <b>The previous run survives.</b> The game log is truncated on start, so a player who
+    ///    crashes and restarts before writing their report has already destroyed the evidence.
+    ///    This file is only rotated after a run that ended cleanly (see <see cref="Start"/>).
+    ///  * <b>It sees the whole process.</b> The Unity log callback, the unhandled-exception hook
+    ///    and the unobserved-task hook record faults from the game and from other mods, which
+    ///    never reach this mod's own logger but are frequently the actual cause.
+    ///  * <b>It is machine-readable.</b> Every line carries run id, sequence, elapsed time and
+    ///    thread, and the payloads are <c>key=value</c>, so a report can be diffed and sorted
+    ///    rather than only read.
+    ///
+    /// It is not a parallel log with different content: <see cref="SyncLog"/> mirrors every line
+    /// it writes to the game log here as well, so this file is a superset. Ask a player for this
+    /// one file and nothing is missing.
     /// </summary>
     internal static class FlightRecorder
     {
@@ -38,6 +55,14 @@ namespace CS2MultiplayerMod.Game.Diagnostics
         private const int MaxDiagnosticMods = 256;
         private const int MaxContentValueChars = 256;
 
+        /// <summary>
+        /// How many unflushed detail lines may sit in the writer's buffer. Detail is the chatty,
+        /// switched-on-by-the-player level, so flushing every one of those would put a disk write
+        /// in the middle of a frame; the next event, warning or fault flushes them anyway, and
+        /// this bound keeps a long quiet stretch of pure detail from outliving a crash.
+        /// </summary>
+        private const int MaxBufferedLines = 64;
+
         private static readonly object Gate = new object();
         private static StreamWriter _writer;
         private static Stopwatch _runClock;
@@ -47,6 +72,7 @@ namespace CS2MultiplayerMod.Game.Diagnostics
         private static int _mirroredErrors;
         private static string _lastUnityKey;
         private static int _lastUnityRepeats;
+        private static int _bufferedLines;
         private static UnityEngine.Application.LogCallback _logHook;
         private static UnityEngine.Application.LowMemoryCallback _lowMemoryHook;
         private static Action _quittingHook;
@@ -75,7 +101,10 @@ namespace CS2MultiplayerMod.Game.Diagnostics
                     // the player restarted before sending it; rotate only clean runs.
                     if (previousRun == "clean") Rotate(path);
 
-                    _writer = new StreamWriter(path, true, new UTF8Encoding(false)) { AutoFlush = true };
+                    // AutoFlush is off deliberately: Note() flushes anything notable itself, so
+                    // the durability promise above is kept without paying a disk write for every
+                    // detail line a player switched on.
+                    _writer = new StreamWriter(path, true, new UTF8Encoding(false)) { AutoFlush = false };
                     _runClock = Stopwatch.StartNew();
                     _runId = Guid.NewGuid().ToString("N").Substring(0, 8);
                     _sequence = 0;
@@ -83,6 +112,7 @@ namespace CS2MultiplayerMod.Game.Diagnostics
                     _mirroredErrors = 0;
                     _lastUnityKey = null;
                     _lastUnityRepeats = 0;
+                    _bufferedLines = 0;
                 }
                 catch
                 {
@@ -117,8 +147,23 @@ namespace CS2MultiplayerMod.Game.Diagnostics
             }
         }
 
-        /// <summary>Append one structured line. Safe from any thread and never throws.</summary>
+        /// <summary>
+        /// Append one structured line and flush it. Safe from any thread and never throws.
+        /// </summary>
         public static void Note(string line)
+        {
+            Note(line, true);
+        }
+
+        /// <summary>
+        /// Append one structured line. Safe from any thread and never throws.
+        ///
+        /// <paramref name="flush"/> is the durability promise: true means the line is on disk
+        /// before this returns, so it survives a hard process exit. Pass false only for chatty
+        /// detail, which is flushed by the next notable line anyway - never for a fault, a
+        /// milestone or anything a bug report would be read for.
+        /// </summary>
+        public static void Note(string line, bool flush)
         {
             if (!Enabled) return;
 
@@ -137,6 +182,14 @@ namespace CS2MultiplayerMod.Game.Diagnostics
                         " elapsed=" + elapsedMs.ToString(CultureInfo.InvariantCulture) + "ms" +
                         " thread=" + Thread.CurrentThread.ManagedThreadId.ToString(CultureInfo.InvariantCulture) +
                         "  " + payload);
+
+                    // A flush also commits whatever detail was buffered ahead of this line, so the
+                    // context leading up to a fault reaches the disk together with the fault.
+                    if (flush || ++_bufferedLines >= MaxBufferedLines)
+                    {
+                        _writer.Flush();
+                        _bufferedLines = 0;
+                    }
                 }
                 catch { }
             }

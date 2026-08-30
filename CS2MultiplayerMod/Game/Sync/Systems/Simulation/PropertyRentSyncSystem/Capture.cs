@@ -1,7 +1,9 @@
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using CS2MultiplayerMod.Core.Diagnostics;
 using CS2MultiplayerMod.Core.Protocol;
+using CS2MultiplayerMod.Game.Diagnostics;
 using CS2MultiplayerMod.Game.Sync.Commands;
 using CS2MultiplayerMod.Game.Sync.Infrastructure;
 using Game;
@@ -167,8 +169,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 // the old generation so the next UI pump retries.
                 _lastSeededWorldInstallGeneration = installGeneration;
                 _clientBaselineWarned = false;
-                Mod.Verbose("[MP] PropertyRent: seeded " + seeded +
-                            " loaded property rent(s) before rolling host correction.");
+                SyncLog.Detail(LogTopic.Residential, "PropertyRent: seeded " + seeded +
+                    " loaded property rent(s) before rolling host correction.");
                 return true;
             }
             catch (Exception ex)
@@ -178,8 +180,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 if (!_clientBaselineWarned)
                 {
                     _clientBaselineWarned = true;
-                    Mod.log.Warn("[MP] PropertyRent: loaded-world baseline seed failed; " +
-                                 "will retry (logged once): " + ex.Message);
+                    SyncLog.Warn(LogTopic.Residential,
+                        "PropertyRent: loaded-world baseline seed failed; " +
+                        "will retry (logged once): " + ex.Message);
                 }
                 return false;
             }

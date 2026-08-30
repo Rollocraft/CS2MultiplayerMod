@@ -116,15 +116,18 @@ namespace CS2MultiplayerMod.Core.Networking
                 _localAddress = RoutableLocalAddress();
                 if (_localAddress == null)
                 {
-                    _log.Warn("[upnp] No local network address to forward to; skipping automatic port forwarding.");
+                    _log.Warn(LogTopic.Transport,
+                        "UPnP: No local network address to forward to; skipping automatic port forwarding.");
                     Settle(PortForwardState.NoRouter);
                     return;
                 }
 
                 if (!Discover())
                 {
-                    _log.Info("[upnp] No UPnP router answered. If players outside your network cannot " +
-                              "connect, forward TCP port " + _port + " to " + _localAddress + " by hand.");
+                    _log.Event(LogTopic.Transport,
+                        "UPnP: No router answered. If players outside your network cannot " +
+                        "connect, forward TCP port " + _port + " to " + _localAddress +
+                        " by hand.");
                     Settle(PortForwardState.NoRouter);
                     return;
                 }
@@ -150,25 +153,26 @@ namespace CS2MultiplayerMod.Core.Networking
 
                 if (failure != null)
                 {
-                    _log.Warn("[upnp] The router refused to open TCP port " + _port + " (" + failure +
-                              "). Forward it to " + _localAddress + " by hand, or host over the Steam relay.");
+                    _log.Warn(LogTopic.Transport, "UPnP: The router refused to open TCP port " +
+                        _port + " (" + failure + "). Forward it to " + _localAddress +
+                        " by hand, or host over the Steam relay.");
                     Settle(PortForwardState.Refused);
                     return;
                 }
 
                 if (!Verify())
                 {
-                    _log.Warn("[upnp] The router accepted the request for TCP port " + _port +
-                              " but does not report the mapping back. Treating it as not forwarded.");
+                    _log.Warn(LogTopic.Transport,
+                        "UPnP: The router accepted the request for TCP port " + _port +
+                        " but does not report the mapping back. Treating it as not forwarded.");
                     Settle(PortForwardState.Refused);
                     return;
                 }
 
                 Settle(PortForwardState.Open);
-                _log.Info("[upnp] TCP port " + _port + " forwarded to " + _localAddress + " automatically." +
-                          (_externalAddress != null
-                              ? " Players outside your network connect to " + _externalAddress + ":" + _port + "."
-                              : ""));
+                _log.Event(LogTopic.Transport, "UPnP: TCP port " + _port + " forwarded to " +
+                    _localAddress + " automatically." +
+                    (_externalAddress != null ? " Players outside your network connect to " + _externalAddress + ":" + _port + "." : ""));
 
                 // Disposed while we were still negotiating: the mapping exists now and has
                 // to come back down, because nothing else knows about it.
@@ -176,8 +180,9 @@ namespace CS2MultiplayerMod.Core.Networking
             }
             catch (Exception ex)
             {
-                _log.Warn("[upnp] Automatic port forwarding failed (" + ex.Message +
-                          "). Forward TCP port " + _port + " by hand if players cannot reach you.");
+                _log.Warn(LogTopic.Transport, "UPnP: Automatic port forwarding failed (" +
+                    ex.Message + "). Forward TCP port " + _port +
+                    " by hand if players cannot reach you.");
                 Settle(PortForwardState.Refused);
             }
         }
@@ -269,7 +274,8 @@ namespace CS2MultiplayerMod.Core.Networking
                 _controlUrl = controlUri.ToString();
                 _serviceType = type;
                 _localAddress = viaLocal;
-                _log.Info("[upnp] Router found at " + controlUri.Host + " (" + type + ").");
+                _log.Detail(LogTopic.Transport, "UPnP: Router found at " + controlUri.Host + " (" +
+                    type + ").");
                 return true;
             }
 
@@ -342,10 +348,10 @@ namespace CS2MultiplayerMod.Core.Networking
                  out error);
             if (!announce) return;
 
-            _log.Info(error == null
-                ? "[upnp] Released the automatic forward of TCP port " + _port + "."
-                : "[upnp] Could not release TCP port " + _port + " (" + error +
-                  "); it will expire when the router restarts.");
+            _log.Detail(LogTopic.Transport,
+                error == null ? "UPnP: Released the automatic forward of TCP port " + _port +
+                "." : "UPnP: Could not release TCP port " + _port + " (" + error +
+                "); it will expire when the router restarts.");
         }
 
         // ---- transport ------------------------------------------------------------

@@ -3,6 +3,7 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Runtime.InteropServices;
 using System.Threading;
+using CS2MultiplayerMod.Core.Diagnostics;
 using Steamworks;
 
 namespace CS2MultiplayerMod.Core.Networking.Steam
@@ -48,13 +49,15 @@ namespace CS2MultiplayerMod.Core.Networking.Steam
                     ESteamNetworkingConfigDataType.k_ESteamNetworkingConfig_Int32,
                     pin.AddrOfPinnedObject());
                 if (!ok)
-                    _log.Warn("Steam refused the relay " + description + " setting; transfers may be slow.");
+                    _log.Warn(LogTopic.Transport, "Steam refused the relay " + description +
+                        " setting; transfers may be slow.");
                 return ok;
             }
             catch (Exception ex)
             {
                 // Non-fatal: the transfer still completes, just slower.
-                _log.Warn("Could not set the relay " + description + " (" + ex.Message + ").");
+                _log.Warn(LogTopic.Transport, "Could not set the relay " + description + " (" +
+                    ex.Message + ").");
                 return false;
             }
             finally
@@ -157,8 +160,8 @@ namespace CS2MultiplayerMod.Core.Networking.Steam
                     {
                         string finished = endpoint.FinishBulk();
                         if (finished != null)
-                            _log.Info("[relay] " + endpoint.Id + " " + finished + " over a " +
-                                      RouteOf(endpoint) + " route.");
+                            _log.Detail(LogTopic.Transport, "Relay " + endpoint.Id + " " + finished +
+                                " over a " + RouteOf(endpoint) + " route.");
 
                         int idle = Math.Min(SendRateStartBytesPerSecond, endpoint.SafeRate);
                         if (endpoint.SendRate != idle) ApplySendRate(endpoint, idle);
@@ -219,14 +222,13 @@ namespace CS2MultiplayerMod.Core.Networking.Steam
                     }
 
                     if (!report) continue;
-                    _log.Info("[relay] " + endpoint.Id + " sending: " + (outstanding / 1024) +
-                              " KB left at " + (goodput / 1024) + " KB/s (paced " +
-                              (endpoint.SendRate / 1024) + " KB/s, held " +
-                              (endpoint.SafeRate / 1024) + " KB/s, wire " +
-                              ((int)status.m_flOutBytesPerSec / 1024) + " KB/s), ping " +
-                              status.m_nPing + " of " + pingBudget + " ms, peer received " +
-                              (quality < 0f ? "?" : ((int)(quality * 100)).ToString()) + "%, " +
-                              RouteOf(endpoint) + " route.");
+                    _log.Detail(LogTopic.Transport, "Relay " + endpoint.Id + " sending: " +
+                        (outstanding / 1024) + " KB left at " + (goodput / 1024) + " KB/s (paced " +
+                        (endpoint.SendRate / 1024) + " KB/s, held " + (endpoint.SafeRate / 1024) +
+                        " KB/s, wire " + ((int)status.m_flOutBytesPerSec / 1024) + " KB/s), ping " +
+                        status.m_nPing + " of " + pingBudget + " ms, peer received " +
+                        (quality < 0f ? "?" : ((int)(quality * 100)).ToString()) + "%, " +
+                        RouteOf(endpoint) + " route.");
                 }
             }
         }

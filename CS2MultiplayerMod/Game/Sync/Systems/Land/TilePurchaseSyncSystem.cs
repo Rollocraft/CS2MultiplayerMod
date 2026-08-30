@@ -7,9 +7,10 @@ using Game.Tools;
 using Unity.Collections;
 using Unity.Entities;
 using Unity.Mathematics;
+using CS2MultiplayerMod.Core.Diagnostics;
 using CS2MultiplayerMod.Core.Protocol.Messages;
 using CS2MultiplayerMod.Core.Session;
-
+using CS2MultiplayerMod.Game.Diagnostics;
 using CS2MultiplayerMod.Game.Sync.Infrastructure;
 using CS2MultiplayerMod.Game.Sync.Commands;
 namespace CS2MultiplayerMod.Game.Sync.Systems
@@ -36,7 +37,6 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         {
             base.OnCreate();
 
-            Mod.log.Info(nameof(TilePurchaseSyncSystem) + " ready.");
             _purchase = World.GetOrCreateSystemManaged<MapTilePurchaseSystem>();
 
             // Owned-this-frame: Updated map tiles that (no longer) carry Native.
@@ -138,8 +138,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 _lastSelectionCost = 0;
 
                 session.SendCommand(0, TilePurchaseCommand.Id, command.Encode());
-                Mod.Verbose("[MP] TilePurchaseSync captured " + count + " tile(s), price " +
-                             command.TotalCost + ".");
+                SyncLog.Detail(LogTopic.Land, "TilePurchaseSync captured " + count +
+                    " tile(s), price " + command.TotalCost + ".");
             }
             finally
             {
@@ -156,7 +156,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
                 TilePurchaseCommand command;
                 try { command = TilePurchaseCommand.Decode(message.Body); }
-                catch (System.Exception ex) { Mod.log.Warn("[MP] TilePurchaseSync: dropping malformed command: " + ex.Message); continue; }
+                catch (System.Exception ex) { SyncLog.Warn(LogTopic.Land, "TilePurchaseSync: dropping malformed command: " + ex.Message); continue; }
                 if (command.CenterX == null || command.CenterX.Length == 0) continue;
 
                 int unlocked = 0;
@@ -194,8 +194,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                         (long)command.TotalCost * unlocked / command.CenterX.Length,
                         "map tiles x" + unlocked + " (player " + message.OriginPlayerId + ")");
 
-                Mod.Verbose("[MP] TilePurchaseSync realize: unlocked " + unlocked + "/" +
-                             command.CenterX.Length + " tile(s) from player " + message.OriginPlayerId + ".");
+                SyncLog.Detail(LogTopic.Land, "TilePurchaseSync realize: unlocked " + unlocked + "/" +
+                    command.CenterX.Length + " tile(s) from player " + message.OriginPlayerId +
+                    ".");
             }
         }
 

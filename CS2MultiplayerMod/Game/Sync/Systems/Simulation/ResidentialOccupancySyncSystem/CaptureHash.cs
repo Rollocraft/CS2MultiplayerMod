@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Text;
+using CS2MultiplayerMod.Core.Diagnostics;
 using CS2MultiplayerMod.Game.Diagnostics;
 using CS2MultiplayerMod.Game.Sync.Commands;
 using Game.Buildings;
@@ -164,11 +165,11 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     .Append("/money=").Append(household.Money);
                 if (household.Departing) roster.Append("/departing");
             }
-            Mod.log.Info("[MP][OCC-DEV] " + stage + " house='" + property.PrefabName +
-                         "' anchor=(" + property.AnchorX.ToString("F2") + ", " +
-                         property.AnchorY.ToString("F2") + ", " +
-                         property.AnchorZ.ToString("F2") + ") rev=" + property.Revision +
-                         " families=" + property.Households.Length + " roster=[" + roster + "].");
+            SyncLog.Detail(LogTopic.Residential, stage + " house='" + property.PrefabName +
+                "' anchor=(" + property.AnchorX.ToString("F2") + ", " +
+                property.AnchorY.ToString("F2") + ", " + property.AnchorZ.ToString("F2") + ") rev=" +
+                property.Revision + " families=" + property.Households.Length + " roster=[" + roster +
+                "].");
         }
 
         private static int Clamp(int value, int min, int max) =>

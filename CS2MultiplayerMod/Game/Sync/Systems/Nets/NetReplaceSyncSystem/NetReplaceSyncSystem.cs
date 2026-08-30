@@ -9,9 +9,10 @@ using Game.Tools;
 using Unity.Collections;
 using Unity.Entities;
 using Unity.Mathematics;
+using CS2MultiplayerMod.Core.Diagnostics;
 using CS2MultiplayerMod.Core.Protocol.Messages;
 using CS2MultiplayerMod.Core.Session;
-
+using CS2MultiplayerMod.Game.Diagnostics;
 using CS2MultiplayerMod.Game.Sync.Infrastructure;
 using CS2MultiplayerMod.Game.Sync.Commands;
 using CS2MultiplayerMod.Game.Sync.Systems.Net;
@@ -122,7 +123,6 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         {
             base.OnCreate();
 
-            Mod.log.Info(nameof(NetReplaceSyncSystem) + " ready.");
             _prefabSystem = World.GetOrCreateSystemManaged<PrefabSystem>();
             _prefabIndex = new PrefabIndex(_prefabSystem, GetEntityQuery(ComponentType.ReadOnly<PrefabData>()));
             // Replacements are committed through NetSync's ApplyTool pipeline (see Realize).
@@ -237,7 +237,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 entities.Dispose();
             }
             _seeded = true;
-            Mod.Verbose("[MP] NetReplaceSync: baselined " + _edgeBaseline.Count + " edge(s).");
+            SyncLog.Detail(LogTopic.Nets, "NetReplaceSync: baselined " + _edgeBaseline.Count +
+                " edge(s).");
         }
 
         /// <summary>
@@ -382,10 +383,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     OldDx = old.d.x, OldDy = old.d.y, OldDz = old.d.z,
                 };
                 session.SendCommand(0, NetReplaceCommand.Id, command.Encode());
-                Mod.Verbose("[MP] NetReplaceSync captured " +
-                            (prefabChanged ? "replacement -> '" + name + "'" :
-                             reversed ? "direction flip of '" + name + "'" :
-                             "mixed-operation geometry update of '" + name + "'") + ".");
+                SyncLog.Detail(LogTopic.Nets, "NetReplaceSync captured " +
+                    (prefabChanged ? "replacement -> '" + name + "'" : reversed ? "direction flip of '" + name + "'" : "mixed-operation geometry update of '" + name + "'") +
+                    ".");
             }
 
             // Advance every touched baseline to the committed state — whether we sent or not — so a
@@ -483,8 +483,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 End = { ElevationLeft = elevation.x, ElevationRight = elevation.y },
             };
             session.SendCommand(0, NetPlacementCommand.Id, command.Encode());
-            Mod.Verbose("[MP] NetReplaceSync: captured merged continuation of '" + name + "' (" +
-                        length.ToString("F1") + " m).");
+            SyncLog.Detail(LogTopic.Nets, "NetReplaceSync: captured merged continuation of '" + name +
+                "' (" + length.ToString("F1") + " m).");
         }
     }
 }

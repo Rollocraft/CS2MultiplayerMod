@@ -6,7 +6,9 @@ using Game.Prefabs;
 using Game.Simulation;
 using Unity.Collections;
 using Unity.Entities;
+using CS2MultiplayerMod.Core.Diagnostics;
 using CS2MultiplayerMod.Core.Session;
+using CS2MultiplayerMod.Game.Diagnostics;
 using CS2MultiplayerMod.Game.Sync.Commands;
 using CS2MultiplayerMod.Game.Sync.Infrastructure;
 
@@ -86,9 +88,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                         };
                     }
                     _sentSpawn++;
-                    Mod.Verbose("[MP] GrowableSync capture: grew '" + name + "' at " +
-                                Format(transform.m_Position) + " seed=" + seed + " seq=" +
-                                command.Sequence + ".");
+                    SyncLog.Detail(LogTopic.Buildings, "GrowableSync capture: grew '" + name +
+                        "' at " + Format(transform.m_Position) + " seed=" + seed + " seq=" +
+                        command.Sequence + ".");
                 }
             }
             finally
@@ -136,8 +138,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     };
                     Send(session, command);
                     _sentRemove++;
-                    Mod.Verbose("[MP] GrowableSync capture: retired '" + name + "' at " +
-                                Format(transform.m_Position) + " seq=" + command.Sequence + ".");
+                    SyncLog.Detail(LogTopic.Buildings, "GrowableSync capture: retired '" + name +
+                        "' at " + Format(transform.m_Position) + " seq=" + command.Sequence + ".");
                 }
             }
             finally
@@ -187,9 +189,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                         // Only reachable if buildings are levelling faster than they finish. Drop
                         // the memory rather than the cap: a repeat announcement is idempotent on
                         // the receiver, an unbounded dictionary is not recoverable.
-                        Mod.log.Warn("[MP] GrowableSync: level-change memory hit " +
-                                     MaxTrackedLevelChanges + " entries and was cleared; " +
-                                     "some level changes may be announced twice.");
+                        SyncLog.Warn(LogTopic.Buildings, "GrowableSync: level-change memory hit " +
+                            MaxTrackedLevelChanges + " entries and was cleared; " +
+                            "some level changes may be announced twice.");
                         _announcedLevelChange.Clear();
                     }
                     _announcedLevelChange[entity] = newPrefab;
@@ -219,8 +221,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                         Speed = command.ConstructionSpeed,
                     };
                     _sentLevel++;
-                    Mod.Verbose("[MP] GrowableSync capture: level change to '" + name + "' at " +
-                                Format(transform.m_Position) + " seq=" + command.Sequence + ".");
+                    SyncLog.Detail(LogTopic.Buildings, "GrowableSync capture: level change to '" +
+                        name + "' at " + Format(transform.m_Position) + " seq=" + command.Sequence +
+                        ".");
                 }
             }
             finally

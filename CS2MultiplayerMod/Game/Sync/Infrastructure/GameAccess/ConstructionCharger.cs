@@ -2,7 +2,9 @@ using Game.City;
 using Game.Prefabs;
 using Unity.Entities;
 using Unity.Mathematics;
+using CS2MultiplayerMod.Core.Diagnostics;
 using CS2MultiplayerMod.Core.Session;
+using CS2MultiplayerMod.Game.Diagnostics;
 
 namespace CS2MultiplayerMod.Game.Sync.Infrastructure
 {
@@ -59,7 +61,8 @@ namespace CS2MultiplayerMod.Game.Sync.Infrastructure
 
                 money.Subtract((int)math.min(amount, int.MaxValue));
                 em.SetComponentData(city, money);
-                Mod.Verbose("[MP] Charged " + amount + " for remote build: " + what + ".");
+                SyncLog.Detail(LogTopic.Pipeline, "Charged " + amount + " for remote build: " + what +
+                    ".");
             }
             finally
             {

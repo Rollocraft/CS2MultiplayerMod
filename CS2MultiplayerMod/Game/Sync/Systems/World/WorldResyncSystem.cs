@@ -2,9 +2,11 @@ using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Threading.Tasks;
+using CS2MultiplayerMod.Core.Diagnostics;
 using CS2MultiplayerMod.Core.Networking;
 using CS2MultiplayerMod.Core.Protocol.Messages;
 using CS2MultiplayerMod.Core.Session;
+using CS2MultiplayerMod.Game.Diagnostics;
 using CS2MultiplayerMod.Game.Sync.Infrastructure;
 using CS2MultiplayerMod.Game.Sync.Systems.Net;
 using Game;
@@ -73,7 +75,6 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         protected override void OnCreate()
         {
             base.OnCreate();
-            Mod.log.Info(nameof(WorldResyncSystem) + " ready (atomic epoch barrier).");
             _netSync = World.GetOrCreateSystemManaged<NetSyncSystem>();
 
             _observer = SyncObserverBinding.Bind(
@@ -202,9 +203,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 else if (evt.Stage == WorldSyncStage.Failed &&
                          _state == RecoveryState.WaitingForLoaded)
                 {
-                    Mod.log.Error("[MP] " + DescribePeer(session, evt.Connection) +
-                                  " could not install world-sync epoch " + _epoch +
-                                  "; disconnecting it rather than resuming divergent worlds.");
+                    SyncLog.Error(LogTopic.Resync, DescribePeer(session, evt.Connection) +
+                        " could not install world-sync epoch " + _epoch +
+                        "; disconnecting it rather than resuming divergent worlds.");
                     session.DisconnectPeer(evt.Connection);
                     RemoveParticipant(evt.Connection);
                 }
@@ -228,14 +229,14 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             _epoch = ++_epochCounter;
             if (!service.TryBeginHostWorldSync(_epoch, out _resumeSpeed))
             {
-                Mod.log.Error("[MP] Could not enter the local world-sync barrier.");
+                SyncLog.Error(LogTopic.Resync, "Could not enter the local world-sync barrier.");
                 ResetEpoch(now);
                 return;
             }
             if (!session.BeginWorldSync(_epoch, _resumeSpeed, _participants))
             {
                 service.AbortHostWorldSync(_epoch, _resumeSpeed);
-                Mod.log.Error("[MP] Could not open world-sync epoch " + _epoch + ".");
+                SyncLog.Error(LogTopic.Resync, "Could not open world-sync epoch " + _epoch + ".");
                 ResetEpoch(now);
                 return;
             }
@@ -247,10 +248,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             _cleanFrames = 0;
             _deadlineMs = now + QuiesceTimeoutMs;
             _state = RecoveryState.WaitingForQuiescence;
-            Mod.log.Info("[MP] World sync epoch " + _epoch + " waiting for " +
-                         _participants.Count + " client quiescence acknowledgement(s).");
-            CS2MultiplayerMod.Game.Diagnostics.FlightRecorder.Note(
-                "resync epoch=" + _epoch + " barrier opened participants=" + _participants.Count);
+            SyncLog.Event(LogTopic.Resync, "World sync epoch " + _epoch + " waiting for " +
+                _participants.Count + " client quiescence acknowledgement(s).");
         }
 
         private void PumpQuiescence(MultiplayerService service, MultiplayerSession session, long now)
@@ -292,10 +291,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 _saveStartMs = now;
                 _state = RecoveryState.Saving;
                 service.SetHostWorldSyncUiStage(HostWorldSyncUiStage.Saving);
-                Mod.log.Info("[MP] World sync epoch " + _epoch +
-                             ": barrier closed; saving the authoritative world.");
-                CS2MultiplayerMod.Game.Diagnostics.FlightRecorder.Note(
-                    "resync epoch=" + _epoch + " save started");
+                SyncLog.Event(LogTopic.Resync, "World sync epoch " + _epoch +
+                    ": barrier closed; saving the authoritative world.");
             }
             catch (Exception ex)
             {
@@ -331,12 +328,10 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             _deadlineMs = now + LoadTimeoutMs;
             _state = RecoveryState.WaitingForLoaded;
             service.SetHostWorldSyncUiStage(HostWorldSyncUiStage.WaitingForLoaded);
-            Mod.log.Info("[MP] World sync epoch " + _epoch + ": queued one " +
-                         (snapshot.Length / 1024) + " KB snapshot for " + _participants.Count +
-                         " participant(s); waiting for load acknowledgement(s). Save took " +
-                         (now - _saveStartMs) + " ms.");
-            CS2MultiplayerMod.Game.Diagnostics.FlightRecorder.Note(
-                "resync epoch=" + _epoch + " snapshot queued KB=" + (snapshot.Length >> 10));
+            SyncLog.Event(LogTopic.Resync, "World sync epoch " + _epoch + ": queued one " +
+                (snapshot.Length / 1024) + " KB snapshot for " + _participants.Count +
+                " participant(s); waiting for load acknowledgement(s). Save took " +
+                (now - _saveStartMs) + " ms.");
         }
 
         private void PumpLoaded(MultiplayerService service, MultiplayerSession session, long now)
@@ -367,8 +362,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             // clients each get their own completion notice as they install the snapshot.
             session.NotifyChat(null, "World sync complete - " + targets.Count +
                                (targets.Count == 1 ? " player is" : " players are") + " in sync.");
-            Mod.log.Info("[MP] World sync epoch " + _epoch + " completed for " +
-                         targets.Count + " participant(s).");
+            SyncLog.Event(LogTopic.Resync, "World sync epoch " + _epoch + " completed for " +
+                targets.Count + " participant(s).");
             ResetEpoch(now);
 
             // A peer that joined after this snapshot was queued needs another snapshot. Open the
@@ -391,9 +386,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 session.AbortWorldSync(_epoch, _resumeSpeed, targets);
                 service.AbortHostWorldSync(_epoch, _resumeSpeed);
             }
-            Mod.log.Error("[MP] World sync epoch " + _epoch + " aborted: " + reason + ".");
-            CS2MultiplayerMod.Game.Diagnostics.FlightRecorder.Note(
-                "resync epoch=" + _epoch + " ABORTED reason=" + reason);
+            SyncLog.Error(LogTopic.Resync, "World sync epoch " + _epoch + " aborted: " + reason +
+                ".");
             ResetEpoch(service.NowMs);
         }
 
@@ -418,8 +412,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             {
                 ConnectionId connection = _participants[i];
                 if (acknowledgements.Contains(connection.Value)) continue;
-                Mod.log.Error("[MP] " + DescribePeer(session, connection) + " timed out waiting for " +
-                              expected + " in epoch " + _epoch + "; disconnecting it.");
+                SyncLog.Error(LogTopic.Resync, DescribePeer(session, connection) +
+                    " timed out waiting for " + expected + " in epoch " + _epoch +
+                    "; disconnecting it.");
                 session.DisconnectPeer(connection);
                 RemoveParticipant(connection);
             }
@@ -499,7 +494,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     Connection = peer.Connection,
                     IsJoin = true,
                 });
-                Mod.log.Info("[MP] Queued atomic initial world sync for " + peer + ".");
+                SyncLog.Event(LogTopic.Resync, "Queued atomic initial world sync for " + peer +
+                    ".");
             }
 
             public override void OnPeerLeft(Peer peer, string reason) =>
@@ -512,7 +508,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     Connection = connection,
                     IsJoin = false,
                 });
-                Mod.log.Info("[MP] Queued atomic world-sync request from player #" + playerId + ".");
+                SyncLog.Event(LogTopic.Resync, "Queued atomic world-sync request from player #" +
+                    playerId + ".");
             }
 
             public override void OnWorldSyncControl(WorldSyncStage stage, long epoch,

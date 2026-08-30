@@ -6,9 +6,10 @@ using Game.Prefabs;
 using Game.Tools;
 using Unity.Collections;
 using Unity.Entities;
+using CS2MultiplayerMod.Core.Diagnostics;
 using CS2MultiplayerMod.Core.Protocol.Messages;
 using CS2MultiplayerMod.Core.Session;
-
+using CS2MultiplayerMod.Game.Diagnostics;
 using CS2MultiplayerMod.Game.Sync.Infrastructure;
 using CS2MultiplayerMod.Game.Sync.Commands;
 using CS2MultiplayerMod.Game.Sync.Channels;
@@ -40,7 +41,6 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         protected override void OnCreate()
         {
             base.OnCreate();
-            Mod.log.Info(nameof(DevTreeSyncSystem) + " ready.");
 
             _prefabSystem = World.GetOrCreateSystemManaged<PrefabSystem>();
             // Unlock events must be raised through the same barrier the game uses so
@@ -141,7 +141,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
                         var command = new DevTreePurchaseCommand { NodePrefabName = name };
                         session.SendCommand(0, DevTreePurchaseCommand.Id, command.Encode());
-                        Mod.Verbose("[MP] DevTreeSync: broadcast purchase of '" + name + "'.");
+                        SyncLog.Detail(LogTopic.City, "DevTreeSync: broadcast purchase of '" + name +
+                            "'.");
                     }
                     else if (!unlocked && known)
                     {
@@ -163,13 +164,14 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
                 DevTreePurchaseCommand command;
                 try { command = DevTreePurchaseCommand.Decode(message.Body); }
-                catch (System.Exception ex) { Mod.log.Warn("[MP] DevTreeSync: dropping malformed command: " + ex.Message); continue; }
+                catch (System.Exception ex) { SyncLog.Warn(LogTopic.City, "DevTreeSync: dropping malformed command: " + ex.Message); continue; }
 
                 Entity node = ResolveNode(command.NodePrefabName);
                 if (node == Entity.Null)
                 {
-                    Mod.log.Warn("[MP] DevTreeSync: unknown node '" + command.NodePrefabName +
-                                 "' from player " + message.OriginPlayerId + "; skipping.");
+                    SyncLog.Warn(LogTopic.City, "DevTreeSync: unknown node '" +
+                        command.NodePrefabName + "' from player " + message.OriginPlayerId +
+                        "; skipping.");
                     continue;
                 }
                 if (!IsLocked(node)) continue; // already unlocked here — nothing to do
@@ -197,8 +199,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     _pointsQuery.SetSingleton(points);
                 }
 
-                Mod.Verbose("[MP] DevTreeSync: applied purchase of '" + command.NodePrefabName +
-                             "' from player " + message.OriginPlayerId + ".");
+                SyncLog.Detail(LogTopic.City, "DevTreeSync: applied purchase of '" +
+                    command.NodePrefabName + "' from player " + message.OriginPlayerId + ".");
             }
         }
 

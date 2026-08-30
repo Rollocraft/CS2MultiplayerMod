@@ -6,8 +6,10 @@ using Game.Prefabs;
 using Game.Simulation;
 using Game.Tools;
 using Unity.Entities;
+using CS2MultiplayerMod.Core.Diagnostics;
 using CS2MultiplayerMod.Core.Protocol;
 using CS2MultiplayerMod.Core.Session;
+using CS2MultiplayerMod.Game.Diagnostics;
 using CS2MultiplayerMod.Game.Sync.Infrastructure;
 
 namespace CS2MultiplayerMod.Game.Sync.Channels
@@ -143,8 +145,9 @@ namespace CS2MultiplayerMod.Game.Sync.Channels
                     if (!hostSpawner.Enabled)
                     {
                         hostSpawner.Enabled = true;
-                        Mod.log.Warn("[MP] PopulationHealth: restored the host's disabled vanilla " +
-                                     "HouseholdSpawnSystem after withdrawing household authority.");
+                        SyncLog.Warn(LogTopic.City,
+                            "PopulationHealth: restored the host's disabled vanilla " +
+                            "HouseholdSpawnSystem after withdrawing household authority.");
                     }
                 }
             }
@@ -179,24 +182,22 @@ namespace CS2MultiplayerMod.Game.Sync.Channels
                 float unemployment = householdData == null ? -1f : householdData.UnemploymentRate;
                 int workable = householdData == null ? -1 : householdData.WorkableCitizenCount;
                 int workers = householdData == null ? -1 : householdData.CityWorkerCount;
-                Mod.log.Info("[MP] PopulationHealth/30s host: spawner=" +
-                             (spawner == null ? "missing" : spawner.Enabled ? "enabled" : "DISABLED") +
-                             ", households=" + households + " (renting=" +
-                             _rentingHouseholds.CalculateEntityCount() + ", seeking=" +
-                             _seekingHouseholds.CalculateEntityCount() + "), citizens=" + citizens +
-                             ", population=" + arrivedPopulation + "/" + populationWithMoveIn +
-                             " (arrived/withMoveIn), pets=" + pets +
-                             ", residentialProperties=" + residentialProperties +
-                             " (onMarket=" + _residentialOnMarket.CalculateEntityCount() + ")" +
-                             ", freeUnits=" + freeUnits.x + "/" + freeUnits.y + "/" + freeUnits.z +
-                             " of " + totalUnits.x + "/" + totalUnits.y + "/" + totalUnits.z +
-                             ", householdDemand=" + residential.householdDemand +
-                             ", buildingDemand=" + residentialDemand.x + "/" +
-                             residentialDemand.y + "/" + residentialDemand.z +
-                             ", unemployment=" + unemployment + "% (workable=" + workable +
-                             ", workers=" + workers + ")" +
-                             ", outsideConnections=" +
-                             _citizenOutsideConnections.CalculateEntityCount() + ".");
+                SyncLog.Detail(LogTopic.City, "PopulationHealth/30s host: spawner=" +
+                    (spawner == null ? "missing" : spawner.Enabled ? "enabled" : "DISABLED") +
+                    ", households=" + households + " (renting=" +
+                    _rentingHouseholds.CalculateEntityCount() + ", seeking=" +
+                    _seekingHouseholds.CalculateEntityCount() + "), citizens=" + citizens +
+                    ", population=" + arrivedPopulation + "/" + populationWithMoveIn +
+                    " (arrived/withMoveIn), pets=" + pets + ", residentialProperties=" +
+                    residentialProperties + " (onMarket=" +
+                    _residentialOnMarket.CalculateEntityCount() + ")" + ", freeUnits=" + freeUnits.x +
+                    "/" + freeUnits.y + "/" + freeUnits.z + " of " + totalUnits.x + "/" +
+                    totalUnits.y + "/" + totalUnits.z + ", householdDemand=" +
+                    residential.householdDemand + ", buildingDemand=" + residentialDemand.x + "/" +
+                    residentialDemand.y + "/" + residentialDemand.z + ", unemployment=" +
+                    unemployment + "% (workable=" + workable + ", workers=" + workers + ")" +
+                    ", outsideConnections=" + _citizenOutsideConnections.CalculateEntityCount() +
+                    ".");
             }
             return true;
         }
@@ -240,37 +241,37 @@ namespace CS2MultiplayerMod.Game.Sync.Channels
             bool buildingsDiverged = Diverged(localBuildings, hostBuildings);
 
             if (buildingsDiverged)
-                Mod.log.Warn("[MP] ZoneDemand: building counts have drifted - this client has " +
-                             localBuildings + ", the host has " + hostBuildings +
-                             ". Zoned-building replication is not keeping up.");
+                SyncLog.Warn(LogTopic.City,
+                    "ZoneDemand: building counts have drifted - this client has " + localBuildings +
+                    ", the host has " + hostBuildings +
+                    ". Zoned-building replication is not keeping up.");
 
             if (worstDemandGap >= DemandGapThreshold)
-                Mod.log.Warn("[MP] ZoneDemand: demand differs from the host by up to " +
-                             worstDemandGap + " (res " + localResidential.x + "/" +
-                             localResidential.y + "/" + localResidential.z + " vs " +
-                             hostResidentialLow + "/" + hostResidentialMedium + "/" +
-                             hostResidentialHigh + ", com " + commercial.buildingDemand + " vs " +
-                             hostCommercial + ", ind " + industrial.industrialBuildingDemand +
-                             " vs " + hostIndustrial + ", off " + industrial.officeBuildingDemand +
-                             " vs " + hostOffice + ", sto " + industrial.storageBuildingDemand +
-                             " vs " + hostStorage + ").");
+                SyncLog.Warn(LogTopic.City, "ZoneDemand: demand differs from the host by up to " +
+                    worstDemandGap + " (res " + localResidential.x + "/" + localResidential.y + "/" +
+                    localResidential.z + " vs " + hostResidentialLow + "/" + hostResidentialMedium +
+                    "/" + hostResidentialHigh + ", com " + commercial.buildingDemand + " vs " +
+                    hostCommercial + ", ind " + industrial.industrialBuildingDemand + " vs " +
+                    hostIndustrial + ", off " + industrial.officeBuildingDemand + " vs " +
+                    hostOffice + ", sto " + industrial.storageBuildingDemand + " vs " + hostStorage +
+                    ").");
 
             int localCitizens = _citizens.CalculateEntityCount();
             int localPets = _pets.CalculateEntityCount();
             int localHouseholds = _households.CalculateEntityCount();
             if (Diverged(localCitizens, hostCitizens) || Diverged(localPets, hostPets) ||
                 Diverged(localHouseholds, hostHouseholds))
-                Mod.Verbose("[MP] ZoneDemand: occupancy differs - households " + localHouseholds +
-                            "/" + hostHouseholds + ", people " + localCitizens + "/" + hostCitizens +
-                            ", pets " + localPets + "/" + hostPets +
-                            " (local/host). Residents are simulated per machine.");
+                SyncLog.Detail(LogTopic.City, "ZoneDemand: occupancy differs - households " +
+                    localHouseholds + "/" + hostHouseholds + ", people " + localCitizens + "/" +
+                    hostCitizens + ", pets " + localPets + "/" + hostPets +
+                    " (local/host). Residents are simulated per machine.");
 
-            Mod.Verbose("[MP] ZoneDemand: buildings " + localBuildings + "/" + hostBuildings +
-                        " (local/host), properties res " + _residentialProperties.CalculateEntityCount() +
-                        "/" + hostResidentialProperties + ", com " +
-                        _commercialProperties.CalculateEntityCount() + "/" + hostCommercialProperties +
-                        ", ind " + _industrialProperties.CalculateEntityCount() + "/" +
-                        hostIndustrialProperties + ".");
+            SyncLog.Detail(LogTopic.City, "ZoneDemand: buildings " + localBuildings + "/" +
+                hostBuildings + " (local/host), properties res " +
+                _residentialProperties.CalculateEntityCount() + "/" + hostResidentialProperties +
+                ", com " + _commercialProperties.CalculateEntityCount() + "/" +
+                hostCommercialProperties + ", ind " + _industrialProperties.CalculateEntityCount() +
+                "/" + hostIndustrialProperties + ".");
         }
 
         private static int Gap(int local, int host) =>

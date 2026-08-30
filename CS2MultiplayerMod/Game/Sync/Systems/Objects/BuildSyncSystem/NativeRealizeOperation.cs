@@ -7,7 +7,9 @@ using Game.Tools;
 using Unity.Collections;
 using Unity.Entities;
 using Unity.Mathematics;
+using CS2MultiplayerMod.Core.Diagnostics;
 using CS2MultiplayerMod.Core.Protocol.Messages;
+using CS2MultiplayerMod.Game.Diagnostics;
 using CS2MultiplayerMod.Game.Sync.Commands;
 using CS2MultiplayerMod.Game.Sync.Infrastructure;
 
@@ -29,8 +31,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             try { command = AssetStampCommand.Decode(message.Body); }
             catch (System.Exception ex)
             {
-                Mod.log.Warn("[MP] BuildSync: dropping malformed asset-stamp command: " + ex.Message);
-                Diagnostics.FlightRecorder.Note("asset stamp dropped malformed");
+                SyncLog.Warn(LogTopic.Buildings,
+                    "BuildSync: dropping malformed asset-stamp command: " + ex.Message);
                 return NativeObjectResult.Rejected;
             }
 
@@ -41,8 +43,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             };
             if (_recentNativeObjectOperations.Contains(key, now))
             {
-                Diagnostics.FlightRecorder.Note("asset stamp duplicate suppressed op=" +
-                                                  command.OperationId);
+                SyncLog.Trace(LogTopic.Buildings, "asset stamp duplicate suppressed op=" +
+                    command.OperationId);
                 return NativeObjectResult.Completed;
             }
 
@@ -55,9 +57,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 // A peer with content we lack. Nothing local will make this resolve, so do not hold
                 // the ordered queue for it.
                 RecordRefused(command.PrefabName);
-                Mod.log.Warn("[MP] BuildSync: asset stamp '" + command.PrefabName +
-                             "' is unavailable here; skipping.");
-                Diagnostics.FlightRecorder.Note("asset stamp prefab unavailable");
+                SyncLog.Warn(LogTopic.Buildings, "BuildSync: asset stamp '" + command.PrefabName +
+                    "' is unavailable here; skipping.");
                 return NativeObjectResult.Rejected;
             }
 
@@ -75,7 +76,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             switch (derived)
             {
                 case NativeDeriveResult.Armed:
-                    Diagnostics.FlightRecorder.Note("asset stamp derived op=" +
+                    SyncLog.Trace(LogTopic.Buildings, "asset stamp derived op=" +
                         command.OperationId + " prefab=" + prefabName);
                     return NativeObjectResult.Armed;
                 case NativeDeriveResult.Busy:
@@ -83,10 +84,10 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 case NativeDeriveResult.Unsupported:
                     // This build cannot reach the generator, and a stamp has no reduced form that
                     // preserves its topology. A world reload is the only complete fallback.
-                    Mod.log.Warn("[MP] BuildSync: the game's definition generator is not reachable; " +
-                                 "the remote stamp '" + prefabName +
-                                 "' was skipped and world recovery was requested.");
-                    Diagnostics.FlightRecorder.Note("asset stamp unsupported; recovery requested");
+                    SyncLog.Warn(LogTopic.Buildings,
+                        "BuildSync: the game's definition generator is not reachable; " +
+                        "the remote stamp '" + prefabName +
+                        "' was skipped and world recovery was requested.");
                     SyncInbox.RequestResync(CS2MultiplayerMod.Game.Diagnostics.ResyncReport
                         .Create("asset stamp generator unavailable", "object",
                             CS2MultiplayerMod.Game.Diagnostics.ResyncEvidence.Contradiction)
@@ -94,7 +95,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                         .Tried("nothing - this build cannot reach the generator and a stamp has no reduced form"));
                     return NativeObjectResult.Rejected;
                 case NativeDeriveResult.Failed:
-                    Diagnostics.FlightRecorder.Note("asset stamp derive failed; recovery requested");
+                    SyncLog.Trace(LogTopic.Buildings,
+                        "asset stamp derive failed; recovery requested");
                     SyncInbox.RequestResync(CS2MultiplayerMod.Game.Diagnostics.ResyncReport
                         .Create("asset stamp generation failed", "object",
                             CS2MultiplayerMod.Game.Diagnostics.ResyncEvidence.Contradiction)
@@ -117,10 +119,11 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             }
             catch (System.Exception ex)
             {
-                Mod.log.Warn("[MP] BuildSync: committed stamp charge failed: " + ex.Message);
+                SyncLog.Warn(LogTopic.Buildings, "BuildSync: committed stamp charge failed: " +
+                    ex.Message);
             }
-            Diagnostics.FlightRecorder.Note("asset stamp transaction committed/drained op=" +
-                                              key.Operation);
+            SyncLog.Trace(LogTopic.Buildings, "asset stamp transaction committed/drained op=" +
+                key.Operation);
         }
 
         private NativeObjectResult TryRealizeNativeObject(SimulationCommandMessage message, long now)
@@ -131,8 +134,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             {
                 // A malformed command from a peer is a protocol/peer problem, not local world
                 // corruption. The decode guard already protected us; drop it, do not resync.
-                Mod.log.Warn("[MP] BuildSync: dropping malformed native object operation: " + ex.Message);
-                Diagnostics.FlightRecorder.Note("object operation dropped malformed");
+                SyncLog.Warn(LogTopic.Buildings,
+                    "BuildSync: dropping malformed native object operation: " + ex.Message);
                 return NativeObjectResult.Rejected;
             }
 
@@ -142,14 +145,15 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             // into an impossible ten-second retry.
             int normalizedPermanentFlags = NormalizeRemoteObjectCreationFlags(command);
             if (normalizedPermanentFlags > 0)
-                Diagnostics.FlightRecorder.Note("object operation normalized permanent flags=" +
-                                                  normalizedPermanentFlags);
+                SyncLog.Trace(LogTopic.Buildings, "object operation normalized permanent flags=" +
+                    normalizedPermanentFlags);
 
             string unsafePrefab;
             if (TryFindUnsafeSimulationReference(command, out unsafePrefab))
             {
                 RecordRefused(unsafePrefab);
-                Diagnostics.FlightRecorder.Note("object operation dropped (simulation-only prefab)");
+                SyncLog.Trace(LogTopic.Buildings,
+                    "object operation dropped (simulation-only prefab)");
                 return NativeObjectResult.Rejected;
             }
 
@@ -160,8 +164,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             };
             if (_recentNativeObjectOperations.Contains(key, now))
             {
-                Diagnostics.FlightRecorder.Note("object operation duplicate suppressed op=" +
-                                                  command.OperationId);
+                SyncLog.Trace(LogTopic.Buildings, "object operation duplicate suppressed op=" +
+                    command.OperationId);
                 return NativeObjectResult.Completed;
             }
 
@@ -183,8 +187,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     if (reason != _lastUnresolvedObjectReason)
                     {
                         _lastUnresolvedObjectReason = reason;
-                        Diagnostics.FlightRecorder.Note("object operation unresolved op=" +
-                                                          command.OperationId + " (" + reason + ")");
+                        SyncLog.Trace(LogTopic.Buildings, "object operation unresolved op=" +
+                            command.OperationId + " (" + reason + ")");
                     }
                     return NativeObjectResult.Retry;
                 }
@@ -196,8 +200,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             if (equivalentExists)
             {
                 _recentNativeObjectOperations.Remember(key, now, NativeObjectReplayRememberMs);
-                Diagnostics.FlightRecorder.Note("object equivalent placement suppressed op=" +
-                                                  command.OperationId);
+                SyncLog.Trace(LogTopic.Buildings, "object equivalent placement suppressed op=" +
+                    command.OperationId);
                 return NativeObjectResult.Completed;
             }
 
@@ -217,10 +221,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 // The partial definitions are torn down here, so nothing inconsistent was committed.
                 // The operation nevertheless exists on the sender, so repair the known divergence.
                 DestroyDefinitions(created);
-                Mod.log.Warn("[MP] BuildSync: native object definitions could not be generated; " +
-                             "requesting world recovery: " + ex.Message);
-                Diagnostics.FlightRecorder.Note("object definitions failed=" + ex.GetType().Name +
-                                                  "; recovery requested");
+                SyncLog.Warn(LogTopic.Buildings,
+                    "BuildSync: native object definitions could not be generated; " +
+                    "requesting world recovery: " + ex.Message);
                 SyncInbox.RequestResync(CS2MultiplayerMod.Game.Diagnostics.ResyncReport
                     .Create("native object definitions could not be generated", "object",
                         CS2MultiplayerMod.Game.Diagnostics.ResyncEvidence.Contradiction)
@@ -246,11 +249,11 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             // Per-phase cost of one native operation. A big relocation is inherently a large
             // transaction; these numbers say which phase is actually spiking rather than leaving it
             // to guesswork.
-            Diagnostics.FlightRecorder.Note("object definitions generated op=" + command.OperationId +
-                " defs=" + created.Count +
-                " resolveMS=" + (isolateStartTick - resolveStartTick) +
-                " isolateMS=" + (generateStartTick - isolateStartTick) +
-                " generateMS=" + (System.Environment.TickCount - generateStartTick));
+            SyncLog.Trace(LogTopic.Buildings, "object definitions generated op=" +
+                command.OperationId + " defs=" + created.Count + " resolveMS=" +
+                (isolateStartTick - resolveStartTick) + " isolateMS=" +
+                (generateStartTick - isolateStartTick) + " generateMS=" +
+                (System.Environment.TickCount - generateStartTick));
             return NativeObjectResult.Armed;
         }
 
@@ -336,8 +339,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             if (EquivalentObjectOperationAlreadyExists(command, resolved))
             {
                 _recentNativeObjectOperations.Remember(key, now, NativeObjectReplayRememberMs);
-                Diagnostics.FlightRecorder.Note("derived placement equivalent suppressed op=" +
-                                                  command.OperationId);
+                SyncLog.Trace(LogTopic.Buildings, "derived placement equivalent suppressed op=" +
+                    command.OperationId);
                 result = NativeObjectResult.Completed;
                 return true;
             }
@@ -357,22 +360,21 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             switch (derived)
             {
                 case NativeDeriveResult.Armed:
-                    Diagnostics.FlightRecorder.Note("building placement regenerated op=" +
-                                                      command.OperationId + " prefab=" +
-                                                      root.PrefabName);
+                    SyncLog.Trace(LogTopic.Buildings, "building placement regenerated op=" +
+                        command.OperationId + " prefab=" + root.PrefabName);
                     result = NativeObjectResult.Armed;
                     return true;
                 case NativeDeriveResult.Busy:
                     result = NativeObjectResult.Retry;
                     return true;
                 case NativeDeriveResult.Unsupported:
-                    Diagnostics.FlightRecorder.Note(
+                    SyncLog.Trace(LogTopic.Buildings,
                         "building placement generator unavailable; using exact graph fallback");
                     return false;
                 case NativeDeriveResult.Failed:
                     // The complete captured graph is still present in the command. A transient
                     // local generator rejection must not discard the building before trying it.
-                    Diagnostics.FlightRecorder.Note(
+                    SyncLog.Trace(LogTopic.Buildings,
                         "building placement regeneration failed; using exact graph fallback");
                     return false;
                 default:

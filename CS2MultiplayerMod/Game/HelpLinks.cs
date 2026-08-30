@@ -1,4 +1,6 @@
 using System;
+using CS2MultiplayerMod.Core.Diagnostics;
+using CS2MultiplayerMod.Game.Diagnostics;
 
 namespace CS2MultiplayerMod.Game
 {
@@ -38,11 +40,12 @@ namespace CS2MultiplayerMod.Game
             try
             {
                 UnityEngine.Application.OpenURL(url);
-                Mod.log.Info("[MP] Opened help page: " + page);
+                SyncLog.Detail(LogTopic.Ui, "Opened help page: " + page);
             }
             catch (Exception ex)
             {
-                Mod.log.Warn("[MP] Could not open the help page " + url + ": " + ex.Message);
+                SyncLog.Warn(LogTopic.Ui, "Could not open the help page " + url + ": " +
+                    ex.Message);
             }
         }
 

@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
+using CS2MultiplayerMod.Core.Diagnostics;
 using CS2MultiplayerMod.Core.Session;
+using CS2MultiplayerMod.Game.Diagnostics;
 using Unity.Entities;
 
 namespace CS2MultiplayerMod.Game.Sync.Infrastructure
@@ -71,15 +73,14 @@ namespace CS2MultiplayerMod.Game.Sync.Infrastructure
                 // that latest native intent before holding it again so disconnect restores it on.
                 _wasEnabled[type] = true;
                 system.Enabled = false;
-                Mod.Verbose("[MP] " + _label + ": " + type.Name +
-                            " disabled on this client; the host decides " + _decides + ".");
+                SyncLog.Detail(LogTopic.Pipeline, _label + ": " + type.Name +
+                    " disabled on this client; the host decides " + _decides + ".");
             }
 
             if (_applied) return;
             _applied = true;
-            Mod.log.Info("[MP] " + _label + ": " + _subject + " handed to the host (" +
-                         _systems.Length + " simulation system(s) held).");
-            CS2MultiplayerMod.Game.Diagnostics.FlightRecorder.Note(_topic + " -> host");
+            SyncLog.Detail(LogTopic.Pipeline, _label + ": " + _subject + " handed to the host (" +
+                _systems.Length + " simulation system(s) held).");
         }
 
         /// <summary>
@@ -101,8 +102,8 @@ namespace CS2MultiplayerMod.Game.Sync.Infrastructure
             }
             _wasEnabled.Clear();
             _applied = false;
-            Mod.log.Info("[MP] " + _label + ": " + _subject + " returned to the local simulation.");
-            CS2MultiplayerMod.Game.Diagnostics.FlightRecorder.Note(_topic + " -> local");
+            SyncLog.Detail(LogTopic.Pipeline, _label + ": " + _subject +
+                " returned to the local simulation.");
         }
     }
 }

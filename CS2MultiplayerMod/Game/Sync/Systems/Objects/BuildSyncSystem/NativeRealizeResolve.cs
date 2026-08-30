@@ -7,7 +7,9 @@ using Game.Tools;
 using Unity.Collections;
 using Unity.Entities;
 using Unity.Mathematics;
+using CS2MultiplayerMod.Core.Diagnostics;
 using CS2MultiplayerMod.Core.Protocol.Messages;
+using CS2MultiplayerMod.Game.Diagnostics;
 using CS2MultiplayerMod.Game.Sync.Commands;
 using CS2MultiplayerMod.Game.Sync.Infrastructure;
 
@@ -21,9 +23,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         {
             if (_nativeObjectReplayPrefix.Count >= MaxNativeObjectReplayPrefix)
             {
-                Mod.log.Warn("[MP] BuildSync: native object replay prefix overflowed; requesting " +
-                             "world recovery instead of losing an operation.");
-                Diagnostics.FlightRecorder.Note("object replay prefix overflow; recovery requested");
+                SyncLog.Warn(LogTopic.Buildings,
+                    "BuildSync: native object replay prefix overflowed; requesting " +
+                    "world recovery instead of losing an operation.");
                 SyncInbox.RequestResync(CS2MultiplayerMod.Game.Diagnostics.ResyncReport
                     .Create("native object replay prefix overflow", "object",
                         CS2MultiplayerMod.Game.Diagnostics.ResyncEvidence.StreamLoss)
@@ -32,7 +34,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 return;
             }
             _nativeObjectReplayPrefix.Add(message);
-            Diagnostics.FlightRecorder.Note("object transaction rejected; replay prioritized");
+            SyncLog.Trace(LogTopic.Buildings, "object transaction rejected; replay prioritized");
         }
 
         private void CompleteNativeObject(NativeObjectOperationKey key,
@@ -73,11 +75,12 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             }
             catch (System.Exception ex)
             {
-                Mod.log.Warn("[MP] BuildSync: committed object charge failed: " + ex.Message);
+                SyncLog.Warn(LogTopic.Buildings, "BuildSync: committed object charge failed: " +
+                    ex.Message);
             }
-            Diagnostics.FlightRecorder.Note((command.IsAssetStamp
-                ? "asset stamp transaction committed/drained op="
-                : "object transaction committed/drained op=") + command.OperationId);
+            SyncLog.Trace(LogTopic.Buildings,
+                (command.IsAssetStamp ? "asset stamp transaction committed/drained op=" : "object transaction committed/drained op=") +
+                command.OperationId);
         }
 
         /// <summary>
@@ -238,7 +241,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 resolved[i] = target;
             }
             reason = null;
-            Diagnostics.FlightRecorder.Note("object operation targets resolved defs=" + resolved.Length);
+            SyncLog.Trace(LogTopic.Buildings, "object operation targets resolved defs=" +
+                resolved.Length);
             return true;
         }
 

@@ -7,7 +7,9 @@ using Game.Tools;
 using Unity.Collections;
 using Unity.Entities;
 using Unity.Mathematics;
+using CS2MultiplayerMod.Core.Diagnostics;
 using CS2MultiplayerMod.Core.Protocol.Messages;
+using CS2MultiplayerMod.Game.Diagnostics;
 using CS2MultiplayerMod.Game.Sync.Commands;
 using CS2MultiplayerMod.Game.Sync.Infrastructure;
 
@@ -229,21 +231,19 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 // incompatible. In both cases silently dropping it leaves known world divergence.
                 if (compactPlacement)
                 {
-                    Mod.log.Warn("[MP] BuildSync: building placement '" + placementPrefab +
-                                 "' could not resolve its snapped target within the retry window (" +
-                                 (_lastUnresolvedObjectReason ?? "unknown target") +
-                                 "); requesting an automatic world sync.");
-                    Diagnostics.FlightRecorder.Note(
-                        "building placement target expired; world sync requested");
+                    SyncLog.Warn(LogTopic.Buildings, "BuildSync: building placement '" +
+                        placementPrefab +
+                        "' could not resolve its snapped target within the retry window (" +
+                        (_lastUnresolvedObjectReason ?? "unknown target") +
+                        "); requesting an automatic world sync.");
                 }
                 else
                 {
-                    Mod.log.Warn("[MP] BuildSync: native object operation target did not resolve " +
-                                 "within the retry window (" +
-                                 (_lastUnresolvedObjectReason ?? "unknown target") +
-                                 "); requesting an automatic world sync.");
-                    Diagnostics.FlightRecorder.Note(
-                        "object operation target expired; world sync requested");
+                    SyncLog.Warn(LogTopic.Buildings,
+                        "BuildSync: native object operation target did not resolve " +
+                        "within the retry window (" +
+                        (_lastUnresolvedObjectReason ?? "unknown target") +
+                        "); requesting an automatic world sync.");
                 }
                 // Read before the reset below clears it - it is the whole point of the report.
                 string unresolvedDetail = _lastUnresolvedObjectReason ?? "unknown target";
@@ -294,7 +294,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             _blockedNativeObjectDeadline = now + NativeObjectTargetRetryMs;
             _blockedNativeObjectNextAttemptMs = now + NativeObjectRetryIntervalMs;
             _hasBlockedNativeObject = true;
-            Diagnostics.FlightRecorder.Note("object operation target retrying");
+            SyncLog.Trace(LogTopic.Buildings, "object operation target retrying");
         }
 
         /// <summary>
