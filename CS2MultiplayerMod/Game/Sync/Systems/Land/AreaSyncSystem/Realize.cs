@@ -53,7 +53,11 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 _ownedAreaRetry.Clear();
                 Diagnostics.FlightRecorder.Note(
                     "owned area retry queue overflow; recovery requested");
-                SyncInbox.RequestResync("owned area retry queue overflow");
+                SyncInbox.RequestResync(CS2MultiplayerMod.Game.Diagnostics.ResyncReport
+                    .Create("owned area retry queue overflow", "area",
+                        CS2MultiplayerMod.Game.Diagnostics.ResyncEvidence.StreamLoss)
+                    .About("owned area retry queue")
+                    .Tried("nothing - the queue was full and was cleared"));
             }
             _ownedAreaRetry.Add((command, originPlayerId, deadline));
         }

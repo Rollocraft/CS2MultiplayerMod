@@ -26,6 +26,14 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
     public partial class DeleteSyncSystem : GameSystemBase
     {
         public bool DeferNetForTerrain;
+
+        /// <summary>
+        /// Set by <see cref="SyncRealizeSystem"/> while a remote placement is still waiting for the
+        /// road it anchors to. A bulldoze can only ever take that road away, and applying one here
+        /// inverts the order the two edits were made in - which is how a placement came to be
+        /// rejected for a "missing" target this system had removed a moment earlier.
+        /// </summary>
+        public bool DeferNetForPendingPlacement;
         private readonly ConcurrentQueue<SimulationCommandMessage> _incoming =
             new ConcurrentQueue<SimulationCommandMessage>();
         private readonly ReplicationGuard _guard = new ReplicationGuard();
@@ -237,13 +245,29 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             base.OnDestroy();
         }
 
+        /// <summary>When this system last got to run its match pass. See ExtendPendingDeleteWindows.</summary>
+        private long _lastDeleteRealizeMs;
+
+        private void ExtendPendingDeleteWindows(long now)
+        {
+            long frozenMs = _lastDeleteRealizeMs == 0 ? 0 : now - _lastDeleteRealizeMs;
+            _lastDeleteRealizeMs = now;
+            if (frozenMs <= 0) return;
+            for (int i = 0; i < _objectRetry.Count; i++)
+                _objectRetry[i] = (_objectRetry[i].cmd, _objectRetry[i].deadline + frozenMs);
+            for (int i = 0; i < _edgeRetry.Count; i++)
+                _edgeRetry[i] = (_edgeRetry[i].cmd, _edgeRetry[i].deadline + frozenMs);
+        }
+
         private void DrainQueue()
         {
             SyncInbox.Clear(_incoming);
+            _lastDeleteRealizeMs = 0;
             _replayEdgeDeletes.Clear();
             _objectRetry.Clear();
             _edgeRetry.Clear();
             DeferNetForTerrain = false;
+            DeferNetForPendingPlacement = false;
         }
 
         protected override void OnUpdate()
@@ -285,11 +309,21 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             // applies) we leave incoming edge deletes queued and retry next cycle. A selected build
             // tool only blocks on its actual Apply/Clear frame. Object deletes (a raw Deleted tag on
             // a real entity) always proceed.
-            bool netBusy = DeferNetForTerrain || _netSync == null || !_netSync.CanBuildDefinitions;
+            bool netBusy = DeferNetForTerrain || DeferNetForPendingPlacement ||
+                           _netSync == null || !_netSync.CanBuildDefinitions;
             // Object deletion also tears down SubObject/SubNet/SubArea ownership. Keep it behind the
             // same graph lock as network work so it cannot invalidate an original while an isolated
             // building/connector transaction is being generated, applied, or drained.
-            if (netBusy) return;
+            if (netBusy)
+            {
+                // Time spent locked out is not the delete's fault. A pending delete's window is for
+                // waiting on its own build to arrive; letting it burn down while this system is not
+                // even allowed to look would drop a bulldoze that would have matched, and a dropped
+                // bulldoze is exactly the divergence that ends in a world reload later.
+                ExtendPendingDeleteWindows(service.NowMs);
+                return;
+            }
+            _lastDeleteRealizeMs = service.NowMs;
             long now = service.NowMs;
             long freshDeadline = now + DeleteRetryWindowMs;
             List<(ObjectDeleteCommand cmd, long deadline)> objects = null;

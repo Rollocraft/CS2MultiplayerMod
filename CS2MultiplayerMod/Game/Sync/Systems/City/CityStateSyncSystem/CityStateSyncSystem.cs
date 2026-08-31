@@ -315,7 +315,12 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             if (_orderedInvalidated) return;
             _orderedInvalidated = true;
             SyncInbox.Clear(_orderedDeferred);
-            SyncInbox.RequestResync(reason);
+            // The ordered city-state stream is revisioned: once a page is lost or refused, every
+            // later page describes a state this machine never reached. Nothing local supplies it.
+            SyncInbox.RequestResync(CS2MultiplayerMod.Game.Diagnostics.ResyncReport
+                .Create(reason, "city-state", CS2MultiplayerMod.Game.Diagnostics.ResyncEvidence.StreamLoss)
+                .About("ordered city-state stream")
+                .Tried("nothing - the ordered stream was invalidated and its deferred pages dropped"));
         }
     }
 }

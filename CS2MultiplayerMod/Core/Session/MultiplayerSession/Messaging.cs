@@ -132,45 +132,64 @@ namespace CS2MultiplayerMod.Core.Session
         /// current world; on the host it refreshes every client. The actual save+stream
         /// is done by the observer (the game layer owns savegames).
         /// </summary>
-        public void RequestWorldSync()
+        public void RequestWorldSync(string reason = null)
         {
             if (Status != SessionStatus.Connected) return;
+            reason = WireGuard.SanitizeText(reason, WireGuard.MaxResyncReasonLength);
+            if (reason.Length == 0) reason = ManualSyncReason;
             if (_worldSyncSuspended)
             {
-                _log.Info("World sync request coalesced into active epoch " + _worldSyncEpoch + ".");
+                _log.Info("World sync request coalesced into active epoch " + _worldSyncEpoch +
+                          " (" + reason + ").");
                 return;
             }
 
             if (Role == SessionRole.Client)
             {
-                SendTo(ConnectionId.Server, new ResyncRequestMessage(LocalPlayerId));
-                _log.Info("World sync request sent to host.");
+                SendTo(ConnectionId.Server, new ResyncRequestMessage(LocalPlayerId, reason));
+                _log.Info("World sync request sent to host (" + reason + ").");
                 NotifyChat(null, "World sync requested - the host will stream you its city.");
             }
             else if (Role == SessionRole.Host)
             {
-                _log.Info("Host requested world sync for all clients.");
+                _log.Info("Host requested world sync for all clients (" + reason + ").");
                 NotifyResyncRequested(LocalPlayerId, ConnectionId.None);
                 NotifyChat(null, "World sync started - streaming the city to all players.");
             }
         }
 
+        /// <summary>What a request carries when the player asked for it themselves.</summary>
+        internal const string ManualSyncReason = "requested by the player";
+
         private void HandleResyncRequest(ConnectionId from, Peer peer, long nowUnixMs)
         {
+            HandleResyncRequest(from, peer, nowUnixMs, ManualSyncReason);
+        }
+
+        private void HandleResyncRequest(ConnectionId from, Peer peer, long nowUnixMs, string reason)
+        {
             if (Role != SessionRole.Host) return;
+
+            reason = WireGuard.SanitizeText(reason, WireGuard.MaxResyncReasonLength);
+            if (reason.Length == 0) reason = ManualSyncReason;
 
             // Rate limit: a misbehaving client spamming /sync would otherwise keep the
             // host in a permanent save+stream loop. (Per-peer budgets run on top.)
             if (nowUnixMs - _lastResyncAcceptedUnixMs < ResyncRequestCooldownMs)
             {
                 _log.Warn("Ignoring /sync from " + (peer != null ? peer.ToString() : from.ToString()) +
-                          ": a world sync ran moments ago.");
+                          " (" + reason + "): a world sync ran moments ago.");
                 return;
             }
             _lastResyncAcceptedUnixMs = nowUnixMs;
 
             // The requester's identity comes from OUR peer table, never from the wire.
             string name = peer != null && peer.Name != null ? peer.Name : from.ToString();
+
+            // Why the other machine gave up belongs in THIS log too. Without it the host's log
+            // reads "someone asked for a sync" for both a player pressing the button and a client
+            // pipeline that could not apply an edit - the two cases that need telling apart most.
+            _log.Info("World sync requested by " + name + ": " + reason + ".");
 
             // Tell everyone the world is about to snap, then let the game layer stream it.
             string notice = name + " requested a world sync.";

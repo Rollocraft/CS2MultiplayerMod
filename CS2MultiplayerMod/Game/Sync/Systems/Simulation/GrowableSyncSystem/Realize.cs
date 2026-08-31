@@ -33,10 +33,37 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         /// Applies the host's zoned-building decisions. Called from <see cref="SyncRealizeSystem"/>
         /// during ToolUpdate, the only phase in which a creation definition becomes a building.
         /// </summary>
+        /// <summary>
+        /// Called by <see cref="SyncRealizeSystem"/> on frames this system is not allowed to run -
+        /// terrain is catching up, or the net pipeline still has placements queued.
+        ///
+        /// A pending state correction's window is for waiting on its building to be generated, not
+        /// for waiting on permission to look for it. Against the wall it expired while this system
+        /// was gated off, and expiring asks for a world reload over a correction that was never
+        /// once attempted. A stalled net placement holds this gate for its whole retry window.
+        /// </summary>
+        public void NotifyRealizeHeld(long nowMs)
+        {
+            ExtendPendingStateWindows(nowMs);
+        }
+
+        /// <summary>When this system last got to attempt its pending corrections.</summary>
+        private long _lastGrowableRealizeMs;
+
+        private void ExtendPendingStateWindows(long nowMs)
+        {
+            long heldMs = _lastGrowableRealizeMs == 0 ? 0 : nowMs - _lastGrowableRealizeMs;
+            _lastGrowableRealizeMs = nowMs;
+            if (heldMs <= 0) return;
+            for (int i = 0; i < _pendingStateCorrections.Count; i++)
+                _pendingStateCorrections[i].Expiry += heldMs;
+        }
+
         public void RealizePending()
         {
             MultiplayerService service = Mod.Service;
-            if (service == null || !service.GameplaySyncReady) return;
+            if (service == null) return;
+            if (!service.GameplaySyncReady) { ExtendPendingStateWindows(service.NowMs); return; }
 
             MultiplayerSession session = service.Session;
             long now = service.NowMs;
@@ -51,7 +78,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
             // A zoned building's transmitted height was sampled on the sender's terrain. Realizing
             // it while remote terraforming is still backlogged buries or floats it.
-            if (DeferForTerrain) return;
+            if (DeferForTerrain) { ExtendPendingStateWindows(now); return; }
+            _lastGrowableRealizeMs = now;
 
             _applied.Prune(now);
             RetryPendingStateCorrections(now);
@@ -308,7 +336,11 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     if (_pendingStateCorrections.Count >= MaxPendingStateCorrections)
                     {
                         _pendingStateSequences.Remove(command.Sequence);
-                        SyncInbox.RequestResync("growable state retry queue overflow");
+                        SyncInbox.RequestResync(CS2MultiplayerMod.Game.Diagnostics.ResyncReport
+                            .Create("growable state retry queue overflow", "growable",
+                                CS2MultiplayerMod.Game.Diagnostics.ResyncEvidence.StreamLoss)
+                            .About("state retry queue")
+                            .Tried("nothing - the pending-correction queue was full"));
                     }
                     else
                     {
@@ -344,7 +376,11 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     _pendingStateCorrections.RemoveAt(i);
                     _unmatched++;
                     _applied.Remember(pending.Command.Sequence, now, ReplayWindowMs);
-                    SyncInbox.RequestResync("growable state target did not resolve");
+                    SyncInbox.RequestResync(CS2MultiplayerMod.Game.Diagnostics.ResyncReport
+                        .Create("growable state target did not resolve", "growable",
+                            CS2MultiplayerMod.Game.Diagnostics.ResyncEvidence.MissingTarget)
+                        .About("state correction target")
+                        .Tried("retried for 15 s of attempts, not counting time this system was held back"));
                     continue;
                 }
 
@@ -680,7 +716,11 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                         EntityManager.AddComponent<Updated>(entity);
                         if (_realizationValidations.Count >= MaxRealizationValidations)
                         {
-                            SyncInbox.RequestResync("growable realization validation overflow");
+                            SyncInbox.RequestResync(CS2MultiplayerMod.Game.Diagnostics.ResyncReport
+                                .Create("growable realization validation overflow", "growable",
+                                    CS2MultiplayerMod.Game.Diagnostics.ResyncEvidence.StreamLoss)
+                                .About("realization validation queue")
+                                .Tried("nothing - the validation queue was full"));
                         }
                         else _realizationValidations.Add(new RealizationValidation
                         {
@@ -712,8 +752,28 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         /// reciprocal road buffer, and the standard utility consumers. Persistent failure is
         /// structural divergence and escalates to the existing world-repair path.
         /// </summary>
+        /// <summary>When this pass last ran with the road pipeline able to deliver.</summary>
+        private long _lastValidationTickMs;
+
+        /// <summary>
+        /// A building is being validated for having joined its ROAD graph, and roads arrive through
+        /// the net pipeline. While that pipeline is held - terrain catching up, or a placement
+        /// waiting for a target - the road this building needs cannot arrive by definition, so the
+        /// window must not count down. It is the same fifteen seconds as the hold itself, so left
+        /// running it would ask for a world reload over a road the mod was still holding back.
+        /// </summary>
+        private void ExtendValidationWindowsWhileRoadsHeld(long now)
+        {
+            long heldMs = _lastValidationTickMs == 0 ? 0 : now - _lastValidationTickMs;
+            _lastValidationTickMs = now;
+            if (!NetworkDependenciesHeld || heldMs <= 0) return;
+            for (int i = 0; i < _realizationValidations.Count; i++)
+                _realizationValidations[i].Expiry += heldMs;
+        }
+
         private void ValidateRealizedBuildings(long now)
         {
+            ExtendValidationWindowsWhileRoadsHeld(now);
             for (int i = _realizationValidations.Count - 1; i >= 0; i--)
             {
                 RealizationValidation pending = _realizationValidations[i];
@@ -741,7 +801,11 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                                  Format(pending.Position) + " did not join its road/service graph; " +
                                  "requesting world repair.");
                     Diagnostics.FlightRecorder.Note("growable realization invalid/resync");
-                    SyncInbox.RequestResync("growable building failed road/service realization");
+                    SyncInbox.RequestResync(CS2MultiplayerMod.Game.Diagnostics.ResyncReport
+                        .Create("growable building failed road/service realization", "growable",
+                            CS2MultiplayerMod.Game.Diagnostics.ResyncEvidence.MissingTarget)
+                        .About("building road/service graph")
+                        .Tried("re-ran native initialization for 15 s of attempts, not counting time roads were held back"));
                     continue;
                 }
 

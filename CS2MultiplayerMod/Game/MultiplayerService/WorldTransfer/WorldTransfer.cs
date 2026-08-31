@@ -197,6 +197,7 @@ namespace CS2MultiplayerMod.Game
             // Purge every sync inbox before the reload: queued commands describe the pre-reload
             // world and would apply stale edits (or reference vanished entities) on the new one.
             Sync.Infrastructure.SyncInbox.DrainAll();
+            Diagnostics.ResyncArbiter.Reset();
             SetPhase(ClientWorldPhase.LoadingMap);
             if (!JoinMapLoader.StageAndLoad(data, _log))
             {

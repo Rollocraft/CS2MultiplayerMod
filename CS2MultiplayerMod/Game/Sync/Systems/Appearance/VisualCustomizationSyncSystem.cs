@@ -671,15 +671,34 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 {
                     Mod.log.Warn("[MP] VisualCustomizationSync: dropping malformed command: " +
                                  ex.Message);
-                    SyncInbox.RequestResync("malformed visual-customization command");
+                    SyncInbox.RequestResync(CS2MultiplayerMod.Game.Diagnostics.ResyncReport
+                        .Create("malformed visual-customization command", "appearance",
+                            CS2MultiplayerMod.Game.Diagnostics.ResyncEvidence.StreamLoss)
+                        .About("malformed customization command")
+                        .Tried("nothing - the command could not be decoded"));
                 }
             }
         }
 
         // Re-resolving every pending command on every frame is what turns a burst of targets
         // into a stall; the retry window is measured in seconds, so this granularity is ample.
+        private readonly HeldTime _targetHold = new HeldTime();
+
         private void ApplyRetries(long now)
         {
+            // A customization waits for its building, and a zone-grown building is exactly what the
+            // realize pipeline holds back while terrain or roads catch up. Counting the window down
+            // through that hold expires it against a target that could not have arrived, and the
+            // expiry below asks for a world reload.
+            long heldMs = _targetHold.Observe(now, RealizeGate.WorldBuildingHeld);
+            if (heldMs > 0)
+                for (int h = 0; h < _retry.Count; h++)
+                {
+                    PendingVisual shifted = _retry[h];
+                    shifted.DeadlineMs += heldMs;
+                    _retry[h] = shifted;
+                }
+
             if (_retry.Count == 0) return;
             if (now - _lastRetryMs < RetryIntervalMs) return;
             _lastRetryMs = now;
@@ -701,7 +720,11 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             {
                 Mod.log.Warn("[MP] VisualCustomizationSync: " + expiredTargets +
                              " target(s) did not appear before the retry deadline.");
-                SyncInbox.RequestResync("visual-customization target did not resolve");
+                SyncInbox.RequestResync(CS2MultiplayerMod.Game.Diagnostics.ResyncReport
+                    .Create("visual-customization target did not resolve", "appearance",
+                        CS2MultiplayerMod.Game.Diagnostics.ResyncEvidence.MissingTarget)
+                    .About("customization target")
+                    .Tried("retried every 250 ms for 10 s of attempts, not counting time the buildings were held back"));
             }
         }
 
@@ -726,7 +749,11 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             {
                 _retryTargetCount -= _retry[0].Command.Targets.Length;
                 _retry.RemoveAt(0);
-                SyncInbox.RequestResync("visual-customization retry budget exhausted");
+                SyncInbox.RequestResync(CS2MultiplayerMod.Game.Diagnostics.ResyncReport
+                    .Create("visual-customization retry budget exhausted", "appearance",
+                        CS2MultiplayerMod.Game.Diagnostics.ResyncEvidence.StreamLoss)
+                    .About("customization retry budget")
+                    .Tried("nothing - the oldest queued customizations were shed to stay within the budget"));
             }
         }
 

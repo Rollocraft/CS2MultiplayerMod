@@ -46,6 +46,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         }
 
         private bool _wasDeferringTerrain;
+        private bool _wasHoldingNetMutations;
 
         private const int FaultReportThrottleMs = 10000;
         private readonly Dictionary<string, int> _lastFaultTick = new Dictionary<string, int>();
@@ -114,31 +115,62 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 }
 
                 Step("BuildSync", _buildSync.RealizePending);
+                // A remote placement that is still waiting for the road it anchors to must not be
+                // overtaken by work that can only take that road away. Delete and replace live in
+                // their own feeders, so wire order between them and a deferred placement was never
+                // enforced: in the sessions this came from, two bulldozes were applied during the
+                // ten seconds a placement spent waiting, and the placement then asked for a full
+                // world reload because its target was "missing". Bounded by the placement's own
+                // retry window, and a delete can never be what a placement is waiting for, so
+                // holding it cannot deadlock.
+                long nowMs = Mod.Service != null ? Mod.Service.NowMs : 0L;
+                bool netMutationHeld = _netSync.HasStalledNativeOperation(nowMs) ||
+                    CS2MultiplayerMod.Game.Diagnostics.ResyncArbiter.NetMutationFrozen(nowMs);
+                if (netMutationHeld != _wasHoldingNetMutations)
+                {
+                    _wasHoldingNetMutations = netMutationHeld;
+                    CS2MultiplayerMod.Game.Diagnostics.FlightRecorder.Note(netMutationHeld
+                        ? "net delete/replace held behind a stalled placement"
+                        : "net delete/replace resumed");
+                }
                 // DeleteSync BEFORE NetSync: a remote bulldoze applied this frame tags its edge Deleted,
                 // and NetSync's split-target query excludes Deleted edges — so NetSync never resolves a
                 // split onto an edge that is being removed this same frame (a stale-reference crash in
                 // ApplyNetSystem). NetSync's own commit (flipping applyMode) is independent of delete order.
+                _deleteSync.DeferNetForPendingPlacement = netMutationHeld;
                 Step("DeleteSync", _deleteSync.RealizePending);
                 // Road-type replacements also drive NetSync's single ApplyTool commit slot, so run after
                 // DeleteSync and before NetSync's build: a delete armed this frame makes replace defer
                 // (IsCommitBusy), and an armed replace makes NetSync's build defer — only one net batch
                 // enters any one ApplyTool pass, never a build+replace of the same edge together.
+                _netReplaceSync.DeferForPendingPlacement = netMutationHeld;
                 if (!deferTerrain) Step("NetReplaceSync", _netReplaceSync.RealizePending);
                 Step("NetSync", _netSync.RealizePending);
                 bool deferNetworkDependents = deferTerrain || _netSync.HasPlacementBacklog;
+                // Published for the systems that only WAIT on roads, zoning and zone-grown
+                // buildings. They are not gated themselves, so without this they keep counting down
+                // retry windows for targets this pipeline is deliberately holding back.
+                CS2MultiplayerMod.Game.Sync.Infrastructure.RealizeGate.WorldBuildingHeld =
+                    deferNetworkDependents;
                 if (!deferNetworkDependents) Step("ZoneSync", _zoneSync.RealizePending);
                 Step("TerrainSync", _terrainSync.RealizePending);
                 // After ZoneSync and behind the same network gate: a zoned building is grown on a lot
                 // that a road and its zoning produced, so realizing one before those arrive would put
                 // it on ground the receiver does not yet consider buildable.
                 _growableSync.DeferForTerrain = deferTerrain;
+                _growableSync.NetworkDependenciesHeld = deferNetworkDependents;
                 if (!deferNetworkDependents) Step("GrowableSync", _growableSync.RealizePending);
+                else _growableSync.NotifyRealizeHeld(nowMs);
                 Step("UpgradeSync", _upgradeSync.RealizePending);
                 Step("MoveSync", _moveSync.RealizePending);
                 if (!deferNetworkDependents) Step("NetUpgradeSync", _netUpgradeSync.RealizePending);
                 Step("AreaSync", _areaSync.RealizePending);
                 Step("RouteSync.FinalizePending", _routeSync.FinalizePending);
+                // Held rather than skipped: a route's retry window is for waiting on its own stop
+                // or road, not for waiting on permission to look, and expiring one unattempted
+                // asks for a world reload over a command that was never tried.
                 if (!deferNetworkDependents) Step("RouteSync", _routeSync.RealizePending);
+                else _routeSync.NotifyRealizeHeld(nowMs);
                 Step("TilePurchaseSync", _tileSync.RealizePending);
                 // Disaster events are plain simulation entities - no definitions, no terrain
                 // dependency - but they must still be created here: the game's event initialization

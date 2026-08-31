@@ -101,7 +101,11 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     bool coalesced = _outgoing.ContainsKey(blockKey);
                     if (!_outgoing.TrySetLatest(blockKey, command, MaxBufferedOutgoingZones))
                     {
-                        SyncInbox.RequestResync("zone outgoing latest-state queue overflow");
+                        SyncInbox.RequestResync(CS2MultiplayerMod.Game.Diagnostics.ResyncReport
+                            .Create("zone outgoing latest-state queue overflow", "zone",
+                                CS2MultiplayerMod.Game.Diagnostics.ResyncEvidence.StreamLoss)
+                            .About("outgoing zone queue")
+                            .Tried("nothing - zoning changes were shed before they could be sent"));
                         if (!_outgoingOverflowWarned)
                         {
                             _outgoingOverflowWarned = true;

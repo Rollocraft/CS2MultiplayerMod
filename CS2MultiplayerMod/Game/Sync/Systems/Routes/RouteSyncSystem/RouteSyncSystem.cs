@@ -236,23 +236,76 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         {
             MultiplayerService service = Mod.Service;
             if (service == null) return;
-            if (!service.GameplaySyncReady) return;
+            if (!service.GameplaySyncReady) { ExtendCreateMetadataWindows(service.NowMs); return; }
+
+            // This pass is not gated, but what it waits for is a route the game builds from a
+            // definition that RealizePending submits - and RealizePending IS gated. Counting the
+            // window down through that hold expires it against a line that could not yet exist,
+            // and the expiry asks for a world reload.
+            ExtendCreateMetadataWindows(service.NowMs);
 
             _mutatedRoutesThisFrame.Clear();
             FinalizeCreatedRoutes(service.NowMs);
         }
 
+        private readonly Infrastructure.HeldTime _createMetadataHold = new Infrastructure.HeldTime();
+
+        private void ExtendCreateMetadataWindows(long nowMs)
+        {
+            long heldMs = _createMetadataHold.Observe(nowMs,
+                Infrastructure.RealizeGate.WorldBuildingHeld ||
+                _netSync == null || !_netSync.CanBuildDefinitions);
+            if (heldMs <= 0) return;
+            for (int i = 0; i < _pendingCreateMetadata.Count; i++)
+                _pendingCreateMetadata[i].DeadlineMs += heldMs;
+        }
+
         /// <summary>Called by <see cref="SyncRealizeSystem"/> during ToolUpdate.</summary>
+        /// <summary>
+        /// Called by <see cref="SyncRealizeSystem"/> on frames this system is not allowed to run -
+        /// terrain is catching up, or the net pipeline still has placements queued.
+        ///
+        /// A route's retry window is for waiting on its own stop, line or road to arrive, not for
+        /// waiting on permission to look. Measured against the wall it expired while this system
+        /// was gated off, and the expiry then reported a dependency that "did not resolve" and
+        /// asked for a world reload - for a command it had never once attempted. A stalled net
+        /// placement holds this gate for its whole retry window, so that was not a rare race.
+        /// </summary>
+        public void NotifyRealizeHeld(long nowMs)
+        {
+            ExtendPendingRouteWindows(nowMs);
+        }
+
+        /// <summary>When this system last got to attempt its pending commands.</summary>
+        private long _lastRouteRealizeMs;
+
+        private void ExtendPendingRouteWindows(long nowMs)
+        {
+            long heldMs = _lastRouteRealizeMs == 0 ? 0 : nowMs - _lastRouteRealizeMs;
+            _lastRouteRealizeMs = nowMs;
+            if (heldMs <= 0) return;
+            for (int i = 0; i < _pendingCommands.Count; i++)
+            {
+                _pendingCommands[i].DeadlineMs += heldMs;
+                _pendingCommands[i].NextAttemptMs += heldMs;
+            }
+        }
+
         public void RealizePending()
         {
             MultiplayerService service = Mod.Service;
             if (service == null) return;
 
             MultiplayerSession session = service.Session;
-            if (!service.GameplaySyncReady) return;
+            if (!service.GameplaySyncReady) { ExtendPendingRouteWindows(service.NowMs); return; }
 
             long now = service.NowMs;
-            if (_netSync == null || !_netSync.CanBuildDefinitions) return;
+            if (_netSync == null || !_netSync.CanBuildDefinitions)
+            {
+                ExtendPendingRouteWindows(now);
+                return;
+            }
+            _lastRouteRealizeMs = now;
 
             int budget = MaxCommandsPerFrame;
             int retries = System.Math.Min(_pendingCommands.Count, MaxCommandsPerFrame / 2);
@@ -315,7 +368,11 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 }
                 catch (System.Exception ex)
                 {
-                    SyncInbox.RequestResync("malformed route command rejected");
+                    SyncInbox.RequestResync(CS2MultiplayerMod.Game.Diagnostics.ResyncReport
+                        .Create("malformed route command rejected", "route",
+                            CS2MultiplayerMod.Game.Diagnostics.ResyncEvidence.StreamLoss)
+                        .About("malformed route command")
+                        .Tried("nothing - the command could not be decoded"));
                     Mod.log.Warn("[MP] RouteSync: dropping malformed command: " + ex.Message);
                 }
             }
@@ -362,7 +419,11 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             }
 
             _pendingCommands.Clear();
-            SyncInbox.RequestResync("route retry queue overflow");
+            SyncInbox.RequestResync(CS2MultiplayerMod.Game.Diagnostics.ResyncReport
+                .Create("route retry queue overflow", "route",
+                    CS2MultiplayerMod.Game.Diagnostics.ResyncEvidence.StreamLoss)
+                .About("route retry queue")
+                .Tried("nothing - the retry queue was full and was cleared"));
             Mod.log.Warn("[MP] RouteSync retry queue overflowed; cleared it and requested a fresh world sync.");
         }
 
@@ -378,7 +439,11 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             bool needsRecovery = pending.Delete == null ||
                                  DeleteStillNeedsRecovery(pending.Delete);
             if (needsRecovery)
-                SyncInbox.RequestResync("route " + operation + " dependency did not resolve");
+                SyncInbox.RequestResync(CS2MultiplayerMod.Game.Diagnostics.ResyncReport
+                    .Create("route " + operation + " dependency did not resolve", "route",
+                        CS2MultiplayerMod.Game.Diagnostics.ResyncEvidence.MissingTarget)
+                    .About("route dependency")
+                    .Tried("retried with backoff for 30 s of attempts, not counting time this system was held back"));
             Mod.log.Warn("[MP] RouteSync " + operation + " for '" + prefabName +
                          "' did not resolve within " + (RetryWindowMs / 1000) + " s" +
                          (pending.LastFailure != null ? " (" + pending.LastFailure + ")" : string.Empty) +
@@ -390,6 +455,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         private void DrainQueue()
         {
             SyncInbox.Clear(_incoming);
+            _lastRouteRealizeMs = 0;
             _pendingCommands.Clear();
             _pendingCreateMetadata.Clear();
             _pendingUpdateCommit = null;

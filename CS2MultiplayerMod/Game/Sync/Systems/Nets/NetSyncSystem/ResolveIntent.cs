@@ -76,11 +76,16 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
         }
 
         /// <summary>
-        /// Resolve a captured target at its source-world height, then (for owner-less utility
-        /// nodes/edges only) at the corresponding local-surface height. Explicit target identity,
-        /// prefab/layer contracts and curve direction are still required by the second pass; only
-        /// the Y reference changes. This prevents terrain/water drift from turning a valid captured
-        /// pipe or cable snap into an unresolved operation.
+        /// Resolve a captured target at its source-world height, then at the corresponding
+        /// local-surface height. Explicit target identity, prefab/layer contracts and curve
+        /// direction are still required by the second pass; only the Y reference changes. This
+        /// prevents terrain/water drift from turning a valid captured snap into an unresolved
+        /// operation.
+        ///
+        /// Normally the second pass covers utility nets only. Once an operation has spent a full
+        /// retry window (<paramref name="allowMergedNodeSplit"/>, which is what marks the
+        /// last-resort pass), it covers roads and rails too - see
+        /// <see cref="TryProjectEndpointToLocalSurface"/> for why that gap mattered.
         /// </summary>
         private bool TryResolveNativeEndpointWithLocalSurface(Entity prefab,
             NetEndpointIntent intent, NetPrefabInfo placedInfo,
@@ -103,8 +108,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
             float3 sourcePoint = new float3(intent.PosX, intent.PosY, intent.PosZ);
             float2 sourceElevation = new float2(intent.ElevationLeft, intent.ElevationRight);
             float3 projected;
-            if (!TryProjectUtilityEndpointToLocalSurface(prefab, placedInfo, sourcePoint,
-                    sourceElevation, ref heightData, ref waterData, out projected))
+            if (!TryProjectEndpointToLocalSurface(prefab, placedInfo, sourcePoint,
+                    sourceElevation, allowMergedNodeSplit, ref heightData, ref waterData,
+                    out projected))
                 return false;
 
             float deltaY = projected.y - intent.PosY;

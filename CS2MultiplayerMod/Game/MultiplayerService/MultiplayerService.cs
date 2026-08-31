@@ -198,31 +198,135 @@ namespace CS2MultiplayerMod.Game
         private const long AutoRecoveryCooldownMs = 90000;
         private long _lastAutoRecoveryMs = long.MinValue;
 
+        /// <summary>True while a world reload is already under way, in either role.</summary>
+        private bool WorldRecoveryInFlight =>
+            _worldSyncBarrierActive ||
+            _phase == ClientWorldPhase.WaitingForMap ||
+            _phase == ClientWorldPhase.LoadingMap ||
+            _phase == ClientWorldPhase.WaitingForResume;
+
+        /// <summary>A settled report waiting for the service tick to act on it. Main thread only.</summary>
+        private Diagnostics.ResyncReport _settledReport;
+
+        /// <summary>
+        /// Set when this client must re-ask the host for a world it is otherwise never going to
+        /// receive. It deliberately bypasses the resync arbiter and the in-flight guard: this is
+        /// not a claim that the two cities diverged, it is a client saying the handover broke and
+        /// it is still waiting. See the Resume-before-load case in WorldSync.
+        /// </summary>
+        private bool _mapReRequestPending;
+
+        internal void RequestMapAgainNextTick() => _mapReRequestPending = true;
+
+        /// <summary>
+        /// Ask again for a world whose handover broke, once the session has actually left the epoch
+        /// that broke. Waiting for that is why this is a pumped flag rather than a direct call: the
+        /// session coalesces any request made while it is still inside the epoch.
+        /// </summary>
+        private void PumpMapReRequest()
+        {
+            if (!_mapReRequestPending) return;
+            if (_session == null || _session.Status != SessionStatus.Connected)
+            {
+                _mapReRequestPending = false;
+                return;
+            }
+            if (_session.WorldSyncSuspended) return;
+            _mapReRequestPending = false;
+            Diagnostics.SyncLog.ProdWarn(
+                "World sync: asking the host to stream this city again - the previous handover " +
+                "resumed before the snapshot had been installed.");
+            _session.RequestWorldSync("resume arrived before the snapshot finished loading");
+        }
+
+        /// <summary>
+        /// The synchronous resync gate wired into <see cref="Sync.Infrastructure.SyncInbox.Arbitrate"/>.
+        /// A caller that can still hold its work puts its evidence here and acts on the verdict:
+        /// only <see cref="Diagnostics.ResyncVerdict.Settled"/> reloads the world.
+        ///
+        /// The VERDICT is synchronous - the caller is mid-frame and has to know right now whether to
+        /// keep its work. The reload is not: it is handed to the service tick, where world recovery
+        /// has always been started from, rather than being kicked off from inside a ToolUpdate.
+        /// </summary>
+        public Diagnostics.ResyncVerdict SettleResyncReport(Diagnostics.ResyncReport report)
+        {
+            if (report == null) return Diagnostics.ResyncVerdict.Settled;
+            if (_session == null || _session.Status != SessionStatus.Connected)
+                return Diagnostics.ResyncVerdict.AlreadyRecovering;
+
+            Diagnostics.ResyncVerdict verdict =
+                Diagnostics.ResyncArbiter.Submit(report, NowMs, WorldRecoveryInFlight);
+            // First settled report wins; a second one this frame is a consequence of the same
+            // divergence and the one reload answers both.
+            if (verdict == Diagnostics.ResyncVerdict.Settled && _settledReport == null)
+                _settledReport = report;
+            return verdict;
+        }
+
         public void RequestAutomaticWorldRecovery(string reason)
         {
+            RequestAutomaticWorldRecovery(Diagnostics.ResyncReport.FromReason(reason));
+        }
+
+        /// <summary>
+        /// Weigh a queued report and, if it settles, reload the world. Requests that arrive here
+        /// have already let go of their work, so a held verdict simply means the world is left
+        /// alone and the arbiter keeps watching for the fault to recur.
+        /// </summary>
+        public void RequestAutomaticWorldRecovery(Diagnostics.ResyncReport report)
+        {
+            if (report == null || _session == null || _session.Status != SessionStatus.Connected) return;
+            if (Diagnostics.ResyncArbiter.Submit(report, NowMs, WorldRecoveryInFlight) !=
+                Diagnostics.ResyncVerdict.Settled) return;
+            RunAutomaticWorldRecovery(report);
+        }
+
+        /// <summary>
+        /// Reload the world for reports whose hold elapsed with nothing withdrawing them. Held is
+        /// never "dismissed": a subsystem that can retry withdraws its report when it succeeds, and
+        /// one that dropped its work simply lets the hold run out, which is what lands here.
+        /// </summary>
+        private void PumpMaturedResyncReports()
+        {
             if (_session == null || _session.Status != SessionStatus.Connected) return;
+            // A reload already running supersedes anything held: leave the evidence alone rather
+            // than announcing a verdict on it that nothing is going to act on.
+            if (WorldRecoveryInFlight) return;
+
+            // Verdicts settled inside a frame (see SettleResyncReport) are acted on here.
+            Diagnostics.ResyncReport settled = _settledReport;
+            _settledReport = null;
+            if (settled != null) RunAutomaticWorldRecovery(settled);
+
+            System.Collections.Generic.List<Diagnostics.ResyncReport> matured =
+                Diagnostics.ResyncArbiter.TakeMatured(NowMs);
+            if (matured == null || matured.Count == 0) return;
+            // One reload settles every one of them; the rest are folded into it.
+            RunAutomaticWorldRecovery(matured[0]);
+        }
+
+        private void RunAutomaticWorldRecovery(Diagnostics.ResyncReport report)
+        {
             long now = NowMs;
-            bool recovering = _worldSyncBarrierActive ||
-                              _phase == ClientWorldPhase.WaitingForMap ||
-                              _phase == ClientWorldPhase.LoadingMap ||
-                              _phase == ClientWorldPhase.WaitingForResume;
             // Guard the sentinel before subtracting it. `now - long.MinValue` wraps negative in
             // unchecked arithmetic, which otherwise makes the first automatic recovery look as if
             // it were inside the cooldown forever.
             bool coolingDown = _lastAutoRecoveryMs != long.MinValue &&
                                now - _lastAutoRecoveryMs < AutoRecoveryCooldownMs;
-            if (recovering || coolingDown)
+            if (coolingDown)
             {
-                _log.Warn("[MP] Suppressed automatic world recovery (" + reason +
-                          "): a recovery is already in progress or within the cooldown. The offending " +
-                          "edit is left un-synced; use /sync if the city looks out of step.");
-                Diagnostics.FlightRecorder.Note("auto recovery suppressed (cooldown/in-progress): " + reason);
+                Diagnostics.SyncLog.ProdWarn(
+                    "World sync: skipped a second automatic reload within " +
+                    (AutoRecoveryCooldownMs / 1000) + " s (" + report.Reason +
+                    "). The edit behind it is left un-synced; use /sync if the city looks out of step.");
+                Diagnostics.FlightRecorder.Note("auto recovery suppressed (cooldown): " + report.Summary());
                 return;
             }
             _lastAutoRecoveryMs = now;
-            _log.Warn("[MP] Requesting world recovery: " + reason + ".");
-            Diagnostics.FlightRecorder.Note("resync requested: " + reason);
-            _session.RequestWorldSync();
+            Diagnostics.SyncLog.Prod("World sync: reloading this city from the host now (" +
+                                     report.Reason + ").");
+            Diagnostics.FlightRecorder.Note("resync requested: " + report.Summary());
+            _session.RequestWorldSync(report.Reason);
         }
 
         // ---- Chat log (in-game hub panel) --------------------------------------

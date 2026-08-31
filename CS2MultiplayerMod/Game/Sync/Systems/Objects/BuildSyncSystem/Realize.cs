@@ -51,10 +51,28 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         private NativeArray<PrefabRef> _dupPrefabs;
         private bool _dupSnapshotTaken;
 
+        private readonly HeldTime _targetHold = new HeldTime();
+
         private void RealizeIncoming(MultiplayerSession session, long now)
         {
             if (_incoming.IsEmpty && _nativeObjectReplayPrefix.Count == 0 &&
                 _attachRetry.Count == 0 && !_hasBlockedNativeObject) return;
+
+            // What these windows wait for is a ROAD - the attachment parent below says so in as
+            // many words - and roads are exactly what the realize pipeline holds back while
+            // terrain or the net commit catches up. Spending the window during that hold expires
+            // it against a parent that could not have arrived, and the expiry asks for a full
+            // world reload. Below, the same three conditions skip the attempt entirely.
+            long heldMs = _targetHold.Observe(now,
+                RealizeGate.WorldBuildingHeld || DeferForTerrain ||
+                _nativeNetCoordinator.IsCommitBusy);
+            if (heldMs > 0)
+            {
+                for (int h = 0; h < _attachRetry.Count; h++)
+                    _attachRetry[h] = (_attachRetry[h].command, _attachRetry[h].prefab,
+                        _attachRetry[h].originPlayerId, _attachRetry[h].deadline + heldMs);
+                if (_hasBlockedNativeObject) _blockedNativeObjectDeadline += heldMs;
+            }
 
             PruneNativeObjectOperations(now);
             if (_nativeNetCoordinator.IsCommitBusy) return;
@@ -146,7 +164,11 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     Mod.log.Warn("[MP] BuildSync realize: reduced placement for spatial object '" +
                                  command.PrefabName +
                                  "' was rejected; requesting world recovery.");
-                    SyncInbox.RequestResync("reduced spatial object placement rejected");
+                    SyncInbox.RequestResync(CS2MultiplayerMod.Game.Diagnostics.ResyncReport
+                        .Create("reduced spatial object placement rejected", "object",
+                            CS2MultiplayerMod.Game.Diagnostics.ResyncEvidence.Contradiction)
+                        .About("reduced spatial placement")
+                        .Tried("nothing - the reduced form of this placement cannot be committed here"));
                     continue;
                 }
 
@@ -161,7 +183,11 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                                      "incomplete backlog and requesting world recovery.");
                         Diagnostics.FlightRecorder.Note(
                             "attachment retry queue overflow; recovery requested");
-                        SyncInbox.RequestResync("object attachment retry queue overflow");
+                        SyncInbox.RequestResync(CS2MultiplayerMod.Game.Diagnostics.ResyncReport
+                            .Create("object attachment retry queue overflow", "object",
+                                CS2MultiplayerMod.Game.Diagnostics.ResyncEvidence.StreamLoss)
+                            .About("attachment retry queue")
+                            .Tried("nothing - the queue was full and was cleared"));
                         return;
                     }
                     _attachRetry.Add((command, prefab, message.OriginPlayerId, now + AttachRetryWindowMs));
@@ -206,7 +232,11 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                                  " s; requesting world recovery.");
                     Diagnostics.FlightRecorder.Note(
                         "attachment target expired; recovery requested");
-                    SyncInbox.RequestResync("object attachment target did not resolve");
+                    SyncInbox.RequestResync(CS2MultiplayerMod.Game.Diagnostics.ResyncReport
+                        .Create("object attachment target did not resolve", "object",
+                            CS2MultiplayerMod.Game.Diagnostics.ResyncEvidence.MissingTarget)
+                        .About("attachment parent road")
+                        .Tried("waited 10 s of attempts for the parent road, not counting time the road pipeline was held"));
                 }
             }
         }
@@ -248,7 +278,11 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 Mod.log.Error("[MP] BuildSync realize FAILED for '" + command.PrefabName + "': " + ex);
                 Diagnostics.FlightRecorder.Note("build realize FAILED '" + command.PrefabName + "': "
                     + ex.GetType().Name + "; recovery requested");
-                SyncInbox.RequestResync("object placement realization failed");
+                SyncInbox.RequestResync(CS2MultiplayerMod.Game.Diagnostics.ResyncReport
+                    .Create("object placement realization failed", "object",
+                        CS2MultiplayerMod.Game.Diagnostics.ResyncEvidence.Contradiction)
+                    .About("object placement")
+                    .Tried("nothing - realization threw and the placement was rolled back"));
             }
         }
 

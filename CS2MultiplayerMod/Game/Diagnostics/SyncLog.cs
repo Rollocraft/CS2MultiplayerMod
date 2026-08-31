@@ -12,6 +12,21 @@ namespace CS2MultiplayerMod.Game.Diagnostics
         /// <summary>Anything without a more specific home. Follows the general verbose switch.</summary>
         General = 0,
 
+        /// <summary>
+        /// The production level: always written, never gated by a setting, and deliberately
+        /// unprefixed.
+        ///
+        /// It exists for the handful of lines that have to be in every player's log because they
+        /// are what a bug report is read for - why the world was reloaded, what the pipeline was
+        /// holding when it decided, what it tried first. A player never turns these on, so they
+        /// cannot be missing from the one log that matters, and a reader who does not know the
+        /// mod's topic prefixes still reads them as ordinary sentences.
+        ///
+        /// It is not a dumping ground: anything that would repeat per frame, per entity or per
+        /// command belongs to a topic switch or the flight recorder instead.
+        /// </summary>
+        Prod,
+
         /// <summary>Frame times and the mod's own main-thread cost, including the per-zone split.</summary>
         Performance,
 
@@ -36,14 +51,17 @@ namespace CS2MultiplayerMod.Game.Diagnostics
     /// building the string. And a line always says which topic it belongs to, so a log with
     /// several topics on is still readable and greppable.
     ///
-    /// Faults are never routed here. A warning or an error is not a diagnostic a player chooses
-    /// to receive; those keep going straight to the game log and the flight recorder.
+    /// A fault is never a topic. A warning or an error is not a diagnostic a player chooses to
+    /// receive, so it is never gated by a switch: it goes out through the production level
+    /// (<see cref="Prod"/>, <see cref="ProdWarn"/>, <see cref="ProdError"/>, <see cref="ProdReport"/>),
+    /// which writes to the game log and the flight recorder unconditionally and without a prefix.
     /// </summary>
     public static class SyncLog
     {
         private static readonly string[] Prefixes =
         {
             "[MP] ",
+            "",             // Prod: deliberately unprefixed.
             "[MP][perf] ",
             "[MP][residential] ",
             "[MP][commercial] ",
@@ -57,6 +75,9 @@ namespace CS2MultiplayerMod.Game.Diagnostics
         /// </summary>
         public static bool IsEnabled(LogTopic topic)
         {
+            // Asked before the setting exists too: a fault during load still has to be reported,
+            // and the production level is the level that is never allowed to be silent.
+            if (topic == LogTopic.Prod) return true;
             Setting setting = Mod.Setting;
             if (setting == null) return false;
             switch (topic)
@@ -94,6 +115,61 @@ namespace CS2MultiplayerMod.Game.Diagnostics
         {
             if (IsEnabled(topic)) Mod.log.Info(Prefix(topic) + message);
             FlightRecorder.Note(message);
+        }
+
+        /// <summary>
+        /// Write one production line: always emitted, no prefix, and always mirrored to the flight
+        /// recorder so the structured log carries the same statement as the game log.
+        /// </summary>
+        public static void Prod(string message)
+        {
+            if (message == null) return;
+            Mod.log.Info(message);
+            FlightRecorder.Note(message);
+        }
+
+        /// <summary>A production line the player is meant to act on (or explain in a report).</summary>
+        public static void ProdWarn(string message)
+        {
+            if (message == null) return;
+            Mod.log.Warn(message);
+            FlightRecorder.Note(message);
+        }
+
+        /// <summary>A production line for a fault the mod could not work around.</summary>
+        public static void ProdError(string message)
+        {
+            if (message == null) return;
+            Mod.log.Error(message);
+            FlightRecorder.Note(message);
+        }
+
+        /// <summary>
+        /// Write a multi-line production report. Each line goes out on its own so the game log
+        /// stays one-statement-per-line and greppable; the flight recorder takes the whole report
+        /// as a single compact event, because there it is one fact, not many.
+        /// </summary>
+        public static void ProdReport(string headline, System.Collections.Generic.IList<string> lines)
+        {
+            if (headline != null) Mod.log.Info(headline);
+            if (lines != null)
+                for (int i = 0; i < lines.Count; i++)
+                    if (lines[i] != null) Mod.log.Info("    " + lines[i]);
+            FlightRecorder.Note(FlattenReport(headline, lines));
+        }
+
+        private static string FlattenReport(string headline,
+            System.Collections.Generic.IList<string> lines)
+        {
+            var flat = new System.Text.StringBuilder(headline ?? string.Empty);
+            if (lines != null)
+                for (int i = 0; i < lines.Count; i++)
+                {
+                    if (lines[i] == null) continue;
+                    if (flat.Length > 0) flat.Append(" | ");
+                    flat.Append(lines[i]);
+                }
+            return flat.ToString();
         }
 
         private static LogTopic TopicFor(SyncZone zone)

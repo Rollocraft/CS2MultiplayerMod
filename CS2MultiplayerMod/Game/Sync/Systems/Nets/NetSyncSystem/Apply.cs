@@ -19,8 +19,31 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
         /// <summary>How long an armed batch may wait for its commit before it is discarded and re-queued.</summary>
         private const int ApplyWindowMs = 3000;
 
-        /// <summary>How long a committed batch's Temps may linger before recovery is requested.</summary>
+        /// <summary>
+        /// How long a committed batch's Temps may linger before recovery is considered.
+        ///
+        /// This is the base for a SMALL batch. The native apply pass is per-entity work, so a fixed
+        /// window silently means "the bigger the edit, the less time it gets": a 311-Temp road
+        /// replacement was quarantined here on the same three seconds that comfortably drained the
+        /// 55- and 86-Temp batches around it. See <see cref="DrainWindowFor"/>.
+        /// </summary>
         private const int DrainWindowMs = 3000;
+
+        /// <summary>Extra drain time per tracked Temp, on top of <see cref="DrainWindowMs"/>.</summary>
+        private const int DrainWindowMsPerTemp = 12;
+
+        /// <summary>Ceiling, so a pathological batch still reaches a verdict.</summary>
+        private const int MaxDrainWindowMs = 15000;
+
+        /// <summary>
+        /// The drain budget for a batch of <paramref name="temps"/> entities. Linear in the work
+        /// the native pipeline actually has to do, and capped.
+        /// </summary>
+        private static int DrainWindowFor(int temps)
+        {
+            long budget = DrainWindowMs + (long)DrainWindowMsPerTemp * (temps > 0 ? temps : 0);
+            return budget > MaxDrainWindowMs ? MaxDrainWindowMs : (int)budget;
+        }
 
         /// <summary>
         /// A wall-clock stall is not evidence that the native pipeline is stuck. Observe several
@@ -136,7 +159,16 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
             else if (_awaitingDrain)
             {
                 _drainFrames++;
-                bool committedTempsRemain = CommittedRemoteTempsRemain();
+                int remainingTemps = CountCommittedRemoteTempsRemaining();
+                bool committedTempsRemain = remainingTemps > 0;
+                // Progress is progress. A large graph leaves Temp state in waves, and the window
+                // exists to catch a pipeline that has STOPPED, not one that is merely slow. Every
+                // frame that retires at least one Temp buys the rest of the batch a fresh window.
+                if (remainingTemps < _drainRemainingTemps)
+                {
+                    _drainRemainingTemps = remainingTemps;
+                    _drainArmTick = System.Environment.TickCount;
+                }
                 if (!committedTempsRemain)
                 {
                     if (++_drainCleanFrames >= RequiredCleanDrainFrames)
@@ -152,6 +184,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                         if (completed != null) completed();
                         Diagnostics.FlightRecorder.Note(
                             "remote transaction drain completed after clean-frame fence");
+                        WithdrawDrainReport("the batch drained on its own");
                     }
                 }
                 else
@@ -161,10 +194,11 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
 
                 if (committedTempsRemain &&
                     _drainFrames >= MinimumDrainFramesBeforeRecovery &&
-                    System.Environment.TickCount - _drainArmTick > DrainWindowMs)
+                    System.Environment.TickCount - _drainArmTick >
+                        DrainWindowFor(_committingRemoteNetTemps.Count))
                 {
+                    int trackedCount = _committingRemoteNetTemps.Count;
                     TrackInvalidatedTemps(_committingRemoteNetTemps);
-                    int quarantinedCount = _committingRemoteNetTemps.Count;
                     // Apply has already been scheduled for this graph. Tagging its entities Deleted
                     // here races the native apply/cleanup jobs and was the immediate precursor to a
                     // process crash. Leave the graph intact, keep its identities quarantined, and
@@ -182,14 +216,24 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                     _invalidatedDrainArmTick = System.Environment.TickCount;
                     _invalidatedCleanFrames = 0;
                     _invalidatedDrainTimedOut = false;
-                    Mod.log.Warn("[MP] NetApply: isolated remote commit remained Temp after " +
-                                 _drainFrames + " frames (tracked=" + quarantinedCount +
-                                 "); quarantined without destructive cleanup and requesting " +
-                                 "world recovery.");
                     Diagnostics.FlightRecorder.Note(
                         "net isolated commit quarantined frames=" + _drainFrames +
-                        " tracked=" + quarantinedCount);
-                    SyncInbox.RequestResync("remote transaction failed to drain");
+                        " tracked=" + trackedCount + " remaining=" + remainingTemps);
+
+                    // The graph is quarantined either way - it may not be touched while native work
+                    // is still scheduled against it. Whether that costs a world reload is a
+                    // separate question, and one a stall alone does not answer.
+                    string drainSubject = "commit of " + trackedCount + " entities";
+                    NoteDrainReport(drainSubject);
+                    SyncInbox.RequestResync(Diagnostics.ResyncReport
+                        .Create(DrainFailedReason, "net", Diagnostics.ResyncEvidence.Timeout)
+                        .About(drainSubject)
+                        .Tried("waited " + _drainFrames + " frames and " +
+                               DrainWindowFor(trackedCount) + " ms, restarting the window on every " +
+                               "frame that retired at least one entity")
+                        .Fact("entities in the commit", trackedCount)
+                        .Fact("still not applied", remainingTemps)
+                        .Fact("frames waited", _drainFrames));
                 }
             }
 
@@ -548,6 +592,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
             _drainArmTick = System.Environment.TickCount;
             _drainFrames = 0;
             _drainCleanFrames = 0;
+            _drainRemainingTemps = int.MaxValue;
             _suppressCaptureThisFrame = true;
             _clearLocalNetIsolationAfterBarrier = true;
             Diagnostics.FlightRecorder.Note("remote " +
@@ -639,18 +684,29 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                 " sharedOriginal=" + sharedOriginals + " members=[" + detail + "]");
         }
 
-        private bool CommittedRemoteTempsRemain()
+        /// <summary>
+        /// How many of the committed batch's entities are still Temp.
+        ///
+        /// The count, not just "any": it is what tells a stuck pipeline apart from a slow one, and
+        /// it is what the quarantine line used to be missing - it reported the batch size, so a
+        /// graph that was one entity from done and one that had not moved at all logged the same
+        /// number.
+        /// </summary>
+        private int CountCommittedRemoteTempsRemaining()
         {
+            int remaining = 0;
             for (int i = 0; i < _committingRemoteNetTemps.Count; i++)
             {
                 Entity entity = _committingRemoteNetTemps[i];
                 // Deleted is only a request to the deferred cleanup pipeline. Treating that tag as
                 // "gone" allowed the next native transaction to reuse a graph still being torn down.
                 if (EntityManager.Exists(entity) && EntityManager.HasComponent<Temp>(entity))
-                    return true;
+                    remaining++;
             }
-            return false;
+            return remaining;
         }
+
+        private bool CommittedRemoteTempsRemain() => CountCommittedRemoteTempsRemaining() > 0;
 
         private void InvalidateArmedBatch(string reason, int count)
         {
@@ -702,15 +758,56 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                                      : "."));
                 Diagnostics.FlightRecorder.Note("net batch invalidated; dropped" +
                     (repeatsPreviousAttempt ? " (rejection is deterministic)" : string.Empty));
-                SyncInbox.RequestResync(repeatsPreviousAttempt
-                    ? "remote transaction rejected deterministically"
-                    : "remote transaction exhausted bounded replays");
+                SyncInbox.RequestResync(Diagnostics.ResyncReport
+                    .Create(repeatsPreviousAttempt
+                            ? "remote transaction rejected deterministically"
+                            : "remote transaction exhausted bounded replays",
+                        "net", Diagnostics.ResyncEvidence.Contradiction)
+                    .About(identity)
+                    .Tried(replay == null
+                        ? "nothing - this batch had no way to be rebuilt"
+                        : "rebuilt and re-applied the batch " + _applyReplayBudget.AttemptsUsed +
+                          " time(s) out of " + _applyReplayBudget.MaximumAttempts)
+                    .Fact("why the batch was refused", reason)
+                    .Fact("entities in the batch", count)
+                    .Fact("the same refusal repeated", repeatsPreviousAttempt));
             }
 
             _invalidatedBatchDraining = true;
             _invalidatedDrainArmTick = System.Environment.TickCount;
             _invalidatedCleanFrames = 0;
             _invalidatedDrainTimedOut = false;
+        }
+
+        /// <summary>The reason a stalled drain reports, shared by the report and its withdrawal.</summary>
+        internal const string DrainFailedReason = "remote transaction failed to drain";
+
+        /// <summary>
+        /// What the outstanding "failed to drain" reports are about, so each can be withdrawn by
+        /// name. A list, not one field: a graph that misses its commit window and then misses its
+        /// quarantine window raises two, and withdrawing only the second would still reload the
+        /// world for the first after the graph had actually finished.
+        /// </summary>
+        private readonly List<string> _outstandingDrainSubjects = new List<string>();
+
+        private void NoteDrainReport(string subject)
+        {
+            if (!_outstandingDrainSubjects.Contains(subject))
+                _outstandingDrainSubjects.Add(subject);
+        }
+
+        /// <summary>
+        /// Take back every outstanding "failed to drain" report. A drain that finishes late is a
+        /// window that was too short, and the log should say so instead of the world reloading.
+        /// </summary>
+        private void WithdrawDrainReport(string outcome)
+        {
+            if (_outstandingDrainSubjects.Count == 0) return;
+            long now = Mod.Service != null ? Mod.Service.NowMs : 0L;
+            for (int i = 0; i < _outstandingDrainSubjects.Count; i++)
+                Diagnostics.ResyncArbiter.Withdraw("net", DrainFailedReason,
+                    _outstandingDrainSubjects[i], now, outcome);
+            _outstandingDrainSubjects.Clear();
         }
 
         /// <summary>
@@ -783,11 +880,18 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                 {
                     _invalidatedDrainTimedOut = true;
                     _replayAfterInvalidatedDrain = null;
-                    Mod.log.Error("[MP] NetApply: quarantined native transaction did not leave Temp " +
-                                  "state; blocking further native work and requesting world recovery.");
+                    Diagnostics.SyncLog.ProdError(
+                        "Road sync: a rejected road transaction is still held by the game's own " +
+                        "apply pass; no further road work can run until it finishes.");
                     Diagnostics.FlightRecorder.Note(
                         "quarantined net temps failed to drain; native work remains blocked");
-                    SyncInbox.RequestResync("quarantined native transaction failed to drain");
+                    NoteDrainReport("quarantined graph");
+                    SyncInbox.RequestResync(Diagnostics.ResyncReport
+                        .Create(DrainFailedReason, "net", Diagnostics.ResyncEvidence.Timeout)
+                        .About("quarantined graph")
+                        .Tried("waited " + DrainWindowMs + " ms for the game's apply pass to " +
+                               "release the rejected entities")
+                        .Fact("entities still held", _invalidatedRemoteTemps.Count));
                 }
                 return;
             }
@@ -804,6 +908,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
             _invalidatedDrainTimedOut = false;
             _drainReleasedThisFrame = true;
             Diagnostics.FlightRecorder.Note("invalidated net transaction fully drained");
+            // It drained after all. Withdraw the report before its hold matures: the window was
+            // too short for this batch, which is a tuning fact, not a reason to reload a world.
+            WithdrawDrainReport("the game's apply pass finished the batch after the window expired");
             if (replay != null) replay();
         }
 

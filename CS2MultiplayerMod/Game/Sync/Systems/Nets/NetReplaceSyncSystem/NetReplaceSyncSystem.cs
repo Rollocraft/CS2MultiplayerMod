@@ -68,10 +68,22 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         // them. Edges shorter than a few times this are skipped as ambiguous.
         private const float EndpointMatchTol = 2f;
 
+        /// <summary>
+        /// Set by <see cref="SyncRealizeSystem"/> while a remote placement is still waiting for the
+        /// road it anchors to. A replacement can only change or remove that road out from under the
+        /// placement, so it waits - and its own retry windows are extended by the time it waited,
+        /// because a replacement dropped for "not resolving" while it was not allowed to look is
+        /// the same divergence, one step later.
+        /// </summary>
+        public bool DeferForPendingPlacement;
+
         private readonly ConcurrentQueue<SimulationCommandMessage> _incoming =
             new ConcurrentQueue<SimulationCommandMessage>();
         private readonly List<(NetReplaceCommand command, long deadline)> _retry =
             new List<(NetReplaceCommand, long)>();
+
+        /// <summary>When this system last got to run a match pass. See RealizePending.</summary>
+        private long _lastReplaceRealizeMs;
 
         // Replacements whose armed commit was destroyed before it ran (the player's tool cleared the
         // Temps — see NetSyncSystem's commit-lost handling). Unlike _retry these carry no deadline:
@@ -199,6 +211,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             _retry.Clear();
             _replayCommands.Clear();
             _expectedMixedGeometryChanges.Clear();
+            _lastReplaceRealizeMs = 0;
+            DeferForPendingPlacement = false;
             _seeded = false;
         }
 

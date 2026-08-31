@@ -15,8 +15,19 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 {
     public partial class PolicySyncSystem
     {
+        private readonly HeldTime _targetHold = new HeldTime();
+
         private void ApplyIncoming(MultiplayerSession session, long now)
         {
+            // A policy waits for the building it applies to, and a zone-grown building is what the
+            // realize pipeline holds back while terrain or roads catch up. See RealizeGate: without
+            // this the window expires against a target that could not yet have arrived.
+            long heldMs = _targetHold.Observe(now, RealizeGate.WorldBuildingHeld);
+            if (heldMs > 0)
+                for (int h = 0; h < _targetRetry.Count; h++)
+                    _targetRetry[h] = (_targetRetry[h].cmd, _targetRetry[h].origin,
+                        _targetRetry[h].deadline + heldMs);
+
             for (int i = 0; i < _targetRetry.Count;)
             {
                 var pending = _targetRetry[i];
@@ -33,7 +44,11 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                                  (TargetRetryWindowMs / 1000) + " s for policy '" +
                                  pending.cmd.PolicyPrefabName +
                                  "'; requesting world recovery.");
-                    SyncInbox.RequestResync("policy target did not resolve");
+                    SyncInbox.RequestResync(CS2MultiplayerMod.Game.Diagnostics.ResyncReport
+                        .Create("policy target did not resolve", "policy",
+                            CS2MultiplayerMod.Game.Diagnostics.ResyncEvidence.MissingTarget)
+                        .About("policy target building")
+                        .Tried("retried for 15 s of attempts, not counting time the buildings were held back"));
                     _targetRetry.RemoveAt(i);
                     continue;
                 }
@@ -85,7 +100,11 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             {
                 Mod.log.Error("[MP] PolicySync realize FAILED for '" +
                               command.PolicyPrefabName + "': " + ex);
-                SyncInbox.RequestResync("building policy application failed");
+                SyncInbox.RequestResync(CS2MultiplayerMod.Game.Diagnostics.ResyncReport
+                    .Create("building policy application failed", "policy",
+                        CS2MultiplayerMod.Game.Diagnostics.ResyncEvidence.Contradiction)
+                    .About("policy application")
+                    .Tried("nothing - applying the policy threw"));
             }
             return true;
         }
@@ -105,7 +124,11 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 _targetRetry.RemoveAt(0);
                 Mod.log.Warn("[MP] PolicySync: pending-target queue reached its bounded limit; " +
                              "requesting world recovery.");
-                SyncInbox.RequestResync("policy target retry queue overflow");
+                SyncInbox.RequestResync(CS2MultiplayerMod.Game.Diagnostics.ResyncReport
+                    .Create("policy target retry queue overflow", "policy",
+                        CS2MultiplayerMod.Game.Diagnostics.ResyncEvidence.StreamLoss)
+                    .About("policy retry queue")
+                    .Tried("nothing - the oldest queued policy was shed to stay within the bound"));
             }
             _targetRetry.Add((command, origin, now + TargetRetryWindowMs));
             Diagnostics.FlightRecorder.Note("policy target retrying kind=" +
