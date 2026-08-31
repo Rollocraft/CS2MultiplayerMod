@@ -44,7 +44,7 @@ namespace CS2MultiplayerMod.Game.Sync.Commands
         {
             RoutePrefabName = WireGuard.ReadName(reader);
             RouteNumber = reader.ReadInt();
-            RouteWaypointIntent.ValidateRouteNumber(RouteNumber);
+            RouteCommandCodec.ValidateRouteNumber(RouteNumber);
             TicketPrice = reader.ReadInt();
             if (TicketPrice < 0 || TicketPrice > MaxTicketPrice)
                 throw new ProtocolException("Transit fare " + TicketPrice +
