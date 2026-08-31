@@ -1,6 +1,8 @@
 using System.Collections.Generic;
 using Colossal.IO.AssetDatabase;
 using Colossal.Logging;
+using CS2MultiplayerMod.Core.Diagnostics;
+using CS2MultiplayerMod.Core.Protocol;
 using CS2MultiplayerMod.Game;
 using CS2MultiplayerMod.Game.Diagnostics;
 using CS2MultiplayerMod.Localization;
@@ -14,6 +16,11 @@ namespace CS2MultiplayerMod
     {
         public const string Name = "CS2MultiplayerMod";
 
+        /// <summary>
+        /// The game's logger, and the destination <see cref="Game.Diagnostics.SyncLog"/> writes to.
+        /// Not a front door: log through SyncLog so the line gets its topic, its switch and its
+        /// copy in the flight log.
+        /// </summary>
         public static ILog log = LogManager.GetLogger(Name).SetShowsErrorsInUI(false);
 
         public static Setting Setting;
@@ -37,44 +44,33 @@ namespace CS2MultiplayerMod
         };
 
         /// <summary>
-        /// Log a chatty, troubleshooting-only line - the per-action sync notices and the
-        /// periodic diagnostics. Silent unless "Verbose Logging" is enabled in settings, so
-        /// the default log stays quiet and only the important lifecycle/fault lines remain.
-        /// </summary>
-        public static void Verbose(string message)
-        {
-            if (VerboseEnabled) log.Info(message);
-        }
-
-        /// <summary>
-        /// Whether anything would come of a <see cref="Verbose"/> call. Ask before *computing* a
-        /// diagnostic, not just before logging one: a counter nobody reads must not cost a frame.
-        /// </summary>
-        public static bool VerboseEnabled => Setting != null && Setting.VerboseLogging;
-
-        /// <summary>
         /// The live multiplayer bridge. Created here and pumped each tick by
         /// <see cref="MultiplayerSystem"/>; the settings screen drives it via
         /// host/join/disconnect buttons.
         /// </summary>
         public static MultiplayerService Service;
 
+        /// <summary>
+        /// The version this build reports - to the log, and to a peer during the handshake.
+        /// </summary>
+        private static string Version => typeof(Mod).Assembly.GetName().Version.ToString();
+
         public void OnLoad(UpdateSystem updateSystem)
         {
-            log.Info(nameof(OnLoad));
-
             // Crash forensics first: the flight log must be recording before anything
             // else of ours can fail (see FlightRecorder).
-            FlightRecorder.Start(typeof(Mod).Assembly.GetName().Version.ToString());
+            FlightRecorder.Start(Version);
 
-            // Route the sync inbox's rare backpressure/drain warnings to the mod log.
-            Game.Sync.Infrastructure.SyncInbox.LogWarn = log.Warn;
+            // Route the sync inbox's rare backpressure/drain warnings through the one logger.
+            // They are pipeline faults, so they are never gated by a switch.
+            Game.Sync.Infrastructure.SyncInbox.LogWarn =
+                delegate(string message) { SyncLog.Warn(LogTopic.Pipeline, message); };
 
             // Also where the Steam relay backend sits, when this copy of the game has one.
             string modFolder = null;
             if (GameManager.instance.modManager.TryGetExecutableAsset(this, out var asset))
             {
-                log.Info($"Current mod asset at {Game.Diagnostics.LogPaths.Redact(asset.path)}");
+                SyncLog.Detail(LogTopic.Startup, "Loaded from " + asset.path + ".");
                 modFolder = System.IO.Path.GetDirectoryName(asset.path);
             }
 
@@ -94,9 +90,9 @@ namespace CS2MultiplayerMod
             // Persist / load settings to the standard mod settings store.
             AssetDatabase.global.LoadSettings(Name, Setting, new Setting(this));
 
-            // Stand up the multiplayer core (portable session + game logger adapter) and
-            // register the ECS system that pumps it once per simulation tick.
-            var coreLog = new ColossalModLogger(log);
+            // Stand up the multiplayer core. The portable half logs through the same logger as
+            // the rest of the mod; ColossalModLogger is the seam (see there).
+            IModLogger coreLog = ColossalModLogger.Instance;
 
             // Offer Steam's relay as a hosting backend. Availability is decided here once;
             // when Steam is absent the mod simply keeps to direct connections.
@@ -110,11 +106,6 @@ namespace CS2MultiplayerMod
             // The sync pipeline asks before it reloads a world. Route that question at the live
             // service, which owns the clock, the in-flight-recovery state and the arbiter.
             Game.Sync.Infrastructure.SyncInbox.Arbitrate = Service.SettleResyncReport;
-
-            FlightRecorder.Note("startup-stage service-created");
-            log.Info("Multiplayer core initialised. Protocol v" +
-                     CS2MultiplayerMod.Core.Protocol.ProtocolConstants.ProtocolVersion +
-                     ". Registering sync systems...");
 
             // UIUpdate, not GameSimulation: the session pump must also run in the main
             // menu (joining from there) and while the game is paused - the options
@@ -285,12 +276,19 @@ namespace CS2MultiplayerMod
             // was never processed while the host sat in the (paused) menu, leaving
             // the client stuck in WaitingForMap forever.
             updateSystem.UpdateAt<Game.Sync.Systems.WorldResyncSystem>(SystemUpdatePhase.UIUpdate);
-            FlightRecorder.Note("startup-complete systems-registered");
+
+            // One line, at the end, rather than a "ready" line per registered system: the thirty
+            // of those said nothing a reader could act on, and the only question they answered -
+            // "did the mod actually come up?" - is answered better here, with the numbers that
+            // decide whether two players can even play together.
+            SyncLog.Event(LogTopic.Startup, "Loaded: mod v" + Version + ", protocol v" +
+                ProtocolConstants.ProtocolVersion + ", game v" + UnityEngine.Application.version +
+                ", sync systems registered.");
         }
 
         public void OnDispose()
         {
-            log.Info(nameof(OnDispose));
+            SyncLog.Event(LogTopic.Startup, "Unloading.");
 
             Game.Sync.Infrastructure.SyncInbox.Arbitrate = null;
             ResyncArbiter.Reset();

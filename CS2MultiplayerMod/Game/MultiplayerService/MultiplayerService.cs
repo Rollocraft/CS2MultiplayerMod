@@ -8,6 +8,7 @@ using Unity.Mathematics;
 using CS2MultiplayerMod.Core.Diagnostics;
 using CS2MultiplayerMod.Core.Protocol.Messages;
 using CS2MultiplayerMod.Core.Session;
+using CS2MultiplayerMod.Game.Diagnostics;
 
 namespace CS2MultiplayerMod.Game
 {
@@ -231,7 +232,7 @@ namespace CS2MultiplayerMod.Game
             try { _session.SendCommand(0, Sync.Commands.MapPingCommand.Id, command.Encode()); }
             catch (Exception ex)
             {
-                _log.Warn("[MP] Ping not sent: " + ex.Message);
+                _log.Warn(LogTopic.Session, "Ping not sent: " + ex.Message);
                 return;
             }
 
@@ -333,14 +334,10 @@ namespace CS2MultiplayerMod.Game
             _lastLoggedCommandId = command.CommandId;
             _lastCommandLogMs = now;
             _lastCommandLoggedTotal = _appliedCommandTotal;
-            Diagnostics.FlightRecorder.Note(
-                "command-apply name=" + CommandName(command.CommandId) +
-                " id=" + command.CommandId +
-                " origin=" + command.OriginPlayerId +
-                " tick=" + command.Tick +
-                " bytes=" + _lastAppliedCommandBytes +
-                " sinceLast=" + commandsSinceLog +
-                " total=" + _appliedCommandTotal);
+            SyncLog.Trace(LogTopic.Session, "command-apply name=" + CommandName(command.CommandId) +
+                " id=" + command.CommandId + " origin=" + command.OriginPlayerId + " tick=" +
+                command.Tick + " bytes=" + _lastAppliedCommandBytes + " sinceLast=" +
+                commandsSinceLog + " total=" + _appliedCommandTotal);
         }
 
         private void ResetCommandDiagnostics()
@@ -418,7 +415,7 @@ namespace CS2MultiplayerMod.Game
             }
             if (_session.WorldSyncSuspended) return;
             _mapReRequestPending = false;
-            Diagnostics.SyncLog.ProdWarn(
+            Diagnostics.SyncLog.Warn(LogTopic.Session,
                 "World sync: asking the host to stream this city again - the previous handover " +
                 "resumed before the snapshot had been installed.");
             _session.RequestWorldSync("resume arrived before the snapshot finished loading");
@@ -500,17 +497,15 @@ namespace CS2MultiplayerMod.Game
                                now - _lastAutoRecoveryMs < AutoRecoveryCooldownMs;
             if (coolingDown)
             {
-                Diagnostics.SyncLog.ProdWarn(
+                Diagnostics.SyncLog.Warn(LogTopic.Session,
                     "World sync: skipped a second automatic reload within " +
-                    (AutoRecoveryCooldownMs / 1000) + " s (" + report.Reason +
+                    (AutoRecoveryCooldownMs / 1000) + " s (" + report.Summary() +
                     "). The edit behind it is left un-synced; use /sync if the city looks out of step.");
-                Diagnostics.FlightRecorder.Note("auto recovery suppressed (cooldown): " + report.Summary());
                 return;
             }
             _lastAutoRecoveryMs = now;
-            Diagnostics.SyncLog.Prod("World sync: reloading this city from the host now (" +
-                                     report.Reason + ").");
-            Diagnostics.FlightRecorder.Note("resync requested: " + report.Summary());
+            Diagnostics.SyncLog.Event(LogTopic.Session,
+                "World sync: reloading this city from the host now (" + report.Summary() + ").");
             _session.RequestWorldSync(report.Reason);
         }
 
@@ -544,14 +539,16 @@ namespace CS2MultiplayerMod.Game
         public void KickPlayerFromUi(int playerId)
         {
             if (!_session.KickPlayer(playerId))
-                _log.Warn("[MP] Ignored kick request for unavailable player #" + playerId + ".");
+                _log.Warn(LogTopic.Session, "Ignored kick request for unavailable player #" +
+                    playerId + ".");
         }
 
         /// <summary>Remove a client and block its address for the current hosting session.</summary>
         public void BanPlayerFromUi(int playerId)
         {
             if (!_session.BanPlayer(playerId))
-                _log.Warn("[MP] Ignored ban request for unavailable player #" + playerId + ".");
+                _log.Warn(LogTopic.Session, "Ignored ban request for unavailable player #" +
+                    playerId + ".");
         }
 
         /// <summary>
@@ -690,8 +687,9 @@ namespace CS2MultiplayerMod.Game
                 if (!_warnedResyncMinutes && minutes.ToString() != raw)
                 {
                     _warnedResyncMinutes = true;
-                    _log.Warn("[MP] World re-sync interval '" + raw + "' is not a whole number of minutes >= " +
-                              MinResyncMinutes + "; using " + minutes + " minutes instead.");
+                    _log.Warn(LogTopic.Session, "World re-sync interval '" + raw +
+                        "' is not a whole number of minutes >= " + MinResyncMinutes + "; using " +
+                        minutes + " minutes instead.");
                 }
                 return (long)minutes * 60000L;
             }
@@ -713,7 +711,7 @@ namespace CS2MultiplayerMod.Game
 
             public override void OnStatusChanged(SessionStatus status, string detail)
             {
-                _log.Info("[MP] " + status + ": " + detail);
+                _log.Detail(LogTopic.Session, status + ": " + detail);
                 // Players commonly attach the flight log to a public support post. Keep
                 // the target IP/hostname in the private main log, but retain the port and
                 // transport mode needed to diagnose a connection-stage failure here.
@@ -721,8 +719,8 @@ namespace CS2MultiplayerMod.Game
                     ? "target=redacted port=" + _service._session.Port +
                       " encryption=" + _service._session.EncryptionActive
                     : detail;
-                Diagnostics.FlightRecorder.Note("status " + status +
-                    " role=" + _service._session.Role +
+                SyncLog.Trace(LogTopic.Session, "status " + status + " role=" +
+                    _service._session.Role +
                     (string.IsNullOrEmpty(flightDetail) ? "" : " detail=" + flightDetail));
                 if (status == SessionStatus.Connected &&
                     _service._session.Role == SessionRole.Client &&
@@ -794,22 +792,20 @@ namespace CS2MultiplayerMod.Game
 
             public override void OnPeerJoined(Peer peer)
             {
-                _log.Info("[MP] Peer joined: " + peer);
-                Diagnostics.FlightRecorder.Note("peer joined #" + peer.PlayerId);
+                _log.Event(LogTopic.Session, "Peer joined: " + peer);
                 _service.RefreshPlayerListJson();
                 // WorldResyncSystem observes joins too and pushes the live world to the newcomer.
             }
             public override void OnPeerLeft(Peer peer, string reason)
             {
-                _log.Info("[MP] Peer left: " + peer + " (" + reason + ")");
-                Diagnostics.FlightRecorder.Note("peer left #" + peer.PlayerId + " (" + reason + ")");
+                _log.Event(LogTopic.Session, "Peer left: " + peer + " (" + reason + ")");
                 RemotePlayer removed;
                 _service._remotePlayers.TryRemove(peer.PlayerId, out removed);
                 _service.RefreshPlayerListJson();
             }
             public override void OnChatReceived(string sender, string text)
             {
-                _log.Info("[MP] " + (sender ?? "system") + ": " + text);
+                _log.Detail(LogTopic.Session, (sender ?? "system") + ": " + text);
                 _service.AppendChatEntry(sender, text);
             }
             public override void OnCommandReceived(SimulationCommandMessage command)
@@ -829,7 +825,7 @@ namespace CS2MultiplayerMod.Game
             public override void OnError(string message)
             {
                 _service._lastFault = message;
-                _log.Error("[MP] " + message);
+                _log.Error(LogTopic.Session, message);
             }
         }
     }

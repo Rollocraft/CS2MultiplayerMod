@@ -1,5 +1,7 @@
 using Game;
 
+using CS2MultiplayerMod.Core.Diagnostics;
+using CS2MultiplayerMod.Game.Diagnostics;
 using CS2MultiplayerMod.Game.Sync.Systems.Net;
 
 namespace CS2MultiplayerMod.Game.Sync.Systems
@@ -19,7 +21,6 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             base.OnCreate();
             _buildSync = World.GetOrCreateSystemManaged<BuildSyncSystem>();
             _netSync = World.GetOrCreateSystemManaged<NetSyncSystem>();
-            Mod.log.Info(nameof(ObjectToolApplyCaptureSystem) + " ready.");
         }
 
         protected override void OnUpdate()

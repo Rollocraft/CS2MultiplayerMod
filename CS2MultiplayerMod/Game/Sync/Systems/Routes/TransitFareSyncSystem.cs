@@ -7,8 +7,10 @@ using Game.Routes;
 using Game.Tools;
 using Unity.Collections;
 using Unity.Entities;
+using CS2MultiplayerMod.Core.Diagnostics;
 using CS2MultiplayerMod.Core.Protocol.Messages;
 using CS2MultiplayerMod.Core.Session;
+using CS2MultiplayerMod.Game.Diagnostics;
 using CS2MultiplayerMod.Game.Sync.Commands;
 using CS2MultiplayerMod.Game.Sync.Infrastructure;
 
@@ -62,7 +64,6 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
             _observer = SyncObserverBinding.Bind(
                 () => new CommandObserver(_incoming, TransitFareCommand.Id), DrainQueue);
-            Mod.log.Info(nameof(TransitFareSyncSystem) + " ready.");
         }
 
         protected override void OnDestroy()
@@ -142,7 +143,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                         TicketPrice = price,
                     };
                     session.SendCommand(0, TransitFareCommand.Id, command.Encode());
-                    Mod.Verbose("[MP] TransitFare: broadcast line " + number + " at " + price + ".");
+                    SyncLog.Detail(LogTopic.Routes, "TransitFare: broadcast line " + number + " at " +
+                        price + ".");
                 }
 
                 // A line deleted while we were not looking would otherwise keep its last price in
@@ -181,7 +183,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 try { command = TransitFareCommand.Decode(message.Body); }
                 catch (System.Exception ex)
                 {
-                    Mod.log.Warn("[MP] TransitFare: dropping malformed command: " + ex.Message);
+                    SyncLog.Warn(LogTopic.Routes, "TransitFare: dropping malformed command: " +
+                        ex.Message);
                     continue;
                 }
 
@@ -189,16 +192,16 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 {
                     // Not a reason to resync: the line is on its way through the route pipeline,
                     // and its price will be picked up by the sender's next scan once it lands.
-                    Mod.Verbose("[MP] TransitFare: line " + command.RouteNumber +
-                                " not here yet; ignoring its fare.");
+                    SyncLog.Detail(LogTopic.Routes, "TransitFare: line " + command.RouteNumber +
+                        " not here yet; ignoring its fare.");
                     continue;
                 }
 
                 _guard.Mark(FareKey(command.RouteNumber, command.TicketPrice), now);
                 _known[command.RouteNumber] = command.TicketPrice;
-                Mod.Verbose("[MP] TransitFare: line " + command.RouteNumber +
-                            " set to " + command.TicketPrice + " by player " +
-                            message.OriginPlayerId + ".");
+                SyncLog.Detail(LogTopic.Routes, "TransitFare: line " + command.RouteNumber +
+                    " set to " + command.TicketPrice + " by player " + message.OriginPlayerId +
+                    ".");
             }
         }
 

@@ -4,10 +4,11 @@ using System.Diagnostics;
 using System.Threading;
 using Game;
 using Unity.Entities;
+using CS2MultiplayerMod.Core.Diagnostics;
 using CS2MultiplayerMod.Core.Protocol;
 using CS2MultiplayerMod.Core.Protocol.Messages;
 using CS2MultiplayerMod.Core.Session;
-
+using CS2MultiplayerMod.Game.Diagnostics;
 using CS2MultiplayerMod.Game.Sync.Infrastructure;
 using CS2MultiplayerMod.Game.Sync.Channels;
 namespace CS2MultiplayerMod.Game.Sync.Systems
@@ -110,8 +111,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             RegisterEditable(new LoanStateChannel());
             RegisterEditable(new CityNameStateChannel());
 
-            Mod.log.Info(nameof(CityStateSyncSystem) + " ready with " + _channels.Count +
-                         " state channel(s), " + _editable.Count + " player-editable.");
+            SyncLog.Detail(LogTopic.City, nameof(CityStateSyncSystem) + " ready with " +
+                _channels.Count + " state channel(s), " + _editable.Count + " player-editable.");
 
             _observer = SyncObserverBinding.Bind(
                 () => new Observer(_incoming, _incomingEdits, RequestOrderedPoison,
@@ -202,7 +203,12 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             }
 
             // Heartbeat every ~30 s so the log shows state replication is alive without spam.
-            if (now - _lastLogMs >= 30000) { _lastLogMs = now; Mod.Verbose("[MP] CityState: broadcasting " + sent + " channel(s)/snapshot to clients."); }
+            if (now - _lastLogMs >= 30000)
+            {
+                _lastLogMs = now;
+                SyncLog.Detail(LogTopic.City, "CityState: broadcasting " + sent +
+                    " channel(s)/snapshot to clients.");
+            }
         }
 
         // ---- Client ------------------------------------------------------------
@@ -240,7 +246,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
                 _pendingEdits[channelId] = new PendingEdit { Payload = local, SentMs = now };
                 session.SendStateEdit(channelId, local);
-                Mod.Verbose("[MP] CityState: local edit on channel " + channelId + " sent to host.");
+                SyncLog.Detail(LogTopic.City, "CityState: local edit on channel " + channelId +
+                    " sent to host.");
             }
         }
 

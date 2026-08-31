@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using CS2MultiplayerMod.Core.Diagnostics;
+using CS2MultiplayerMod.Game.Diagnostics;
 using CS2MultiplayerMod.Game.Sync.Commands;
 using Game.Agents;
 using Game.Buildings;
@@ -77,8 +79,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 if (!_arrivalSourceWarned)
                 {
                     _arrivalSourceWarned = true;
-                    Mod.Verbose("[MP] Occupancy: no live road outside connection was " +
-                                "available; new families will start at home.");
+                    SyncLog.Detail(LogTopic.Residential,
+                        "Occupancy: no live road outside connection was " +
+                        "available; new families will start at home.");
                 }
             }
 

@@ -2,6 +2,7 @@ using System;
 using System.Threading.Tasks;
 using Colossal;
 using Colossal.IO.AssetDatabase;
+using CS2MultiplayerMod.Core.Diagnostics;
 using CS2MultiplayerMod.Core.Session;
 using Game;
 using Game.Assets;
@@ -103,14 +104,15 @@ namespace CS2MultiplayerMod.Game
                     SaveHelpers.kSaveLoadTaskName,
                     () => SaveClientWorld(world, saveName),
                     1);
-                _log.Info("[MP] Saving a permanent local copy of the client world as '" +
-                          saveName + "'.");
+                _log.Detail(LogTopic.WorldTransfer,
+                    "Saving a permanent local copy of the client world as '" + saveName + "'.");
             }
             catch (Exception ex)
             {
                 _clientWorldSaveTask = null;
                 _clientWorldSaveStatus = SaveStatusFailed;
-                _log.Error("[MP] Could not start the local client-world save: " + ex.Message);
+                _log.Error(LogTopic.WorldTransfer, "Could not start the local client-world save: " +
+                    ex.Message);
             }
         }
 
@@ -186,8 +188,8 @@ namespace CS2MultiplayerMod.Game
                         UnityEngine.Object.Destroy(preview);
                         preview = null;
                     }
-                    _log.Warn("[MP] Could not capture a preview for the local world copy: " +
-                              ex.Message);
+                    _log.Warn(LogTopic.WorldTransfer,
+                        "Could not capture a preview for the local world copy: " + ex.Message);
                 }
 
                 bool completed = preview != null
@@ -215,7 +217,8 @@ namespace CS2MultiplayerMod.Game
             if (task.IsCanceled)
             {
                 _clientWorldSaveStatus = SaveStatusFailed;
-                _log.Warn("[MP] Saving the local client-world copy was canceled.");
+                _log.Warn(LogTopic.WorldTransfer,
+                    "Saving the local client-world copy was canceled.");
             }
             else if (task.IsFaulted)
             {
@@ -223,14 +226,14 @@ namespace CS2MultiplayerMod.Game
                     ? task.Exception.GetBaseException()
                     : null;
                 _clientWorldSaveStatus = _clientWorldSaveFailureStatus ?? SaveStatusFailed;
-                _log.Error("[MP] Saving the local client-world copy failed" +
-                           (failure != null ? ": " + failure.Message : "."));
+                _log.Error(LogTopic.WorldTransfer, "Saving the local client-world copy failed" +
+                    (failure != null ? ": " + failure.Message : "."));
             }
             else
             {
                 _clientWorldSaveStatus = SaveStatusSaved;
-                _log.Info("[MP] Permanent local client-world copy saved as '" +
-                          _clientWorldSaveName + "'.");
+                _log.Detail(LogTopic.WorldTransfer, "Permanent local client-world copy saved as '" +
+                    _clientWorldSaveName + "'.");
             }
 
             _clientWorldSaveFailureStatus = null;

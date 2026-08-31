@@ -2,6 +2,8 @@ using System;
 using System.Collections.Generic;
 using Game;
 
+using CS2MultiplayerMod.Core.Diagnostics;
+using CS2MultiplayerMod.Game.Diagnostics;
 using CS2MultiplayerMod.Game.Sync.Systems.Net;
 namespace CS2MultiplayerMod.Game.Sync.Systems
 {
@@ -71,10 +73,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     unchecked(now - last) < FaultReportThrottleMs) return;
                 _lastFaultTick[stage] = now;
 
-                Mod.log.Warn("[MP] " + stage + " failed this frame and was skipped: " +
-                             ex.GetType().Name + ": " + ex.Message);
-                CS2MultiplayerMod.Game.Diagnostics.FlightRecorder.NoteException(
-                    "realize stage " + stage, ex);
+                SyncLog.Error(LogTopic.Pipeline, "Realize stage '" + stage +
+                    "' failed this frame and was skipped.", ex);
             }
         }
 
@@ -109,9 +109,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 if (deferTerrain != _wasDeferringTerrain)
                 {
                     _wasDeferringTerrain = deferTerrain;
-                    CS2MultiplayerMod.Game.Diagnostics.FlightRecorder.Note(deferTerrain
-                        ? "net/build realize deferred (terrain backlog)"
-                        : "terrain drained; net/build realize resumed");
+                    SyncLog.Trace(LogTopic.Pipeline,
+                        deferTerrain ? "net/build realize deferred (terrain backlog)" : "terrain drained; net/build realize resumed");
                 }
 
                 Step("BuildSync", _buildSync.RealizePending);
@@ -129,9 +128,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 if (netMutationHeld != _wasHoldingNetMutations)
                 {
                     _wasHoldingNetMutations = netMutationHeld;
-                    CS2MultiplayerMod.Game.Diagnostics.FlightRecorder.Note(netMutationHeld
-                        ? "net delete/replace held behind a stalled placement"
-                        : "net delete/replace resumed");
+                    SyncLog.Trace(LogTopic.Pipeline,
+                        netMutationHeld ? "net delete/replace held behind a stalled placement" : "net delete/replace resumed");
                 }
                 // DeleteSync BEFORE NetSync: a remote bulldoze applied this frame tags its edge Deleted,
                 // and NetSync's split-target query excludes Deleted edges — so NetSync never resolves a

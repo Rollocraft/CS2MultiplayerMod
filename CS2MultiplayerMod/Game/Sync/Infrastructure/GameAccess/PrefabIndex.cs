@@ -1,5 +1,7 @@
 using System;
 using System.Collections.Generic;
+using CS2MultiplayerMod.Core.Diagnostics;
+using CS2MultiplayerMod.Game.Diagnostics;
 using Game.Prefabs;
 using Unity.Collections;
 using Unity.Entities;
@@ -154,9 +156,10 @@ namespace CS2MultiplayerMod.Game.Sync.Infrastructure
                 if (tornDownCount > 0 && !_warnedUnusable)
                 {
                     _warnedUnusable = true;
-                    Mod.log.Warn("[MP] PrefabIndex: " + tornDownCount + " of " + prefabs.Length +
-                                 " catalogue entries still point at a torn-down asset (first entity " +
-                                 firstTornDown + "); skipped. " + retired + " more were retired normally.");
+                    SyncLog.Warn(LogTopic.Pipeline, "PrefabIndex: " + tornDownCount + " of " +
+                        prefabs.Length +
+                        " catalogue entries still point at a torn-down asset (first entity " +
+                        firstTornDown + "); skipped. " + retired + " more were retired normally.");
                 }
             }
             finally

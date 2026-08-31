@@ -7,6 +7,8 @@ using Game.Tools;
 using Unity.Collections;
 using Unity.Entities;
 using Unity.Mathematics;
+using CS2MultiplayerMod.Core.Diagnostics;
+using CS2MultiplayerMod.Game.Diagnostics;
 using CS2MultiplayerMod.Game.Sync.Commands;
 using CS2MultiplayerMod.Game.Sync.Infrastructure;
 
@@ -46,9 +48,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                         : "waited for the line the game builds from this definition, not counting " +
                           "time route realization was held back")
                     .Fact("line number", pending.RouteNumber));
-                Mod.log.Warn("[MP] RouteSync could not finalize created line '" +
-                             pending.PrefabName + "' number " + pending.RouteNumber +
-                             "; requested a fresh world sync.");
+                SyncLog.Warn(LogTopic.Routes, "RouteSync could not finalize created line '" +
+                    pending.PrefabName + "' number " + pending.RouteNumber +
+                    "; requested a fresh world sync.");
             }
 
             // The game's initializer may temporarily give several routes created in one batch the
@@ -68,21 +70,17 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                             CS2MultiplayerMod.Game.Diagnostics.ResyncEvidence.Contradiction)
                         .About("line number after creation")
                         .Tried("assigned every line finalized in this batch together before rejecting the conflict"));
-                    Mod.log.Warn("[MP] RouteSync could not assign number " +
-                                 pending.RouteNumber + " to '" + pending.PrefabName +
-                                 "'; requested a fresh world sync.");
+                    SyncLog.Warn(LogTopic.Routes, "RouteSync could not assign number " +
+                        pending.RouteNumber + " to '" + pending.PrefabName +
+                        "'; requested a fresh world sync.");
                 }
                 else
                 {
                     RouteSnapshot snapshot;
                     if (TryCaptureSnapshot(route, out snapshot))
                         _knownRoutes[route] = snapshot;
-                    Diagnostics.FlightRecorder.Note("route create finalized number=" +
-                                                      pending.RouteNumber + " stops=" +
-                                                      pending.Waypoints.Length);
-                    Mod.Verbose("[MP] RouteSync finalized line '" +
-                                pending.PrefabName + "' number " +
-                                pending.RouteNumber + ".");
+                    SyncLog.Detail(LogTopic.Routes, "RouteSync finalized line '" +
+                        pending.PrefabName + "' number " + pending.RouteNumber + ".");
                 }
                 _pendingCreateMetadata.Remove(pending);
             }
@@ -141,7 +139,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             pending.GraphCommitted = true;
             if (Mod.Service != null)
                 pending.DeadlineMs = Mod.Service.NowMs + RetryWindowMs;
-            Diagnostics.FlightRecorder.Note("route create graph committed; awaiting identity");
+            SyncLog.Trace(LogTopic.Routes, "route create graph committed; awaiting identity");
         }
 
         private void ReplayCreateAfterCommitLoss(PendingCreateMetadata pending)
@@ -166,7 +164,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 _knownRoutes[pending.Route] = snapshot;
             else
                 _knownRoutes[pending.Route] = pending.Desired;
-            Diagnostics.FlightRecorder.Note("route update graph committed");
+            SyncLog.Trace(LogTopic.Routes, "route update graph committed");
         }
 
         private void ReplayUpdateAfterCommitLoss(PendingUpdateCommit pending)
@@ -190,9 +188,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             // reload BECAUSE a world reload is under way is how a session gets into a loop.
             if (service == null || !service.GameplaySyncReady)
             {
-                Mod.log.Warn("[MP] RouteSync " + operation +
-                             " commit was lost while the world was being replaced; the incoming " +
-                             "world supersedes it.");
+                SyncLog.Warn(LogTopic.Routes, "RouteSync " + operation +
+                    " commit was lost while the world was being replaced; the incoming " +
+                    "world supersedes it.");
                 return;
             }
             if (now >= command.DeadlineMs ||
@@ -204,16 +202,15 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     .About("route " + operation + " commit")
                     .Tried("nothing - the armed commit was wiped and its window had already closed")
                     .Fact("route commands still queued", _pendingCommands.Count));
-                Mod.log.Warn("[MP] RouteSync " + operation +
-                             " commit was lost and could not be replayed safely.");
+                SyncLog.Warn(LogTopic.Routes, "RouteSync " + operation +
+                    " commit was lost and could not be replayed safely.");
                 return;
             }
 
             command.NextAttemptMs = now;
             command.RetryDelayMs = InitialRetryDelayMs;
             _pendingCommands.Insert(0, command);
-            Diagnostics.FlightRecorder.Note("route " + operation +
-                                              " commit re-queued");
+            SyncLog.Trace(LogTopic.Routes, "route " + operation + " commit re-queued");
         }
 
         private void MarkCreateGuards(RouteCreateCommand command, long now)

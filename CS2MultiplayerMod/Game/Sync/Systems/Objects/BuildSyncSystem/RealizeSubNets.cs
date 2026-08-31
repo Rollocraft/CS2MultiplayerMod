@@ -1,5 +1,7 @@
 using System.Text;
 using Colossal.Mathematics;
+using CS2MultiplayerMod.Core.Diagnostics;
+using CS2MultiplayerMod.Game.Diagnostics;
 using Game.Common;
 using Game.Prefabs;
 using Game.Simulation;
@@ -74,8 +76,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     if (!EntityManager.HasComponent<NetData>(subNet.m_Prefab) ||
                         !EntityManager.HasComponent<NetGeometryData>(subNet.m_Prefab))
                     {
-                        Mod.log.Warn("[MP] BuildSync realize: sub-net prefab '" +
-                            _prefabSystem.GetPrefabName(subNet.m_Prefab) + "' of '" + _prefabSystem.GetPrefabName(prefab) +
+                        SyncLog.Warn(LogTopic.Buildings, "BuildSync realize: sub-net prefab '" +
+                            _prefabSystem.GetPrefabName(subNet.m_Prefab) + "' of '" +
+                            _prefabSystem.GetPrefabName(prefab) +
                             "' lacks NetData/NetGeometryData; skipping that driveway.");
                         continue;
                     }

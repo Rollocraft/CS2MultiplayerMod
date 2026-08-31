@@ -7,6 +7,8 @@ using Game.Tools;
 using Unity.Collections;
 using Unity.Entities;
 using Unity.Mathematics;
+using CS2MultiplayerMod.Core.Diagnostics;
+using CS2MultiplayerMod.Game.Diagnostics;
 using CS2MultiplayerMod.Game.Sync.Commands;
 using CS2MultiplayerMod.Game.Sync.Infrastructure;
 
@@ -90,7 +92,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             {
                 if (PlacementSnapTargetReachesGenerator(point.m_OriginalEntity))
                 {
-                    Diagnostics.FlightRecorder.Note(
+                    SyncLog.Trace(LogTopic.Buildings,
                         "building placement snap target was not portable");
                     return;
                 }
@@ -101,8 +103,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             operation.HasPlacementInput = true;
             operation.ToolRandomSeed = AppliedLifecycleToolSeed;
             operation.PlacementTarget = target;
-            Diagnostics.FlightRecorder.Note("building placement inputs captured prefab=" +
-                                              root.PrefabName + " target=" + target.Kind);
+            SyncLog.Trace(LogTopic.Buildings, "building placement inputs captured prefab=" +
+                root.PrefabName + " target=" + target.Kind);
         }
 
         /// <summary>
@@ -181,15 +183,14 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             catch (System.Exception ex)
             {
                 // Fall back to the definition batch rather than losing the placement entirely.
-                Mod.log.Warn("[MP] BuildSync: asset-stamp inputs were not sent: " + ex.Message);
-                Diagnostics.FlightRecorder.Note("asset stamp inputs rejected=" + ex.GetType().Name);
+                SyncLog.Warn(LogTopic.Buildings, "BuildSync: asset-stamp inputs were not sent: " +
+                    ex.Message);
                 return false;
             }
 
             _nativeLifecycleCapturedThisFrame = true;
-            Diagnostics.FlightRecorder.Note("asset stamp inputs published op=" +
-                command.OperationId + " prefab=" + prefabName +
-                " seed=" + command.ToolRandomSeed);
+            SyncLog.Trace(LogTopic.Buildings, "asset stamp inputs published op=" +
+                command.OperationId + " prefab=" + prefabName + " seed=" + command.ToolRandomSeed);
             return true;
         }
 
@@ -254,7 +255,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 {
                     // The final-entity detector remains available later in the frame. Do not send a
                     // compact move without knowing whether the tool snapped it to a road.
-                    Diagnostics.FlightRecorder.Note("relocation control point unavailable; final-entity fallback");
+                    SyncLog.Trace(LogTopic.Buildings,
+                        "relocation control point unavailable; final-entity fallback");
                     return;
                 }
 
@@ -335,10 +337,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
                 _localObjectApplyThisFrame = true;
                 _localLifecycleApplyThisFrame = true;
-                Diagnostics.FlightRecorder.Note((operation.IsAssetStamp
-                    ? "asset stamp"
-                    : "object lifecycle") + " apply captured from standing definitions=" +
-                                                  operation.Definitions.Length);
+                SyncLog.Trace(LogTopic.Buildings,
+                    (operation.IsAssetStamp ? "asset stamp" : "object lifecycle") +
+                    " apply captured from standing definitions=" + operation.Definitions.Length);
                 PublishCachedLocalObjectOperation();
             }
             finally
@@ -371,15 +372,14 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             try
             {
                 if (TryPublishLocalObjectOperation(_cachedLocalObjectOperation))
-                    Diagnostics.FlightRecorder.Note("object operation captured op=" +
+                    SyncLog.Trace(LogTopic.Buildings, "object operation captured op=" +
                         _cachedLocalObjectOperation.OperationId + " defs=" +
                         _cachedLocalObjectOperation.Definitions.Length);
             }
             catch (System.Exception ex)
             {
-                Mod.log.Warn("[MP] BuildSync: native object operation was not sent: " + ex.Message);
-                Diagnostics.FlightRecorder.Note("object operation capture rejected=" +
-                                                  ex.GetType().Name);
+                SyncLog.Warn(LogTopic.Buildings, "BuildSync: native object operation was not sent: " +
+                    ex.Message);
                 if (Mod.Service != null)
                     Mod.Service.RequestAutomaticWorldRecovery(
                         "native object operation could not be sent");

@@ -9,8 +9,9 @@ using Unity.Collections;
 using Unity.Entities;
 using Unity.Jobs;
 using Unity.Mathematics;
+using CS2MultiplayerMod.Core.Diagnostics;
 using CS2MultiplayerMod.Core.Protocol.Messages;
-
+using CS2MultiplayerMod.Game.Diagnostics;
 using CS2MultiplayerMod.Game.Sync.Infrastructure;
 using CS2MultiplayerMod.Game.Sync.Commands;
 namespace CS2MultiplayerMod.Game.Sync.Systems.Net
@@ -80,8 +81,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                     Windows = 1,
                 };
                 _nativeOperationHolds[key] = hold;
-                Diagnostics.FlightRecorder.Note("net native target retry op=" + operationId +
-                                                  " " + detail);
+                SyncLog.Trace(LogTopic.Nets, "net native target retry op=" + operationId + " " +
+                    detail);
             }
             windows = hold.Windows;
             return now < hold.DeadlineMs;

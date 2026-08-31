@@ -11,6 +11,8 @@ using Unity.Collections;
 using Unity.Entities;
 using Unity.Mathematics;
 
+using CS2MultiplayerMod.Core.Diagnostics;
+using CS2MultiplayerMod.Game.Diagnostics;
 using CS2MultiplayerMod.Game.Sync.Commands;
 namespace CS2MultiplayerMod.Game.Sync.Systems
 {
@@ -58,10 +60,10 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 _retry.Add((nodeTargets[t].cmd, now + RetryWindowMs));
 
             if (applied > 0)
-                Mod.Verbose("[MP] NetUpgradeSync: applied " + applied + " road upgrade(s)" +
-                             (edgeTargets.Count + nodeTargets.Count > 0
-                                 ? ", " + (edgeTargets.Count + nodeTargets.Count) + " waiting for their segment"
-                                 : "") + ".");
+                SyncLog.Detail(LogTopic.Nets, "NetUpgradeSync: applied " + applied +
+                    " road upgrade(s)" +
+                    (edgeTargets.Count + nodeTargets.Count > 0 ? ", " + (edgeTargets.Count + nodeTargets.Count) + " waiting for their segment" : "") +
+                    ".");
         }
 
         private int ApplyEdges(List<(Entity prefab, float3 a, float3 d, NetUpgradeCommand cmd)> targets)

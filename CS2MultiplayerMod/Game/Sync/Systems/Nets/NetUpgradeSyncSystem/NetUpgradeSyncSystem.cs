@@ -10,9 +10,10 @@ using Game.Tools;
 using Unity.Collections;
 using Unity.Entities;
 using Unity.Mathematics;
+using CS2MultiplayerMod.Core.Diagnostics;
 using CS2MultiplayerMod.Core.Protocol.Messages;
 using CS2MultiplayerMod.Core.Session;
-
+using CS2MultiplayerMod.Game.Diagnostics;
 using CS2MultiplayerMod.Game.Sync.Infrastructure;
 using CS2MultiplayerMod.Game.Sync.Commands;
 namespace CS2MultiplayerMod.Game.Sync.Systems
@@ -95,7 +96,6 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         {
             base.OnCreate();
 
-            Mod.log.Info(nameof(NetUpgradeSyncSystem) + " ready.");
             _prefabSystem = World.GetOrCreateSystemManaged<PrefabSystem>();
             _prefabIndex = new PrefabIndex(_prefabSystem, GetEntityQuery(ComponentType.ReadOnly<PrefabData>()));
 
@@ -219,7 +219,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     };
                 }
                 if (entities.Length > 0)
-                    Mod.Verbose("[MP] NetUpgradeSync: seeded " + entities.Length + " existing upgrade(s).");
+                    SyncLog.Detail(LogTopic.Nets, "NetUpgradeSync: seeded " + entities.Length +
+                        " existing upgrade(s).");
             }
             finally
             {
@@ -253,7 +254,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             {
                 if (message.OriginPlayerId == session.LocalPlayerId) continue;
                 try { (work ?? (work = new List<NetUpgradeCommand>())).Add(NetUpgradeCommand.Decode(message.Body)); }
-                catch (System.Exception ex) { Mod.log.Warn("[MP] NetUpgradeSync: dropping malformed command: " + ex.Message); }
+                catch (System.Exception ex) { SyncLog.Warn(LogTopic.Nets, "NetUpgradeSync: dropping malformed command: " + ex.Message); }
             }
 
             if (work != null && work.Count > 0) Apply(work, now);

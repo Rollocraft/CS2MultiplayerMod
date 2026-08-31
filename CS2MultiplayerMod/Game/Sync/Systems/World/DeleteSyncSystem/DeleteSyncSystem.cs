@@ -8,9 +8,10 @@ using Game.Prefabs;
 using Game.Tools;
 using Unity.Entities;
 using Unity.Mathematics;
+using CS2MultiplayerMod.Core.Diagnostics;
 using CS2MultiplayerMod.Core.Protocol.Messages;
 using CS2MultiplayerMod.Core.Session;
-
+using CS2MultiplayerMod.Game.Diagnostics;
 using CS2MultiplayerMod.Game.Sync.Infrastructure;
 using CS2MultiplayerMod.Game.Sync.Commands;
 using CS2MultiplayerMod.Game.Sync.Systems.Net;
@@ -88,7 +89,6 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         {
             base.OnCreate();
 
-            Mod.log.Info(nameof(DeleteSyncSystem) + " ready.");
             _prefabSystem = World.GetOrCreateSystemManaged<PrefabSystem>();
             _prefabIndex = new PrefabIndex(_prefabSystem, GetEntityQuery(ComponentType.ReadOnly<PrefabData>()));
             // Edge deletes are committed through NetSync's ApplyTool pipeline (see RealizeEdgeDeletes).
@@ -273,7 +273,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                                 .Add((NetDeleteCommand.Decode(message.Body), freshDeadline));
                     }
                 }
-                catch (System.Exception ex) { Mod.log.Warn("[MP] DeleteSync: dropping malformed command: " + ex.Message); }
+                catch (System.Exception ex) { SyncLog.Warn(LogTopic.Buildings, "DeleteSync: dropping malformed command: " + ex.Message); }
             }
 
             // Re-queue edge deletes that arrived while the net pipeline was mid-commit (the drain loop

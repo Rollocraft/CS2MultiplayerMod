@@ -7,7 +7,9 @@ using Game.Tools;
 using Unity.Collections;
 using Unity.Entities;
 using Unity.Mathematics;
+using CS2MultiplayerMod.Core.Diagnostics;
 using CS2MultiplayerMod.Core.Session;
+using CS2MultiplayerMod.Game.Diagnostics;
 using CS2MultiplayerMod.Game.Sync.Commands;
 using CS2MultiplayerMod.Game.Sync.Infrastructure;
 
@@ -56,8 +58,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     if (!ownedUpgrades && IsSimulationOwnedLifecycle(prefab) &&
                         !_toolDeleteOriginals.Contains(entity))
                     {
-                        Mod.Verbose("[MP] DeleteSync: not replicating simulation-owned removal of '" +
-                                    name + "'.");
+                        SyncLog.Detail(LogTopic.Buildings,
+                            "DeleteSync: not replicating simulation-owned removal of '" + name +
+                            "'.");
                         continue;
                     }
 

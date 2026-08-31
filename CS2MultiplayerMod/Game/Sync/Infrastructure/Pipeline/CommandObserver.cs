@@ -49,7 +49,7 @@ namespace CS2MultiplayerMod.Game.Sync.Infrastructure
                 if (command.CommandId != _ids[i]) continue;
                 if (command.Body != null && command.Body.Length > MaxBodyBytes)
                 {
-                    WarnThrottled("[MP] Dropping oversized command id " + command.CommandId +
+                    WarnThrottled("Dropping oversized command id " + command.CommandId +
                                   " body=" + command.Body.Length + " > " + MaxBodyBytes + ".");
                     SyncInbox.RequestResync(CS2MultiplayerMod.Game.Diagnostics.ResyncReport
                         .Create("oversized sync command rejected", "stream",

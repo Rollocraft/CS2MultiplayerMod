@@ -3,6 +3,7 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Runtime.InteropServices;
 using System.Threading;
+using CS2MultiplayerMod.Core.Diagnostics;
 using Steamworks;
 
 namespace CS2MultiplayerMod.Core.Networking.Steam
@@ -92,7 +93,7 @@ namespace CS2MultiplayerMod.Core.Networking.Steam
                 _statusCallback = null;
             }
 
-            _log.Info("Steam relay transport stopped.");
+            _log.Detail(LogTopic.Transport, "Steam relay transport stopped.");
         }
 
         public void ShutdownAfterFlush(int timeoutMs)
@@ -124,8 +125,8 @@ namespace CS2MultiplayerMod.Core.Networking.Steam
 
             long left = PendingSendBytes;
             if (left > 0)
-                _log.Warn("Steam relay stopping with " + left + " byte(s) still queued after " +
-                          timeoutMs + " ms; closing anyway.");
+                _log.Warn(LogTopic.Transport, "Steam relay stopping with " + left +
+                    " byte(s) still queued after " + timeoutMs + " ms; closing anyway.");
 
             // Linger lets Steam make a final attempt after the handles leave our maps.
             lock (_gate)

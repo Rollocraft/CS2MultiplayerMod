@@ -7,6 +7,8 @@ using Game.Tools;
 using Unity.Collections;
 using Unity.Entities;
 using Unity.Mathematics;
+using CS2MultiplayerMod.Core.Diagnostics;
+using CS2MultiplayerMod.Game.Diagnostics;
 using CS2MultiplayerMod.Game.Sync.Infrastructure;
 
 namespace CS2MultiplayerMod.Game.Sync.Systems
@@ -158,7 +160,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                         // a candidate missing it is a hard (native) crash, not a catchable exception. Guard.
                         if (!AllHaveSpawnableData(placeholders))
                         {
-                            Mod.log.Warn("[MP] BuildSync realize: a placeholder sub-area of '" +
+                            SyncLog.Warn(LogTopic.Buildings,
+                                "BuildSync realize: a placeholder sub-area of '" +
                                 _prefabSystem.GetPrefabName(prefab) +
                                 "' has a candidate without SpawnableObjectData; skipping that area.");
                             continue;
@@ -179,8 +182,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     // prefab here hard-crashes the game. Only emit a definition for a real area prefab.
                     if (!EntityManager.HasComponent<AreaData>(areaPrefab))
                     {
-                        Mod.log.Warn("[MP] BuildSync realize: sub-area prefab '" +
-                            _prefabSystem.GetPrefabName(areaPrefab) + "' of '" + _prefabSystem.GetPrefabName(prefab) +
+                        SyncLog.Warn(LogTopic.Buildings, "BuildSync realize: sub-area prefab '" +
+                            _prefabSystem.GetPrefabName(areaPrefab) + "' of '" +
+                            _prefabSystem.GetPrefabName(prefab) +
                             "' has no AreaData; skipping that area.");
                         continue;
                     }

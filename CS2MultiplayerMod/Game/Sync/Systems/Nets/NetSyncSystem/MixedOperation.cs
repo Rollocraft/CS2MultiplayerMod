@@ -8,8 +8,10 @@ using Game.Tools;
 using Unity.Collections;
 using Unity.Entities;
 using Unity.Mathematics;
+using CS2MultiplayerMod.Core.Diagnostics;
 using CS2MultiplayerMod.Core.Protocol.Messages;
 using CS2MultiplayerMod.Core.Session;
+using CS2MultiplayerMod.Game.Diagnostics;
 using CS2MultiplayerMod.Game.Sync.Commands;
 using CS2MultiplayerMod.Game.Sync.Infrastructure;
 
@@ -102,8 +104,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
             };
             if (_completedNetOperations.Contains(key, now))
             {
-                Diagnostics.FlightRecorder.Note("net mixed operation duplicate suppressed op=" +
-                                                  operation.OperationId);
+                SyncLog.Trace(LogTopic.Nets, "net mixed operation duplicate suppressed op=" +
+                    operation.OperationId);
                 return;
             }
 

@@ -9,9 +9,10 @@ using Unity.Collections;
 using Unity.Entities;
 using Unity.Jobs;
 using Unity.Mathematics;
+using CS2MultiplayerMod.Core.Diagnostics;
 using CS2MultiplayerMod.Core.Protocol.Messages;
 using CS2MultiplayerMod.Core.Session;
-
+using CS2MultiplayerMod.Game.Diagnostics;
 using CS2MultiplayerMod.Game.Sync.Infrastructure;
 using CS2MultiplayerMod.Game.Sync.Commands;
 namespace CS2MultiplayerMod.Game.Sync.Systems.Net
@@ -188,8 +189,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                 };
                 if (_completedNetOperations.Contains(completedKey, now))
                 {
-                    Diagnostics.FlightRecorder.Note("net operation duplicate suppressed op=" +
-                                                      completedHeader.OperationId);
+                    SyncLog.Trace(LogTopic.Nets, "net operation duplicate suppressed op=" +
+                        completedHeader.OperationId);
                     return;
                 }
                 hasCompletedKey = true;
@@ -280,8 +281,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                         try { command = NetPlacementCommand.Decode(work[i].Body); }
                         catch (System.Exception ex)
                         {
-                            Mod.log.Warn("[MP] NetSync: native operation became malformed during preflight: " +
-                                         ex.Message + "; dropping whole operation.");
+                            SyncLog.Warn(LogTopic.Nets,
+                                "NetSync: native operation became malformed during preflight: " +
+                                ex.Message + "; dropping whole operation.");
                             return;
                         }
 
@@ -290,8 +292,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                             !EntityManager.HasComponent<global::Game.Prefabs.NetData>(prefab) ||
                             !EntityManager.HasComponent<global::Game.Prefabs.NetGeometryData>(prefab))
                         {
-                            Mod.log.Warn("[MP] NetSync: native operation references unavailable net prefab '" +
-                                         command.PrefabName + "'; dropping whole operation.");
+                            SyncLog.Warn(LogTopic.Nets,
+                                "NetSync: native operation references unavailable net prefab '" +
+                                command.PrefabName + "'; dropping whole operation.");
                             return;
                         }
                         if (!string.IsNullOrEmpty(command.SubPrefabName))
@@ -300,8 +303,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                             if (!_prefabIndex.TryResolve(command.SubPrefabName, out subPrefab) ||
                                 !EntityManager.HasComponent<global::Game.Prefabs.NetLaneData>(subPrefab))
                             {
-                                Mod.log.Warn("[MP] NetSync: native operation references unavailable lane prefab '" +
-                                             command.SubPrefabName + "'; dropping whole operation.");
+                                SyncLog.Warn(LogTopic.Nets,
+                                    "NetSync: native operation references unavailable lane prefab '" +
+                                    command.SubPrefabName + "'; dropping whole operation.");
                                 return;
                             }
                         }
@@ -322,8 +326,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                         if (!math.isfinite(measuredLength) ||
                             (measuredLength < NetPlacementCommand.MinCourseLength && !nativePoint))
                         {
-                            Mod.log.Warn("[MP] NetSync: native operation " + command.OperationId +
-                                         " contains a degenerate course; dropping the whole operation.");
+                            SyncLog.Warn(LogTopic.Nets, "NetSync: native operation " +
+                                command.OperationId +
+                                " contains a degenerate course; dropping the whole operation.");
                             return;
                         }
 
@@ -332,8 +337,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                         float lengthTolerance = math.max(0.05f, measuredLength * 0.01f);
                         if (math.abs(command.Length - measuredLength) > lengthTolerance)
                         {
-                            Mod.log.Warn("[MP] NetSync: native operation " + command.OperationId +
-                                         " has an inconsistent course length; dropping the whole operation.");
+                            SyncLog.Warn(LogTopic.Nets, "NetSync: native operation " +
+                                command.OperationId +
+                                " has an inconsistent course length; dropping the whole operation.");
                             return;
                         }
 
@@ -343,8 +349,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                             CreationFlags.Construction | CreationFlags.SubElevation;
                         if ((((CreationFlags)command.CreationFlags) & ~allowedNativeFlags) != 0)
                         {
-                            Mod.log.Warn("[MP] NetSync: native operation " + command.OperationId +
-                                         " contains an unsafe creation mode; dropping the whole operation.");
+                            SyncLog.Warn(LogTopic.Nets, "NetSync: native operation " +
+                                command.OperationId +
+                                " contains an unsafe creation mode; dropping the whole operation.");
                             SyncInbox.RequestResync(Diagnostics.ResyncReport
                                 .Create("unsafe native net creation flags", "net",
                                     Diagnostics.ResyncEvidence.StreamLoss)
@@ -433,7 +440,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                         }
 
                         if (geometryAlreadyBuilt && topologyNeedsReplay)
-                            Diagnostics.FlightRecorder.Note("net native topology replay op=" +
+                            SyncLog.Trace(LogTopic.Nets, "net native topology replay op=" +
                                 command.OperationId + " course=" + command.CourseIndex);
 
                         // A course whose geometry and endpoint topology are already present is this
@@ -449,15 +456,14 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                                 operationRetryKey.Origin),
                             "the operation turned out to be already present");
                         _operationBuildFailures.Remove(operationRetryKey);
-                        Diagnostics.FlightRecorder.Note("net native op already present=" +
-                                                          operationHeader.OperationId +
-                                                          " courses=" + work.Count);
+                        SyncLog.Trace(LogTopic.Nets, "net native op already present=" +
+                            operationHeader.OperationId + " courses=" + work.Count);
                         _completedNetOperations.Remember(operationRetryKey, now, 60000);
                         return;
                     }
                     if (alreadyBuiltCourses > 0)
-                        Diagnostics.FlightRecorder.Note("net native op reconcile existing=" +
-                                                          alreadyBuiltCourses + "/" + work.Count);
+                        SyncLog.Trace(LogTopic.Nets, "net native op reconcile existing=" +
+                            alreadyBuiltCourses + "/" + work.Count);
 
                     if (unresolvedOperationTarget)
                     {
@@ -509,14 +515,13 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                         }
 
                         _nativeOperationHolds.Remove(operationRetryKey);
-                        Diagnostics.FlightRecorder.Note("net native operation rejected/resync op=" +
-                                                          operationHeader.OperationId + " " +
-                                                          unresolvedDetail);
+                        SyncLog.Trace(LogTopic.Nets, "net native operation rejected/resync op=" +
+                            operationHeader.OperationId + " " + unresolvedDetail);
                         return;
                     }
                     if (allowMergedNodeSplit)
-                        Diagnostics.FlightRecorder.Note("net native node target recovered op=" +
-                                                          operationHeader.OperationId);
+                        SyncLog.Trace(LogTopic.Nets, "net native node target recovered op=" +
+                            operationHeader.OperationId);
                     ClearOperationHold(operationRetryKey, UnresolvedNativeTargetReason,
                         NativeOperationSubject(operationHeader.OperationId, operationRetryKey.Origin),
                         "every endpoint resolved on a later attempt");
@@ -527,9 +532,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                     if (aliasedSplitTarget)
                     {
                         _operationBuildFailures.Remove(operationRetryKey);
-                        Diagnostics.FlightRecorder.Note("net native op aliased split target op=" +
-                                                          operationHeader.OperationId +
-                                                          " courses=" + work.Count);
+                        SyncLog.Trace(LogTopic.Nets, "net native op aliased split target op=" +
+                            operationHeader.OperationId + " courses=" + work.Count);
                         SyncInbox.RequestResync(Diagnostics.ResyncReport
                             .Create("net split target aliased by local divergence", "net",
                                 Diagnostics.ResyncEvidence.Contradiction)
@@ -550,9 +554,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                     // through, but record it: the source applied a different course set than this
                     // batch will, and CourseSplitSystem resolves intersections from what it is given.
                     if (alreadyBuiltCourses > 0 && !_armedNetOperations.Contains(operationRetryKey, now))
-                        Diagnostics.FlightRecorder.Note("net native op partial on first sight op=" +
-                                                          operationHeader.OperationId + " present=" +
-                                                          alreadyBuiltCourses + "/" + work.Count);
+                        SyncLog.Trace(LogTopic.Nets, "net native op partial on first sight op=" +
+                            operationHeader.OperationId + " present=" + alreadyBuiltCourses + "/" +
+                            work.Count);
                     _armedNetOperations.Remember(operationRetryKey, now, ArmedOperationWindowMs);
                 }
 
@@ -584,7 +588,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                         try { command = NetPlacementCommand.Decode(message.Body); }
                         catch (System.Exception ex)
                         {
-                            Mod.log.Warn("[MP] NetSync: dropping malformed command: " + ex.Message);
+                            SyncLog.Warn(LogTopic.Nets, "NetSync: dropping malformed command: " +
+                                ex.Message);
                             continue;
                         }
 
@@ -592,9 +597,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                             !EntityManager.HasComponent<global::Game.Prefabs.NetData>(prefab) ||
                             !EntityManager.HasComponent<global::Game.Prefabs.NetGeometryData>(prefab))
                         {
-                            Mod.log.Warn("[MP] NetSync realize: unavailable net prefab '" +
-                                         command.PrefabName + "' from player " +
-                                         message.OriginPlayerId + "; skipping.");
+                            SyncLog.Warn(LogTopic.Nets, "NetSync realize: unavailable net prefab '" +
+                                command.PrefabName + "' from player " + message.OriginPlayerId +
+                                "; skipping.");
                             continue;
                         }
 
@@ -610,8 +615,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                         if (!math.isfinite(measuredLength) ||
                             measuredLength < NetPlacementCommand.MinCourseLength)
                         {
-                            Mod.log.Warn("[MP] NetSync realize: degenerate fallback course for '" +
-                                         command.PrefabName + "'; skipping.");
+                            SyncLog.Warn(LogTopic.Nets,
+                                "NetSync realize: degenerate fallback course for '" +
+                                command.PrefabName + "'; skipping.");
                             continue;
                         }
                         // Geometry-only fallback has no exact native length, so derive it locally.
@@ -816,8 +822,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                                           ex.GetType().Name + ")";
                             break;
                         }
-                        Mod.log.Error("[MP] NetSync realize FAILED for '" + command.PrefabName +
-                                      "': " + ex);
+                        SyncLog.Error(LogTopic.Nets, "NetSync realize FAILED for '" +
+                            command.PrefabName + "': " + ex);
                     }
                 }
 
@@ -862,11 +868,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                     if (retry) outcome = "; retrying the whole operation (" + failures + "/3).";
                     else if (abortAliasedSplit) outcome = "; dropped and requested world recovery.";
                     else outcome = "; dropped after 3 retries.";
-                    Mod.log.Warn("[MP] NetSync: native operation rolled back before generation - " +
-                                 abortReason + outcome);
-                    Diagnostics.FlightRecorder.Note(abortAliasedSplit
-                        ? "net native op aliased split target op=" + header.OperationId
-                        : "net native op rollback before generation retry=" + (retry ? failures : 0));
+                    SyncLog.Warn(LogTopic.Nets, "NetSync: native operation " + header.OperationId +
+                        " rolled back before generation - " + abortReason + outcome);
                     return;
                 }
 
@@ -898,7 +901,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                 {
                     constructionCost = 0;
                     chargedCourses = 0;
-                    Mod.log.Warn("[MP] NetSync: could not calculate remote net charge: " + ex.Message);
+                    SyncLog.Warn(LogTopic.Nets, "NetSync: could not calculate remote net charge: " +
+                        ex.Message);
                 }
                 // Publish echo guards and diagnostics only after every definition selected for this
                 // operation exists. A failed later course therefore cannot leave a phantom realized
@@ -961,11 +965,12 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                     {
                         long completedNow = Mod.Service != null ? Mod.Service.NowMs : now;
                         _completedNetOperations.Remember(completionKey, completedNow, 60000);
-                        Diagnostics.FlightRecorder.Note("net operation committed/drained op=" +
-                                                          completionKey.Operation);
+                        SyncLog.Trace(LogTopic.Nets, "net operation committed/drained op=" +
+                            completionKey.Operation);
                     };
                 }
-                Diagnostics.FlightRecorder.Note("net build batch armed n=" + built + (splitUsed ? " +split" : ""));
+                SyncLog.Trace(LogTopic.Nets, "net build batch armed n=" + built +
+                    (splitUsed ? " +split" : ""));
             }
         }
     }

@@ -5,6 +5,8 @@ using System.IO;
 using System.Reflection;
 using Colossal.IO.AssetDatabase;
 using Colossal.PSI.Common;
+using CS2MultiplayerMod.Core.Diagnostics;
+using CS2MultiplayerMod.Game.Diagnostics;
 using CS2MultiplayerMod.Localization;
 using Game.Modding;
 using Game.SceneFlow;
@@ -350,17 +352,17 @@ namespace CS2MultiplayerMod.Game
             }
 
             string source = _restartRequired ? "loaded assemblies (restart to clear)" : "active playset";
-            Mod.log.Info(current.Length == 0
-                ? "[MP] No other mods detected - multiplayer is available."
-                : "[MP] Other mods block multiplayer, from " + source + ": " + string.Join(", ", current));
+            SyncLog.Detail(LogTopic.Startup,
+                current.Length == 0 ? "No other mods detected - multiplayer is available." : "Other mods block multiplayer, from " +
+                source + ": " + string.Join(", ", current));
         }
 
         private static void WarnOnce(string source, Exception ex)
         {
             if (_scanWarned) return;
             _scanWarned = true;
-            Mod.log.Warn("[MP] Could not read the " + source + " (" + ex.Message +
-                         "); other mods cannot be detected from it.");
+            SyncLog.Warn(LogTopic.Startup, "Could not read the " + source + " (" + ex.Message +
+                "); other mods cannot be detected from it.");
         }
     }
 }

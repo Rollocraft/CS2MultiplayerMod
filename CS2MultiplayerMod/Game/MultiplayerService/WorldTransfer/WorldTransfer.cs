@@ -3,9 +3,11 @@ using System.IO;
 using System.Threading.Tasks;
 using Colossal;
 using Colossal.IO.AssetDatabase;
+using CS2MultiplayerMod.Core.Diagnostics;
 using CS2MultiplayerMod.Core.Networking;
 using CS2MultiplayerMod.Core.Protocol.Messages;
 using CS2MultiplayerMod.Core.Session;
+using CS2MultiplayerMod.Game.Diagnostics;
 using Game;
 using Game.Assets;
 using Game.PSI.PdxSdk;
@@ -80,8 +82,8 @@ namespace CS2MultiplayerMod.Game
                     throw new InvalidOperationException("The game did not create the world snapshot package.");
 
                 byte[] data = ReadWorldSnapshotPackage(package);
-                _log.Info("[MP] Prepared isolated recovery snapshot '" +
-                          WorldSnapshotFileName + "' (" + (data.Length / 1024) + " KB).");
+                _log.Detail(LogTopic.WorldTransfer, "Prepared isolated recovery snapshot '" +
+                    WorldSnapshotFileName + "' (" + (data.Length / 1024) + " KB).");
                 return data;
             }
             finally
@@ -135,18 +137,18 @@ namespace CS2MultiplayerMod.Game
             if (_session.Role != SessionRole.Host || target.IsNone || data == null || epoch <= 0)
                 return;
             _session.SendBlobTo(target, MapChannel, epoch, data);
-            _log.Info("[MP] Queued recovery snapshot '" + (saveName ?? "<save>") + "' (" +
-                      (data.Length / 1024) + " KB) for " + DescribeWorldTarget(target) +
-                      " in epoch " + epoch + ".");
+            _log.Detail(LogTopic.WorldTransfer, "Queued recovery snapshot '" +
+                (saveName ?? "<save>") + "' (" + (data.Length / 1024) + " KB) for " +
+                DescribeWorldTarget(target) + " in epoch " + epoch + ".");
         }
 
         private void LoadReceivedMap(long transferId, byte[] data)
         {
             if (!_worldSyncBarrierActive || transferId <= 0 || transferId != _activeWorldSyncEpoch)
             {
-                _log.Warn("[MP] Ignoring map transfer " + transferId +
-                          ": active world-sync epoch is " +
-                          (_worldSyncBarrierActive ? _activeWorldSyncEpoch.ToString() : "none") + ".");
+                _log.Warn(LogTopic.WorldTransfer, "Ignoring map transfer " + transferId +
+                    ": active world-sync epoch is " +
+                    (_worldSyncBarrierActive ? _activeWorldSyncEpoch.ToString() : "none") + ".");
                 return;
             }
 
@@ -157,8 +159,9 @@ namespace CS2MultiplayerMod.Game
             {
                 _deferredMapTransferId = transferId;
                 _deferredMapData = data;
-                _log.Info("[MP] World-sync map received while a local copy is saving; " +
-                          "installation will continue after that save completes.");
+                _log.Detail(LogTopic.WorldTransfer,
+                    "World-sync map received while a local copy is saving; " +
+                    "installation will continue after that save completes.");
                 return;
             }
 
@@ -179,11 +182,13 @@ namespace CS2MultiplayerMod.Game
                 transferId <= 0 ||
                 transferId != _activeWorldSyncEpoch)
             {
-                _log.Warn("[MP] Discarding a deferred map because its world-sync epoch is no longer active.");
+                _log.Warn(LogTopic.WorldTransfer,
+                    "Discarding a deferred map because its world-sync epoch is no longer active.");
                 return;
             }
 
-            _log.Info("[MP] Local world copy finished; installing the deferred host map.");
+            _log.Detail(LogTopic.WorldTransfer,
+                "Local world copy finished; installing the deferred host map.");
             InstallReceivedMap(transferId, data);
         }
 
@@ -191,9 +196,8 @@ namespace CS2MultiplayerMod.Game
         {
             // The completed blob is the causal cut: commands received before it are represented by
             // the save, while every later command must survive the ECS world replacement.
-            _log.Info("[MP] Map blob delivered to game layer (" +
-                      (data != null ? data.Length / 1024 : 0) + " KB); staging and loading.");
-            Diagnostics.FlightRecorder.Note("world blob received " + (data != null ? data.Length >> 10 : 0) + " KB; reloading world");
+            _log.Event(LogTopic.WorldTransfer, "Map blob delivered to game layer (" +
+                (data != null ? data.Length / 1024 : 0) + " KB); staging and loading.");
             // Purge every sync inbox before the reload: queued commands describe the pre-reload
             // world and would apply stale edits (or reference vanished entities) on the new one.
             Sync.Infrastructure.SyncInbox.DrainAll();
@@ -204,8 +208,10 @@ namespace CS2MultiplayerMod.Game
                 // Defined, recoverable state instead of a half-connected limbo.
                 SetPhase(ClientWorldPhase.WaitingForMap);
                 _session.SendWorldSyncStage(_activeWorldSyncEpoch, WorldSyncStage.Failed);
-                _log.Warn("[MP] Could not auto-load the host world. Still connected - use /sync to " +
-                          "request it again, or load '" + JoinMapLoader.TransientName + "' from Load Game.");
+                _log.Warn(LogTopic.WorldTransfer,
+                    "Could not auto-load the host world. Still connected - use /sync to " +
+                    "request it again, or load '" + JoinMapLoader.TransientName +
+                    "' from Load Game.");
             }
             else
             {

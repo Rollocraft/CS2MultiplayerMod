@@ -54,7 +54,7 @@ namespace CS2MultiplayerMod.Game.Sync.Infrastructure
                        "without the command it depends on"));
             Action<string> warn = LogWarn;
             if (warn != null)
-                warn("[MP] Sync inbox overflowed; cleared the incomplete command suffix and " +
+                warn("Sync inbox overflowed; cleared the incomplete command suffix and " +
                      "requested a fresh world sync.");
             return false;
         }
@@ -160,7 +160,7 @@ namespace CS2MultiplayerMod.Game.Sync.Infrastructure
                 catch (Exception ex)
                 {
                     Action<string> warn = LogWarn;
-                    if (warn != null) warn("[MP] SyncInbox drain threw: " + ex.Message);
+                    if (warn != null) warn("Sync inbox drain threw: " + ex.Message);
                 }
             }
         }

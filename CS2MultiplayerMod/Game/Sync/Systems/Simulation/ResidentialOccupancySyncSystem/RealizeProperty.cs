@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using CS2MultiplayerMod.Core.Diagnostics;
+using CS2MultiplayerMod.Game.Diagnostics;
 using CS2MultiplayerMod.Game.Sync.Commands;
 using Game.Agents;
 using Game.Buildings;
@@ -115,8 +117,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 if (!_applyWarned)
                 {
                     _applyWarned = true;
-                    Mod.log.Warn("[MP] Occupancy: reconcile failed for one property; dropped it " +
-                                 "until the next page (logged once): " + ex.Message);
+                    SyncLog.Warn(LogTopic.Residential,
+                        "Occupancy: reconcile failed for one property; dropped it " +
+                        "until the next page (logged once): " + ex.Message);
                 }
             }
             if (applied && cached.RemoveAfterApply)

@@ -7,6 +7,8 @@ using Game.Tools;
 using Unity.Collections;
 using Unity.Entities;
 using Unity.Mathematics;
+using CS2MultiplayerMod.Core.Diagnostics;
+using CS2MultiplayerMod.Game.Diagnostics;
 using CS2MultiplayerMod.Game.Sync.Commands;
 
 namespace CS2MultiplayerMod.Game.Sync.Systems
@@ -102,7 +104,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
             if (rootIndex < 0 || definitions.Count > ObjectToolOperationCommand.MaxDefinitions)
             {
-                Mod.log.Warn("[MP] BuildSync: specialized object/area operation was incomplete; not sent.");
+                SyncLog.Warn(LogTopic.Buildings,
+                    "BuildSync: specialized object/area operation was incomplete; not sent.");
                 if (Mod.Service != null)
                     Mod.Service.RequestAutomaticWorldRecovery(
                         "specialized building capture was incomplete");
@@ -125,18 +128,17 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             {
                 if (TryPublishLocalObjectOperation(operation))
                 {
-                    Diagnostics.FlightRecorder.Note("specialized object/area operation captured op=" +
-                        operation.OperationId + " defs=" + operation.Definitions.Length +
-                        " areaNodes=" + _pendingSpecializedAreaDefinition.AreaNodes.Length);
+                    SyncLog.Trace(LogTopic.Buildings,
+                        "specialized object/area operation captured op=" + operation.OperationId +
+                        " defs=" + operation.Definitions.Length + " areaNodes=" +
+                        _pendingSpecializedAreaDefinition.AreaNodes.Length);
                     PublishOwnedAreaSnapshot(root, _pendingSpecializedAreaDefinition);
                 }
             }
             catch (System.Exception ex)
             {
-                Mod.log.Warn("[MP] BuildSync: specialized object/area operation was not sent: " +
-                             ex.Message);
-                Diagnostics.FlightRecorder.Note("specialized object/area capture rejected=" +
-                                                  ex.GetType().Name);
+                SyncLog.Warn(LogTopic.Buildings,
+                    "BuildSync: specialized object/area operation was not sent: " + ex.Message);
                 if (Mod.Service != null)
                     Mod.Service.RequestAutomaticWorldRecovery(
                         "specialized building capture failed");
@@ -185,13 +187,13 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             {
                 service.Session.SendCommand(0, OwnedAreaSnapshotCommand.Id,
                     command.Encode());
-                Diagnostics.FlightRecorder.Note("specialized owned-area safeguard sent nodes=" +
-                                                  count);
+                SyncLog.Trace(LogTopic.Buildings, "specialized owned-area safeguard sent nodes=" +
+                    count);
             }
             catch (System.Exception ex)
             {
-                Mod.log.Warn("[MP] BuildSync: owned-area safeguard was not sent: " +
-                             ex.Message);
+                SyncLog.Warn(LogTopic.Buildings, "BuildSync: owned-area safeguard was not sent: " +
+                    ex.Message);
                 if (Mod.Service != null)
                     Mod.Service.RequestAutomaticWorldRecovery(
                         "specialized owned-area safeguard failed");
@@ -228,7 +230,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
             if (!SpecializedPlacementStillCommitted(operation))
             {
-                Diagnostics.FlightRecorder.Note(
+                SyncLog.Trace(LogTopic.Buildings,
                     "specialized object/area handoff ended with no committed building");
                 ClearSpecializedAreaCapture();
                 return;
@@ -237,15 +239,13 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             try
             {
                 if (TryPublishLocalObjectOperation(operation))
-                    Diagnostics.FlightRecorder.Note("specialized object without area captured op=" +
+                    SyncLog.Trace(LogTopic.Buildings, "specialized object without area captured op=" +
                         operation.OperationId + " defs=" + operation.Definitions.Length);
             }
             catch (System.Exception ex)
             {
-                Mod.log.Warn("[MP] BuildSync: specialized object without area was not sent: " +
-                             ex.Message);
-                Diagnostics.FlightRecorder.Note("specialized object without area rejected=" +
-                                                  ex.GetType().Name);
+                SyncLog.Warn(LogTopic.Buildings,
+                    "BuildSync: specialized object without area was not sent: " + ex.Message);
                 if (Mod.Service != null)
                     Mod.Service.RequestAutomaticWorldRecovery(
                         "specialized building capture failed");
@@ -304,7 +304,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             ObjectToolDefinitionIntent completed;
             if (!TryCaptureCompletedSpecializedArea(out completed))
             {
-                Diagnostics.FlightRecorder.Note("specialized object/area apply not observed");
+                SyncLog.Trace(LogTopic.Buildings, "specialized object/area apply not observed");
                 FinishSpecializedAreaCaptureWithoutPolygon();
                 return;
             }

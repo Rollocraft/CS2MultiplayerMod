@@ -10,8 +10,9 @@ using Game.Tools;
 using Unity.Collections;
 using Unity.Entities;
 using Unity.Mathematics;
+using CS2MultiplayerMod.Core.Diagnostics;
 using CS2MultiplayerMod.Core.Session;
-
+using CS2MultiplayerMod.Game.Diagnostics;
 using CS2MultiplayerMod.Game.Sync.Commands;
 namespace CS2MultiplayerMod.Game.Sync.Systems
 {
@@ -63,7 +64,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                         SubReps = subs,
                     };
                     session.SendCommand(0, NetUpgradeCommand.Id, command.Encode());
-                    Mod.Verbose("[MP] NetUpgradeSync captured upgrade on '" + name + "'.");
+                    SyncLog.Detail(LogTopic.Nets, "NetUpgradeSync captured upgrade on '" + name +
+                        "'.");
                 }
             }
             finally
@@ -98,7 +100,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                         Dx = b.d.x, Dy = b.d.y, Dz = b.d.z,
                     };
                     session.SendCommand(0, NetUpgradeCommand.Id, command.Encode());
-                    Mod.Verbose("[MP] NetUpgradeSync captured upgrade REMOVAL on '" + name + "'.");
+                    SyncLog.Detail(LogTopic.Nets, "NetUpgradeSync captured upgrade REMOVAL on '" +
+                        name + "'.");
                 }
             }
             finally
@@ -144,7 +147,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                         IsNode = true,
                     };
                     session.SendCommand(0, NetUpgradeCommand.Id, command.Encode());
-                    Mod.Verbose("[MP] NetUpgradeSync captured node upgrade at '" + name + "'.");
+                    SyncLog.Detail(LogTopic.Nets, "NetUpgradeSync captured node upgrade at '" + name +
+                        "'.");
                 }
             }
             finally
@@ -180,7 +184,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                         IsNode = true,
                     };
                     session.SendCommand(0, NetUpgradeCommand.Id, command.Encode());
-                    Mod.Verbose("[MP] NetUpgradeSync captured node upgrade REMOVAL at '" + name + "'.");
+                    SyncLog.Detail(LogTopic.Nets,
+                        "NetUpgradeSync captured node upgrade REMOVAL at '" + name + "'.");
                 }
             }
             finally

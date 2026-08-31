@@ -2,7 +2,9 @@ using System.Collections.Generic;
 using Game.Zones;
 using Unity.Collections;
 using Unity.Entities;
+using CS2MultiplayerMod.Core.Diagnostics;
 using CS2MultiplayerMod.Core.Session;
+using CS2MultiplayerMod.Game.Diagnostics;
 using CS2MultiplayerMod.Game.Sync.Commands;
 using CS2MultiplayerMod.Game.Sync.Infrastructure;
 
@@ -109,8 +111,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                         if (!_outgoingOverflowWarned)
                         {
                             _outgoingOverflowWarned = true;
-                            Mod.log.Warn("[MP] ZoneSync outgoing queue reached its safety limit; " +
-                                         "requesting a fresh world sync.");
+                            SyncLog.Warn(LogTopic.Land,
+                                "ZoneSync outgoing queue reached its safety limit; " +
+                                "requesting a fresh world sync.");
                         }
                         continue;
                     }

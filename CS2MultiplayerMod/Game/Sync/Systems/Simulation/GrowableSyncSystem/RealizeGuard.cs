@@ -6,7 +6,9 @@ using Game.Tools;
 using Unity.Collections;
 using Unity.Entities;
 using Unity.Mathematics;
+using CS2MultiplayerMod.Core.Diagnostics;
 using CS2MultiplayerMod.Core.Protocol.Messages;
+using CS2MultiplayerMod.Game.Diagnostics;
 using CS2MultiplayerMod.Game.Sync.Commands;
 using CS2MultiplayerMod.Game.Sync.Infrastructure;
 
@@ -104,10 +106,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
                     EntityManager.AddComponent<Deleted>(entity);
                     _rejectedLocal++;
-                    Mod.log.Warn("[MP] GrowableSync: this client grew '" +
-                                 PrefabIndexSafeName(prefab) + "' at " + Format(position) +
-                                 " on its own; removed (the host decides zoned buildings).");
-                    Diagnostics.FlightRecorder.Note("locally grown building rejected");
+                    SyncLog.Warn(LogTopic.Buildings, "GrowableSync: this client grew '" +
+                        PrefabIndexSafeName(prefab) + "' at " + Format(position) +
+                        " on its own; removed (the host decides zoned buildings).");
                 }
             }
             finally
@@ -166,11 +167,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 if (pending.Expiry <= now)
                 {
                     _realizationValidations.RemoveAt(i);
-                    Mod.log.Warn("[MP] GrowableSync: generated building '" +
-                                 PrefabIndexSafeName(pending.Prefab) + "' at " +
-                                 Format(pending.Position) + " did not join its road/service graph; " +
-                                 "requesting world repair.");
-                    Diagnostics.FlightRecorder.Note("growable realization invalid/resync");
+                    SyncLog.Warn(LogTopic.Buildings, "GrowableSync: generated building '" +
+                        PrefabIndexSafeName(pending.Prefab) + "' at " + Format(pending.Position) +
+                        " did not join its road/service graph; " + "requesting world repair.");
                     SyncInbox.RequestResync(CS2MultiplayerMod.Game.Diagnostics.ResyncReport
                         .Create("growable building failed road/service realization", "growable",
                             CS2MultiplayerMod.Game.Diagnostics.ResyncEvidence.MissingTarget)
@@ -230,8 +229,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             while (_incoming.TryDequeue(out message))
                 if (message.OriginPlayerId != localPlayerId) foreign++;
             if (foreign == 0) return;
-            Mod.log.Warn("[MP] GrowableSync: host discarded " + foreign +
-                         " zoned-building command(s) from another player; only a host may author them.");
+            SyncLog.Warn(LogTopic.Buildings, "GrowableSync: host discarded " + foreign +
+                " zoned-building command(s) from another player; only a host may author them.");
         }
     }
 }

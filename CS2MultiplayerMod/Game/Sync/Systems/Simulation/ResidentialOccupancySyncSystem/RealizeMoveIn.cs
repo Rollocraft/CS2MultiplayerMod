@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using CS2MultiplayerMod.Core.Diagnostics;
 using CS2MultiplayerMod.Core.Session;
 using CS2MultiplayerMod.Game.Diagnostics;
 using CS2MultiplayerMod.Game.Sync.Commands;
@@ -169,14 +170,12 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             if (_tracePlacedHouseholds.TryGetValue(household.HouseholdId, out previous) &&
                 previous.Equals(property.Identity)) return;
             _tracePlacedHouseholds[household.HouseholdId] = property.Identity;
-            Mod.log.Info("[MP][OCC-DEV] PLACED house='" + property.Identity.PrefabName +
-                         "' anchor=(" + property.Identity.AnchorX.ToString("F2") + ", " +
-                         property.Identity.AnchorY.ToString("F2") + ", " +
-                         property.Identity.AnchorZ.ToString("F2") + ") rev=" +
-                         property.Revision + " family=0x" +
-                         household.HouseholdId.ToString("X16") + " people=" + localPeople +
-                         "/" + wantedPeople + " vehicles=" + localVehicles + "/" +
-                         wantedVehicles + ".");
+            SyncLog.Detail(LogTopic.Residential, "PLACED house='" + property.Identity.PrefabName +
+                "' anchor=(" + property.Identity.AnchorX.ToString("F2") + ", " +
+                property.Identity.AnchorY.ToString("F2") + ", " +
+                property.Identity.AnchorZ.ToString("F2") + ") rev=" + property.Revision +
+                " family=0x" + household.HouseholdId.ToString("X16") + " people=" + localPeople +
+                "/" + wantedPeople + " vehicles=" + localVehicles + "/" + wantedVehicles + ".");
         }
 
         private int CountRealizedCitizens(Entity household, OccupancyHousehold wanted)

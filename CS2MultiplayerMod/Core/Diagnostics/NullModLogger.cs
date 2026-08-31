@@ -9,10 +9,12 @@ namespace CS2MultiplayerMod.Core.Diagnostics
 
         private NullModLogger() { }
 
-        public void Debug(string message) { }
-        public void Info(string message) { }
-        public void Warn(string message) { }
-        public void Error(string message) { }
-        public void Error(string message, Exception exception) { }
+        public bool IsEnabled(LogTopic topic) { return false; }
+        public void Detail(LogTopic topic, string message) { }
+        public void Trace(LogTopic topic, string message) { }
+        public void Event(LogTopic topic, string message) { }
+        public void Warn(LogTopic topic, string message) { }
+        public void Error(LogTopic topic, string message) { }
+        public void Error(LogTopic topic, string message, Exception exception) { }
     }
 }

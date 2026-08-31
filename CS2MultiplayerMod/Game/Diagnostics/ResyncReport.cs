@@ -50,7 +50,7 @@ namespace CS2MultiplayerMod.Game.Diagnostics
     /// world reloaded. That is enough to grep for and not enough to fix anything: the log never
     /// said which operation, which endpoint, what was actually standing there instead, how long the
     /// pipeline had been blocked, or whether anything cheaper had been tried. A report carries all
-    /// of that, is written at the production log level whether or not the reload follows, and is
+    /// of that, is written as an ungated event whether or not the reload follows, and is
     /// what <see cref="ResyncArbiter"/> settles before any world is thrown away.
     ///
     /// Build one with <see cref="Create"/> and chain <see cref="Fact"/> calls; every setter returns
@@ -141,7 +141,7 @@ namespace CS2MultiplayerMod.Game.Diagnostics
         public ResyncReport Fact(string name, bool value) => Fact(name, value ? "yes" : "no");
 
         /// <summary>
-        /// The report as the lines the production log prints under its headline. Written in
+        /// The report as the lines the log prints under its headline. Written in
         /// sentences, because the reader is usually a player pasting a log into a bug report.
         /// </summary>
         public List<string> Lines()
@@ -155,7 +155,7 @@ namespace CS2MultiplayerMod.Game.Diagnostics
             return lines;
         }
 
-        /// <summary>One-line form for the flight recorder and the chat/system feed.</summary>
+        /// <summary>One-line form for the flight log and the chat/system feed.</summary>
         public string Summary()
         {
             var text = new StringBuilder(Reason);

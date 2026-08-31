@@ -3,6 +3,7 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Runtime.InteropServices;
 using System.Threading;
+using CS2MultiplayerMod.Core.Diagnostics;
 using CS2MultiplayerMod.Core.Protocol;
 using Steamworks;
 
@@ -111,14 +112,15 @@ namespace CS2MultiplayerMod.Core.Networking.Steam
                 // rejected, and a half-delivered payload can never be completed.
                 if (result == EResult.k_EResultLimitExceeded) return SendOutcome.Backpressure;
 
-                _log.Warn("Steam relay send to " + endpoint.Id + " failed (" + result + "); dropping the connection. " +
-                          DescribeConnection(endpoint));
+                _log.Warn(LogTopic.Transport, "Steam relay send to " + endpoint.Id + " failed (" +
+                    result + "); dropping the connection. " + DescribeConnection(endpoint));
                 Close(endpoint, "relay send failed: " + result, linger: false);
                 return SendOutcome.Failed;
             }
             catch (Exception ex)
             {
-                _log.Warn("Steam relay send to " + endpoint.Id + " threw (" + ex.Message + "); dropping the connection.");
+                _log.Warn(LogTopic.Transport, "Steam relay send to " + endpoint.Id + " threw (" +
+                    ex.Message + "); dropping the connection.");
                 Close(endpoint, "relay send error", linger: false);
                 return SendOutcome.Failed;
             }
@@ -164,7 +166,7 @@ namespace CS2MultiplayerMod.Core.Networking.Steam
                 }
                 catch (Exception ex)
                 {
-                    _log.Warn("Steam relay receive failed: " + ex.Message);
+                    _log.Warn(LogTopic.Transport, "Steam relay receive failed: " + ex.Message);
                     return;
                 }
 
