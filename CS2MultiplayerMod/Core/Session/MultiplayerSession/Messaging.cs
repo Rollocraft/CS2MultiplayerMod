@@ -17,7 +17,7 @@ namespace CS2MultiplayerMod.Core.Session
             if (heartbeat.EchoOfMs > 0)
             {
                 long rtt = nowUnixMs - heartbeat.EchoOfMs;
-                if (peer != null && rtt >= 0 && rtt < 60000) peer.LatencyMs = (int)rtt;
+                if (peer != null && rtt >= 0 && rtt < 60000) peer.RecordRttSample(rtt);
                 return;
             }
 
@@ -152,9 +152,14 @@ namespace CS2MultiplayerMod.Core.Session
             }
             else if (Role == SessionRole.Host)
             {
-                _log.Info("Host requested world sync for all clients (" + reason + ").");
+                // With nobody connected the epoch opens, finds no participants and closes again,
+                // which from the button looked identical to a sync that had failed silently.
+                int peers = HandshakedPeerCount();
+                _log.Info("Host requested world sync for " + peers + " client(s) (" + reason + ").");
                 NotifyResyncRequested(LocalPlayerId, ConnectionId.None);
-                NotifyChat(null, "World sync started - streaming the city to all players.");
+                NotifyChat(null, peers == 0
+                    ? "Nothing to sync - no other players are connected."
+                    : "World sync started - streaming the city to all players.");
             }
         }
 
