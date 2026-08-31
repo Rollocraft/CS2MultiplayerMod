@@ -113,20 +113,15 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             Mod.log.Info(nameof(CityStateSyncSystem) + " ready with " + _channels.Count +
                          " state channel(s), " + _editable.Count + " player-editable.");
 
-            if (Mod.Service != null)
-            {
-                _observer = new Observer(_incoming, _incomingEdits, RequestOrderedPoison,
-                    channelId => _editable.Contains(channelId));
-                Mod.Service.Session.AddObserver(_observer);
-            }
-            SyncInbox.RegisterDrain(DrainQueues);
+            _observer = SyncObserverBinding.Bind(
+                () => new Observer(_incoming, _incomingEdits, RequestOrderedPoison,
+                    channelId => _editable.Contains(channelId)),
+                DrainQueues);
         }
 
         protected override void OnDestroy()
         {
-            SyncInbox.UnregisterDrain(DrainQueues);
-            if (_observer != null && Mod.Service != null)
-                Mod.Service.Session.RemoveObserver(_observer);
+            SyncObserverBinding.Unbind(_observer, DrainQueues);
             if (_treeStateChannel != null) _treeStateChannel.Dispose();
             base.OnDestroy();
         }

@@ -131,12 +131,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             // number of things a player has actually renamed.
             _namedEntities = GetEntityQuery(new EntityQueryDesc
             {
-                All = new[]
-                {
-                    ComponentType.ReadOnly<global::Game.UI.CustomName>(),
-                    ComponentType.ReadOnly<PrefabRef>(),
-                },
-                None = new[] { ComponentType.ReadOnly<Temp>(), ComponentType.ReadOnly<Deleted>() },
+                All = SyncQuery.ReadOnly<global::Game.UI.CustomName, PrefabRef>(),
+                None = SyncQuery.ReadOnly<Temp, Deleted>(),
             });
 
             // A street's draw is published whenever its edge set changes, not only when the street
@@ -145,75 +141,47 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             // aggregate is built from carries it alongside Created.
             _changedStreets = GetEntityQuery(new EntityQueryDesc
             {
-                All = new[]
-                {
-                    ComponentType.ReadOnly<Updated>(),
-                    ComponentType.ReadOnly<global::Game.Net.Aggregate>(),
-                    ComponentType.ReadOnly<RandomLocalizationIndex>(),
-                    ComponentType.ReadOnly<PrefabRef>(),
-                },
-                None = new[] { ComponentType.ReadOnly<Temp>(), ComponentType.ReadOnly<Deleted>() },
+                All = SyncQuery.ReadOnly<Updated, global::Game.Net.Aggregate,
+                    RandomLocalizationIndex, PrefabRef>(),
+                None = SyncQuery.ReadOnly<Temp, Deleted>(),
             });
             _streets = GetEntityQuery(new EntityQueryDesc
             {
-                All = new[]
-                {
-                    ComponentType.ReadOnly<global::Game.Net.Aggregate>(),
-                    ComponentType.ReadOnly<RandomLocalizationIndex>(),
-                    ComponentType.ReadOnly<PrefabRef>(),
-                },
-                None = new[] { ComponentType.ReadOnly<Temp>(), ComponentType.ReadOnly<Deleted>() },
+                All = SyncQuery.ReadOnly<global::Game.Net.Aggregate, RandomLocalizationIndex,
+                    PrefabRef>(),
+                None = SyncQuery.ReadOnly<Temp, Deleted>(),
             });
 
             // Districts are never merged, so their draw still travels from the one frame the area
             // appears. Loading a world does not tag entities Created, so a join never re-broadcasts.
             _createdDistricts = GetEntityQuery(new EntityQueryDesc
             {
-                All = new[]
-                {
-                    ComponentType.ReadOnly<Created>(),
-                    ComponentType.ReadOnly<District>(),
-                    ComponentType.ReadOnly<RandomLocalizationIndex>(),
-                    ComponentType.ReadOnly<Node>(),
-                    ComponentType.ReadOnly<PrefabRef>(),
-                },
-                None = new[] { ComponentType.ReadOnly<Temp>(), ComponentType.ReadOnly<Deleted>() },
+                All = SyncQuery.ReadOnly<Created, District, RandomLocalizationIndex, Node, PrefabRef>(),
+                None = SyncQuery.ReadOnly<Temp, Deleted>(),
             });
 
             _districts = GetEntityQuery(new EntityQueryDesc
             {
-                All = new[]
-                {
-                    ComponentType.ReadOnly<District>(),
-                    ComponentType.ReadOnly<Node>(),
-                    ComponentType.ReadOnly<PrefabRef>(),
-                },
-                None = new[] { ComponentType.ReadOnly<Temp>(), ComponentType.ReadOnly<Deleted>() },
+                All = SyncQuery.ReadOnly<District, Node, PrefabRef>(),
+                None = SyncQuery.ReadOnly<Temp, Deleted>(),
             });
             _routes = GetEntityQuery(new EntityQueryDesc
             {
-                All = new[]
-                {
-                    ComponentType.ReadOnly<global::Game.Routes.Route>(),
-                    ComponentType.ReadOnly<PrefabRef>(),
-                },
-                None = new[] { ComponentType.ReadOnly<Temp>(), ComponentType.ReadOnly<Deleted>() },
+                All = SyncQuery.ReadOnly<global::Game.Routes.Route, PrefabRef>(),
+                None = SyncQuery.ReadOnly<Temp, Deleted>(),
             });
 
-            if (Mod.Service != null)
-            {
-                _observer = new CommandObserver(_incoming, EntityNameCommand.Id);
-                _observer.MaxBodyBytes = EntityNameCommand.MaxEncodedBytes;
-                Mod.Service.Session.AddObserver(_observer);
-            }
-            SyncInbox.RegisterDrain(DrainQueue);
+            _observer = SyncObserverBinding.Bind(
+                () => new CommandObserver(_incoming, EntityNameCommand.Id)
+                    {
+                        MaxBodyBytes = EntityNameCommand.MaxEncodedBytes,
+                    },
+                DrainQueue);
         }
 
         protected override void OnDestroy()
         {
-            SyncInbox.UnregisterDrain(DrainQueue);
-            if (_observer != null && Mod.Service != null)
-                Mod.Service.Session.RemoveObserver(_observer);
+            SyncObserverBinding.Unbind(_observer, DrainQueue);
             base.OnDestroy();
         }
 

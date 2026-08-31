@@ -141,22 +141,10 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             // (Temp), not an owned sub-object (Owner), not being deleted, not a net edge.
             _createdObjects = GetEntityQuery(new EntityQueryDesc
             {
-                All = new[]
-                {
-                    ComponentType.ReadOnly<Created>(),
-                    ComponentType.ReadOnly<PrefabRef>(),
-                    ComponentType.ReadOnly<Transform>(),
-                },
-                None = new[]
-                {
-                    ComponentType.ReadOnly<Temp>(),
-                    ComponentType.ReadOnly<Owner>(),
-                    ComponentType.ReadOnly<Deleted>(),
-                    ComponentType.ReadOnly<global::Game.Net.Edge>(),
-                    ComponentType.ReadOnly<global::Game.Objects.Moving>(),
-                    ComponentType.ReadOnly<global::Game.Vehicles.Vehicle>(),
-                    ComponentType.ReadOnly<global::Game.Creatures.Creature>(),
-                },
+                All = SyncQuery.ReadOnly<Created, PrefabRef, Transform>(),
+                None = SyncQuery.ReadOnly<Temp, Owner, Deleted, global::Game.Net.Edge,
+                    global::Game.Objects.Moving, global::Game.Vehicles.Vehicle,
+                    global::Game.Creatures.Creature>(),
             });
 
             // Full object-tool transactions can commit through an owned extension rather than a
@@ -164,62 +152,29 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             // exact preview graph cached before the click.
             _createdAppliedObjects = GetEntityQuery(new EntityQueryDesc
             {
-                All = new[]
-                {
-                    ComponentType.ReadOnly<Created>(),
-                    ComponentType.ReadOnly<Applied>(),
-                    ComponentType.ReadOnly<PrefabRef>(),
-                    ComponentType.ReadOnly<Transform>(),
-                    ComponentType.ReadOnly<PseudoRandomSeed>(),
-                    ComponentType.ReadOnly<global::Game.Objects.Object>(),
-                },
-                None = new[]
-                {
-                    ComponentType.ReadOnly<Temp>(),
-                    ComponentType.ReadOnly<Deleted>(),
-                },
+                All = SyncQuery.ReadOnly<Created, Applied, PrefabRef, Transform, PseudoRandomSeed,
+                    global::Game.Objects.Object>(),
+                None = SyncQuery.ReadOnly<Temp, Deleted>(),
             });
 
             // Attach targets for incoming net objects, matched by position.
             _liveNodes = GetEntityQuery(new EntityQueryDesc
             {
-                All = new[] { ComponentType.ReadOnly<global::Game.Net.Node>() },
-                None = new[]
-                {
-                    ComponentType.ReadOnly<Temp>(),
-                    ComponentType.ReadOnly<Deleted>(),
-                },
+                All = SyncQuery.ReadOnly<global::Game.Net.Node>(),
+                None = SyncQuery.ReadOnly<Temp, Deleted>(),
             });
             _liveEdges = GetEntityQuery(new EntityQueryDesc
             {
-                All = new[]
-                {
-                    ComponentType.ReadOnly<global::Game.Net.Edge>(),
-                    ComponentType.ReadOnly<global::Game.Net.Curve>(),
-                },
-                None = new[]
-                {
-                    ComponentType.ReadOnly<Temp>(),
-                    ComponentType.ReadOnly<Deleted>(),
-                },
+                All = SyncQuery.ReadOnly<global::Game.Net.Edge, global::Game.Net.Curve>(),
+                None = SyncQuery.ReadOnly<Temp, Deleted>(),
             });
 
             // Standing placed objects (buildings, props), for the duplicate-placement guard in
             // Realize.cs. Static excludes vehicles/cims; Owner excludes sub-objects.
             _liveStaticObjects = GetEntityQuery(new EntityQueryDesc
             {
-                All = new[]
-                {
-                    ComponentType.ReadOnly<PrefabRef>(),
-                    ComponentType.ReadOnly<Transform>(),
-                    ComponentType.ReadOnly<global::Game.Objects.Static>(),
-                },
-                None = new[]
-                {
-                    ComponentType.ReadOnly<Temp>(),
-                    ComponentType.ReadOnly<Owner>(),
-                    ComponentType.ReadOnly<Deleted>(),
-                },
+                All = SyncQuery.ReadOnly<PrefabRef, Transform, global::Game.Objects.Static>(),
+                None = SyncQuery.ReadOnly<Temp, Owner, Deleted>(),
             });
 
             _diagAnyCreated = GetEntityQuery(ComponentType.ReadOnly<Created>());
@@ -230,24 +185,19 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             InitializeNativeObjectOperations();
             InitializeNativeDerive();
 
-            if (Mod.Service != null)
-            {
-                _observer = new CommandObserver(_incoming,
-                    ObjectPlacementCommand.Id, ObjectToolOperationCommand.Id,
-                    AssetStampCommand.Id)
-                {
-                    MaxBodyBytes = ObjectToolOperationCommand.MaxEncodedBytes,
-                };
-                Mod.Service.Session.AddObserver(_observer);
-            }
-            SyncInbox.RegisterDrain(DrainQueue);
+            _observer = SyncObserverBinding.Bind(
+                () => new CommandObserver(_incoming,
+                        ObjectPlacementCommand.Id, ObjectToolOperationCommand.Id,
+                        AssetStampCommand.Id)
+                    {
+                        MaxBodyBytes = ObjectToolOperationCommand.MaxEncodedBytes,
+                    },
+                DrainQueue);
         }
 
         protected override void OnDestroy()
         {
-            SyncInbox.UnregisterDrain(DrainQueue);
-            if (_observer != null && Mod.Service != null)
-                Mod.Service.Session.RemoveObserver(_observer);
+            SyncObserverBinding.Unbind(_observer, DrainQueue);
             base.OnDestroy();
         }
 

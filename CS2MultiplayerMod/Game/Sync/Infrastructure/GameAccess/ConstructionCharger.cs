@@ -32,19 +32,6 @@ namespace CS2MultiplayerMod.Game.Sync.Infrastructure
                 ChargeObject(em, prefab, name);
         }
 
-        /// <summary>
-        /// Road segment: per-cell cost x cell count. The game prices nets per 8 m cell;
-        /// length/8 reproduces that closely but not exactly (elevation multipliers are
-        /// not applied) - flagged in the log line for in-game tuning.
-        /// </summary>
-        public static void ChargeNet(EntityManager em, Entity prefab, float length, string name)
-        {
-            if (!em.HasComponent<PlaceableNetData>(prefab)) return;
-            int cells = math.max(1, (int)math.round(length / 8f));
-            Charge(em, CalculateNetCost(em, prefab, length),
-                name + " x" + cells + " cells (8m approximation)");
-        }
-
         /// <summary>Calculate one net course's host-authoritative charge without mutating money.</summary>
         public static long CalculateNetCost(EntityManager em, Entity prefab, float length)
         {

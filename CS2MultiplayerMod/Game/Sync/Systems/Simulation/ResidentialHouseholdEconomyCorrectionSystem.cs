@@ -6,6 +6,7 @@ using Game.Economy;
 using Game.Tools;
 using Unity.Collections;
 using Unity.Entities;
+using CS2MultiplayerMod.Game.Sync.Infrastructure;
 
 namespace CS2MultiplayerMod.Game.Sync.Systems
 {
@@ -25,19 +26,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             _occupancy = World.GetOrCreateSystemManaged<ResidentialOccupancySyncSystem>();
             _changedHouseholds = GetEntityQuery(new EntityQueryDesc
             {
-                All = new[]
-                {
-                    ComponentType.ReadOnly<Household>(),
-                    ComponentType.ReadOnly<PropertyRenter>(),
-                    ComponentType.ReadOnly<Resources>(),
-                },
-                None = new[]
-                {
-                    ComponentType.ReadOnly<Deleted>(),
-                    ComponentType.ReadOnly<Temp>(),
-                    ComponentType.ReadOnly<TouristHousehold>(),
-                    ComponentType.ReadOnly<CommuterHousehold>(),
-                },
+                All = SyncQuery.ReadOnly<Household, PropertyRenter, Resources>(),
+                None = SyncQuery.ReadOnly<Deleted, Temp, TouristHousehold, CommuterHousehold>(),
             });
             _changedHouseholds.SetChangedVersionFilter(new[]
             {

@@ -49,20 +49,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             // can persist) to the frame the move actually happened.
             _movedObjects = GetEntityQuery(new EntityQueryDesc
             {
-                All = new[]
-                {
-                    ComponentType.ReadOnly<Updated>(),
-                    ComponentType.ReadOnly<MovedLocation>(),
-                    ComponentType.ReadOnly<PrefabRef>(),
-                    ComponentType.ReadOnly<Transform>(),
-                },
-                None = new[]
-                {
-                    ComponentType.ReadOnly<Temp>(),
-                    ComponentType.ReadOnly<Owner>(),
-                    ComponentType.ReadOnly<Deleted>(),
-                    ComponentType.ReadOnly<Created>(),
-                },
+                All = SyncQuery.ReadOnly<Updated, MovedLocation, PrefabRef, Transform>(),
+                None = SyncQuery.ReadOnly<Temp, Owner, Deleted, Created>(),
             });
 
             // A blocked move re-runs FindAt every frame until its retry window closes; that lookup
@@ -70,19 +58,13 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             _objectSearch = new ObjectSearch(
                 World.GetOrCreateSystemManaged<global::Game.Objects.SearchSystem>());
 
-            if (Mod.Service != null)
-            {
-                _observer = new CommandObserver(_incoming, ObjectMoveCommand.Id);
-                Mod.Service.Session.AddObserver(_observer);
-            }
-            SyncInbox.RegisterDrain(DrainQueue);
+            _observer = SyncObserverBinding.Bind(
+                () => new CommandObserver(_incoming, ObjectMoveCommand.Id), DrainQueue);
         }
 
         protected override void OnDestroy()
         {
-            SyncInbox.UnregisterDrain(DrainQueue);
-            if (_observer != null && Mod.Service != null)
-                Mod.Service.Session.RemoveObserver(_observer);
+            SyncObserverBinding.Unbind(_observer, DrainQueue);
             base.OnDestroy();
         }
 

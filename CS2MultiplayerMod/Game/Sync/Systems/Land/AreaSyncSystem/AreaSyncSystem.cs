@@ -60,65 +60,26 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             _deletedAreas = GetEntityQuery(AreaQuery(ComponentType.ReadOnly<Deleted>()));
             _liveAreas = GetEntityQuery(new EntityQueryDesc
             {
-                All = new[]
-                {
-                    ComponentType.ReadOnly<Area>(),
-                    ComponentType.ReadOnly<Node>(),
-                    ComponentType.ReadOnly<PrefabRef>(),
-                },
-                None = new[]
-                {
-                    ComponentType.ReadOnly<Temp>(),
-                    ComponentType.ReadOnly<Owner>(),
-                    ComponentType.ReadOnly<Deleted>(),
-                    ComponentType.ReadOnly<MapTile>(),
-                },
+                All = SyncQuery.ReadOnly<Area, Node, PrefabRef>(),
+                None = SyncQuery.ReadOnly<Temp, Owner, Deleted, MapTile>(),
             });
             _ownedSpecializedAreas = GetEntityQuery(new EntityQueryDesc
             {
-                All = new[]
-                {
-                    ComponentType.ReadOnly<Area>(),
-                    ComponentType.ReadOnly<Node>(),
-                    ComponentType.ReadOnly<PrefabRef>(),
-                    ComponentType.ReadOnly<Owner>(),
-                },
-                Any = new[]
-                {
-                    ComponentType.ReadOnly<Extractor>(),
-                    ComponentType.ReadOnly<Storage>(),
-                },
-                None = new[]
-                {
-                    ComponentType.ReadOnly<Temp>(),
-                    ComponentType.ReadOnly<Deleted>(),
-                    ComponentType.ReadOnly<MapTile>(),
-                },
+                All = SyncQuery.ReadOnly<Area, Node, PrefabRef, Owner>(),
+                Any = SyncQuery.ReadOnly<Extractor, Storage>(),
+                None = SyncQuery.ReadOnly<Temp, Deleted, MapTile>(),
             });
             _ownedAreaOwners = GetEntityQuery(new EntityQueryDesc
             {
-                All = new[]
-                {
-                    ComponentType.ReadOnly<global::Game.Objects.Object>(),
-                    ComponentType.ReadOnly<global::Game.Objects.Transform>(),
-                    ComponentType.ReadOnly<PrefabRef>(),
-                    ComponentType.ReadOnly<global::Game.Areas.SubArea>(),
-                },
-                None = new[]
-                {
-                    ComponentType.ReadOnly<Temp>(),
-                    ComponentType.ReadOnly<Deleted>(),
-                    ComponentType.ReadOnly<Owner>(),
-                },
+                All = SyncQuery.ReadOnly<global::Game.Objects.Object,
+                    global::Game.Objects.Transform, PrefabRef, global::Game.Areas.SubArea>(),
+                None = SyncQuery.ReadOnly<Temp, Deleted, Owner>(),
             });
 
-            if (Mod.Service != null)
-            {
-                _observer = new CommandObserver(_incoming, AreaCreateCommand.Id,
-                    AreaUpdateCommand.Id, AreaDeleteCommand.Id,
-                    OwnedAreaSnapshotCommand.Id);
-                Mod.Service.Session.AddObserver(_observer);
-            }
+            _observer = SyncObserverBinding.Bind(
+                () => new CommandObserver(_incoming, AreaCreateCommand.Id,
+                AreaUpdateCommand.Id, AreaDeleteCommand.Id,
+                OwnedAreaSnapshotCommand.Id));
         }
 
         private static EntityQueryDesc AreaQuery(ComponentType lifecycleTag) => new EntityQueryDesc
@@ -141,8 +102,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
         protected override void OnDestroy()
         {
-            if (_observer != null && Mod.Service != null)
-                Mod.Service.Session.RemoveObserver(_observer);
+            SyncObserverBinding.Unbind(_observer);
             base.OnDestroy();
         }
 

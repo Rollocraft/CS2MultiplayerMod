@@ -192,85 +192,47 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             // city the client just downloaded. Owner excludes lot content owned by a building.
             _createdBuildings = GetEntityQuery(new EntityQueryDesc
             {
-                All = new[]
-                {
-                    ComponentType.ReadOnly<Created>(),
-                    ComponentType.ReadOnly<Building>(),
-                    ComponentType.ReadOnly<PrefabRef>(),
-                    ComponentType.ReadOnly<global::Game.Objects.Transform>(),
-                },
-                None = new[]
-                {
-                    ComponentType.ReadOnly<Temp>(),
-                    ComponentType.ReadOnly<Deleted>(),
-                    ComponentType.ReadOnly<Owner>(),
-                },
+                All = SyncQuery.ReadOnly<Created, Building, PrefabRef,
+                    global::Game.Objects.Transform>(),
+                None = SyncQuery.ReadOnly<Temp, Deleted, Owner>(),
             });
 
             _deletedBuildings = GetEntityQuery(new EntityQueryDesc
             {
-                All = new[]
-                {
-                    ComponentType.ReadOnly<Deleted>(),
-                    ComponentType.ReadOnly<Building>(),
-                    ComponentType.ReadOnly<PrefabRef>(),
-                    ComponentType.ReadOnly<global::Game.Objects.Transform>(),
-                },
-                None = new[]
-                {
-                    ComponentType.ReadOnly<Temp>(),
-                    ComponentType.ReadOnly<Owner>(),
-                },
+                All = SyncQuery.ReadOnly<Deleted, Building, PrefabRef,
+                    global::Game.Objects.Transform>(),
+                None = SyncQuery.ReadOnly<Temp, Owner>(),
             });
 
             // A building only carries UnderConstruction while it is being built or re-levelled, so
             // this query holds a handful of entities even in a large city.
             _levelChanging = GetEntityQuery(new EntityQueryDesc
             {
-                All = new[]
-                {
-                    ComponentType.ReadOnly<UnderConstruction>(),
-                    ComponentType.ReadOnly<Building>(),
-                    ComponentType.ReadOnly<PrefabRef>(),
-                    ComponentType.ReadOnly<global::Game.Objects.Transform>(),
-                },
-                None = new[] { ComponentType.ReadOnly<Temp>(), ComponentType.ReadOnly<Deleted>() },
+                All = SyncQuery.ReadOnly<UnderConstruction, Building, PrefabRef,
+                    global::Game.Objects.Transform>(),
+                None = SyncQuery.ReadOnly<Temp, Deleted>(),
             });
 
             // Building state is ordinary component data, not a Created/Deleted lifecycle edge.
             // Scan one native UpdateFrame partition at a time and announce absolute transitions.
             _stateBuildings = GetEntityQuery(new EntityQueryDesc
             {
-                All = new[]
-                {
-                    ComponentType.ReadOnly<Building>(),
-                    ComponentType.ReadOnly<BuildingCondition>(),
-                    ComponentType.ReadOnly<PrefabRef>(),
-                    ComponentType.ReadOnly<global::Game.Objects.Transform>(),
-                    ComponentType.ReadOnly<UpdateFrame>(),
-                },
-                None = new[]
-                {
-                    ComponentType.ReadOnly<Temp>(),
-                    ComponentType.ReadOnly<Deleted>(),
-                    ComponentType.ReadOnly<Owner>(),
-                },
+                All = SyncQuery.ReadOnly<Building, BuildingCondition, PrefabRef,
+                    global::Game.Objects.Transform, UpdateFrame>(),
+                None = SyncQuery.ReadOnly<Temp, Deleted, Owner>(),
             });
 
-            if (Mod.Service != null)
-            {
-                _observer = new CommandObserver(_incoming, GrowableLifecycleCommand.Id);
-                _observer.MaxBodyBytes = GrowableLifecycleCommand.MaxEncodedBytes;
-                Mod.Service.Session.AddObserver(_observer);
-            }
-            SyncInbox.RegisterDrain(DrainQueue);
+            _observer = SyncObserverBinding.Bind(
+                () => new CommandObserver(_incoming, GrowableLifecycleCommand.Id)
+                    {
+                        MaxBodyBytes = GrowableLifecycleCommand.MaxEncodedBytes,
+                    },
+                DrainQueue);
         }
 
         protected override void OnDestroy()
         {
-            SyncInbox.UnregisterDrain(DrainQueue);
-            if (_observer != null && Mod.Service != null)
-                Mod.Service.Session.RemoveObserver(_observer);
+            SyncObserverBinding.Unbind(_observer, DrainQueue);
             RestoreLocalAuthority();
             base.OnDestroy();
         }

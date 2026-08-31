@@ -9,17 +9,6 @@ namespace CS2MultiplayerMod.Core.Session
     public sealed partial class MultiplayerSession
     {
         /// <summary>
-        /// Send a large named byte stream to all peers, split into chunks. Used by map
-        /// sync to ship the host's savegame so both players start on the same city.
-        /// </summary>
-        public void SendBlob(string channel, byte[] data) =>
-            ChunkAndSend(channel, 0, data, ConnectionId.None);
-
-        /// <summary>Send an epoch-tagged blob to every current peer.</summary>
-        public void SendBlob(string channel, long transferId, byte[] data) =>
-            ChunkAndSend(channel, transferId, data, ConnectionId.None);
-
-        /// <summary>
         /// Send a blob to a single peer - auto-ships map to just-joined client
         /// without re-sending to everyone already in the session.
         /// </summary>

@@ -262,19 +262,8 @@ namespace CS2MultiplayerMod.Game.Sync.Channels
             // Host-side rolling capture only; Apply resolves through the search tree instead.
             _trees = em.CreateEntityQuery(new EntityQueryDesc
             {
-                All = new[]
-                {
-                    ComponentType.ReadOnly<Tree>(),
-                    ComponentType.ReadOnly<PrefabRef>(),
-                    ComponentType.ReadOnly<Transform>(),
-                    ComponentType.ReadOnly<PseudoRandomSeed>(),
-                },
-                None = new[]
-                {
-                    ComponentType.ReadOnly<Temp>(),
-                    ComponentType.ReadOnly<Deleted>(),
-                    ComponentType.ReadOnly<Owner>(),
-                },
+                All = SyncQuery.ReadOnly<Tree, PrefabRef, Transform, PseudoRandomSeed>(),
+                None = SyncQuery.ReadOnly<Temp, Deleted, Owner>(),
             });
             _ready = true;
         }

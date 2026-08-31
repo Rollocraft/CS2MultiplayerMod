@@ -115,7 +115,6 @@ namespace CS2MultiplayerMod.Core.Session
         /// rejected at the session boundary during this interval, in addition to game-layer gates.
         /// </summary>
         public bool WorldSyncSuspended => _worldSyncSuspended;
-        public long WorldSyncEpoch => _worldSyncEpoch;
 
         // Host-side "Sending world %": a streamed blob is queued instantly (the send is
         // non-blocking) and then drains off the transport's send thread; these track that

@@ -9,10 +9,6 @@ namespace CS2MultiplayerMod.Game
     /// </summary>
     internal static class HelpLinks
     {
-        /// <summary>The help directory requested by the project documentation.</summary>
-        public const string Root =
-            "https://github.com/Rollocraft/CS2MultiplayerMod/tree/master/help";
-
         // GitHub uses /tree/ for a directory and /blob/ for an individual Markdown
         // file. Open the latter so headings such as #mod-version-issues work too.
         private const string PageRoot =

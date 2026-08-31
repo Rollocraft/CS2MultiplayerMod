@@ -119,80 +119,41 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
             _createdRoutes = GetEntityQuery(new EntityQueryDesc
             {
-                All = new[]
-                {
-                    ComponentType.ReadOnly<Created>(),
-                    ComponentType.ReadOnly<Route>(),
-                    ComponentType.ReadOnly<PrefabRef>(),
-                },
-                None = new[]
-                {
-                    ComponentType.ReadOnly<Temp>(),
-                    ComponentType.ReadOnly<Deleted>(),
-                },
+                All = SyncQuery.ReadOnly<Created, Route, PrefabRef>(),
+                None = SyncQuery.ReadOnly<Temp, Deleted>(),
             });
 
             _deletedRoutes = GetEntityQuery(new EntityQueryDesc
             {
-                All = new[]
-                {
-                    ComponentType.ReadOnly<Deleted>(),
-                    ComponentType.ReadOnly<Route>(),
-                    ComponentType.ReadOnly<PrefabRef>(),
-                },
-                None = new[]
-                {
-                    ComponentType.ReadOnly<Temp>(),
-                },
+                All = SyncQuery.ReadOnly<Deleted, Route, PrefabRef>(),
+                None = SyncQuery.ReadOnly<Temp>(),
             });
 
             _liveRoutes = GetEntityQuery(new EntityQueryDesc
             {
-                All = new[]
-                {
-                    ComponentType.ReadOnly<Route>(),
-                    ComponentType.ReadOnly<PrefabRef>(),
-                },
-                None = new[]
-                {
-                    ComponentType.ReadOnly<Temp>(),
-                    ComponentType.ReadOnly<Deleted>(),
-                },
+                All = SyncQuery.ReadOnly<Route, PrefabRef>(),
+                None = SyncQuery.ReadOnly<Temp, Deleted>(),
             });
 
             _transportStops = GetEntityQuery(new EntityQueryDesc
             {
-                All = new[]
-                {
-                    ComponentType.ReadOnly<global::Game.Routes.TransportStop>(),
-                    ComponentType.ReadOnly<ConnectedRoute>(),
-                    ComponentType.ReadOnly<PrefabRef>(),
-                    ComponentType.ReadOnly<global::Game.Objects.Transform>(),
-                },
-                None = new[]
-                {
-                    ComponentType.ReadOnly<Temp>(),
-                    ComponentType.ReadOnly<Deleted>(),
-                },
+                All = SyncQuery.ReadOnly<global::Game.Routes.TransportStop, ConnectedRoute,
+                    PrefabRef, global::Game.Objects.Transform>(),
+                None = SyncQuery.ReadOnly<Temp, Deleted>(),
             });
 
-            if (Mod.Service != null)
-            {
-                _observer = new CommandObserver(_incoming, RouteCreateCommand.Id,
-                    RouteUpdateCommand.Id, RouteDeleteCommand.Id)
-                {
-                    MaxBodyBytes = RouteCreateCommand.MaxEncodedBytes,
-                };
-                Mod.Service.Session.AddObserver(_observer);
-            }
-            SyncInbox.RegisterDrain(DrainQueue);
+            _observer = SyncObserverBinding.Bind(
+                () => new CommandObserver(_incoming, RouteCreateCommand.Id,
+                        RouteUpdateCommand.Id, RouteDeleteCommand.Id)
+                    {
+                        MaxBodyBytes = RouteCreateCommand.MaxEncodedBytes,
+                    },
+                DrainQueue);
         }
 
         protected override void OnDestroy()
         {
-            SyncInbox.UnregisterDrain(DrainQueue);
-            if (_observer != null && Mod.Service != null)
-                Mod.Service.Session.RemoveObserver(_observer);
+            SyncObserverBinding.Unbind(_observer, DrainQueue);
             base.OnDestroy();
         }
 

@@ -71,17 +71,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
             _createdPhenomena = GetEntityQuery(new EntityQueryDesc
             {
-                All = new[]
-                {
-                    ComponentType.ReadOnly<global::Game.Events.Event>(),
-                    ComponentType.ReadOnly<global::Game.Events.WeatherPhenomenon>(),
-                    ComponentType.ReadOnly<Created>(),
-                },
-                None = new[]
-                {
-                    ComponentType.ReadOnly<Deleted>(),
-                    ComponentType.ReadOnly<Temp>(),
-                },
+                All = SyncQuery.ReadOnly<global::Game.Events.Event,
+                    global::Game.Events.WeatherPhenomenon, Created>(),
+                None = SyncQuery.ReadOnly<Deleted, Temp>(),
             });
 
             // Flood excluded: that marker is the rain-driven river flood, which every machine
@@ -89,37 +81,24 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             // rains. Replicating it would stack a second surge on top of the local one.
             _createdSurges = GetEntityQuery(new EntityQueryDesc
             {
-                All = new[]
-                {
-                    ComponentType.ReadOnly<global::Game.Events.Event>(),
-                    ComponentType.ReadOnly<global::Game.Events.WaterLevelChange>(),
-                    ComponentType.ReadOnly<Created>(),
-                },
-                None = new[]
-                {
-                    ComponentType.ReadOnly<global::Game.Events.Flood>(),
-                    ComponentType.ReadOnly<Deleted>(),
-                    ComponentType.ReadOnly<Temp>(),
-                },
+                All = SyncQuery.ReadOnly<global::Game.Events.Event,
+                    global::Game.Events.WaterLevelChange, Created>(),
+                None = SyncQuery.ReadOnly<global::Game.Events.Flood, Deleted, Temp>(),
             });
 
-            if (Mod.Service != null)
-            {
-                _observer = new CommandObserver(_incoming, DisasterEventCommand.Id)
-                {
-                    MaxBodyBytes = DisasterEventCommand.MaxEncodedBytes,
-                };
-                Mod.Service.Session.AddObserver(_observer);
-            }
-            SyncInbox.RegisterDrain(DrainQueue);
+            _observer = SyncObserverBinding.Bind(
+                () => new CommandObserver(_incoming, DisasterEventCommand.Id)
+                    {
+                        MaxBodyBytes = DisasterEventCommand.MaxEncodedBytes,
+                    },
+                DrainQueue);
         }
 
         protected override void OnDestroy()
         {
             SyncInbox.UnregisterDrain(DrainQueue);
             SuppressLocalRolls(false);
-            if (_observer != null && Mod.Service != null)
-                Mod.Service.Session.RemoveObserver(_observer);
+            SyncObserverBinding.Unbind(_observer);
             base.OnDestroy();
         }
 

@@ -5,6 +5,7 @@ using System.Threading.Tasks;
 using CS2MultiplayerMod.Core.Networking;
 using CS2MultiplayerMod.Core.Protocol.Messages;
 using CS2MultiplayerMod.Core.Session;
+using CS2MultiplayerMod.Game.Sync.Infrastructure;
 using CS2MultiplayerMod.Game.Sync.Systems.Net;
 using Game;
 
@@ -75,18 +76,14 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             Mod.log.Info(nameof(WorldResyncSystem) + " ready (atomic epoch barrier).");
             _netSync = World.GetOrCreateSystemManaged<NetSyncSystem>();
 
-            if (Mod.Service != null)
-            {
-                _observer = new Observer(_requests, _controls, _leaves);
-                Mod.Service.Session.AddObserver(_observer);
-            }
+            _observer = SyncObserverBinding.Bind(
+                () => new Observer(_requests, _controls, _leaves));
         }
 
         protected override void OnDestroy()
         {
+            SyncObserverBinding.Unbind(_observer);
             MultiplayerService service = Mod.Service;
-            if (_observer != null && service != null)
-                service.Session.RemoveObserver(_observer);
             if (_state != RecoveryState.Idle && service != null &&
                 service.Session.Role == SessionRole.Host)
                 AbortEpoch(service, "world-sync system was destroyed");

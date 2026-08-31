@@ -205,77 +205,33 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             // because "nobody rents this one" is the statement a client cannot work out alone.
             _properties = GetEntityQuery(new EntityQueryDesc
             {
-                All = new[]
-                {
-                    ComponentType.ReadOnly<Building>(),
-                    ComponentType.ReadOnly<Renter>(),
-                    ComponentType.ReadOnly<PrefabRef>(),
-                    ComponentType.ReadOnly<global::Game.Objects.Transform>(),
-                    ComponentType.ReadOnly<UpdateFrame>(),
-                },
-                Any = new[]
-                {
-                    ComponentType.ReadOnly<CommercialProperty>(),
-                    ComponentType.ReadOnly<IndustrialProperty>(),
-                    ComponentType.ReadOnly<OfficeProperty>(),
-                },
-                None = new[]
-                {
-                    ComponentType.ReadOnly<StorageProperty>(),
-                    ComponentType.ReadOnly<Temp>(),
-                    ComponentType.ReadOnly<Deleted>(),
-                    ComponentType.ReadOnly<Owner>(),
-                },
+                All = SyncQuery.ReadOnly<Building, Renter, PrefabRef,
+                    global::Game.Objects.Transform, UpdateFrame>(),
+                Any = SyncQuery.ReadOnly<CommercialProperty, IndustrialProperty, OfficeProperty>(),
+                None = SyncQuery.ReadOnly<StorageProperty, Temp, Deleted, Owner>(),
             });
 
             // Deliberately the same shape as CompanyEconomyStatisticSystem's own query, so the
             // correction pass sees exactly the companies that system writes - no more, no fewer.
             _companies = GetEntityQuery(new EntityQueryDesc
             {
-                All = new[]
-                {
-                    ComponentType.ReadOnly<CompanyData>(),
-                    ComponentType.ReadOnly<global::Game.Economy.Resources>(),
-                    ComponentType.ReadOnly<PropertyRenter>(),
-                    ComponentType.ReadOnly<CompanyStatisticData>(),
-                    ComponentType.ReadOnly<UpdateFrame>(),
-                },
-                None = new[]
-                {
-                    ComponentType.ReadOnly<Created>(),
-                    ComponentType.ReadOnly<Deleted>(),
-                    ComponentType.ReadOnly<Temp>(),
-                },
+                All = SyncQuery.ReadOnly<CompanyData, global::Game.Economy.Resources,
+                    PropertyRenter, CompanyStatisticData, UpdateFrame>(),
+                None = SyncQuery.ReadOnly<Created, Deleted, Temp>(),
             });
 
             _departingCompanies = GetEntityQuery(new EntityQueryDesc
             {
-                All = new[]
-                {
-                    ComponentType.ReadOnly<CompanyData>(),
-                    ComponentType.ReadOnly<global::Game.Agents.MovingAway>(),
-                },
-                None = new[]
-                {
-                    ComponentType.ReadOnly<Deleted>(),
-                    ComponentType.ReadOnly<Temp>(),
-                },
+                All = SyncQuery.ReadOnly<CompanyData, global::Game.Agents.MovingAway>(),
+                None = SyncQuery.ReadOnly<Deleted, Temp>(),
             });
 
             // PropertySeeker is enableable, so this only contains companies whose local behaviour
             // has actively asked to find a building. The host owns that decision.
             _companySeekers = GetEntityQuery(new EntityQueryDesc
             {
-                All = new[]
-                {
-                    ComponentType.ReadOnly<CompanyData>(),
-                    ComponentType.ReadOnly<global::Game.Agents.PropertySeeker>(),
-                },
-                None = new[]
-                {
-                    ComponentType.ReadOnly<Deleted>(),
-                    ComponentType.ReadOnly<Temp>(),
-                },
+                All = SyncQuery.ReadOnly<CompanyData, global::Game.Agents.PropertySeeker>(),
+                None = SyncQuery.ReadOnly<Deleted, Temp>(),
             });
 
             SyncInbox.RegisterDrain(DrainForWorldChange);

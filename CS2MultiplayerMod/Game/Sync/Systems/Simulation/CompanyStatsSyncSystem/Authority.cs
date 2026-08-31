@@ -1,6 +1,5 @@
-using System;
-using System.Collections.Generic;
 using CS2MultiplayerMod.Core.Session;
+using CS2MultiplayerMod.Game.Sync.Infrastructure;
 using Game.Common;
 using Game.Companies;
 using Unity.Collections;
@@ -30,77 +29,27 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         /// * <c>PropertyProcessingSystem</c> and <c>PropertyRenterSystem</c> stay running. They
         ///   maintain the native renter links and execute the move-ins this system queues.
         /// </summary>
-        private static readonly Type[] ClientSuppressedSystems =
-        {
+        private readonly LocalAuthorityHold _authority = new LocalAuthorityHold(
+            "CompanyStats", "workplace tenancy", "which business is where",
+            "company tenancy authority",
             typeof(global::Game.Simulation.CommercialSpawnSystem),
             typeof(global::Game.Simulation.IndustrialSpawnSystem),
             typeof(global::Game.Simulation.CommercialFindPropertySystem),
-            typeof(global::Game.Simulation.IndustrialFindPropertySystem),
-        };
-
-        private readonly Dictionary<Type, bool> _suppressedWasEnabled = new Dictionary<Type, bool>();
-        private bool _authorityApplied;
+            typeof(global::Game.Simulation.IndustrialFindPropertySystem));
 
         /// <summary>
         /// Hands workplace tenancy to the host. Idempotent, and re-checked every update so a
         /// system the game re-enables on a state change does not quietly start opening businesses
         /// this peer's own way again.
         /// </summary>
-        private void ApplyLocalAuthority(MultiplayerSession session)
-        {
-            if (session.Role == SessionRole.Host)
-            {
-                // A host owns its own simulation. Restore in case this process was a client
-                // earlier in its life.
-                RestoreLocalAuthority();
-                return;
-            }
-
-            for (int i = 0; i < ClientSuppressedSystems.Length; i++)
-            {
-                Type type = ClientSuppressedSystems[i];
-                ComponentSystemBase system = World.GetExistingSystemManaged(type);
-                if (system == null) continue;
-                if (!_suppressedWasEnabled.ContainsKey(type))
-                    _suppressedWasEnabled[type] = system.Enabled;
-                if (!system.Enabled) continue;
-                // If a system that was initially off becomes enabled during the session, remember
-                // that latest native intent before holding it again so disconnect restores it on.
-                _suppressedWasEnabled[type] = true;
-                system.Enabled = false;
-                Mod.Verbose("[MP] CompanyStats: " + type.Name +
-                            " disabled on this client; the host decides which business is where.");
-            }
-
-            if (_authorityApplied) return;
-            _authorityApplied = true;
-            Mod.log.Info("[MP] CompanyStats: workplace tenancy handed to the host (" +
-                         ClientSuppressedSystems.Length + " simulation system(s) held).");
-            Diagnostics.FlightRecorder.Note("company tenancy authority -> host");
-        }
+        private void ApplyLocalAuthority(MultiplayerSession session) =>
+            _authority.Apply(World, session);
 
         /// <summary>
         /// Gives the local simulation its economy back when the session ends. Without this a
         /// player who leaves a session keeps a city no business can ever open in again.
         /// </summary>
-        private void RestoreLocalAuthority()
-        {
-            if (_suppressedWasEnabled.Count == 0)
-            {
-                _authorityApplied = false;
-                return;
-            }
-
-            foreach (KeyValuePair<Type, bool> pair in _suppressedWasEnabled)
-            {
-                ComponentSystemBase system = World.GetExistingSystemManaged(pair.Key);
-                if (system != null) system.Enabled = pair.Value;
-            }
-            _suppressedWasEnabled.Clear();
-            _authorityApplied = false;
-            Mod.log.Info("[MP] CompanyStats: workplace tenancy returned to the local simulation.");
-            Diagnostics.FlightRecorder.Note("company tenancy authority -> local");
-        }
+        private void RestoreLocalAuthority() => _authority.Restore(World);
 
         /// <summary>
         /// Called immediately before the native move-away executor. The systems that propose a
