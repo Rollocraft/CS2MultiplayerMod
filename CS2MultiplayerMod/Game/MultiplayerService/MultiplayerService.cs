@@ -1,6 +1,10 @@
+using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Globalization;
+using System.Threading;
+using Unity.Mathematics;
 using CS2MultiplayerMod.Core.Diagnostics;
 using CS2MultiplayerMod.Core.Protocol.Messages;
 using CS2MultiplayerMod.Core.Session;
@@ -87,6 +91,187 @@ namespace CS2MultiplayerMod.Game
 
         /// <summary>Latest known positions of the other players, for rendering their cursors.</summary>
         public IEnumerable<RemotePlayer> RemotePlayers => _remotePlayers.Values;
+
+        /// <summary>How many remote players are tracked, without walking the enumerator.</summary>
+        public int RemotePlayerCount => _remotePlayers.Count;
+
+        /// <summary>The tracked position of one player, or null when that id is unknown.</summary>
+        public RemotePlayer FindRemotePlayer(int playerId)
+        {
+            RemotePlayer player;
+            return _remotePlayers.TryGetValue(playerId, out player) ? player : null;
+        }
+
+        /// <summary>
+        /// Resolve a player from what someone typed: an exact id, then an exact name, then a
+        /// unique prefix. A prefix that matches more than one player resolves to nothing rather
+        /// than to an arbitrary one - following the wrong partner is worse than being told to be
+        /// more specific.
+        /// </summary>
+        public RemotePlayer FindRemotePlayerByName(string query)
+        {
+            if (string.IsNullOrEmpty(query)) return null;
+            query = query.Trim();
+            if (query.Length == 0) return null;
+
+            int id;
+            if (int.TryParse(query, NumberStyles.Integer, CultureInfo.InvariantCulture, out id))
+            {
+                RemotePlayer byId = FindRemotePlayer(id);
+                if (byId != null) return byId;
+            }
+
+            RemotePlayer exact = null;
+            RemotePlayer prefix = null;
+            bool prefixAmbiguous = false;
+            foreach (RemotePlayer player in _remotePlayers.Values)
+            {
+                string name = PlayerDisplayName(player.PlayerId);
+                if (string.Equals(name, query, StringComparison.OrdinalIgnoreCase)) exact = player;
+                else if (name.StartsWith(query, StringComparison.OrdinalIgnoreCase))
+                {
+                    if (prefix != null) prefixAmbiguous = true;
+                    prefix = player;
+                }
+            }
+            if (exact != null) return exact;
+            return prefixAmbiguous ? null : prefix;
+        }
+
+        /// <summary>
+        /// The best name we can put on a player id. A client is never sent a roster, so for
+        /// anyone but the host it can only offer the id - saying so plainly beats inventing a
+        /// name that will not match what that player calls themselves.
+        /// </summary>
+        public string PlayerDisplayName(int playerId)
+        {
+            foreach (Peer peer in _session.Peers)
+                if (peer.PlayerId == playerId && !string.IsNullOrEmpty(peer.Name)) return peer.Name;
+            if (playerId == _session.LocalPlayerId) return _session.LocalPlayerName;
+            if (playerId == MultiplayerSession.HostPlayerId) return "Host";
+            return "Player " + playerId;
+        }
+
+        // ---- Camera intent -----------------------------------------------------------
+        // Chat commands run on the UI thread and have no business touching the game camera.
+        // They record what they want here; PlayerCursorSyncSystem, which owns the camera
+        // reference, carries it out on its next update.
+
+        private int _followPlayerId = -1;
+        private float3 _cameraJump;
+        private int _cameraJumpPending; // 0/1, Interlocked so the consumer takes it exactly once
+
+        /// <summary>The player the camera is following, or -1.</summary>
+        public int FollowPlayerId => Volatile.Read(ref _followPlayerId);
+
+        /// <summary>Ask the camera to jump to a point on its next frame.</summary>
+        public void RequestCameraJump(float3 target)
+        {
+            _cameraJump = target;
+            Interlocked.Exchange(ref _cameraJumpPending, 1);
+        }
+
+        /// <summary>Consume a pending jump. True exactly once per request.</summary>
+        public bool TakeCameraJump(out float3 target)
+        {
+            if (Interlocked.Exchange(ref _cameraJumpPending, 0) == 0)
+            {
+                target = default(float3);
+                return false;
+            }
+            target = _cameraJump;
+            return true;
+        }
+
+        /// <summary>Follow a player's camera focus until they stop reporting or ours moves.</summary>
+        public void StartFollowing(int playerId) => Volatile.Write(ref _followPlayerId, playerId);
+
+        public void StopFollowing() => Volatile.Write(ref _followPlayerId, -1);
+
+        /// <summary>Post a line into the local chat feed without sending it to anyone.</summary>
+        public void AppendSystemChat(string text) => AppendChatEntry(null, text);
+
+        // ---- Map pings ---------------------------------------------------------------
+
+        private float3 _localCameraFocus;
+        private float3 _localPing;
+        private int _localPingPending;
+
+        /// <summary>
+        /// Where the local camera is looking, republished by PlayerCursorSyncSystem each time it
+        /// sends. Chat commands need a point on the map and have no camera reference of their own.
+        /// </summary>
+        public float3 LocalCameraFocus
+        {
+            get { return _localCameraFocus; }
+            internal set { _localCameraFocus = value; }
+        }
+
+        /// <summary>
+        /// Drop a beacon at the local camera focus for everyone in the session.
+        ///
+        /// The sender's own ring is recorded locally rather than waiting for the command to come
+        /// back: a host is notified of its own commands and a client is not, so relying on the
+        /// echo would draw the host's pings and silently swallow every client's.
+        /// </summary>
+        public void SendMapPing(string label)
+        {
+            if (!GameplaySyncReady) return;
+
+            float3 at = _localCameraFocus;
+            var command = new Sync.Commands.MapPingCommand
+            {
+                X = at.x,
+                Y = at.y,
+                Z = at.z,
+                Label = Core.Protocol.WireGuard.SanitizeText(
+                    label, Sync.Commands.MapPingCommand.MaxLabelLength),
+            };
+
+            try { _session.SendCommand(0, Sync.Commands.MapPingCommand.Id, command.Encode()); }
+            catch (Exception ex)
+            {
+                _log.Warn("[MP] Ping not sent: " + ex.Message);
+                return;
+            }
+
+            _localPing = at;
+            Interlocked.Exchange(ref _localPingPending, 1);
+            NotePing(at);
+
+            AppendChatEntry(null, string.IsNullOrEmpty(command.Label)
+                ? "Pinged (" + (int)at.x + ", " + (int)at.z + ")."
+                : "Pinged (" + (int)at.x + ", " + (int)at.z + "): " + command.Label);
+        }
+
+        /// <summary>Consume the local player's own pending ping. True exactly once per send.</summary>
+        public bool TakeLocalPing(out float3 position)
+        {
+            if (Interlocked.Exchange(ref _localPingPending, 0) == 0)
+            {
+                position = default(float3);
+                return false;
+            }
+            position = _localPing;
+            return true;
+        }
+
+        private float3 _lastPing;
+        private bool _hasLastPing;
+
+        /// <summary>Remember where the most recent ping landed, whoever dropped it.</summary>
+        internal void NotePing(float3 position)
+        {
+            _lastPing = position;
+            _hasLastPing = true;
+        }
+
+        /// <summary>Where the most recent ping landed, for "/goto ping".</summary>
+        public bool TryGetLastPing(out float3 position)
+        {
+            position = _lastPing;
+            return _hasLastPing;
+        }
 
         /// <summary>The joining client's place in the world-handover flow.</summary>
         public ClientWorldPhase WorldPhase => _phase;
@@ -369,42 +554,98 @@ namespace CS2MultiplayerMod.Game
                 _log.Warn("[MP] Ignored ban request for unavailable player #" + playerId + ".");
         }
 
+        /// <summary>
+        /// The participant list the in-game panel renders. The host builds it from its peer
+        /// table; a client has no peer table beyond the host connection, so it builds one from
+        /// the players it is tracking positions for. Either way the local player is included and
+        /// is never kickable.
+        ///
+        /// A client used to be handed an empty array and rendered nothing at all, which made a
+        /// two-player session look like a single-player one from one side of it.
+        /// </summary>
         private void RefreshPlayerListJson()
         {
             lock (_chatLock)
             {
-                if (_session.Role != SessionRole.Host)
+                switch (_session.Role)
                 {
-                    _playerListJson = "[]";
-                    return;
+                    case SessionRole.Host: _playerListJson = BuildHostPlayerList(); break;
+                    case SessionRole.Client: _playerListJson = BuildClientPlayerList(); break;
+                    default: _playerListJson = "[]"; break;
                 }
-
-                var peers = new List<Peer>();
-                foreach (Peer peer in _session.Peers)
-                    if (peer.Handshaked) peers.Add(peer);
-                peers.Sort((a, b) => a.PlayerId.CompareTo(b.PlayerId));
-
-                var sb = new System.Text.StringBuilder((peers.Count + 1) * 56 + 2);
-                sb.Append("[{\"id\":").Append(_session.LocalPlayerId).Append(",\"name\":");
-                AppendJsonString(sb, _session.LocalPlayerName);
-                sb.Append(",\"isHost\":true}]");
-
-                if (peers.Count > 0)
-                {
-                    // Replace the closing bracket while appending keeps this a single,
-                    // small allocation and reuses the chat JSON escaping rules.
-                    sb.Length--;
-                    for (int i = 0; i < peers.Count; i++)
-                    {
-                        Peer peer = peers[i];
-                        sb.Append(",{\"id\":").Append(peer.PlayerId).Append(",\"name\":");
-                        AppendJsonString(sb, peer.Name);
-                        sb.Append(",\"isHost\":false}");
-                    }
-                    sb.Append(']');
-                }
-                _playerListJson = sb.ToString();
             }
+        }
+
+        private string BuildHostPlayerList()
+        {
+            var peers = new List<Peer>();
+            foreach (Peer peer in _session.Peers)
+                if (peer.Handshaked) peers.Add(peer);
+            peers.Sort((a, b) => a.PlayerId.CompareTo(b.PlayerId));
+
+            var sb = new System.Text.StringBuilder((peers.Count + 1) * 72 + 2);
+            sb.Append('[');
+            AppendPlayerEntry(sb, _session.LocalPlayerId, _session.LocalPlayerName,
+                isHost: true, isYou: true, latencyMs: 0);
+            for (int i = 0; i < peers.Count; i++)
+            {
+                sb.Append(',');
+                AppendPlayerEntry(sb, peers[i].PlayerId, peers[i].Name,
+                    isHost: false, isYou: false, latencyMs: peers[i].LatencyMs);
+            }
+            sb.Append(']');
+            return sb.ToString();
+        }
+
+        private string BuildClientPlayerList()
+        {
+            // The host is the one peer a client holds, and it carries the measured latency.
+            Peer hostPeer = null;
+            foreach (Peer peer in _session.Peers)
+                if (peer.Handshaked || peer.PlayerId == MultiplayerSession.HostPlayerId) { hostPeer = peer; break; }
+
+            var others = new List<int>();
+            foreach (RemotePlayer player in _remotePlayers.Values)
+                if (player.PlayerId != _session.LocalPlayerId &&
+                    player.PlayerId != MultiplayerSession.HostPlayerId) others.Add(player.PlayerId);
+            others.Sort();
+
+            var sb = new System.Text.StringBuilder((others.Count + 2) * 72 + 2);
+            sb.Append('[');
+            AppendPlayerEntry(sb, MultiplayerSession.HostPlayerId,
+                hostPeer != null && !string.IsNullOrEmpty(hostPeer.Name) ? hostPeer.Name : "Host",
+                isHost: true, isYou: _session.LocalPlayerId == MultiplayerSession.HostPlayerId,
+                latencyMs: hostPeer != null ? hostPeer.LatencyMs : -1);
+
+            sb.Append(',');
+            AppendPlayerEntry(sb, _session.LocalPlayerId, _session.LocalPlayerName,
+                isHost: false, isYou: true, latencyMs: 0);
+
+            for (int i = 0; i < others.Count; i++)
+            {
+                sb.Append(',');
+                // No roster travels to clients, so another client's name is not known here.
+                // PlayerDisplayName says "Player 3" rather than inventing one.
+                AppendPlayerEntry(sb, others[i], PlayerDisplayName(others[i]),
+                    isHost: false, isYou: false, latencyMs: -1);
+            }
+            sb.Append(']');
+            return sb.ToString();
+        }
+
+        /// <summary>
+        /// One roster entry. A latency of -1 means "not measured from here" and the panel
+        /// shows nothing rather than a misleading zero.
+        /// </summary>
+        private static void AppendPlayerEntry(System.Text.StringBuilder sb, int id, string name,
+            bool isHost, bool isYou, int latencyMs)
+        {
+            sb.Append("{\"id\":").Append(id).Append(",\"name\":");
+            AppendJsonString(sb, name);
+            sb.Append(",\"isHost\":").Append(isHost ? "true" : "false");
+            sb.Append(",\"isYou\":").Append(isYou ? "true" : "false");
+            sb.Append(",\"latency\":").Append(latencyMs);
+            sb.Append('}');
         }
 
 

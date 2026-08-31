@@ -59,7 +59,12 @@ namespace CS2MultiplayerMod.Core.Session
                 catch (Exception ex) { LogObserverError("OnPeerLeft", ex); }
         }
 
-        private void NotifyChat(string sender, string text)
+        /// <summary>
+        /// Post a session notice into every observer's chat feed. Internal rather than private
+        /// so the world-sync flow, which lives in the game layer, can report its own completion
+        /// through the same path the session's own notices use.
+        /// </summary>
+        internal void NotifyChat(string sender, string text)
         {
             for (int i = 0; i < _observers.Count; i++)
                 try { _observers[i].OnChatReceived(sender, text); }

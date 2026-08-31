@@ -75,6 +75,14 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 for (int i = 0; i < entities.Length && targets.Count > 0; i++)
                 {
                     Entity entity = entities[i];
+                    // The array was materialized from a query; a delete realized between that
+                    // snapshot and this loop leaves a handle here that no longer resolves, and
+                    // GetComponentData on it throws out of the whole apply pass. Skipping the
+                    // one edge costs nothing - the upgrade stays in targets and retries.
+                    if (!EntityManager.Exists(entity) ||
+                        !EntityManager.HasComponent<PrefabRef>(entity) ||
+                        !EntityManager.HasComponent<Curve>(entity)) continue;
+
                     Entity candidatePrefab = EntityManager.GetComponentData<PrefabRef>(entity).m_Prefab;
                     Bezier4x3 b = EntityManager.GetComponentData<Curve>(entity).m_Bezier;
 
@@ -150,9 +158,14 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                         EntityManager.AddComponent<Updated>(entity);
                         // The composition at each end (crosswalks, transitions) is selected
                         // per node - re-update them like the game's own commit does.
-                        Edge ends = EntityManager.GetComponentData<Edge>(entity);
-                        TagUpdated(ends.m_Start);
-                        TagUpdated(ends.m_End);
+                        // An edge normally has Edge, but the query admits anything with a Curve;
+                        // a pending replacement can leave one without ends for a frame.
+                        if (EntityManager.HasComponent<Edge>(entity))
+                        {
+                            Edge ends = EntityManager.GetComponentData<Edge>(entity);
+                            TagUpdated(ends.m_Start);
+                            TagUpdated(ends.m_End);
+                        }
 
                         targets.RemoveAt(t);
                         applied++;
@@ -184,6 +197,11 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
                     for (int i = 0; i < entities.Length; i++)
                     {
+                        // Same staleness window as the edge scan above.
+                        if (!EntityManager.Exists(entities[i]) ||
+                            !EntityManager.HasComponent<Node>(entities[i]) ||
+                            !EntityManager.HasComponent<PrefabRef>(entities[i])) continue;
+
                         float3 pos = EntityManager.GetComponentData<Node>(entities[i]).m_Position;
                         if (math.abs(pos.y - wanted.y) > NodeMatchMaxDy) continue;
                         float distSq = math.distancesq(pos.xz, wanted.xz);

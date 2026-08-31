@@ -167,6 +167,9 @@ namespace CS2MultiplayerMod.Game
                 if (_worldInstallGeneration < long.MaxValue) _worldInstallGeneration++;
                 ResetWorldSyncState(restoreSpeed: true);
                 SetPhase(ClientWorldPhase.InSession);
+                // The player watched the world reload and the simulation stop; say plainly that
+                // it is over, rather than leaving them to infer it from the clock moving again.
+                _session.NotifyChat(null, "World sync complete - your city matches the host's.");
                 _log.Info("[MP] World sync epoch " + epoch +
                           " resumed after the authoritative snapshot was installed.");
                 Diagnostics.FlightRecorder.Note("world-sync client resumed epoch=" + epoch);
@@ -290,7 +293,17 @@ namespace CS2MultiplayerMod.Game
             }
         }
 
+        /// <summary>
+        /// The speed to restore once a sync finishes. It arrives over the wire, so the upper
+        /// bound matters as much as the lower one: the game's own selector tops out at 3, and a
+        /// peer that sends a large finite value would otherwise have the simulation resume at it.
+        /// </summary>
         private static float SanitizeSpeed(float speed) =>
-            float.IsNaN(speed) || float.IsInfinity(speed) || speed < 0f ? 0f : speed;
+            float.IsNaN(speed) || float.IsInfinity(speed) || speed < 0f
+                ? 0f
+                : Math.Min(speed, MaxResumeSpeed);
+
+        /// <summary>Generous ceiling on a restored speed - well above the selector's 3.</summary>
+        private const float MaxResumeSpeed = 8f;
     }
 }
