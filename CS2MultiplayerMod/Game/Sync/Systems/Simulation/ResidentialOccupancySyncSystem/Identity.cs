@@ -59,6 +59,22 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             return ((ulong)(uint)entity.Version << 32) | (uint)entity.Index;
         }
 
+        /// <summary>
+        /// Session-scoped citizen identity shared with company employment snapshots. The packed
+        /// value is only a wire key; a receiver must resolve it through this system's binding map
+        /// and must never reinterpret it as one of its own entity handles.
+        /// </summary>
+        internal static ulong PackNetworkCitizenId(Entity citizen) =>
+            PackHostEntityId(citizen);
+
+        /// <summary>
+        /// Resolve an employee from the same authoritative resident mapping used by occupancy.
+        /// This narrow seam is what lets the company channel attach a job to a real local citizen
+        /// instead of creating a display-only worker count.
+        /// </summary>
+        internal bool TryResolveCompanyCitizen(ulong citizenId, out Entity citizen) =>
+            TryResolveCitizen(citizenId, out citizen);
+
         private bool TryResolveHousehold(ulong householdId, out Entity household)
         {
             household = Entity.Null;
@@ -183,15 +199,24 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 RemoveCitizenBinding(citizenId, citizen);
         }
 
+        /// <summary>
+        /// The id map is consulted before the entity is inspected: this is called for every
+        /// household a local economy system touched, and most families in a large city were never
+        /// bound to a host identity at all. An unmapped entity has nothing to unbind either way.
+        /// </summary>
         private bool TryGetBoundHouseholdId(Entity household, out ulong householdId)
         {
-            householdId = 0;
+            if (!_hostIdsByHousehold.TryGetValue(household, out householdId))
+            {
+                householdId = 0;
+                return false;
+            }
             if (!IsLiveMappedHousehold(household))
             {
                 UnbindHousehold(household);
+                householdId = 0;
                 return false;
             }
-            if (!_hostIdsByHousehold.TryGetValue(household, out householdId)) return false;
 
             Entity reverse;
             if (_householdsByHostId.TryGetValue(householdId, out reverse) && reverse == household)
@@ -204,13 +229,17 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
         private bool TryGetBoundCitizenId(Entity citizen, out ulong citizenId)
         {
-            citizenId = 0;
+            if (!_hostIdsByCitizen.TryGetValue(citizen, out citizenId))
+            {
+                citizenId = 0;
+                return false;
+            }
             if (!IsLiveMappedCitizen(citizen))
             {
                 UnbindCitizen(citizen);
+                citizenId = 0;
                 return false;
             }
-            if (!_hostIdsByCitizen.TryGetValue(citizen, out citizenId)) return false;
 
             Entity reverse;
             if (_citizensByHostId.TryGetValue(citizenId, out reverse) && reverse == citizen)
@@ -348,6 +377,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             _propertiesByIdentity.Clear();
             _desiredHouseholds.Clear();
             _desiredHouseholdEconomies.Clear();
+            ClearHouseholdEconomyCorrections();
+            ClearPropertyFeeCorrections();
             _desiredCitizens.Clear();
             _desiredCitizensByHousehold.Clear();
         }

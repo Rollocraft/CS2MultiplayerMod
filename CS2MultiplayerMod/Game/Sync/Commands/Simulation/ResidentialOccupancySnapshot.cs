@@ -17,7 +17,12 @@ namespace CS2MultiplayerMod.Game.Sync.Commands
     /// citizen models can cover a whole street), so names are interned in a page-local table and
     /// referenced by index.
     /// </summary>
-    public sealed class ResidentialOccupancySnapshot
+    // The page's limits, its contents, and the codec that puts it on the wire.
+    //
+    // Everything a page must satisfy before it is trusted - and the page-local name table the codec
+    // interns through - is in OccupancySnapshotValidation.cs. The records themselves are in
+    // OccupancyRecords.cs.
+    public sealed partial class ResidentialOccupancySnapshot
     {
         public const int MaxNames = 512;
         public const int MaxProperties = 256;
@@ -50,6 +55,9 @@ namespace CS2MultiplayerMod.Game.Sync.Commands
         /// Same idea for a household's savings, cash, and signed daily economy totals.
         /// </summary>
         public const int MaxMoney = 1000000000;
+
+        /// <summary>Bound for fulfilled electricity, fresh-water and sewage quantities.</summary>
+        public const int MaxUtilityConsumption = 1000000000;
 
         /// <summary>Highest wage bracket a worker can be paid at.</summary>
         public const int MaxWorkerLevel = 4;
@@ -133,7 +141,7 @@ namespace CS2MultiplayerMod.Game.Sync.Commands
                 if (households > MaxHouseholdsPerPage)
                     throw new ProtocolException("Occupancy page exceeds its household cap.");
                 Intern(names, property);
-                encodedBytes += 24;
+                encodedBytes += 38;
                 for (int h = 0; h < property.Households.Length; h++)
                 {
                     OccupancyHousehold household = property.Households[h];
@@ -148,14 +156,14 @@ namespace CS2MultiplayerMod.Game.Sync.Commands
                     vehicles += household.OwnedVehicles.Length;
                     if (vehicles > MaxVehiclesPerPage)
                         throw new ProtocolException("Occupancy page exceeds its vehicle cap.");
-                    encodedBytes += 50L + household.NameIndices.Length * 4L +
+                    encodedBytes += 63L + household.NameIndices.Length * 4L +
                                     (household.Pets.Length + household.OwnedVehicles.Length) * 2L;
                     for (int c = 0; c < household.Citizens.Length; c++)
                     {
                         OccupancyCitizen citizen = household.Citizens[c];
                         if (!citizenIds.Add(citizen.CitizenId))
                             throw new ProtocolException("Duplicate citizen id in occupancy page.");
-                        encodedBytes += 24L + citizen.NameIndices.Length * 4L;
+                        encodedBytes += 25L + citizen.NameIndices.Length * 4L;
                     }
                 }
             }
@@ -197,6 +205,11 @@ namespace CS2MultiplayerMod.Game.Sync.Commands
                 writer.WriteFloat(property.AnchorZ);
                 writer.WriteLong(unchecked((long)property.Revision));
                 writer.WriteByte(property.ConstructionSpeed);
+                writer.WriteBool(property.HasElectricityConsumer);
+                writer.WriteInt(property.ElectricityFulfilledConsumption);
+                writer.WriteBool(property.HasWaterConsumer);
+                writer.WriteInt(property.WaterFulfilledFresh);
+                writer.WriteInt(property.WaterFulfilledSewage);
                 writer.WriteByte((byte)property.Households.Length);
                 for (int h = 0; h < property.Households.Length; h++)
                 {
@@ -214,6 +227,10 @@ namespace CS2MultiplayerMod.Game.Sync.Commands
                     writer.WriteInt(unchecked((int)household.ShoppedValueLastDay));
                     writer.WriteInt(unchecked((int)household.LastDayFrameIndex));
                     writer.WriteInt(household.MoneySpentOnBuildingLevelingLastDay);
+                    writer.WriteBool(household.HasTaxPayer);
+                    writer.WriteInt(household.UntaxedIncome);
+                    writer.WriteInt(household.AverageTaxRate);
+                    writer.WriteInt(household.AverageTaxPaid);
                     WriteNameIndices(writer, household.NameIndices);
                     writer.WriteByte((byte)household.Citizens.Length);
                     for (int c = 0; c < household.Citizens.Length; c++)
@@ -226,6 +243,7 @@ namespace CS2MultiplayerMod.Game.Sync.Commands
                         writer.WriteShort(citizen.BirthDay);
                         writer.WriteByte(citizen.Health);
                         writer.WriteByte(citizen.WellBeing);
+                        writer.WriteByte(citizen.HealthProblem);
                         writer.WriteByte(citizen.Employment);
                         writer.WriteInt(citizen.UnemploymentCounter);
                         WriteNameIndices(writer, citizen.NameIndices);
@@ -309,9 +327,9 @@ namespace CS2MultiplayerMod.Game.Sync.Commands
                 snapshot.CitizenDepartures.Add(departure);
             }
 
-            // 24 bytes is the smallest a property with no households can encode to: name index,
-            // three coordinates, revision, construction speed, and household count.
-            int propertyCount = WireGuard.ReadCount(reader, 24, MaxProperties);
+            // 38 bytes is the smallest a property with no households can encode to: identity,
+            // construction state, the fee-driving utility quantities, and household count.
+            int propertyCount = WireGuard.ReadCount(reader, 38, MaxProperties);
             var identities = new HashSet<PropertyRentIdentity>();
             var householdIds = new HashSet<ulong>();
             var citizenIds = new HashSet<ulong>();
@@ -326,6 +344,11 @@ namespace CS2MultiplayerMod.Game.Sync.Commands
                     AnchorZ = WireGuard.ReadCoordinate(reader),
                     Revision = unchecked((ulong)reader.ReadLong()),
                     ConstructionSpeed = reader.ReadByte(),
+                    HasElectricityConsumer = ReadStrictBool(reader),
+                    ElectricityFulfilledConsumption = reader.ReadInt(),
+                    HasWaterConsumer = ReadStrictBool(reader),
+                    WaterFulfilledFresh = reader.ReadInt(),
+                    WaterFulfilledSewage = reader.ReadInt(),
                 };
                 int householdCount = reader.ReadByte();
                 if (householdCount > MaxHouseholdsPerProperty)
@@ -351,6 +374,10 @@ namespace CS2MultiplayerMod.Game.Sync.Commands
                         ShoppedValueLastDay = unchecked((uint)reader.ReadInt()),
                         LastDayFrameIndex = unchecked((uint)reader.ReadInt()),
                         MoneySpentOnBuildingLevelingLastDay = reader.ReadInt(),
+                        HasTaxPayer = ReadStrictBool(reader),
+                        UntaxedIncome = reader.ReadInt(),
+                        AverageTaxRate = reader.ReadInt(),
+                        AverageTaxPaid = reader.ReadInt(),
                         NameIndices = ReadNameIndices(reader),
                     };
                     if (!householdIds.Add(household.HouseholdId))
@@ -372,6 +399,7 @@ namespace CS2MultiplayerMod.Game.Sync.Commands
                             BirthDay = reader.ReadShort(),
                             Health = reader.ReadByte(),
                             WellBeing = reader.ReadByte(),
+                            HealthProblem = reader.ReadByte(),
                             Employment = reader.ReadByte(),
                             UnemploymentCounter = reader.ReadInt(),
                             NameIndices = ReadNameIndices(reader),
@@ -418,309 +446,5 @@ namespace CS2MultiplayerMod.Game.Sync.Commands
                 throw new ProtocolException("Occupancy page exceeds its encoded-byte cap.");
             return Read(new NetworkReader(body));
         }
-
-        /// <summary>
-        /// Shared validation for the codec and for host capture. Capture calls it before an entry
-        /// reaches a page, so one broken local prefab or transform is skipped rather than making
-        /// <see cref="Write"/> throw — city-state capture is shared, and a throw there would
-        /// suppress money, clock, demand and every other channel in the same snapshot.
-        /// </summary>
-        public static bool IsValidProperty(OccupancyProperty property)
-        {
-            if (!IsValidName(property.PrefabName)) return false;
-            if (property.Revision == 0) return false;
-            if (!IsValidCoordinate(property.AnchorX) || !IsValidCoordinate(property.AnchorY) ||
-                !IsValidCoordinate(property.AnchorZ)) return false;
-            if (property.Households == null ||
-                property.Households.Length > MaxHouseholdsPerProperty) return false;
-            var householdIds = new HashSet<ulong>();
-            var citizenIds = new HashSet<ulong>();
-            for (int h = 0; h < property.Households.Length; h++)
-            {
-                OccupancyHousehold household = property.Households[h];
-                if (household.HouseholdId == 0 || !householdIds.Add(household.HouseholdId))
-                    return false;
-                if (!IsValidName(household.PrefabName)) return false;
-                if (!IsValidNameIndices(household.NameIndices)) return false;
-                if (household.Rent < 0 || household.Rent > MaxRent) return false;
-                if (household.Savings < -MaxMoney || household.Savings > MaxMoney) return false;
-                if (household.Money < -MaxMoney || household.Money > MaxMoney) return false;
-                if (household.SalaryLastDay < -MaxMoney ||
-                    household.SalaryLastDay > MaxMoney) return false;
-                if (household.MoneySpentOnBuildingLevelingLastDay < -MaxMoney ||
-                    household.MoneySpentOnBuildingLevelingLastDay > MaxMoney) return false;
-                if (household.Citizens == null ||
-                    household.Citizens.Length > MaxCitizensPerHousehold) return false;
-                for (int c = 0; c < household.Citizens.Length; c++)
-                {
-                    OccupancyCitizen citizen = household.Citizens[c];
-                    if (citizen.CitizenId == 0 || !citizenIds.Add(citizen.CitizenId)) return false;
-                    if (!IsValidName(citizen.PrefabName)) return false;
-                    if (!IsValidNameIndices(citizen.NameIndices)) return false;
-                    if (citizen.WorkerLevel > MaxWorkerLevel) return false;
-                    if (citizen.UnemploymentCounter < 0 ||
-                        citizen.UnemploymentCounter > MaxMoney) return false;
-                }
-                if (household.Pets == null || household.Pets.Length > MaxPetsPerHousehold)
-                    return false;
-                for (int p = 0; p < household.Pets.Length; p++)
-                    if (!IsValidName(household.Pets[p])) return false;
-                if (household.OwnedVehicles == null ||
-                    household.OwnedVehicles.Length > MaxVehiclesPerHousehold) return false;
-                for (int v = 0; v < household.OwnedVehicles.Length; v++)
-                    if (!IsValidName(household.OwnedVehicles[v])) return false;
-            }
-            return true;
-        }
-
-        private static void Validate(OccupancyProperty property)
-        {
-            if (!IsValidProperty(property))
-                throw new ProtocolException("Invalid occupancy property entry.");
-        }
-
-        private static void Intern(NameTable names, OccupancyProperty property)
-        {
-            names.Add(property.PrefabName);
-            if (property.Households == null) return;
-            for (int h = 0; h < property.Households.Length; h++)
-            {
-                OccupancyHousehold household = property.Households[h];
-                names.Add(household.PrefabName);
-                if (household.Citizens != null)
-                    for (int c = 0; c < household.Citizens.Length; c++)
-                        names.Add(household.Citizens[c].PrefabName);
-                if (household.Pets != null)
-                    for (int p = 0; p < household.Pets.Length; p++) names.Add(household.Pets[p]);
-                if (household.OwnedVehicles != null)
-                    for (int v = 0; v < household.OwnedVehicles.Length; v++)
-                        names.Add(household.OwnedVehicles[v]);
-            }
-        }
-
-        /// <summary>
-        /// A random name slot is a plain index into a localized name list, or -1 for "this prefab
-        /// has no list". Both are drawn per machine from its own clock, which is why they have to
-        /// travel: without them the same family has a different surname on every peer.
-        /// </summary>
-        private static bool IsValidNameIndices(int[] indices)
-        {
-            if (indices == null || indices.Length > MaxNameIndices) return false;
-            for (int i = 0; i < indices.Length; i++)
-                if (indices[i] < -1) return false;
-            return true;
-        }
-
-        private static void WriteNameIndices(NetworkWriter writer, int[] indices)
-        {
-            writer.WriteByte((byte)indices.Length);
-            for (int i = 0; i < indices.Length; i++) writer.WriteInt(indices[i]);
-        }
-
-        private static int[] ReadNameIndices(NetworkReader reader)
-        {
-            int count = reader.ReadByte();
-            if (count > MaxNameIndices)
-                throw new ProtocolException("Occupancy name-index count exceeds its cap.");
-            if ((long)count * 4 > reader.Remaining)
-                throw new ProtocolException("Occupancy name indices do not fit the payload.");
-            var indices = new int[count];
-            for (int i = 0; i < count; i++)
-            {
-                indices[i] = reader.ReadInt();
-                if (indices[i] < -1)
-                    throw new ProtocolException("Occupancy name index is below its floor.");
-            }
-            return indices;
-        }
-
-        private static int ReadNameIndex(NetworkReader reader, int nameCount)
-        {
-            int index = reader.ReadShort();
-            if (index < 0 || index >= nameCount)
-                throw new ProtocolException("Occupancy name index outside the page's table.");
-            return index;
-        }
-
-        private static bool ReadStrictBool(NetworkReader reader)
-        {
-            byte value = reader.ReadByte();
-            if (value > 1) throw new ProtocolException("Invalid occupancy page flag.");
-            return value != 0;
-        }
-
-        private static bool IsValidName(string name)
-        {
-            if (string.IsNullOrEmpty(name) || name.Length > WireGuard.MaxNameLength) return false;
-            for (int i = 0; i < name.Length; i++)
-                if (char.IsControl(name[i])) return false;
-            return true;
-        }
-
-        private static bool IsValidCoordinate(float value) =>
-            !float.IsNaN(value) && !float.IsInfinity(value) &&
-            value >= -WireGuard.MaxCoordinate && value <= WireGuard.MaxCoordinate;
-
-        private sealed class NameTable
-        {
-            private readonly Dictionary<string, int> _index = new Dictionary<string, int>(
-                StringComparer.Ordinal);
-            public readonly List<string> Ordered = new List<string>();
-
-            public int Count => Ordered.Count;
-
-            public void Add(string name)
-            {
-                if (string.IsNullOrEmpty(name) || _index.ContainsKey(name)) return;
-                _index.Add(name, Ordered.Count);
-                Ordered.Add(name);
-            }
-
-            public int IndexOf(string name)
-            {
-                int index;
-                if (!_index.TryGetValue(name, out index))
-                    throw new ProtocolException("Occupancy name missing from its own page table.");
-                return index;
-            }
-        }
-    }
-
-    /// <summary>One residential property and everyone the host has living in it.</summary>
-    public struct OccupancyProperty
-    {
-        public string PrefabName;
-        public float AnchorX;
-        public float AnchorY;
-        public float AnchorZ;
-
-        /// <summary>
-        /// Host-monotonic version of this property's absolute roster. It is opaque to the client
-        /// except for rejecting an older roster after a newer one has already been applied.
-        /// </summary>
-        public ulong Revision;
-
-        /// <summary>
-        /// Zero when the host's building is finished; otherwise the build rate its site was given.
-        /// That rate is drawn independently on each machine, so without it two peers building the
-        /// same house finish it at different times - and a roster that describes a finished
-        /// building keeps arriving at a peer that is still a construction site.
-        /// </summary>
-        public byte ConstructionSpeed;
-
-        public OccupancyHousehold[] Households;
-
-        /// <summary>
-        /// The same portable property identity the rent channel and growable realization use:
-        /// building entity ids are machine-local, the prefab name and world anchor are not.
-        /// </summary>
-        public PropertyRentIdentity Identity =>
-            new PropertyRentIdentity(PrefabName, AnchorX, AnchorY, AnchorZ);
-    }
-
-    /// <summary>One household in a property, identified by a host-issued world-scoped id.</summary>
-    public struct OccupancyHousehold
-    {
-        public ulong HouseholdId;
-        public string PrefabName;
-        public byte Flags;
-
-        /// <summary>
-        /// Explicit host lifecycle decision. Property-page absence alone is not a departure: the
-        /// household may have moved to a destination whose page was dropped or is unresolved.
-        /// </summary>
-        public bool Departing;
-
-        public int Rent;
-
-        /// <summary><see cref="Game.Citizens.Household.m_Resources"/>: accumulated savings.</summary>
-        public int Savings;
-
-        /// <summary>The money resource in the household's own resource buffer.</summary>
-        public int Money;
-
-        /// <summary>Salary recorded by the host's household behavior pass for the last day.</summary>
-        public int SalaryLastDay;
-
-        /// <summary>Consumption target produced by the host's household behavior pass.</summary>
-        public short ConsumptionPerDay;
-
-        public uint ShoppedValuePerDay;
-        public uint ShoppedValueLastDay;
-        public uint LastDayFrameIndex;
-
-        /// <summary>Last day's signed expenditure on building leveling.</summary>
-        public int MoneySpentOnBuildingLevelingLastDay;
-
-        /// <summary>Random name slots; the first is the family surname.</summary>
-        public int[] NameIndices;
-
-        public OccupancyCitizen[] Citizens;
-        public string[] Pets;
-
-        /// <summary>
-        /// Prefabs of the household's live personal vehicles. Synced households deliberately skip
-        /// the local random-arrival initializer, so the owned vehicles created by that initializer
-        /// have to be realized explicitly on receiving peers.
-        /// </summary>
-        public string[] OwnedVehicles;
-    }
-
-    /// <summary>
-    /// One resident. The stable id prevents a same-sized roster replacement from reusing the wrong
-    /// local citizen. Age, education and gender live in the citizen's flag word; employment and
-    /// unemployment state feed the household-income calculation.
-    /// </summary>
-    public struct OccupancyCitizen
-    {
-        public ulong CitizenId;
-        public string PrefabName;
-        public short State;
-        public ushort PseudoRandom;
-        public short BirthDay;
-        public byte Health;
-        public byte WellBeing;
-
-        /// <summary>Bit 0: holds a job. Bits 4-7: wage level.</summary>
-        public byte Employment;
-
-        /// <summary>Frames of unemployment used by the benefit branch of household income.</summary>
-        public int UnemploymentCounter;
-
-        /// <summary>Random name slots; the first is this person's first name.</summary>
-        public int[] NameIndices;
-
-        public bool Employed => (Employment & 1) != 0;
-        public byte WorkerLevel => (byte)((Employment >> 4) & 0xF);
-
-        public static byte PackEmployment(bool employed, byte level) =>
-            (byte)((employed ? 1 : 0) | ((level & 0xF) << 4));
-    }
-
-    /// <summary>
-    /// A repeated, revisioned host lifecycle tombstone. It is carried independently of a property
-    /// roster so coalescing one move-away page cannot leave the client preserving that family.
-    /// </summary>
-    public struct OccupancyDeparture
-    {
-        public ulong HouseholdId;
-        public ulong Revision;
-
-        /// <summary>
-        /// The live household currently has no property. A client releases its old renter link but
-        /// preserves the family and identity for a later host-authored destination.
-        /// </summary>
-        public bool Unhoused;
-    }
-
-    /// <summary>
-    /// A retained exact-person tombstone. It closes individual death or emigration without
-    /// treating absence from one household page as proof of departure; a later, higher-revision
-    /// positive location still wins when the citizen actually moved to another household.
-    /// </summary>
-    public struct OccupancyCitizenDeparture
-    {
-        public ulong CitizenId;
-        public ulong Revision;
     }
 }

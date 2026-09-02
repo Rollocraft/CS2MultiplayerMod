@@ -9,9 +9,11 @@ using Game.Simulation;
 using Game.Tools;
 using Unity.Entities;
 using Unity.Mathematics;
+using CS2MultiplayerMod.Core.Diagnostics;
 using CS2MultiplayerMod.Core.Protocol.Messages;
 using CS2MultiplayerMod.Core.Session;
 using CS2MultiplayerMod.Core.Sync;
+using CS2MultiplayerMod.Game.Diagnostics;
 using CS2MultiplayerMod.Game.Sync.Commands;
 using CS2MultiplayerMod.Game.Sync.Infrastructure;
 
@@ -36,6 +38,14 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
     {
         /// <summary>How often the host looks for level changes. They are rare; the query is small.</summary>
         private const long LevelScanIntervalMs = 500;
+
+        /// <summary>
+        /// Buildings the rolling abandonment/condemnation scan examines per pass. It exists to
+        /// notice a state the host never announced, so a very large city may take longer to come
+        /// all the way round without anything being missed; every real transition still reaches
+        /// the wire through its own event-driven capture.
+        /// </summary>
+        private const int MaxStateBuildingsPerScan = 256;
 
         /// <summary>Maximum time for a generated building to acquire its native road link.</summary>
         private const long RealizationValidationWindowMs = 15000;
@@ -79,6 +89,12 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         /// Positions this client has asked the build pipeline for, so the building that appears
         /// there is recognised as the host's rather than as one this machine grew.
         /// </summary>
+        /// <summary>
+        /// Set by <see cref="SyncRealizeSystem"/> while the net pipeline cannot deliver roads. A
+        /// growable waiting to join its road graph is waiting on exactly that pipeline.
+        /// </summary>
+        public bool NetworkDependenciesHeld;
+
         private sealed class PendingRealizedSpawn
         {
             public Entity Prefab;
@@ -131,8 +147,17 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             new Dictionary<Entity, HostConstructionObservation>();
         private readonly HashSet<Entity> _constructionSeen = new HashSet<Entity>();
         private readonly List<Entity> _constructionScratch = new List<Entity>();
-        private readonly Dictionary<Entity, byte> _hostStateFlags = new Dictionary<Entity, byte>();
+
+        private struct HostStateObservation
+        {
+            public byte Flags;
+            public int Condition;
+        }
+
+        private readonly Dictionary<Entity, HostStateObservation> _hostState =
+            new Dictionary<Entity, HostStateObservation>();
         private int _stateScanBucket;
+        private int _stateScanCursor;
 
         private uint _sequence;
         private long _lastLevelScanMs;
@@ -145,6 +170,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         private int _sentSpawn, _sentLevel, _sentRemove, _sentState;
         private int _gotSpawn, _gotLevel, _gotRemove, _gotState;
         private int _duplicates, _conflicts, _unmatched, _unknownPrefab, _rejectedLocal;
+        private int _repairedPrefabs;
 
         private PrefabSystem _prefabSystem;
         private PrefabIndex _prefabIndex;
@@ -165,7 +191,6 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         {
             base.OnCreate();
 
-            Mod.log.Info(nameof(GrowableSyncSystem) + " ready.");
             _prefabSystem = World.GetOrCreateSystemManaged<PrefabSystem>();
             _prefabIndex = new PrefabIndex(_prefabSystem, GetEntityQuery(ComponentType.ReadOnly<PrefabData>()));
             _objectSearch = new ObjectSearch(
@@ -177,85 +202,47 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             // city the client just downloaded. Owner excludes lot content owned by a building.
             _createdBuildings = GetEntityQuery(new EntityQueryDesc
             {
-                All = new[]
-                {
-                    ComponentType.ReadOnly<Created>(),
-                    ComponentType.ReadOnly<Building>(),
-                    ComponentType.ReadOnly<PrefabRef>(),
-                    ComponentType.ReadOnly<global::Game.Objects.Transform>(),
-                },
-                None = new[]
-                {
-                    ComponentType.ReadOnly<Temp>(),
-                    ComponentType.ReadOnly<Deleted>(),
-                    ComponentType.ReadOnly<Owner>(),
-                },
+                All = SyncQuery.ReadOnly<Created, Building, PrefabRef,
+                    global::Game.Objects.Transform>(),
+                None = SyncQuery.ReadOnly<Temp, Deleted, Owner>(),
             });
 
             _deletedBuildings = GetEntityQuery(new EntityQueryDesc
             {
-                All = new[]
-                {
-                    ComponentType.ReadOnly<Deleted>(),
-                    ComponentType.ReadOnly<Building>(),
-                    ComponentType.ReadOnly<PrefabRef>(),
-                    ComponentType.ReadOnly<global::Game.Objects.Transform>(),
-                },
-                None = new[]
-                {
-                    ComponentType.ReadOnly<Temp>(),
-                    ComponentType.ReadOnly<Owner>(),
-                },
+                All = SyncQuery.ReadOnly<Deleted, Building, PrefabRef,
+                    global::Game.Objects.Transform>(),
+                None = SyncQuery.ReadOnly<Temp, Owner>(),
             });
 
             // A building only carries UnderConstruction while it is being built or re-levelled, so
             // this query holds a handful of entities even in a large city.
             _levelChanging = GetEntityQuery(new EntityQueryDesc
             {
-                All = new[]
-                {
-                    ComponentType.ReadOnly<UnderConstruction>(),
-                    ComponentType.ReadOnly<Building>(),
-                    ComponentType.ReadOnly<PrefabRef>(),
-                    ComponentType.ReadOnly<global::Game.Objects.Transform>(),
-                },
-                None = new[] { ComponentType.ReadOnly<Temp>(), ComponentType.ReadOnly<Deleted>() },
+                All = SyncQuery.ReadOnly<UnderConstruction, Building, PrefabRef,
+                    global::Game.Objects.Transform>(),
+                None = SyncQuery.ReadOnly<Temp, Deleted>(),
             });
 
             // Building state is ordinary component data, not a Created/Deleted lifecycle edge.
             // Scan one native UpdateFrame partition at a time and announce absolute transitions.
             _stateBuildings = GetEntityQuery(new EntityQueryDesc
             {
-                All = new[]
-                {
-                    ComponentType.ReadOnly<Building>(),
-                    ComponentType.ReadOnly<BuildingCondition>(),
-                    ComponentType.ReadOnly<PrefabRef>(),
-                    ComponentType.ReadOnly<global::Game.Objects.Transform>(),
-                    ComponentType.ReadOnly<UpdateFrame>(),
-                },
-                None = new[]
-                {
-                    ComponentType.ReadOnly<Temp>(),
-                    ComponentType.ReadOnly<Deleted>(),
-                    ComponentType.ReadOnly<Owner>(),
-                },
+                All = SyncQuery.ReadOnly<Building, BuildingCondition, PrefabRef,
+                    global::Game.Objects.Transform, UpdateFrame>(),
+                None = SyncQuery.ReadOnly<Temp, Deleted, Owner>(),
             });
 
-            if (Mod.Service != null)
-            {
-                _observer = new CommandObserver(_incoming, GrowableLifecycleCommand.Id);
-                _observer.MaxBodyBytes = GrowableLifecycleCommand.MaxEncodedBytes;
-                Mod.Service.Session.AddObserver(_observer);
-            }
-            SyncInbox.RegisterDrain(DrainQueue);
+            _observer = SyncObserverBinding.Bind(
+                () => new CommandObserver(_incoming, GrowableLifecycleCommand.Id)
+                    {
+                        MaxBodyBytes = GrowableLifecycleCommand.MaxEncodedBytes,
+                    },
+                DrainQueue);
         }
 
         protected override void OnDestroy()
         {
-            SyncInbox.UnregisterDrain(DrainQueue);
-            if (_observer != null && Mod.Service != null)
-                Mod.Service.Session.RemoveObserver(_observer);
+            SyncObserverBinding.Unbind(_observer, DrainQueue);
             RestoreLocalAuthority();
             base.OnDestroy();
         }
@@ -270,6 +257,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             _playerPlacedGrowables.Clear();
             _stalePlayerPlacedGrowables.Clear();
             _lastPlayerPlacedPruneMs = 0;
+            _lastGrowableRealizeMs = 0;
+            _lastValidationTickMs = 0;
+            NetworkDependenciesHeld = false;
             // A replaced world arrives complete. Anything still queued for the old one refers to
             // buildings that no longer exist, and every sequence number belongs to a city that is
             // gone: keeping either would apply a stale decision to a fresh world.
@@ -278,8 +268,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             _hostConstruction.Clear();
             _constructionSeen.Clear();
             _constructionScratch.Clear();
-            _hostStateFlags.Clear();
+            _hostState.Clear();
             _stateScanBucket = 0;
+            _stateScanCursor = 0;
         }
 
         /// <summary>
@@ -288,41 +279,44 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         /// </summary>
         protected override void OnUpdate()
         {
-            MultiplayerService service = Mod.Service;
-            if (service == null) return;
-
-            if (!service.GameplaySyncReady)
+            using (Diagnostics.SyncProfiler.Measure("Growable"))
             {
-                DrainQueue();
-                RestoreLocalAuthority();
-                return;
-            }
+                MultiplayerService service = Mod.Service;
+                if (service == null) return;
 
-            MultiplayerSession session = service.Session;
-            long now = service.NowMs;
-            PrunePlayerPlacedGrowables(now);
-            ApplyLocalAuthority(session);
+                if (!service.GameplaySyncReady)
+                {
+                    DrainQueue();
+                    RestoreLocalAuthority();
+                    return;
+                }
 
-            if (session.Role != SessionRole.Host)
-            {
-                // ModificationEnd, not the ToolUpdate realize pass: the Created tag this reads is
-                // written by the object pipeline during the Modification phases and is gone again
-                // by the next frame's ToolUpdate.
-                RejectLocallyGrownBuildings(now);
-                ValidateRealizedBuildings(now);
-                return;
-            }
+                MultiplayerSession session = service.Session;
+                long now = service.NowMs;
+                PrunePlayerPlacedGrowables(now);
+                ApplyLocalAuthority(session);
 
-            CaptureCreated(session, now);
-            CaptureRemoved(session, now);
-            if (now - _lastLevelScanMs >= LevelScanIntervalMs)
-            {
-                _lastLevelScanMs = now;
-                CaptureLevelChanges(session, now);
-                CaptureConstructionChanges(session, now);
-                CaptureStateChanges(session, now);
+                if (session.Role != SessionRole.Host)
+                {
+                    // ModificationEnd, not the ToolUpdate realize pass: the Created tag this reads is
+                    // written by the object pipeline during the Modification phases and is gone again
+                    // by the next frame's ToolUpdate.
+                    RejectLocallyGrownBuildings(now);
+                    ValidateRealizedBuildings(now);
+                    return;
+                }
+
+                CaptureCreated(session, now);
+                CaptureRemoved(session, now);
+                if (now - _lastLevelScanMs >= LevelScanIntervalMs)
+                {
+                    _lastLevelScanMs = now;
+                    CaptureLevelChanges(session, now);
+                    CaptureConstructionChanges(session, now);
+                    CaptureStateChanges(session, now);
+                }
+                ReportStats(session, now);
             }
-            ReportStats(session, now);
         }
 
         /// <summary>
@@ -351,9 +345,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             if (_buildSync != null && _buildSync.ConsumePlayerPlacedSpawnable(entity, now))
             {
                 _playerPlacedGrowables.Add(entity);
-                Mod.Verbose("[MP] GrowableSync: excluded player-placed spawnable '" +
-                            PrefabIndexSafeName(prefab) + "' from autonomous lifecycle sync.");
-                Diagnostics.FlightRecorder.Note("player-placed spawnable excluded from growables");
+                SyncLog.Detail(LogTopic.Buildings,
+                    "GrowableSync: excluded player-placed spawnable '" + PrefabIndexSafeName(prefab) +
+                    "' from autonomous lifecycle sync.");
                 return false;
             }
             return true;
@@ -406,8 +400,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             _lastStatsMs = now;
 
             if (_sentSpawn + _sentLevel + _sentRemove + _sentState == 0) return;
-            Mod.Verbose("[MP] GrowableSync/30s host: spawn=" + _sentSpawn + " level=" + _sentLevel +
-                        " remove=" + _sentRemove + " state=" + _sentState + ".");
+            SyncLog.Detail(LogTopic.Buildings, "GrowableSync/30s host: spawn=" + _sentSpawn +
+                " level=" + _sentLevel + " remove=" + _sentRemove + " state=" + _sentState + ".");
             _sentSpawn = _sentLevel = _sentRemove = _sentState = 0;
         }
 
@@ -418,14 +412,15 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             _lastStatsMs = now;
 
             if (_gotSpawn + _gotLevel + _gotRemove + _gotState + _duplicates + _conflicts +
-                _unmatched + _unknownPrefab + _rejectedLocal == 0) return;
-            Mod.Verbose("[MP] GrowableSync/30s client: spawn=" + _gotSpawn + " level=" + _gotLevel +
-                        " remove=" + _gotRemove + " state=" + _gotState +
-                        " duplicate=" + _duplicates + " conflict=" + _conflicts +
-                        " unmatched=" + _unmatched + " unknownPrefab=" + _unknownPrefab +
-                        " rejectedLocal=" + _rejectedLocal + ".");
+                _unmatched + _unknownPrefab + _rejectedLocal + _repairedPrefabs == 0) return;
+            SyncLog.Detail(LogTopic.Buildings, "GrowableSync/30s client: spawn=" + _gotSpawn +
+                " level=" + _gotLevel + " remove=" + _gotRemove + " state=" + _gotState +
+                " duplicate=" + _duplicates + " conflict=" + _conflicts + " unmatched=" + _unmatched +
+                " unknownPrefab=" + _unknownPrefab + " rejectedLocal=" + _rejectedLocal +
+                " prefabRepairs=" + _repairedPrefabs + ".");
             _gotSpawn = _gotLevel = _gotRemove = _gotState = 0;
             _duplicates = _conflicts = _unmatched = _unknownPrefab = _rejectedLocal = 0;
+            _repairedPrefabs = 0;
         }
     }
 }

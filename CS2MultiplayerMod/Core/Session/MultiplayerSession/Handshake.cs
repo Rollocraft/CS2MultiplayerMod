@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using CS2MultiplayerMod.Core.Diagnostics;
 using CS2MultiplayerMod.Core.Networking;
 using CS2MultiplayerMod.Core.Protocol;
 using CS2MultiplayerMod.Core.Protocol.Messages;
@@ -26,9 +27,10 @@ namespace CS2MultiplayerMod.Core.Session
             }
 
             _challengeAnswered = true;
-            _log.Info("Host challenge received (protocol v" + challenge.ProtocolVersion + ", password " +
-                      (challenge.PasswordRequired ? "required" : "not required") +
-                      "); sending handshake as '" + LocalPlayerName + "'.");
+            _log.Detail(LogTopic.Session, "Host challenge received (protocol v" +
+                challenge.ProtocolVersion + ", password " +
+                (challenge.PasswordRequired ? "required" : "not required") +
+                "); sending handshake as '" + LocalPlayerName + "'.");
             byte[] binding = _transport.GetChannelBinding(ConnectionId.Server);
             byte[] proof = HandshakeAuth.ComputeProof(_config.Password, challenge.Nonce, binding);
             SendTo(connection, new HandshakeRequest(
@@ -48,13 +50,15 @@ namespace CS2MultiplayerMod.Core.Session
                 return;
             }
 
-            _log.Info("Handshake request from " + connection + " (" + (peer.RemoteAddress ?? "?") +
-                      "): name='" + WireGuard.SanitizePlayerName(request.PlayerName) +
-                      "' protocol=" + request.ProtocolVersion +
-                      " mod=" + (request.ModVersion ?? "?") +
-                      " game=" + (request.GameVersion ?? "?") +
-                      " dlcs=[" + string.Join(", ", request.DlcList ?? Array.Empty<string>()) + "]" +
-                      " passwordProof=" + (request.PasswordProof != null && request.PasswordProof.Length > 0 ? "present" : "missing") + ".");
+            _log.Detail(LogTopic.Session, "Handshake request from " + connection + " (" +
+                (peer.RemoteAddress ?? "?") + "): name='" +
+                WireGuard.SanitizePlayerName(request.PlayerName) + "' protocol=" +
+                request.ProtocolVersion + " mod=" + (request.ModVersion ?? "?") + " game=" +
+                (request.GameVersion ?? "?") + " dlcs=[" +
+                string.Join(", ", request.DlcList ?? Array.Empty<string>()) + "]" +
+                " passwordProof=" +
+                (request.PasswordProof != null && request.PasswordProof.Length > 0 ? "present" : "missing") +
+                ".");
 
             if (request.ProtocolVersion != ProtocolConstants.ProtocolVersion)
             {
@@ -76,8 +80,9 @@ namespace CS2MultiplayerMod.Core.Session
                 if (!HandshakeAuth.FixedTimeEquals(expected, request.PasswordProof))
                 {
                     bool nowBanned = _failedAuth.RecordFailure(peer.RemoteAddress, nowUnixMs);
-                    _log.Warn("[security] Auth failure from " + connection + " (" +
-                              (peer.RemoteAddress ?? "?") + ")" + (nowBanned ? " - address temporarily banned." : "."));
+                    _log.Warn(LogTopic.Session, "Auth failure from " + connection + " (" +
+                        (peer.RemoteAddress ?? "?") + ")" +
+                        (nowBanned ? " - address temporarily banned." : "."));
                     Reject(connection, "Incorrect password.");
                     return;
                 }
@@ -98,9 +103,9 @@ namespace CS2MultiplayerMod.Core.Session
                     return;
                 }
 
-                _log.Warn("[compatibility] " + mismatch +
-                          " The host chose to ignore this check at their own risk; " +
-                          "protocol compatibility is still enforced.");
+                _log.Warn(LogTopic.Session, mismatch +
+                    " The host chose to ignore this check at their own risk; " +
+                    "protocol compatibility is still enforced.");
             }
 
             if (!string.IsNullOrEmpty(_config.GameVersion) &&
@@ -146,7 +151,8 @@ namespace CS2MultiplayerMod.Core.Session
                 peer.PlayerId = _nextPlayerId++;
                 peer.AwaitingApproval = true;
                 SendTo(connection, new HandshakePendingMessage());
-                _log.Info("Join from " + peer + " passed the checks; awaiting host approval.");
+                _log.Detail(LogTopic.Session, "Join from " + peer +
+                    " passed the checks; awaiting host approval.");
                 return;
             }
 
@@ -171,7 +177,7 @@ namespace CS2MultiplayerMod.Core.Session
             peer.Handshaked = true;
 
             SendTo(connection, HandshakeResponse.Accept(peer.PlayerId));
-            _log.Info("Accepted " + peer + ".");
+            _log.Event(LogTopic.Session, "Accepted " + peer + ".");
             NotifyPeerJoined(peer);
 
             // Surface a "joined" system line to everyone — the clients over the wire and
@@ -241,7 +247,8 @@ namespace CS2MultiplayerMod.Core.Session
             }
             if (_awaitingHostApproval) return;
             _awaitingHostApproval = true;
-            _log.Info("The host received the join request; waiting for the host to approve it.");
+            _log.Detail(LogTopic.Session,
+                "The host received the join request; waiting for the host to approve it.");
         }
 
         /// <summary>
@@ -311,7 +318,7 @@ namespace CS2MultiplayerMod.Core.Session
             // race the asynchronous send and the client would only see "remote closed".
             _transport.DisconnectAfterFlush(connection);
             _peers.Remove(connection.Value);
-            _log.Warn("Rejected " + connection + ": " + reason);
+            _log.Warn(LogTopic.Session, "Rejected " + connection + ": " + reason);
         }
 
         private void HandleHandshakeResponse(Peer peer, HandshakeResponse response)
@@ -330,8 +337,8 @@ namespace CS2MultiplayerMod.Core.Session
 
             LocalPlayerId = response.AssignedPlayerId;
             if (peer != null) peer.Handshaked = true;
-            _log.Info("Join accepted by host; assigned player #" + LocalPlayerId +
-                      ". Waiting for host world stream.");
+            _log.Event(LogTopic.Session, "Join accepted by host; assigned player #" + LocalPlayerId +
+                ". Waiting for host world stream.");
             SetStatus(SessionStatus.Connected, "Joined as player #" + LocalPlayerId);
             if (peer != null) NotifyPeerJoined(peer);
         }

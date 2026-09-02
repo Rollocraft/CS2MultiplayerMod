@@ -1,5 +1,6 @@
 ---
 title: Port forwarding problems
+description: "Port forwarded and still nobody can join? Check the firewall, rule out CGNAT and confirm the port is really open."
 ---
 
 # Diagnose issues with port forwarding

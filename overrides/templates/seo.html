@@ -1,0 +1,56 @@
+{# Replaces the theme's seo block: adds the description and site name that link previews
+   (Discord, Slack, X, iMessage) need. Absolute URLs come from site_url. #}
+{% block seo %}
+
+{% set page_title = page.meta.title or page.title or config.site_name %}
+{% set page_desc = page.meta.description or config.site_description %}
+{% set full_title = config.site_name if (page.is_homepage or page_title == config.site_name)
+                    else page_title ~ ' - ' ~ config.site_name %}
+
+<title>{{ full_title }}</title>
+<meta name="description" content="{{ page_desc | e }}">
+{% if page.meta.keywords %}
+<meta name="keywords" content="{{ page.meta.keywords | e }}">
+{% endif %}
+<meta name="author" content="{{ page.meta.author or config.site_author }}">
+<meta name="theme-color" content="#3088da">
+{% if page.canonical_url %}
+<link rel="canonical" href="{{ page.canonical_url }}">
+{% endif %}
+
+<!-- Open Graph (Discord, Facebook, LinkedIn) -->
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="{{ config.site_name }}">
+<meta property="og:title" content="{{ page_title | e }}">
+<meta property="og:description" content="{{ page_desc | e }}">
+<meta property="og:locale" content="en_US">
+{% if page.canonical_url %}
+<meta property="og:url" content="{{ page.canonical_url }}">
+{% endif %}
+
+<!-- Twitter Card -->
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="{{ page_title | e }}">
+<meta name="twitter:description" content="{{ page_desc | e }}">
+
+<!-- JSON-LD Structured Data -->
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "WebPage",
+  "name": {{ page_title | tojson }},
+  "description": {{ page_desc | tojson }},
+  {% if page.canonical_url %}"url": {{ page.canonical_url | tojson }},{% endif %}
+  "isPartOf": {
+    "@type": "WebSite",
+    "name": {{ config.site_name | tojson }},
+    {% if config.site_url %}"url": {{ config.site_url | tojson }},{% endif %}
+    "publisher": {
+      "@type": "Organization",
+      "name": {{ config.site_author | tojson }}
+    }
+  }
+}
+</script>
+
+{% endblock seo %}

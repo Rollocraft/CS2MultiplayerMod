@@ -2,8 +2,9 @@ using Game.City;
 using Game.Simulation;
 using Unity.Entities;
 using Unity.Jobs;
+using CS2MultiplayerMod.Core.Diagnostics;
 using CS2MultiplayerMod.Core.Protocol;
-
+using CS2MultiplayerMod.Game.Diagnostics;
 using CS2MultiplayerMod.Game.Sync.Infrastructure;
 namespace CS2MultiplayerMod.Game.Sync.Channels
 {
@@ -112,7 +113,8 @@ namespace CS2MultiplayerMod.Game.Sync.Channels
         {
             if (_warned) return;
             _warned = true;
-            Mod.log.Warn("[MP] Statistics channel " + stage + " failed (logged once): " + ex.Message);
+            SyncLog.Warn(LogTopic.City, "Statistics channel " + stage + " failed (logged once): " +
+                ex.Message);
         }
     }
 }

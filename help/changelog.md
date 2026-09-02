@@ -1,8 +1,78 @@
 ---
 title: Changelog
+description: "What changed in each release of the mod: new features, sync work and fixes."
 ---
 
 # Changelog
+
+## Version 0.1.6.1
+
+This update marks a major step forward for the project.
+
+Until now, synchronization was primarily focused on keeping the world itself consistent between players: roads, player-placed buildings, networks, pipelines, electricity infrastructure and other physical changes to the city.
+
+With **0.1.6.1, we have expanded the core synchronization system to include some parts of the simulation itself.**
+
+This means the mod is no longer only synchronizing what players build. It now also synchronizes more of what the game simulation changes on its own.
+
+### Simulation Synchronization
+
+* Residential simulation synchronization has received major performance improvements.
+* Naturally spawned Industrial, Commercial and Office buildings are now synchronized between host and clients.
+* Population is now better synchronized between host and clients.
+* City income and economic values are synchronized much more closely.
+* Simulation-driven financial values such as taxes, fees and service costs are now included in synchronization.
+* Improved synchronization of changes caused directly by the game simulation rather than player actions.
+
+This brings multiplayer significantly closer to running the same city simulation on every client, instead of only maintaining the same physical city layout.
+
+### Performance
+
+The synchronization system itself has become significantly more efficient in this update.
+
+However, 0.1.6.1 also massively increases the amount of data the mod has to process. Instead of only reacting to player actions and major world changes, the mod can now deal with thousands of simulation events every second.
+
+Because of this, large and highly populated cities may still begin to experience noticeable slowdown or lag.
+
+In other words: the synchronization code is faster than before, but it is also doing far more work than before. The increased simulation workload can currently outweigh those performance improvements in larger cities.
+
+Improving performance under these new workloads will remain an important focus going forward.
+
+### Synchronization & Stability
+
+* Significantly reduced unnecessary world reloads by improving how synchronization failures are detected and verified before triggering a resync.
+* World reloads now record detailed information about what caused them, making synchronization issues significantly easier to diagnose.
+* Improved road synchronization when connected roads, terrain height differences or large road edits temporarily delay placement.
+* Large road edits are now given more time to finish based on their size and progress instead of relying on a fixed timeout.
+* Improved synchronization queue handling so buildings, policies, transport lines and other dependent changes no longer time out while waiting for another synchronization system to finish.
+* Improved terraforming synchronization and processing speed.
+* Terraforming changes are now applied in a single frame instead of being spread across multiple frames.
+* Invalid or missing terrain updates can no longer silently block the entire synchronization pipeline.
+* Improved handling of bulldoze operations that fail to find the expected object.
+* Fixed several cases where delayed transport, zoning, road and building synchronization could incorrectly trigger world reloads.
+* Fixed a case where transport line synchronization could cause repeated world reloads after an incoming world was already being applied.
+* Fixed a case where clients could become stuck waiting indefinitely for a world resynchronization.
+* Improved handling of special Industries that previously caused resyncs.
+
+### Bug Fixes
+
+* Fixed bridges breaking when placed at height level 0.
+* Fixed several situations that could cause synchronization instability.
+* Fixed special Industries triggering unnecessary resyncs.
+* Automatic world reloads are now verified before being triggered, allowing temporary synchronization issues to recover without forcing a full reload.
+* The host log now records why a client requested a resynchronization, making manual sync requests distinguishable from synchronization failures.
+* Fixed that client could not see demand.
+
+### Quality of Life
+
+* Improved logging throughout the synchronization systems, making issues easier to identify, reproduce and fix.
+* World reload logs now include more context about the affected edit, what was found instead, how long the system waited and what recovery steps were attempted first.
+
+## Contributing
+
+Contributing to the project has previously been difficult, if not nearly impossible.
+
+Going forward, the project will have a dedicated development branch, making it significantly easier for other developers to contribute, test changes and help improve the mod.
 
 ## 0.1.6 - 2026-08-24
 

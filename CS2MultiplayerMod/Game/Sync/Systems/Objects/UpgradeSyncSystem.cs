@@ -8,9 +8,10 @@ using Game.Tools;
 using Unity.Collections;
 using Unity.Entities;
 using Unity.Mathematics;
+using CS2MultiplayerMod.Core.Diagnostics;
 using CS2MultiplayerMod.Core.Protocol.Messages;
 using CS2MultiplayerMod.Core.Session;
-
+using CS2MultiplayerMod.Game.Diagnostics;
 using CS2MultiplayerMod.Game.Sync.Infrastructure;
 using CS2MultiplayerMod.Game.Sync.Commands;
 namespace CS2MultiplayerMod.Game.Sync.Systems
@@ -48,7 +49,6 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         {
             base.OnCreate();
 
-            Mod.log.Info(nameof(UpgradeSyncSystem) + " ready.");
             _prefabSystem = World.GetOrCreateSystemManaged<PrefabSystem>();
             _prefabIndex = new PrefabIndex(_prefabSystem, GetEntityQuery(ComponentType.ReadOnly<PrefabData>()));
             _buildSync = World.GetOrCreateSystemManaged<BuildSyncSystem>();
@@ -57,75 +57,32 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             // Any{} keeps out the decorative props the game also parents to buildings.
             _createdUpgrades = GetEntityQuery(new EntityQueryDesc
             {
-                All = new[]
-                {
-                    ComponentType.ReadOnly<Created>(),
-                    ComponentType.ReadOnly<PrefabRef>(),
-                    ComponentType.ReadOnly<Transform>(),
-                    ComponentType.ReadOnly<Owner>(),
-                },
-                Any = new[]
-                {
-                    ComponentType.ReadOnly<global::Game.Buildings.ServiceUpgrade>(),
-                    ComponentType.ReadOnly<Extension>(),
-                },
-                None = new[]
-                {
-                    ComponentType.ReadOnly<Temp>(),
-                    ComponentType.ReadOnly<Deleted>(),
-                },
+                All = SyncQuery.ReadOnly<Created, PrefabRef, Transform, Owner>(),
+                Any = SyncQuery.ReadOnly<global::Game.Buildings.ServiceUpgrade, Extension>(),
+                None = SyncQuery.ReadOnly<Temp, Deleted>(),
             });
 
             _liveUpgrades = GetEntityQuery(new EntityQueryDesc
             {
-                All = new[]
-                {
-                    ComponentType.ReadOnly<PrefabRef>(),
-                    ComponentType.ReadOnly<Transform>(),
-                    ComponentType.ReadOnly<Owner>(),
-                },
-                Any = new[]
-                {
-                    ComponentType.ReadOnly<global::Game.Buildings.ServiceUpgrade>(),
-                    ComponentType.ReadOnly<Extension>(),
-                },
-                None = new[]
-                {
-                    ComponentType.ReadOnly<Temp>(),
-                    ComponentType.ReadOnly<Deleted>(),
-                },
+                All = SyncQuery.ReadOnly<PrefabRef, Transform, Owner>(),
+                Any = SyncQuery.ReadOnly<global::Game.Buildings.ServiceUpgrade, Extension>(),
+                None = SyncQuery.ReadOnly<Temp, Deleted>(),
             });
 
             // Candidate owner buildings for realizing a remote upgrade.
             _liveOwners = GetEntityQuery(new EntityQueryDesc
             {
-                All = new[]
-                {
-                    ComponentType.ReadOnly<Building>(),
-                    ComponentType.ReadOnly<PrefabRef>(),
-                    ComponentType.ReadOnly<Transform>(),
-                },
-                None = new[]
-                {
-                    ComponentType.ReadOnly<Temp>(),
-                    ComponentType.ReadOnly<Owner>(),
-                    ComponentType.ReadOnly<Deleted>(),
-                },
+                All = SyncQuery.ReadOnly<Building, PrefabRef, Transform>(),
+                None = SyncQuery.ReadOnly<Temp, Owner, Deleted>(),
             });
 
-            if (Mod.Service != null)
-            {
-                _observer = new CommandObserver(_incoming, UpgradePlacementCommand.Id);
-                Mod.Service.Session.AddObserver(_observer);
-            }
-            SyncInbox.RegisterDrain(DrainQueue);
+            _observer = SyncObserverBinding.Bind(
+                () => new CommandObserver(_incoming, UpgradePlacementCommand.Id), DrainQueue);
         }
 
         protected override void OnDestroy()
         {
-            SyncInbox.UnregisterDrain(DrainQueue);
-            if (_observer != null && Mod.Service != null)
-                Mod.Service.Session.RemoveObserver(_observer);
+            SyncObserverBinding.Unbind(_observer, DrainQueue);
             base.OnDestroy();
         }
 
@@ -137,15 +94,18 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
         protected override void OnUpdate()
         {
-            MultiplayerService service = Mod.Service;
-            if (service == null) return;
+            using (Diagnostics.SyncProfiler.Measure("UpgradeSync"))
+            {
+                MultiplayerService service = Mod.Service;
+                if (service == null) return;
 
-            MultiplayerSession session = service.Session;
-            if (!service.GameplaySyncReady) return;
+                MultiplayerSession session = service.Session;
+                if (!service.GameplaySyncReady) return;
 
-            long now = service.NowMs;
-            _guard.Prune(now);
-            CaptureNewUpgrades(session, now);
+                long now = service.NowMs;
+                _guard.Prune(now);
+                CaptureNewUpgrades(session, now);
+            }
         }
 
         /// <summary>Called by <see cref="SyncRealizeSystem"/> during ToolUpdate (see there for why).</summary>
@@ -233,7 +193,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                         ToolRandomSeed = _buildSync.AppliedLifecycleToolSeed,
                     };
                     session.SendCommand(0, UpgradePlacementCommand.Id, command.Encode());
-                    Mod.Verbose("[MP] UpgradeSync captured '" + name + "' on '" + ownerName + "'.");
+                    SyncLog.Detail(LogTopic.Buildings, "UpgradeSync captured '" + name + "' on '" +
+                        ownerName + "'.");
                 }
             }
             finally
@@ -252,9 +213,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 if (now >= pending.deadline)
                 {
                     _ownerRetry.RemoveAt(i);
-                    Mod.log.Warn("[MP] UpgradeSync realize: no local '" + pending.cmd.OwnerPrefabName +
-                                 "' after " + (OwnerRetryWindowMs / 1000) + " s to attach '" +
-                                 pending.cmd.PrefabName + "'; dropping.");
+                    SyncLog.Warn(LogTopic.Buildings, "UpgradeSync realize: no local '" +
+                        pending.cmd.OwnerPrefabName + "' after " + (OwnerRetryWindowMs / 1000) +
+                        " s to attach '" + pending.cmd.PrefabName + "'; dropping.");
                 }
             }
 
@@ -265,7 +226,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
                 UpgradePlacementCommand command;
                 try { command = UpgradePlacementCommand.Decode(message.Body); }
-                catch (System.Exception ex) { Mod.log.Warn("[MP] UpgradeSync: dropping malformed command: " + ex.Message); continue; }
+                catch (System.Exception ex) { SyncLog.Warn(LogTopic.Buildings, "UpgradeSync: dropping malformed command: " + ex.Message); continue; }
 
                 if (TryRealize(command, message.OriginPlayerId, now)) continue;
 
@@ -290,8 +251,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             if (!_prefabIndex.TryResolve(command.PrefabName, out prefab) ||
                 !_prefabIndex.TryResolve(command.OwnerPrefabName, out ownerPrefab))
             {
-                Mod.log.Warn("[MP] UpgradeSync realize: unknown prefab '" + command.PrefabName +
-                             "'/'" + command.OwnerPrefabName + "'; skipping.");
+                SyncLog.Warn(LogTopic.Buildings, "UpgradeSync realize: unknown prefab '" +
+                    command.PrefabName + "'/'" + command.OwnerPrefabName + "'; skipping.");
                 return true;
             }
 
@@ -301,8 +262,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             // without the links it needs. One test refuses the whole class.
             if (!EntityManager.HasComponent<ServiceUpgradeData>(prefab))
             {
-                Mod.log.Warn("[MP] UpgradeSync realize: '" + command.PrefabName +
-                             "' is not a service upgrade; skipping.");
+                SyncLog.Warn(LogTopic.Buildings, "UpgradeSync realize: '" + command.PrefabName +
+                    "' is not a service upgrade; skipping.");
                 return true;
             }
 
@@ -336,8 +297,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             {
                 _guard.Mark(UpgradeKey(command.PrefabName, position), now);
                 ConstructionCharger.ChargeUpgrade(EntityManager, prefab, command.PrefabName);
-                Mod.Verbose("[MP] UpgradeSync realize: derived '" + command.PrefabName + "' on '" +
-                             command.OwnerPrefabName + "' from player " + origin + ".");
+                SyncLog.Detail(LogTopic.Buildings, "UpgradeSync realize: derived '" +
+                    command.PrefabName + "' on '" + command.OwnerPrefabName + "' from player " +
+                    origin + ".");
                 return true;
             }
             if (derived == BuildSyncSystem.NativeDeriveResult.Failed) return true;
@@ -348,12 +310,14 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 RealizeUpgrade(prefab, owner, position, rotation,
                     EntityManager.GetComponentData<Transform>(owner), command.RandomSeed);
                 ConstructionCharger.ChargeUpgrade(EntityManager, prefab, command.PrefabName);
-                Mod.Verbose("[MP] UpgradeSync realize: attached '" + command.PrefabName + "' to '" +
-                             command.OwnerPrefabName + "' from player " + origin + ".");
+                SyncLog.Detail(LogTopic.Buildings, "UpgradeSync realize: attached '" +
+                    command.PrefabName + "' to '" + command.OwnerPrefabName + "' from player " +
+                    origin + ".");
             }
             catch (System.Exception ex)
             {
-                Mod.log.Error("[MP] UpgradeSync realize FAILED for '" + command.PrefabName + "': " + ex);
+                SyncLog.Error(LogTopic.Buildings, "UpgradeSync realize FAILED for '" +
+                    command.PrefabName + "': " + ex);
             }
             return true;
         }

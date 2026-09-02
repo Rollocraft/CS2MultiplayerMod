@@ -9,9 +9,9 @@ using Game.Tools;
 using Unity.Collections;
 using Unity.Entities;
 using Unity.Mathematics;
+using CS2MultiplayerMod.Core.Diagnostics;
 using CS2MultiplayerMod.Core.Protocol.Messages;
 using CS2MultiplayerMod.Core.Session;
-
 using CS2MultiplayerMod.Game.Diagnostics;
 using CS2MultiplayerMod.Game.Sync.Commands;
 using CS2MultiplayerMod.Game.Sync.Infrastructure;
@@ -63,7 +63,6 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         {
             base.OnCreate();
 
-            Mod.log.Info(nameof(DisasterSyncSystem) + " ready.");
             _prefabSystem = World.GetOrCreateSystemManaged<PrefabSystem>();
             _prefabIndex = new PrefabIndex(_prefabSystem, GetEntityQuery(ComponentType.ReadOnly<PrefabData>()));
             _simulation = World.GetOrCreateSystemManaged<SimulationSystem>();
@@ -71,17 +70,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
             _createdPhenomena = GetEntityQuery(new EntityQueryDesc
             {
-                All = new[]
-                {
-                    ComponentType.ReadOnly<global::Game.Events.Event>(),
-                    ComponentType.ReadOnly<global::Game.Events.WeatherPhenomenon>(),
-                    ComponentType.ReadOnly<Created>(),
-                },
-                None = new[]
-                {
-                    ComponentType.ReadOnly<Deleted>(),
-                    ComponentType.ReadOnly<Temp>(),
-                },
+                All = SyncQuery.ReadOnly<global::Game.Events.Event,
+                    global::Game.Events.WeatherPhenomenon, Created>(),
+                None = SyncQuery.ReadOnly<Deleted, Temp>(),
             });
 
             // Flood excluded: that marker is the rain-driven river flood, which every machine
@@ -89,61 +80,51 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             // rains. Replicating it would stack a second surge on top of the local one.
             _createdSurges = GetEntityQuery(new EntityQueryDesc
             {
-                All = new[]
-                {
-                    ComponentType.ReadOnly<global::Game.Events.Event>(),
-                    ComponentType.ReadOnly<global::Game.Events.WaterLevelChange>(),
-                    ComponentType.ReadOnly<Created>(),
-                },
-                None = new[]
-                {
-                    ComponentType.ReadOnly<global::Game.Events.Flood>(),
-                    ComponentType.ReadOnly<Deleted>(),
-                    ComponentType.ReadOnly<Temp>(),
-                },
+                All = SyncQuery.ReadOnly<global::Game.Events.Event,
+                    global::Game.Events.WaterLevelChange, Created>(),
+                None = SyncQuery.ReadOnly<global::Game.Events.Flood, Deleted, Temp>(),
             });
 
-            if (Mod.Service != null)
-            {
-                _observer = new CommandObserver(_incoming, DisasterEventCommand.Id)
-                {
-                    MaxBodyBytes = DisasterEventCommand.MaxEncodedBytes,
-                };
-                Mod.Service.Session.AddObserver(_observer);
-            }
-            SyncInbox.RegisterDrain(DrainQueue);
+            _observer = SyncObserverBinding.Bind(
+                () => new CommandObserver(_incoming, DisasterEventCommand.Id)
+                    {
+                        MaxBodyBytes = DisasterEventCommand.MaxEncodedBytes,
+                    },
+                DrainQueue);
         }
 
         protected override void OnDestroy()
         {
             SyncInbox.UnregisterDrain(DrainQueue);
             SuppressLocalRolls(false);
-            if (_observer != null && Mod.Service != null)
-                Mod.Service.Session.RemoveObserver(_observer);
+            SyncObserverBinding.Unbind(_observer);
             base.OnDestroy();
         }
 
         protected override void OnUpdate()
         {
-            MultiplayerService service = Mod.Service;
-            if (service == null || !service.GameplaySyncReady)
+            using (Diagnostics.SyncProfiler.Measure("DisasterSync"))
             {
-                SuppressLocalRolls(false);
-                if (_justRealized.Count > 0) _justRealized.Clear();
-                return;
+                MultiplayerService service = Mod.Service;
+                if (service == null || !service.GameplaySyncReady)
+                {
+                    SuppressLocalRolls(false);
+                    if (_justRealized.Count > 0) _justRealized.Clear();
+                    return;
+                }
+
+                MultiplayerSession session = service.Session;
+                SuppressLocalRolls(session.Role == SessionRole.Client);
+
+                CapturePhenomena(session);
+                CaptureSurges(session);
+
+                // The game's initialization pass (Modification2) has run by now, so anything it
+                // overwrote or re-randomized on a replica gets the sender's values put back. This also
+                // ends the frame's echo window: from here on those entities are indistinguishable
+                // from local ones, which is safe because their Created tag is stripped at Cleanup.
+                ReassertRealized();
             }
-
-            MultiplayerSession session = service.Session;
-            SuppressLocalRolls(session.Role == SessionRole.Client);
-
-            CapturePhenomena(session);
-            CaptureSurges(session);
-
-            // The game's initialization pass (Modification2) has run by now, so anything it
-            // overwrote or re-randomized on a replica gets the sender's values put back. This also
-            // ends the frame's echo window: from here on those entities are indistinguishable
-            // from local ones, which is safe because their Created tag is stripped at Cleanup.
-            ReassertRealized();
         }
 
         /// <summary>Called by <see cref="SyncRealizeSystem"/> during ToolUpdate: an event created
@@ -170,7 +151,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 try { command = DisasterEventCommand.Decode(message.Body); }
                 catch (System.Exception ex)
                 {
-                    Mod.log.Warn("[MP] DisasterSync: dropping malformed command: " + ex.Message);
+                    SyncLog.Warn(LogTopic.City, "DisasterSync: dropping malformed command: " +
+                        ex.Message);
                     continue;
                 }
 
@@ -224,12 +206,11 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                                     command.DurationFrames;
                     if (IsDamaging(prefab))
                     {
-                        Mod.log.Info("[MP] DisasterSync sent " + detail + ".");
-                        FlightRecorder.Note("disaster sent " + detail);
+                        SyncLog.Detail(LogTopic.City, "DisasterSync sent " + detail + ".");
                     }
                     else
                     {
-                        Mod.Verbose("[MP] DisasterSync sent weather " + detail + ".");
+                        SyncLog.Detail(LogTopic.City, "DisasterSync sent weather " + detail + ".");
                     }
                 }
             }
@@ -277,8 +258,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     string detail = "water surge '" + prefabName + "', intensity " +
                                     command.MaxIntensity + ", lasting " + command.DurationFrames +
                                     " frame(s)";
-                    Mod.log.Info("[MP] DisasterSync sent " + detail + ".");
-                    FlightRecorder.Note("disaster sent " + detail);
+                    SyncLog.Detail(LogTopic.City, "DisasterSync sent " + detail + ".");
                 }
             }
             finally
@@ -310,8 +290,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             }
             catch (System.Exception ex)
             {
-                Mod.log.Warn("[MP] DisasterSync: refusing to send " + label + " '" +
-                             command.PrefabName + "': " + ex.Message);
+                SyncLog.Warn(LogTopic.City, "DisasterSync: refusing to send " + label + " '" +
+                    command.PrefabName + "': " + ex.Message);
                 return false;
             }
         }
@@ -323,14 +303,14 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             Entity prefab;
             if (!_prefabIndex.TryResolve(command.PrefabName, out prefab))
             {
-                Mod.log.Warn("[MP] DisasterSync: no local event prefab named '" +
-                             command.PrefabName + "'; ignoring the disaster.");
+                SyncLog.Warn(LogTopic.City, "DisasterSync: no local event prefab named '" +
+                    command.PrefabName + "'; ignoring the disaster.");
                 return false;
             }
             if (!EntityManager.HasComponent<EventData>(prefab) || !MatchesKind(prefab, command.Kind))
             {
-                Mod.log.Warn("[MP] DisasterSync: prefab '" + command.PrefabName + "' is not a " +
-                             command.Kind + " event here; ignoring.");
+                SyncLog.Warn(LogTopic.City, "DisasterSync: prefab '" + command.PrefabName +
+                    "' is not a " + command.Kind + " event here; ignoring.");
                 return false;
             }
 
@@ -338,8 +318,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             // switched off never starts a damaging event, so it must not accept one either.
             if (IsDamaging(prefab) && !_cityConfiguration.naturalDisasters)
             {
-                Mod.Verbose("[MP] DisasterSync: natural disasters are off in this city; ignoring '" +
-                            command.PrefabName + "' from player " + originPlayerId + ".");
+                SyncLog.Detail(LogTopic.City,
+                    "DisasterSync: natural disasters are off in this city; ignoring '" +
+                    command.PrefabName + "' from player " + originPlayerId + ".");
                 return false;
             }
 
@@ -357,8 +338,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 !HasKindComponent(entity, command.Kind))
             {
                 EntityManager.DestroyEntity(entity);
-                Mod.log.Warn("[MP] DisasterSync: the event archetype for '" + command.PrefabName +
-                             "' is missing what a " + command.Kind + " needs; ignoring.");
+                SyncLog.Warn(LogTopic.City, "DisasterSync: the event archetype for '" +
+                    command.PrefabName + "' is missing what a " + command.Kind +
+                    " needs; ignoring.");
                 return false;
             }
 
@@ -377,12 +359,11 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                             originPlayerId + ", starting in " + command.StartDelayFrames + " frame(s)";
             if (IsDamaging(prefab))
             {
-                Mod.log.Info("[MP] DisasterSync realized " + detail + ".");
-                FlightRecorder.Note("disaster realized " + detail);
+                SyncLog.Detail(LogTopic.City, "DisasterSync realized " + detail + ".");
             }
             else
             {
-                Mod.Verbose("[MP] DisasterSync realized weather " + detail + ".");
+                SyncLog.Detail(LogTopic.City, "DisasterSync realized weather " + detail + ".");
             }
             return true;
         }
@@ -472,9 +453,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
             spawner.Enabled = !suppress;
             _rollsSuppressed = suppress;
-            Mod.log.Info("[MP] DisasterSync: local weather-hazard rolls " +
-                         (suppress ? "stopped; the host's disasters are replicated instead."
-                                   : "restored."));
+            SyncLog.Detail(LogTopic.City, "DisasterSync: local weather-hazard rolls " +
+                (suppress ? "stopped; the host's disasters are replicated instead." : "restored."));
         }
 
         // ---- Helpers ------------------------------------------------------------

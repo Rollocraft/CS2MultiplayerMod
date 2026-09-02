@@ -6,8 +6,9 @@ using Game.Prefabs;
 using Unity.Collections;
 using Unity.Entities;
 using Unity.Mathematics;
+using CS2MultiplayerMod.Core.Diagnostics;
 using CS2MultiplayerMod.Core.Session;
-
+using CS2MultiplayerMod.Game.Diagnostics;
 using CS2MultiplayerMod.Game.Sync.Infrastructure;
 using CS2MultiplayerMod.Game.Sync.Commands;
 namespace CS2MultiplayerMod.Game.Sync.Systems.Net
@@ -33,7 +34,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
             if (_diagTotal > 0)
             {
                 var sb = new StringBuilder();
-                sb.Append("[MP] NetSync captured ").Append(_diagTotal)
+                sb.Append("NetSync captured ").Append(_diagTotal)
                   .Append(" road segment(s)/5s across ").Append(_diag.Count).Append(" prefab(s): ");
                 int n = 0;
                 foreach (var pair in _diag)
@@ -42,50 +43,58 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                     sb.Append(pair.Key).Append(" x").Append(pair.Value);
                     if (++n >= 12) { sb.Append(", ..."); break; }
                 }
-                Mod.Verbose(sb.ToString());
+                SyncLog.Detail(LogTopic.Nets, sb.ToString());
             }
 
             if (_peakUpdated > 0 || _peakDeleted > 0 || _diagTotal > 0 || _capFilteredHalves > 0)
             {
-                Mod.Verbose("[MP] NetSync edge tags/5s peak: Created=" + _peakCreated +
-                             " Updated=" + _peakUpdated + " Deleted=" + _peakDeleted +
-                             "; dropped " + _capFilteredHalves + " split-half edge(s) (side-effects of a " +
-                             "mid-span tap; only the drawn edge is sent so the receiver splits locally).");
+                SyncLog.Detail(LogTopic.Nets, "NetSync edge tags/5s peak: Created=" + _peakCreated +
+                    " Updated=" + _peakUpdated + " Deleted=" + _peakDeleted + "; dropped " +
+                    _capFilteredHalves + " split-half edge(s) (side-effects of a " +
+                    "mid-span tap; only the drawn edge is sent so the receiver splits locally).");
             }
 
             if (_rzSegments > 0)
             {
-                Mod.Verbose("[MP] NetSync realized " + _rzSegments + " remote segment(s)/5s; endpoints: " +
-                             _rzSnapEnds + " reused a node, " + _rzMergeEnds +
-                             " merged a shared new node, " + _rzMidEnds +
-                             " split an existing edge (T-junction), " +
-                             _rzFreeEnds + " free ground.");
+                SyncLog.Detail(LogTopic.Nets, "NetSync realized " + _rzSegments +
+                    " remote segment(s)/5s; endpoints: " + _rzSnapEnds + " reused a node, " +
+                    _rzMergeEnds + " merged a shared new node, " + _rzMidEnds +
+                    " split an existing edge (T-junction), " + _rzFreeEnds + " free ground.");
+            }
+
+            if (_capPinnedSpans > 0 || _rzPinnedSpans > 0 || _rzPinRefused > 0 ||
+                _capSelfAnchoredSpans > 0 || _capBentDeckSpans > 0)
+            {
+                SyncLog.Detail(LogTopic.Nets, "NetSync water profile/5s: pinned " +
+                    _capPinnedSpans + " span(s) over water; left " + _capSelfAnchoredSpans +
+                    " banded by their own elevation and " + _capBentDeckSpans +
+                    " with a deck that is not one line to the receiver's own generator; realized " +
+                    _rzPinnedSpans + " pinned span(s), " + _rzPinRefused +
+                    " refused (those rebuild their deck from local water).");
             }
 
             if (_rzSurfaceCorrections > 0)
             {
-                Mod.log.Info("[MP] NetSync: " + _rzSurfaceCorrections + " remote endpoint(s)/5s needed " +
-                             "an elevation correction (up to " +
-                             _rzSurfaceCorrectionMax.ToString("F1") + " m) because the surface under " +
-                             "them differs from the source's. The height is reproduced; a large or " +
-                             "growing figure means terrain or water is out of step.");
-                Diagnostics.FlightRecorder.Note("net surface correction ends=" + _rzSurfaceCorrections +
-                                                  " maxM=" + _rzSurfaceCorrectionMax.ToString("F1"));
+                SyncLog.Detail(LogTopic.Nets, "NetSync: " + _rzSurfaceCorrections +
+                    " remote endpoint(s)/5s needed " + "an elevation correction (up to " +
+                    _rzSurfaceCorrectionMax.ToString("F1") + " m) because the surface under " +
+                    "them differs from the source's. The height is reproduced; a large or " +
+                    "growing figure means terrain or water is out of step.");
             }
 
             if (_rzLocalSurfaceMatches > 0)
             {
-                Mod.log.Info("[MP] NetSync: " + _rzLocalSurfaceMatches +
-                             " utility endpoint(s)/5s reused connectivity through local-surface " +
-                             "height projection instead of creating an overlapping free node.");
-                Diagnostics.FlightRecorder.Note("net utility local-surface matches=" +
-                                                  _rzLocalSurfaceMatches);
+                SyncLog.Detail(LogTopic.Nets, "NetSync: " + _rzLocalSurfaceMatches +
+                    " utility endpoint(s)/5s reused connectivity through local-surface " +
+                    "height projection instead of creating an overlapping free node.");
             }
 
             _diag.Clear();
             _diagTotal = 0;
             _rzSegments = _rzSnapEnds = _rzMergeEnds = _rzMidEnds = _rzFreeEnds = 0;
             _rzLocalSurfaceMatches = 0;
+            _capPinnedSpans = _capSelfAnchoredSpans = _capBentDeckSpans = 0;
+            _rzPinnedSpans = _rzPinRefused = 0;
             _rzSurfaceCorrections = 0;
             _rzSurfaceCorrectionMax = 0f;
             _peakCreated = _peakUpdated = _peakDeleted = 0;
@@ -237,7 +246,12 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                         Length = curve.m_Length,
                         Start = { ElevationLeft = startElevation.x, ElevationRight = startElevation.y },
                         End = { ElevationLeft = endElevation.x, ElevationRight = endElevation.y },
+                        // Over water the receiver would rebuild the deck from ITS water field; pin
+                        // the span to the two committed end-node heights instead.
+                        PinProfile = ShouldPinCommittedEdge(prefab, b, startElevation,
+                            endElevation),
                     };
+                    if (command.PinProfile) _capPinnedSpans++;
                     if (onKeptSpan)
                     {
                         _deferredSpanPieces.Add(command);
@@ -261,8 +275,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
             }
 
             if (stubs > 0)
-                Diagnostics.FlightRecorder.Note("net per-edge fallback sent=" + stubs +
-                                                  " (no native operation covered this apply)");
+                SyncLog.Trace(LogTopic.Nets, "net per-edge fallback sent=" + stubs +
+                    " (no native operation covered this apply)");
         }
 
         /// <summary>

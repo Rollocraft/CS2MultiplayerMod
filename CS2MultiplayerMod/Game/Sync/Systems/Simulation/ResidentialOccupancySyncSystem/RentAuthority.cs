@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
+using CS2MultiplayerMod.Core.Diagnostics;
 using CS2MultiplayerMod.Core.Session;
+using CS2MultiplayerMod.Game.Diagnostics;
 using CS2MultiplayerMod.Game.Sync.Commands;
 using Game.Buildings;
 using Game.Citizens;
@@ -69,8 +71,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 _loadedWorldRentSeedGeneration = installGeneration;
                 _loadedWorldRentSeeded = true;
                 _loadedWorldRentSeedWarned = false;
-                Mod.Verbose("[MP] Occupancy: seeded " + _loadedWorldHouseholdRents.Count +
-                            " loaded household rent contract(s) before local RentAdjust.");
+                SyncLog.Detail(LogTopic.Residential, "Occupancy: seeded " +
+                    _loadedWorldHouseholdRents.Count +
+                    " loaded household rent contract(s) before local RentAdjust.");
             }
             catch (Exception ex)
             {
@@ -79,8 +82,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 if (!_loadedWorldRentSeedWarned)
                 {
                     _loadedWorldRentSeedWarned = true;
-                    Mod.log.Warn("[MP] Occupancy: loaded-world household rent seed failed; " +
-                                 "will retry (logged once): " + ex.Message);
+                    SyncLog.Warn(LogTopic.Residential,
+                        "Occupancy: loaded-world household rent seed failed; " +
+                        "will retry (logged once): " + ex.Message);
                 }
             }
             finally

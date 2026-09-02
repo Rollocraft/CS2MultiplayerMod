@@ -7,8 +7,10 @@ using Game.Tools;
 using Unity.Collections;
 using Unity.Entities;
 using Unity.Mathematics;
+using CS2MultiplayerMod.Core.Diagnostics;
 using CS2MultiplayerMod.Core.Protocol.Messages;
 using CS2MultiplayerMod.Core.Session;
+using CS2MultiplayerMod.Game.Diagnostics;
 using CS2MultiplayerMod.Game.Sync.Commands;
 using CS2MultiplayerMod.Game.Sync.Infrastructure;
 
@@ -34,7 +36,14 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             // applies), leave incoming commands and retries queued for the next cycle — RealizePending
             // runs after DeleteSync, so a delete armed this frame defers us. A selected build tool is
             // allowed on quiet preview frames; only its actual Apply/Clear frame has priority.
-            if (_netSync == null || !_netSync.CanBuildDefinitions) return;
+            if (DeferForPendingPlacement || _netSync == null || !_netSync.CanBuildDefinitions)
+            {
+                // Time locked out is not the replacement's fault: its window is for waiting on its
+                // own target to arrive, not for waiting on this system to be allowed to run.
+                ExtendPendingReplaceWindows(service.NowMs);
+                return;
+            }
+            _lastReplaceRealizeMs = service.NowMs;
 
             long now = service.NowMs;
             List<(NetReplaceCommand cmd, long deadline)> work = null;
@@ -57,22 +66,35 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             if (_retry.Count > 0)
             {
                 int expired = 0;
+                NetReplaceCommand firstExpired = null;
                 if (work == null) work = new List<(NetReplaceCommand, long)>();
                 for (int i = 0; i < _retry.Count; i++)
                 {
                     if (_retry[i].deadline > now) work.Add((_retry[i].command, _retry[i].deadline));
-                    else expired++;
+                    else
+                    {
+                        if (firstExpired == null) firstExpired = _retry[i].command;
+                        expired++;
+                    }
                 }
                 _retry.Clear();
                 if (expired > 0)
                 {
-                    Mod.log.Warn("[MP] NetReplaceSync: " + expired +
-                                 " road replacement target(s) did not resolve within " +
-                                 (RetryWindowMs / 1000) +
-                                 " s; dropping them and requesting authoritative world recovery.");
+                    SyncLog.Warn(LogTopic.Nets, "NetReplaceSync: " + expired +
+                        " road replacement target(s) did not resolve within " +
+                        (RetryWindowMs / 1000) +
+                        " s; dropping them and requesting authoritative world recovery.");
                     // One request for this expiry pass, not one per command. The expired entries were
                     // removed above, so they cannot request recovery again on later frames.
-                    SyncInbox.RequestResync("road replacement target did not resolve");
+                    SyncInbox.RequestResync(Diagnostics.ResyncReport
+                        .Create("road replacement target did not resolve", "net",
+                            Diagnostics.ResyncEvidence.MissingTarget)
+                        .About("'" + firstExpired.PrefabName + "' over the span at (" +
+                               firstExpired.OldAx.ToString("F1") + "," +
+                               firstExpired.OldAz.ToString("F1") + ")")
+                        .Tried("rescanned the city's roads for the replaced span every cycle for " +
+                               (RetryWindowMs / 1000) + " s")
+                        .Fact("replacements that found no road here", expired));
                 }
             }
 
@@ -85,10 +107,19 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     (work ?? (work = new List<(NetReplaceCommand, long)>()))
                         .Add((NetReplaceCommand.Decode(message.Body), now + RetryWindowMs));
                 }
-                catch (System.Exception ex) { Mod.log.Warn("[MP] NetReplaceSync: dropping malformed command: " + ex.Message); }
+                catch (System.Exception ex) { SyncLog.Warn(LogTopic.Nets, "NetReplaceSync: dropping malformed command: " + ex.Message); }
             }
 
             if (work != null && work.Count > 0) Apply(work, now);
+        }
+
+        private void ExtendPendingReplaceWindows(long now)
+        {
+            long frozenMs = _lastReplaceRealizeMs == 0 ? 0 : now - _lastReplaceRealizeMs;
+            _lastReplaceRealizeMs = now;
+            if (frozenMs <= 0) return;
+            for (int i = 0; i < _retry.Count; i++)
+                _retry[i] = (_retry[i].command, _retry[i].deadline + frozenMs);
         }
 
         private void Apply(List<(NetReplaceCommand cmd, long deadline)> commands, long now)
@@ -106,7 +137,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                         commands[i].cmd, commands[i].deadline));
                 }
                 else
-                    Mod.log.Warn("[MP] NetReplaceSync realize: unknown prefab '" + commands[i].cmd.PrefabName + "'; skipping.");
+                    SyncLog.Warn(LogTopic.Nets, "NetReplaceSync realize: unknown prefab '" +
+                        commands[i].cmd.PrefabName + "'; skipping.");
             }
             if (targets.Count == 0) return;
 
@@ -219,8 +251,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 if (!found[t]) { _retry.Add((targets[t].cmd, targets[t].deadline)); retried++; }
 
             if (replaced > 0 || retried > 0)
-                Mod.Verbose("[MP] NetReplaceSync: replaced " + replaced + " road segment(s)" +
-                             (retried > 0 ? ", " + retried + " waiting for their segment" : "") + ".");
+                SyncLog.Detail(LogTopic.Nets, "NetReplaceSync: replaced " + replaced +
+                    " road segment(s)" +
+                    (retried > 0 ? ", " + retried + " waiting for their segment" : "") + ".");
         }
 
         /// <summary>
@@ -319,7 +352,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             }
             catch (System.Exception ex)
             {
-                Mod.log.Warn("[MP] NetReplaceSync: failed to build replacement definition: " + ex.Message);
+                SyncLog.Warn(LogTopic.Nets,
+                    "NetReplaceSync: failed to build replacement definition: " + ex.Message);
                 return Entity.Null;
             }
             finally

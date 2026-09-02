@@ -1,5 +1,6 @@
 ---
 title: Disable DLC
+description: "Turn DLC off on Steam and on Xbox, Microsoft Store or Game Pass so every player has the same content enabled."
 ---
 
 # Disabling DLC

@@ -1,7 +1,9 @@
 using Colossal.Serialization.Entities;
 using Colossal.UI.Binding;
+using CS2MultiplayerMod.Core.Diagnostics;
 using CS2MultiplayerMod.Core.Networking;
 using CS2MultiplayerMod.Core.Session;
+using CS2MultiplayerMod.Game.Diagnostics;
 using CS2MultiplayerMod.Localization;
 using Game;
 using Game.SceneFlow;
@@ -57,7 +59,8 @@ namespace CS2MultiplayerMod.Game
             {
                 if (_uiModuleReady) return;
                 _uiModuleReady = true;
-                Mod.log.Info("UI module loaded and registered - the main-menu Multiplayer button is available.");
+                SyncLog.Detail(LogTopic.Ui,
+                    "UI module loaded and registered - the main-menu Multiplayer button is available.");
             }));
 
             // Field values: polled from Setting every UI frame, pushed on change.
@@ -303,7 +306,8 @@ namespace CS2MultiplayerMod.Game
                 if (Mod.Service != null) Mod.Service.RetryClientWorldExit();
             }));
 
-            Mod.log.Info(nameof(MultiplayerUISystem) + " created (binding group '" + Group + "').");
+            SyncLog.Detail(LogTopic.Ui, nameof(MultiplayerUISystem) + " created (binding group '" +
+                Group + "').");
         }
 
         /// <summary>
@@ -316,7 +320,7 @@ namespace CS2MultiplayerMod.Game
             MenuUISystem menu = World.GetExistingSystemManaged<MenuUISystem>();
             if (menu == null)
             {
-                Mod.log.Error("Could not open the multiplayer menu screen.");
+                SyncLog.Error(LogTopic.Ui, "Could not open the multiplayer menu screen.");
                 return;
             }
 
@@ -334,26 +338,29 @@ namespace CS2MultiplayerMod.Game
             if (Mod.Service == null || Mod.Setting == null) return;
             if (!MultiplayerService.ModEnabled)
             {
-                Mod.log.Warn("Cannot choose a host world: the mod is disabled in settings.");
+                SyncLog.Warn(LogTopic.Ui,
+                    "Cannot choose a host world: the mod is disabled in settings.");
                 return;
             }
             if (Mod.Service.Session.Role != SessionRole.None)
             {
-                Mod.log.Warn("Cannot choose a host world: a multiplayer session is already active.");
+                SyncLog.Warn(LogTopic.Ui,
+                    "Cannot choose a host world: a multiplayer session is already active.");
                 return;
             }
 
             MenuUISystem menu = World.GetExistingSystemManaged<MenuUISystem>();
             if (menu == null)
             {
-                Mod.log.Error("Could not open the game's world-selection screen.");
+                SyncLog.Error(LogTopic.Ui, "Could not open the game's world-selection screen.");
                 return;
             }
 
             _hostAfterWorldLoad = true;
             _hostWorldLoadStarted = false;
             menu.activeScreen = screen;
-            Mod.log.Info("Host world selection opened through the game's " + screen + " screen.");
+            SyncLog.Detail(LogTopic.Ui, "Host world selection opened through the game's " + screen +
+                " screen.");
         }
 
         private void CancelPendingHost()
@@ -362,7 +369,7 @@ namespace CS2MultiplayerMod.Game
 
             _hostAfterWorldLoad = false;
             _hostWorldLoadStarted = false;
-            Mod.log.Info("Host world selection cancelled.");
+            SyncLog.Detail(LogTopic.Ui, "Host world selection cancelled.");
         }
 
         private void StartHostFromSettings()
@@ -380,7 +387,7 @@ namespace CS2MultiplayerMod.Game
             if (purpose != Purpose.NewGame && purpose != Purpose.LoadGame) return;
 
             _hostWorldLoadStarted = true;
-            Mod.log.Info("Selected host world is loading (" + purpose + ").");
+            SyncLog.Detail(LogTopic.Ui, "Selected host world is loading (" + purpose + ").");
         }
 
         protected override void OnUpdate()
@@ -398,7 +405,8 @@ namespace CS2MultiplayerMod.Game
                     // Backstop for the preload callback: UIUpdate normally observes at
                     // least one loading frame as the selected city enters the game.
                     _hostWorldLoadStarted = true;
-                    Mod.log.Info("Selected host world entered the game load pipeline.");
+                    SyncLog.Detail(LogTopic.Ui,
+                        "Selected host world entered the game load pipeline.");
                 }
                 else
                 {
@@ -419,7 +427,8 @@ namespace CS2MultiplayerMod.Game
                     {
                         _hostAfterWorldLoad = false;
                         _hostWorldLoadStarted = false;
-                        Mod.log.Info("Host world is ready - starting the multiplayer session.");
+                        SyncLog.Detail(LogTopic.Ui,
+                            "Host world is ready - starting the multiplayer session.");
                         StartHostFromSettings();
                     }
                     else
@@ -435,7 +444,7 @@ namespace CS2MultiplayerMod.Game
             if (UnityEngine.Time.realtimeSinceStartup - _createdAt < UiReadyGraceSeconds) return;
 
             _uiModuleWarned = true;
-            Mod.log.Warn(
+            SyncLog.Warn(LogTopic.Ui,
                 "The multiplayer UI module never reported in - the main-menu button is most likely missing. " +
                 "Either CS2MultiplayerMod.mjs is not in the mod folder, or another mod's broken UI module " +
                 "(known offender: Gooee) crashed the game's UI-module load chain before it reached this mod. " +

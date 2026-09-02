@@ -1,4 +1,5 @@
 using System;
+using CS2MultiplayerMod.Core.Diagnostics;
 using CS2MultiplayerMod.Core.Networking;
 using CS2MultiplayerMod.Core.Networking.Tcp;
 using CS2MultiplayerMod.Core.Protocol;
@@ -34,16 +35,16 @@ namespace CS2MultiplayerMod.Core.Session
                 // protocol work happens.
                 if (_failedAuth.IsBanned(address, nowUnixMs))
                 {
-                    _log.Warn("[security] Refused " + connection + " (" + address +
-                              "): temporarily banned after repeated auth failures.");
+                    _log.Warn(LogTopic.Transport, "Refused " + connection + " (" + address +
+                        "): temporarily banned after repeated auth failures.");
                     _transport.Disconnect(connection);
                     return;
                 }
 
                 if (!string.IsNullOrEmpty(address) && _hostBannedAddresses.Contains(address))
                 {
-                    _log.Warn("[security] Refused " + connection + " (" + address +
-                              "): banned by the host for this session.");
+                    _log.Warn(LogTopic.Transport, "Refused " + connection + " (" + address +
+                        "): banned by the host for this session.");
                     SendTo(connection, HandshakeResponse.Reject(
                         "The host banned this connection for the current hosting session."));
                     _transport.DisconnectAfterFlush(connection);
@@ -56,8 +57,8 @@ namespace CS2MultiplayerMod.Core.Session
                     if (!pair.Value.Handshaked) pending++;
                 if (pending >= TcpServerTransport.MaxPendingConnections)
                 {
-                    _log.Warn("[security] Refused " + connection + " (" + address +
-                              "): too many connections awaiting handshake.");
+                    _log.Warn(LogTopic.Transport, "Refused " + connection + " (" + address +
+                        "): too many connections awaiting handshake.");
                     _transport.Disconnect(connection);
                     return;
                 }
@@ -73,7 +74,8 @@ namespace CS2MultiplayerMod.Core.Session
                 _peers[connection.Value] = peer;
                 SendTo(connection, new HandshakeChallenge(
                     ProtocolConstants.ProtocolVersion, PasswordProtected, peer.ChallengeNonce));
-                _log.Info("Client connecting on " + connection + " (" + address + "); challenged, awaiting handshake.");
+                _log.Detail(LogTopic.Transport, "Client connecting on " + connection + " (" +
+                    address + "); challenged, awaiting handshake.");
             }
             else // Client: the socket to the host is up — wait for its challenge.
             {
@@ -114,8 +116,9 @@ namespace CS2MultiplayerMod.Core.Session
                     // Without this line a client that connects but never authenticates
                     // (TLS failure, crash, wrong build) vanishes without a trace in the
                     // host's log — the single worst blind spot when debugging joins.
-                    _log.Info("Connection " + connection + " (" + (peer.RemoteAddress ?? "?") +
-                              ") closed before completing the handshake: " + reason);
+                    _log.Warn(LogTopic.Transport, "Connection " + connection + " (" +
+                        (peer.RemoteAddress ?? "?") + ") closed before completing the handshake: " +
+                        reason);
             }
 
             if (Role == SessionRole.Client)
@@ -141,7 +144,8 @@ namespace CS2MultiplayerMod.Core.Session
         /// </summary>
         private void EndByRemote(string reason)
         {
-            _log.Info("Host ended the session (" + reason + "). Disconnecting cleanly.");
+            _log.Event(LogTopic.Transport, "Host ended the session (" + reason +
+                "). Disconnecting cleanly.");
             // Preserve the host notice / transport failure for the game layer. It uses
             // this detail to tell the player why their temporary host world is closing.
             Stop(reason);
@@ -236,7 +240,8 @@ namespace CS2MultiplayerMod.Core.Session
                     HandleBlobChunk(connection, peer, (BlobChunkMessage)message, nowUnixMs);
                     break;
                 case MessageType.ResyncRequest:
-                    HandleResyncRequest(connection, peer, nowUnixMs);
+                    HandleResyncRequest(connection, peer, nowUnixMs,
+                        ((ResyncRequestMessage)message).Reason);
                     break;
                 case MessageType.WorldSyncControl:
                     HandleWorldSyncControl(connection, peer, (WorldSyncControlMessage)message);
@@ -258,7 +263,8 @@ namespace CS2MultiplayerMod.Core.Session
             // ends the whole session. Strays are logged and dropped instead.
             if (Role == SessionRole.Client)
             {
-                _log.Warn("[security] Dropping " + messageType + " from host: " + reason + ".");
+                _log.Warn(LogTopic.Transport, "Dropping " + messageType + " from host: " + reason +
+                    ".");
                 return;
             }
 
@@ -269,8 +275,8 @@ namespace CS2MultiplayerMod.Core.Session
                 ? peer.RemoteAddress
                 : (_transport != null ? _transport.GetRemoteAddress(connection) : null) ?? "?";
 
-            _log.Warn("[security] Disconnecting " + connection + " " + who + " (" + address +
-                      "): " + reason + " [type=" + messageType + "]");
+            _log.Warn(LogTopic.Transport, "Disconnecting " + connection + " " + who + " (" + address +
+                "): " + reason + " [type=" + messageType + "]");
 
             if (_transport != null) _transport.Disconnect(connection);
             // Removal + observer notification happen on the transport's Disconnected event.

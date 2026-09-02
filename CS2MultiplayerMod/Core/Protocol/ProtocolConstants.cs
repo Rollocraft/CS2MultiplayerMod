@@ -4,7 +4,97 @@ namespace CS2MultiplayerMod.Core.Protocol
     {
         /// <summary>
         /// Wire-format version. Bump when message layout changes to refuse handshake on mismatch.
-        /// Current v47 adds each synchronized household's owned personal-vehicle prefabs to the
+        /// Current v61 decides the water pin on a net course's endpoint ELEVATIONS. The gate read
+        /// CoursePosFlags.FreeHeight, which the net tool sets only on parallel, grid and mid-curve
+        /// positions - never on either end of a plain drag, whatever height it is drawn at. Every
+        /// hand-drawn bridge was therefore exempted and rebuilt its deck from the receiver's own
+        /// water. The generator bands a deck as soon as ONE endpoint elevation reaches the prefab's
+        /// limit, so that is the exemption now - but only while both ends are FIXED height, because
+        /// the band is anchored at heights resolved after free-height resolution, on the realizing
+        /// machine and from its water. Over water the tool raises an endpoint elevation to
+        /// m_MinWaterElevation, so a bridge drawn at level 0 looks raised a full step; exempting it
+        /// on the elevation alone skipped every bridge there is. A pinned course carries the endpoint heights already on
+        /// the wire: an endpoint's elevation over water is measured from the terrain while the
+        /// profile surface is the water plus bridge clearance, so resolving one as
+        /// surface+elevation counts the lake's depth twice - 65 m on a measured span, which is also
+        /// what made a later edit unable to find that road and forced a world resync.
+        /// v61 also stops dividing a span into several pinned pieces - a pin can only
+        /// carry one straight deck, and dividing gave the receiver a node and an edge per boundary
+        /// that the source did not have. A deck with a real bend in it travels unpinned, its shape
+        /// coming from the terrain both machines share.
+        /// v60 carries every native workplace Efficiency factor used by the industrial and
+        /// office production-rate binding. It also observes condition-only growable changes, so
+        /// LevelSection's progress input follows the host even when no abandonment flag or
+        /// construction marker changed. v59 peers cannot decode the expanded company-state entry.
+        /// v60 also retires city-state channel 2 (population): the HUD population count is a
+        /// cosmetic output of each peer's own simulation, and mirroring the host's value once a
+        /// second made the client's number flicker as the local sim and the snapshot fought over
+        /// it. A stale peer that still sends channel 2 is harmless - the id is simply unrouted.
+        /// v59 adds channel 24, the complete host service-accounting view: every collected
+        /// fee count/value, every per-service budget/upkeep aggregate, and the fee/upkeep income
+        /// and expense slots consumed by the budget pass. Client boundaries discard locally timed
+        /// fee events before and after the native collector and reassert the absolute host records
+        /// around the upkeep collector. Channel 8 remains independently editable and now validates
+        /// and applies its complete stable slider table atomically. v58 peers do not carry channel
+        /// 24 and therefore cannot preserve this authority boundary.
+        /// v58 raises the bounded rolling-page throughput for property rent, residential
+        /// occupancy and workplace state. The native city state stores every apartment household in the
+        /// building's Renter buffer and every real employee in the company's Employee buffer, so
+        /// records grow with density; the former small-page quotas permanently fell behind in
+        /// mid/high-density cities even though low-density records kept up. Pages remain below the
+        /// StateSnapshot transport's 256 KiB ceiling, but priority and retained-departure rotation
+        /// can now drain faster than the native high-capacity writers mutate those buffers.
+        /// Workplace records also carry construction presence, allowing completed absolute
+        /// occupancy/company pages to repair a missed growable level transition through the
+        /// game's native prefab-completion path.
+        /// v57 makes residential citizen lifecycle authoritative as well as the absolute
+        /// household roster. Channel 21 now carries HealthProblem presence/flags because sickness
+        /// and sick/injured deaths draw from a per-world random stream; changed household-member
+        /// and health buffers prioritize their property immediately. v57 peers also use renter
+        /// events on clients as repair triggers, covering move-in/out mutations in dense towers.
+        /// Workplace renter events and changed Employee buffers provide the same immediate path
+        /// for commercial, industrial and office tenant/hiring changes.
+        /// This channel-21 layout is intentionally incompatible with v56.
+        /// v56 makes the displayed economy authoritative at the state that actually feeds
+        /// the simulation and UI. Channel 6 now carries TaxSystem's complete 92-slot table rather
+        /// than four headline rates; channel 23 carries the four taxable-income statistic families;
+        /// and channel 18 carries the complete residential/commercial/industrial/office demand
+        /// scalars and resource arrays consumed by zone spawning. Channel 21 adds household
+        /// TaxPayer history and the fulfilled utility quantities used for residential fees. These
+        /// layouts are intentionally incompatible with v55.
+        /// v55 stops water-pinning a span the receiver already reproduces. A course with
+        /// both endpoint elevations at or past the prefab's limit - any bridge raised a full step or
+        /// more - carries its own height band: the generator holds the whole deck between the two
+        /// transmitted endpoint heights and never consults the water. Pinning it replaced a deck the
+        /// receiver derives exactly with one measured here and predicted for there, and the
+        /// prediction did not model that band at all, so a raised deck dived to whatever shoal or
+        /// island sat under it. The band is now reproduced for the spans that are still pinned.
+        /// v54 expands company-state channel 22 with the tenant's brand/custom name,
+        /// random state, service/trade/tax/work-provider state and host resident employee roster.
+        /// Employee ids resolve through residential occupancy, allowing the receiver to rebuild
+        /// real Employee/Worker links rather than displaying invented headcounts. Entry flags are
+        /// now 16-bit and pages are byte-budgeted, so v53 peers cannot decode this layout.
+        /// v53 fixes the length a water-pinned net course carries. A pinned span is
+        /// published as straight pieces of the deck it commits, and each piece was measured on the
+        /// source curve it was cut from rather than on the piece itself - whose two ends had just
+        /// been moved onto that deck. The receiver re-measures the curve it is given and refuses
+        /// the whole operation when the two disagree, so every bridge crossing water was dropped
+        /// entirely. The layout is unchanged; the bump refuses a stale peer, whose spans this
+        /// build would now answer with a resync instead of a silent hole.
+        /// v50 adds a reason string to ResyncRequest. It is log text only - nothing
+        /// branches on it - but without it the host's log cannot tell a player pressing the sync
+        /// button apart from a client whose pipeline gave up on an edit, which is the single most
+        /// useful distinction when reading a session that kept reloading its world.
+        /// v49 adds city-state channel 22: host-authoritative workplace state for every
+        /// commercial, industrial and office building. Each page entry is about the building, not
+        /// the business, so the host can say "nobody rents this one" - the one statement a client
+        /// cannot derive for itself. Occupied entries carry the tenant's archetype, the whole
+        /// CompanyStatisticData block, the profitability rating and the goods held. Figures are
+        /// corrected on the game's own company cadence and UpdateFrame partition so a panel
+        /// settles instead of being overwritten between corrections; tenancy is taken as
+        /// authority, because a client left choosing its own tenants opens businesses the host
+        /// never had and no correction removes them afterwards.
+        /// v47 adds each synchronized household's owned personal-vehicle prefabs to the
         /// occupancy roster. Receiving peers realize missing vehicles through the normal stopped
         /// vehicle archetype and ownership references, so synchronized residents can actually use
         /// cars and generate traffic. v46 makes growable construction and condition host-authoritative. Lifecycle
@@ -92,6 +182,9 @@ namespace CS2MultiplayerMod.Core.Protocol
         /// replacement an epoch-scoped pause/load/resume transaction and tags blob chunks with
         /// their transfer epoch. v18 adds entity visual-customization
         /// and savegame color-palette commands.
+        /// v48 carries the water-profile pin on a net course: capture measures the deck it is
+        /// committing and the receiver reproduces it instead of re-deriving the span from its own
+        /// (never replicated) water field.
         /// v17 carries atomic native object-tool definition batches, portable owned-net connector
         /// identities, and host-authoritative tree stage/growth correction. v16 carries
         /// object random seed/tree age and service-upgrade random seed. v15
@@ -103,7 +196,7 @@ namespace CS2MultiplayerMod.Core.Protocol
         /// islands) reattach on the receiver.
         /// See <see cref="Messages.HandshakeRequest"/> and version notes in doc/internals.
         /// </summary>
-        public const int ProtocolVersion = 47;
+        public const int ProtocolVersion = 61;
 
         /// <summary>
         /// Hard cap on a single payload, guarding against corrupt length prefixes.

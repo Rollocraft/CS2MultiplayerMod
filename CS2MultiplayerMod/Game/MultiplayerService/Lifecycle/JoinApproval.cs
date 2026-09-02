@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using CS2MultiplayerMod.Core.Diagnostics;
 using CS2MultiplayerMod.Core.Session;
 
 namespace CS2MultiplayerMod.Game
@@ -64,7 +65,8 @@ namespace CS2MultiplayerMod.Game
         public void ApproveJoinFromUi(int playerId)
         {
             if (!_session.ApproveJoin(playerId, NowMs))
-                _log.Warn("[MP] Ignored approve for unknown pending join #" + playerId + ".");
+                _log.Warn(LogTopic.Session, "Ignored approve for unknown pending join #" + playerId +
+                    ".");
             RefreshPendingJoinsJson();
         }
 
@@ -72,7 +74,8 @@ namespace CS2MultiplayerMod.Game
         public void DeclineJoinFromUi(int playerId)
         {
             if (!_session.DeclineJoin(playerId))
-                _log.Warn("[MP] Ignored decline for unknown pending join #" + playerId + ".");
+                _log.Warn(LogTopic.Session, "Ignored decline for unknown pending join #" + playerId +
+                    ".");
             RefreshPendingJoinsJson();
         }
     }

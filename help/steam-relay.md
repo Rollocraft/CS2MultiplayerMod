@@ -1,5 +1,6 @@
 ---
 title: Steam Relay
+description: "Play without port forwarding: both players pick Steam Relay and the host shares a join code. Steam copies of the game only."
 ---
 
 # Steam Relay

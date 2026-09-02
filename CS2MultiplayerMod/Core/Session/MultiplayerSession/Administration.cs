@@ -1,3 +1,4 @@
+using CS2MultiplayerMod.Core.Diagnostics;
 using CS2MultiplayerMod.Core.Networking;
 using CS2MultiplayerMod.Core.Protocol;
 using CS2MultiplayerMod.Core.Protocol.Messages;
@@ -52,7 +53,8 @@ namespace CS2MultiplayerMod.Core.Session
             _administrativeRemovals.Add(selected.Connection.Value);
             SendTo(selected.Connection, new DisconnectNoticeMessage(reason));
             _transport.DisconnectAfterFlush(selected.Connection);
-            _log.Info("Host " + (ban ? "banned " : "removed ") + selected + " from the session.");
+            _log.Event(LogTopic.Session, "Host " + (ban ? "banned " : "removed ") + selected +
+                " from the session.");
             return true;
         }
 

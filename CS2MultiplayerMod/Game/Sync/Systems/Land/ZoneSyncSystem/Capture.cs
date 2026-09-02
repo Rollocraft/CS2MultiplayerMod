@@ -2,7 +2,9 @@ using System.Collections.Generic;
 using Game.Zones;
 using Unity.Collections;
 using Unity.Entities;
+using CS2MultiplayerMod.Core.Diagnostics;
 using CS2MultiplayerMod.Core.Session;
+using CS2MultiplayerMod.Game.Diagnostics;
 using CS2MultiplayerMod.Game.Sync.Commands;
 using CS2MultiplayerMod.Game.Sync.Infrastructure;
 
@@ -101,12 +103,17 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     bool coalesced = _outgoing.ContainsKey(blockKey);
                     if (!_outgoing.TrySetLatest(blockKey, command, MaxBufferedOutgoingZones))
                     {
-                        SyncInbox.RequestResync("zone outgoing latest-state queue overflow");
+                        SyncInbox.RequestResync(CS2MultiplayerMod.Game.Diagnostics.ResyncReport
+                            .Create("zone outgoing latest-state queue overflow", "zone",
+                                CS2MultiplayerMod.Game.Diagnostics.ResyncEvidence.StreamLoss)
+                            .About("outgoing zone queue")
+                            .Tried("nothing - zoning changes were shed before they could be sent"));
                         if (!_outgoingOverflowWarned)
                         {
                             _outgoingOverflowWarned = true;
-                            Mod.log.Warn("[MP] ZoneSync outgoing queue reached its safety limit; " +
-                                         "requesting a fresh world sync.");
+                            SyncLog.Warn(LogTopic.Land,
+                                "ZoneSync outgoing queue reached its safety limit; " +
+                                "requesting a fresh world sync.");
                         }
                         continue;
                     }

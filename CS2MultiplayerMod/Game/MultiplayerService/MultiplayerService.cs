@@ -4,6 +4,7 @@ using System.Diagnostics;
 using CS2MultiplayerMod.Core.Diagnostics;
 using CS2MultiplayerMod.Core.Protocol.Messages;
 using CS2MultiplayerMod.Core.Session;
+using CS2MultiplayerMod.Game.Diagnostics;
 
 namespace CS2MultiplayerMod.Game
 {
@@ -148,14 +149,10 @@ namespace CS2MultiplayerMod.Game
             _lastLoggedCommandId = command.CommandId;
             _lastCommandLogMs = now;
             _lastCommandLoggedTotal = _appliedCommandTotal;
-            Diagnostics.FlightRecorder.Note(
-                "command-apply name=" + CommandName(command.CommandId) +
-                " id=" + command.CommandId +
-                " origin=" + command.OriginPlayerId +
-                " tick=" + command.Tick +
-                " bytes=" + _lastAppliedCommandBytes +
-                " sinceLast=" + commandsSinceLog +
-                " total=" + _appliedCommandTotal);
+            SyncLog.Trace(LogTopic.Session, "command-apply name=" + CommandName(command.CommandId) +
+                " id=" + command.CommandId + " origin=" + command.OriginPlayerId + " tick=" +
+                command.Tick + " bytes=" + _lastAppliedCommandBytes + " sinceLast=" +
+                commandsSinceLog + " total=" + _appliedCommandTotal);
         }
 
         private void ResetCommandDiagnostics()
@@ -198,31 +195,133 @@ namespace CS2MultiplayerMod.Game
         private const long AutoRecoveryCooldownMs = 90000;
         private long _lastAutoRecoveryMs = long.MinValue;
 
+        /// <summary>True while a world reload is already under way, in either role.</summary>
+        private bool WorldRecoveryInFlight =>
+            _worldSyncBarrierActive ||
+            _phase == ClientWorldPhase.WaitingForMap ||
+            _phase == ClientWorldPhase.LoadingMap ||
+            _phase == ClientWorldPhase.WaitingForResume;
+
+        /// <summary>A settled report waiting for the service tick to act on it. Main thread only.</summary>
+        private Diagnostics.ResyncReport _settledReport;
+
+        /// <summary>
+        /// Set when this client must re-ask the host for a world it is otherwise never going to
+        /// receive. It deliberately bypasses the resync arbiter and the in-flight guard: this is
+        /// not a claim that the two cities diverged, it is a client saying the handover broke and
+        /// it is still waiting. See the Resume-before-load case in WorldSync.
+        /// </summary>
+        private bool _mapReRequestPending;
+
+        internal void RequestMapAgainNextTick() => _mapReRequestPending = true;
+
+        /// <summary>
+        /// Ask again for a world whose handover broke, once the session has actually left the epoch
+        /// that broke. Waiting for that is why this is a pumped flag rather than a direct call: the
+        /// session coalesces any request made while it is still inside the epoch.
+        /// </summary>
+        private void PumpMapReRequest()
+        {
+            if (!_mapReRequestPending) return;
+            if (_session == null || _session.Status != SessionStatus.Connected)
+            {
+                _mapReRequestPending = false;
+                return;
+            }
+            if (_session.WorldSyncSuspended) return;
+            _mapReRequestPending = false;
+            Diagnostics.SyncLog.Warn(LogTopic.Session,
+                "World sync: asking the host to stream this city again - the previous handover " +
+                "resumed before the snapshot had been installed.");
+            _session.RequestWorldSync("resume arrived before the snapshot finished loading");
+        }
+
+        /// <summary>
+        /// The synchronous resync gate wired into <see cref="Sync.Infrastructure.SyncInbox.Arbitrate"/>.
+        /// A caller that can still hold its work puts its evidence here and acts on the verdict:
+        /// only <see cref="Diagnostics.ResyncVerdict.Settled"/> reloads the world.
+        ///
+        /// The VERDICT is synchronous - the caller is mid-frame and has to know right now whether to
+        /// keep its work. The reload is not: it is handed to the service tick, where world recovery
+        /// has always been started from, rather than being kicked off from inside a ToolUpdate.
+        /// </summary>
+        public Diagnostics.ResyncVerdict SettleResyncReport(Diagnostics.ResyncReport report)
+        {
+            if (report == null) return Diagnostics.ResyncVerdict.Settled;
+            if (_session == null || _session.Status != SessionStatus.Connected)
+                return Diagnostics.ResyncVerdict.AlreadyRecovering;
+
+            Diagnostics.ResyncVerdict verdict =
+                Diagnostics.ResyncArbiter.Submit(report, NowMs, WorldRecoveryInFlight);
+            // First settled report wins; a second one this frame is a consequence of the same
+            // divergence and the one reload answers both.
+            if (verdict == Diagnostics.ResyncVerdict.Settled && _settledReport == null)
+                _settledReport = report;
+            return verdict;
+        }
+
         public void RequestAutomaticWorldRecovery(string reason)
         {
+            RequestAutomaticWorldRecovery(Diagnostics.ResyncReport.FromReason(reason));
+        }
+
+        /// <summary>
+        /// Weigh a queued report and, if it settles, reload the world. Requests that arrive here
+        /// have already let go of their work, so a held verdict simply means the world is left
+        /// alone and the arbiter keeps watching for the fault to recur.
+        /// </summary>
+        public void RequestAutomaticWorldRecovery(Diagnostics.ResyncReport report)
+        {
+            if (report == null || _session == null || _session.Status != SessionStatus.Connected) return;
+            if (Diagnostics.ResyncArbiter.Submit(report, NowMs, WorldRecoveryInFlight) !=
+                Diagnostics.ResyncVerdict.Settled) return;
+            RunAutomaticWorldRecovery(report);
+        }
+
+        /// <summary>
+        /// Reload the world for reports whose hold elapsed with nothing withdrawing them. Held is
+        /// never "dismissed": a subsystem that can retry withdraws its report when it succeeds, and
+        /// one that dropped its work simply lets the hold run out, which is what lands here.
+        /// </summary>
+        private void PumpMaturedResyncReports()
+        {
             if (_session == null || _session.Status != SessionStatus.Connected) return;
+            // A reload already running supersedes anything held: leave the evidence alone rather
+            // than announcing a verdict on it that nothing is going to act on.
+            if (WorldRecoveryInFlight) return;
+
+            // Verdicts settled inside a frame (see SettleResyncReport) are acted on here.
+            Diagnostics.ResyncReport settled = _settledReport;
+            _settledReport = null;
+            if (settled != null) RunAutomaticWorldRecovery(settled);
+
+            System.Collections.Generic.List<Diagnostics.ResyncReport> matured =
+                Diagnostics.ResyncArbiter.TakeMatured(NowMs);
+            if (matured == null || matured.Count == 0) return;
+            // One reload settles every one of them; the rest are folded into it.
+            RunAutomaticWorldRecovery(matured[0]);
+        }
+
+        private void RunAutomaticWorldRecovery(Diagnostics.ResyncReport report)
+        {
             long now = NowMs;
-            bool recovering = _worldSyncBarrierActive ||
-                              _phase == ClientWorldPhase.WaitingForMap ||
-                              _phase == ClientWorldPhase.LoadingMap ||
-                              _phase == ClientWorldPhase.WaitingForResume;
             // Guard the sentinel before subtracting it. `now - long.MinValue` wraps negative in
             // unchecked arithmetic, which otherwise makes the first automatic recovery look as if
             // it were inside the cooldown forever.
             bool coolingDown = _lastAutoRecoveryMs != long.MinValue &&
                                now - _lastAutoRecoveryMs < AutoRecoveryCooldownMs;
-            if (recovering || coolingDown)
+            if (coolingDown)
             {
-                _log.Warn("[MP] Suppressed automatic world recovery (" + reason +
-                          "): a recovery is already in progress or within the cooldown. The offending " +
-                          "edit is left un-synced; use /sync if the city looks out of step.");
-                Diagnostics.FlightRecorder.Note("auto recovery suppressed (cooldown/in-progress): " + reason);
+                Diagnostics.SyncLog.Warn(LogTopic.Session,
+                    "World sync: skipped a second automatic reload within " +
+                    (AutoRecoveryCooldownMs / 1000) + " s (" + report.Summary() +
+                    "). The edit behind it is left un-synced; use /sync if the city looks out of step.");
                 return;
             }
             _lastAutoRecoveryMs = now;
-            _log.Warn("[MP] Requesting world recovery: " + reason + ".");
-            Diagnostics.FlightRecorder.Note("resync requested: " + reason);
-            _session.RequestWorldSync();
+            Diagnostics.SyncLog.Event(LogTopic.Session,
+                "World sync: reloading this city from the host now (" + report.Summary() + ").");
+            _session.RequestWorldSync(report.Reason);
         }
 
         // ---- Chat log (in-game hub panel) --------------------------------------
@@ -255,14 +354,16 @@ namespace CS2MultiplayerMod.Game
         public void KickPlayerFromUi(int playerId)
         {
             if (!_session.KickPlayer(playerId))
-                _log.Warn("[MP] Ignored kick request for unavailable player #" + playerId + ".");
+                _log.Warn(LogTopic.Session, "Ignored kick request for unavailable player #" +
+                    playerId + ".");
         }
 
         /// <summary>Remove a client and block its address for the current hosting session.</summary>
         public void BanPlayerFromUi(int playerId)
         {
             if (!_session.BanPlayer(playerId))
-                _log.Warn("[MP] Ignored ban request for unavailable player #" + playerId + ".");
+                _log.Warn(LogTopic.Session, "Ignored ban request for unavailable player #" +
+                    playerId + ".");
         }
 
         private void RefreshPlayerListJson()
@@ -345,8 +446,9 @@ namespace CS2MultiplayerMod.Game
                 if (!_warnedResyncMinutes && minutes.ToString() != raw)
                 {
                     _warnedResyncMinutes = true;
-                    _log.Warn("[MP] World re-sync interval '" + raw + "' is not a whole number of minutes >= " +
-                              MinResyncMinutes + "; using " + minutes + " minutes instead.");
+                    _log.Warn(LogTopic.Session, "World re-sync interval '" + raw +
+                        "' is not a whole number of minutes >= " + MinResyncMinutes + "; using " +
+                        minutes + " minutes instead.");
                 }
                 return (long)minutes * 60000L;
             }
@@ -368,7 +470,7 @@ namespace CS2MultiplayerMod.Game
 
             public override void OnStatusChanged(SessionStatus status, string detail)
             {
-                _log.Info("[MP] " + status + ": " + detail);
+                _log.Detail(LogTopic.Session, status + ": " + detail);
                 // Players commonly attach the flight log to a public support post. Keep
                 // the target IP/hostname in the private main log, but retain the port and
                 // transport mode needed to diagnose a connection-stage failure here.
@@ -376,8 +478,8 @@ namespace CS2MultiplayerMod.Game
                     ? "target=redacted port=" + _service._session.Port +
                       " encryption=" + _service._session.EncryptionActive
                     : detail;
-                Diagnostics.FlightRecorder.Note("status " + status +
-                    " role=" + _service._session.Role +
+                SyncLog.Trace(LogTopic.Session, "status " + status + " role=" +
+                    _service._session.Role +
                     (string.IsNullOrEmpty(flightDetail) ? "" : " detail=" + flightDetail));
                 if (status == SessionStatus.Connected &&
                     _service._session.Role == SessionRole.Client &&
@@ -449,22 +551,20 @@ namespace CS2MultiplayerMod.Game
 
             public override void OnPeerJoined(Peer peer)
             {
-                _log.Info("[MP] Peer joined: " + peer);
-                Diagnostics.FlightRecorder.Note("peer joined #" + peer.PlayerId);
+                _log.Event(LogTopic.Session, "Peer joined: " + peer);
                 _service.RefreshPlayerListJson();
                 // WorldResyncSystem observes joins too and pushes the live world to the newcomer.
             }
             public override void OnPeerLeft(Peer peer, string reason)
             {
-                _log.Info("[MP] Peer left: " + peer + " (" + reason + ")");
-                Diagnostics.FlightRecorder.Note("peer left #" + peer.PlayerId + " (" + reason + ")");
+                _log.Event(LogTopic.Session, "Peer left: " + peer + " (" + reason + ")");
                 RemotePlayer removed;
                 _service._remotePlayers.TryRemove(peer.PlayerId, out removed);
                 _service.RefreshPlayerListJson();
             }
             public override void OnChatReceived(string sender, string text)
             {
-                _log.Info("[MP] " + (sender ?? "system") + ": " + text);
+                _log.Detail(LogTopic.Session, (sender ?? "system") + ": " + text);
                 _service.AppendChatEntry(sender, text);
             }
             public override void OnCommandReceived(SimulationCommandMessage command)
@@ -484,7 +584,7 @@ namespace CS2MultiplayerMod.Game
             public override void OnError(string message)
             {
                 _service._lastFault = message;
-                _log.Error("[MP] " + message);
+                _log.Error(LogTopic.Session, message);
             }
         }
     }

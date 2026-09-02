@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using CS2MultiplayerMod.Core.Diagnostics;
 using CS2MultiplayerMod.Core.Networking;
 using CS2MultiplayerMod.Core.Protocol.Messages;
 
@@ -26,8 +27,8 @@ namespace CS2MultiplayerMod.Core.Session
             _worldSyncSuspended = true;
             var begin = new WorldSyncControlMessage(epoch, WorldSyncStage.Begin, resumeSpeed);
             SendWorldSyncToTargets(begin, targets);
-            _log.Info("World sync epoch " + epoch + " began for " +
-                      (targets != null ? targets.Count : 0) + " peer(s); gameplay traffic suspended.");
+            _log.Event(LogTopic.WorldTransfer, "World sync epoch " + epoch + " began for " +
+                (targets != null ? targets.Count : 0) + " peer(s); gameplay traffic suspended.");
             return true;
         }
 
@@ -56,7 +57,7 @@ namespace CS2MultiplayerMod.Core.Session
                 new WorldSyncControlMessage(epoch, WorldSyncStage.Resume, resumeSpeed), targets);
             _worldSyncSuspended = false;
             _worldSyncEpoch = 0;
-            _log.Info("World sync epoch " + epoch + " resumed.");
+            _log.Event(LogTopic.WorldTransfer, "World sync epoch " + epoch + " resumed.");
             return true;
         }
 
@@ -70,7 +71,8 @@ namespace CS2MultiplayerMod.Core.Session
                 new WorldSyncControlMessage(epoch, WorldSyncStage.Abort, resumeSpeed), targets);
             _worldSyncSuspended = false;
             _worldSyncEpoch = 0;
-            _log.Warn("World sync epoch " + epoch + " aborted; previous world resumed.");
+            _log.Warn(LogTopic.WorldTransfer, "World sync epoch " + epoch +
+                " aborted; previous world resumed.");
             return true;
         }
 
@@ -114,8 +116,8 @@ namespace CS2MultiplayerMod.Core.Session
                 }
                 if (!_worldSyncSuspended || control.Epoch != _worldSyncEpoch)
                 {
-                    _log.Warn("Ignoring stale world-sync " + control.Stage + " for epoch " +
-                              control.Epoch + " from " + from + ".");
+                    _log.Warn(LogTopic.WorldTransfer, "Ignoring stale world-sync " + control.Stage +
+                        " for epoch " + control.Epoch + " from " + from + ".");
                     return;
                 }
                 NotifyWorldSync(control.Stage, control.Epoch, 0f, from);

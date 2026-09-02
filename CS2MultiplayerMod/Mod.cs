@@ -1,6 +1,8 @@
 using System.Collections.Generic;
 using Colossal.IO.AssetDatabase;
 using Colossal.Logging;
+using CS2MultiplayerMod.Core.Diagnostics;
+using CS2MultiplayerMod.Core.Protocol;
 using CS2MultiplayerMod.Game;
 using CS2MultiplayerMod.Game.Diagnostics;
 using CS2MultiplayerMod.Localization;
@@ -14,6 +16,11 @@ namespace CS2MultiplayerMod
     {
         public const string Name = "CS2MultiplayerMod";
 
+        /// <summary>
+        /// The game's logger, and the destination <see cref="Game.Diagnostics.SyncLog"/> writes to.
+        /// Not a front door: log through SyncLog so the line gets its topic, its switch and its
+        /// copy in the flight log.
+        /// </summary>
         public static ILog log = LogManager.GetLogger(Name).SetShowsErrorsInUI(false);
 
         public static Setting Setting;
@@ -37,38 +44,33 @@ namespace CS2MultiplayerMod
         };
 
         /// <summary>
-        /// Log a chatty, troubleshooting-only line - the per-action sync notices and the
-        /// periodic diagnostics. Silent unless "Verbose Logging" is enabled in settings, so
-        /// the default log stays quiet and only the important lifecycle/fault lines remain.
-        /// </summary>
-        public static void Verbose(string message)
-        {
-            if (Setting != null && Setting.VerboseLogging) log.Info(message);
-        }
-
-        /// <summary>
         /// The live multiplayer bridge. Created here and pumped each tick by
         /// <see cref="MultiplayerSystem"/>; the settings screen drives it via
         /// host/join/disconnect buttons.
         /// </summary>
         public static MultiplayerService Service;
 
+        /// <summary>
+        /// The version this build reports - to the log, and to a peer during the handshake.
+        /// </summary>
+        private static string Version => typeof(Mod).Assembly.GetName().Version.ToString();
+
         public void OnLoad(UpdateSystem updateSystem)
         {
-            log.Info(nameof(OnLoad));
-
             // Crash forensics first: the flight log must be recording before anything
             // else of ours can fail (see FlightRecorder).
-            FlightRecorder.Start(typeof(Mod).Assembly.GetName().Version.ToString());
+            FlightRecorder.Start(Version);
 
-            // Route the sync inbox's rare backpressure/drain warnings to the mod log.
-            Game.Sync.Infrastructure.SyncInbox.LogWarn = log.Warn;
+            // Route the sync inbox's rare backpressure/drain warnings through the one logger.
+            // They are pipeline faults, so they are never gated by a switch.
+            Game.Sync.Infrastructure.SyncInbox.LogWarn =
+                delegate(string message) { SyncLog.Warn(LogTopic.Pipeline, message); };
 
             // Also where the Steam relay backend sits, when this copy of the game has one.
             string modFolder = null;
             if (GameManager.instance.modManager.TryGetExecutableAsset(this, out var asset))
             {
-                log.Info($"Current mod asset at {Game.Diagnostics.LogPaths.Redact(asset.path)}");
+                SyncLog.Detail(LogTopic.Startup, "Loaded from " + asset.path + ".");
                 modFolder = System.IO.Path.GetDirectoryName(asset.path);
             }
 
@@ -88,9 +90,9 @@ namespace CS2MultiplayerMod
             // Persist / load settings to the standard mod settings store.
             AssetDatabase.global.LoadSettings(Name, Setting, new Setting(this));
 
-            // Stand up the multiplayer core (portable session + game logger adapter) and
-            // register the ECS system that pumps it once per simulation tick.
-            var coreLog = new ColossalModLogger(log);
+            // Stand up the multiplayer core. The portable half logs through the same logger as
+            // the rest of the mod; ColossalModLogger is the seam (see there).
+            IModLogger coreLog = ColossalModLogger.Instance;
 
             // Offer Steam's relay as a hosting backend. Availability is decided here once;
             // when Steam is absent the mod simply keeps to direct connections.
@@ -100,10 +102,10 @@ namespace CS2MultiplayerMod
             Setting.ApplyPlatformNamePreset();
 
             Service = new MultiplayerService(coreLog);
-            FlightRecorder.Note("startup-stage service-created");
-            log.Info("Multiplayer core initialised. Protocol v" +
-                     CS2MultiplayerMod.Core.Protocol.ProtocolConstants.ProtocolVersion +
-                     ". Registering sync systems...");
+
+            // The sync pipeline asks before it reloads a world. Route that question at the live
+            // service, which owns the clock, the in-flight-recovery state and the arbiter.
+            Game.Sync.Infrastructure.SyncInbox.Arbitrate = Service.SettleResyncReport;
 
             // UIUpdate, not GameSimulation: the session pump must also run in the main
             // menu (joining from there) and while the game is paused - the options
@@ -120,6 +122,24 @@ namespace CS2MultiplayerMod
             // state) now stays in sync even while a player is paused. Channel capture is
             // gated to ~1 Hz internally, so the render-rate phase adds no extra traffic.
             updateSystem.UpdateAt<Game.Sync.Systems.CityStateSyncSystem>(SystemUpdatePhase.UIUpdate);
+            // Service fee accounting has producers on both sides of ServiceFeeSystem: transit and
+            // parking arrive before it, utility sales/trade after it. Empty the redundant client
+            // queue at both boundaries; the host's absolute collected records are reinstalled by
+            // channel 24, so no locally timed event can replace them between snapshots.
+            updateSystem.UpdateBefore<Game.Sync.Systems.ServiceFeeIngressBoundarySystem,
+                global::Game.Simulation.ServiceFeeSystem>(SystemUpdatePhase.GameSimulation);
+            updateSystem.UpdateAfter<Game.Sync.Systems.ServiceFeeEgressBoundarySystem,
+                global::Game.Simulation.UtilityFeeSystem>(SystemUpdatePhase.GameSimulation);
+            // CityServiceBudgetSystem first reads last frame's collected fee/upkeep records and
+            // then rebuilds those records from local buildings, networks, upgrades and usage.
+            // Install the host input before that read and restore the host output immediately
+            // after it, while also pinning the fee/upkeep income and expense array slots.
+            updateSystem.UpdateBefore<Game.Sync.Systems.ServiceAccountingInputSystem,
+                global::Game.Simulation.CityServiceBudgetSystem>(
+                SystemUpdatePhase.ModificationEnd);
+            updateSystem.UpdateAfter<Game.Sync.Systems.ServiceAccountingCorrectionSystem,
+                global::Game.Simulation.CityServiceBudgetSystem>(
+                SystemUpdatePhase.ModificationEnd);
             // Capture the host's short-lived MovingAway decision immediately before its native
             // consumer. Register this proxy exactly once: ordering registrations are additive.
             updateSystem.UpdateBefore<
@@ -144,6 +164,47 @@ namespace CS2MultiplayerMod
             // the same authoritative snapshot when the residents panel calculates its averages.
             updateSystem.UpdateAfter<Game.Sync.Systems.ResidentialHouseholdEconomyCorrectionSystem,
                 global::Game.Simulation.RentAdjustSystem>(SystemUpdatePhase.GameSimulation);
+            // ResourceBuyerSystem runs real shoppers and SaleEvents after the earlier household
+            // boundary. Keep those agents alive, then correct the money and shopped-value result
+            // to the host snapshot at the first safe point after the sale is booked.
+            updateSystem.UpdateAfter<Game.Sync.Systems.ResidentialHouseholdPurchaseCorrectionSystem,
+                global::Game.Simulation.ResourceBuyerSystem>(SystemUpdatePhase.GameSimulation);
+            // ResidentsSection derives average fees directly from fulfilled building utility
+            // quantities. Correct those fields after the exact native systems that rewrite them;
+            // wanted demand, graph connectivity and warning state remain locally simulated.
+            updateSystem.UpdateAfter<Game.Sync.Systems.ResidentialElectricityFeeCorrectionSystem,
+                global::Game.Simulation.DispatchElectricitySystem>(SystemUpdatePhase.GameSimulation);
+            updateSystem.UpdateAfter<Game.Sync.Systems.ResidentialWaterFeeCorrectionSystem,
+                global::Game.Simulation.DispatchWaterSystem>(SystemUpdatePhase.GameSimulation);
+            // Strip the client's own company closure/seeking proposals at the last point before
+            // anything acts on them. The systems that make those proposals stay running because
+            // they also produce the figures and demand the rest of the simulation reads.
+            updateSystem.UpdateBefore<Game.Sync.Systems.CompanyLifecycleBoundarySystem,
+                global::Game.Simulation.CompanyMoveAwaySystem>(SystemUpdatePhase.GameSimulation);
+            // Directly after the game's own company bookkeeping, at that system's own interval and
+            // over that system's own UpdateFrame partition. This ordering IS the feature: an
+            // earlier attempt corrected on a 1024-frame rotation while CompanyEconomyStatisticSystem
+            // rewrites the same fields every 128 frames, so every correction was overwritten
+            // several times over before the next one arrived and the panels never settled.
+            updateSystem.UpdateAfter<Game.Sync.Systems.CompanyStatsSyncSystem,
+                global::Game.Simulation.CompanyEconomyStatisticSystem>(
+                SystemUpdatePhase.GameSimulation);
+            // Company pages can otherwise sit cached until a business's 2,048-frame accounting
+            // partition returns. Apply deep state on FindJobSystem's 16-frame cadence: this also
+            // repairs the real Employee/Worker graph after local job matching tries to diverge.
+            updateSystem.UpdateAfter<Game.Sync.Systems.CompanyStateBoundarySystem,
+                global::Game.Simulation.FindJobSystem>(SystemUpdatePhase.GameSimulation);
+            // The building panel recalculates Production from the property's efficiency factors on
+            // every UI frame, and these two native passes rewrite those factors from state that is
+            // local by construction - goods on hand plus a rounding draw for processing, area
+            // depletion for extraction. Each correction runs directly after its own writer, at that
+            // writer's interval and therefore its update offset, so the panel never reads the local
+            // result. The two passes are separate registrations with separate offsets, which is why
+            // this is two systems and not one.
+            updateSystem.UpdateAfter<Game.Sync.Systems.CompanyProcessingBoundarySystem,
+                global::Game.Simulation.ProcessingCompanySystem>(SystemUpdatePhase.GameSimulation);
+            updateSystem.UpdateAfter<Game.Sync.Systems.CompanyExtractorBoundarySystem,
+                global::Game.Simulation.ExtractorCompanySystem>(SystemUpdatePhase.GameSimulation);
             // Before PropertyProcessingSystem: that system drains the rent-action queue this one
             // fills. The queue is persistent, so an action always survives to the next drain; the
             // ordering is what lets a move-in land in the same tick it was decided in whenever the
@@ -157,6 +218,15 @@ namespace CS2MultiplayerMod
             // the same managed system twice in one simulation phase.
             updateSystem.UpdateAfter<Game.Sync.Systems.ResidentialOccupancyFinalizeSystem,
                 global::Game.Simulation.PropertyProcessingSystem>(SystemUpdatePhase.GameSimulation);
+            // HouseholdCitizen is the authoritative inner roster. Birth, individual death and a
+            // household split mutate that buffer without emitting RentersUpdated because the
+            // family can stay in the same property. Observe it after native citizen initialization
+            // so a newborn is complete before the host prioritizes its building; later writers are
+            // still caught from their changed version on the following frame.
+            updateSystem.UpdateAfter<
+                Game.Sync.Systems.ResidentialHouseholdLifecycleObservationSystem,
+                global::Game.Citizens.CitizenInitializeSystem>(
+                SystemUpdatePhase.GameSimulation);
             // Also UIUpdate: publishing the local camera focus must keep going while a
             // player is paused (so partners still see where they are), and GameSimulation
             // barely ticked it - the live log showed ~1 position sent per 30 s.
@@ -252,12 +322,22 @@ namespace CS2MultiplayerMod
             // was never processed while the host sat in the (paused) menu, leaving
             // the client stuck in WaitingForMap forever.
             updateSystem.UpdateAt<Game.Sync.Systems.WorldResyncSystem>(SystemUpdatePhase.UIUpdate);
-            FlightRecorder.Note("startup-complete systems-registered");
+
+            // One line, at the end, rather than a "ready" line per registered system: the thirty
+            // of those said nothing a reader could act on, and the only question they answered -
+            // "did the mod actually come up?" - is answered better here, with the numbers that
+            // decide whether two players can even play together.
+            SyncLog.Event(LogTopic.Startup, "Loaded: mod v" + Version + ", protocol v" +
+                ProtocolConstants.ProtocolVersion + ", game v" + UnityEngine.Application.version +
+                ", sync systems registered.");
         }
 
         public void OnDispose()
         {
-            log.Info(nameof(OnDispose));
+            SyncLog.Event(LogTopic.Startup, "Unloading.");
+
+            Game.Sync.Infrastructure.SyncInbox.Arbitrate = null;
+            ResyncArbiter.Reset();
 
             if (Service != null)
             {

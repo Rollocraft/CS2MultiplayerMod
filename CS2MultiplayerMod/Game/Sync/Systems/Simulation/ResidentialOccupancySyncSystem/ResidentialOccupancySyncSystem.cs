@@ -1,8 +1,10 @@
-using System;
+﻿using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using CS2MultiplayerMod.Core.Diagnostics;
 using CS2MultiplayerMod.Core.Protocol;
 using CS2MultiplayerMod.Core.Session;
+using CS2MultiplayerMod.Game.Diagnostics;
 using CS2MultiplayerMod.Game.Sync.Commands;
 using CS2MultiplayerMod.Game.Sync.Infrastructure;
 using Game;
@@ -32,6 +34,12 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
     ///
     /// The client stops authoring occupancy while this runs — see Authority.cs.
     /// </summary>
+    // The budgets, state and cached records the whole system works from, and its per-update cycle.
+    //
+    // The rest is split by side: Capture*.cs is what a host sends, Realize*.cs is what a client
+    // does with it, Identity.cs is how the two agree on which property is which, and Authority.cs
+    // is what a client stops doing while the host owns occupancy. The lifecycle boundary, page
+    // plumbing and stats are in Cycle.cs.
     public partial class ResidentialOccupancySyncSystem : GameSystemBase
     {
         private const int UpdatePartitions = 16;
@@ -56,10 +64,12 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         /// is also roughly the per-client bandwidth this feature costs.
         /// </summary>
         // One occupancy page is emitted per city-state snapshot. Four KiB could not keep up with
-        // normal residential growth once the city reached a few hundred homes, leaving urgent
-        // move-ins queued for minutes. Sixteen KiB remains far below the 240 KiB hard codec cap
-        // while allowing the rolling baseline and the priority queue to make city-scale progress.
-        private const int PageByteBudget = 16 * 1024;
+        // A dense property is atomic: all of its households and citizens have to travel together.
+        // The former 16 KiB target therefore sent only three or four towers per second and the
+        // changed-property queue grew without bound. Use most of the already validated 240 KiB
+        // codec allowance; the remaining headroom is for lifecycle records and size estimation
+        // conservatism, and the client still applies structural changes through separate budgets.
+        private const int PageByteBudget = 224 * 1024;
 
         private const int MaxIncomingPages = 8;
         private const int MaxPumpPages = 2;
@@ -78,12 +88,29 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         private const long ResolveRetryMs = 5000;
         private const long ResolveTimeoutMs = 300000;
         private const int MaxPriorityProperties = 4096;
-        private const int PriorityPropertiesPerPage = 16;
+        private const int PriorityPropertiesPerPage = 64;
+
+        // Properties examined by the rolling change detector in one update, and cached properties
+        // reconciled by the rolling client partition in one update. Both walks used to cover a
+        // whole sixteenth of the city per update, so their cost grew with the city until a
+        // quarter-million residents turned each one into a visible hitch every second. A ceiling
+        // keeps them flat: a very large city takes proportionally longer to complete one rotation.
+        // Nothing urgent rides on that rotation - a move-in or move-out reaches the wire through
+        // the RentersUpdated event in the same frame it happens, and a page that changes a
+        // property reconciles it immediately through the dirty queue.
+        private const int MaxPropertiesObservedPerUpdate = 256;
+        private const int MaxCachedPropertiesWalkedPerUpdate = 256;
         // Retained lifecycle records rotate across pages rather than consuming the whole soft
         // page budget. Leave enough guaranteed room to drain several just-occupied properties per
         // snapshot while still advancing the baseline by at least one property.
-        private const int HostDeparturesPerPage = 24;
-        private const int HostCitizenDeparturesPerPage = 48;
+        // In the reported dense city more than 27k household and 41k citizen tombstones were
+        // retained. At 24/48 records per second a household record could expire before completing
+        // one rotation. Eight KiB carries both maximum batches and closes every lifecycle edge
+        // several times inside the retention window.
+        private const int HostDeparturesPerPage =
+            ResidentialOccupancySnapshot.MaxDeparturesPerPage;
+        private const int HostCitizenDeparturesPerPage =
+            ResidentialOccupancySnapshot.MaxCitizenDeparturesPerPage;
         private const int PriorityByteBudget = PageByteBudget * 3 / 4;
 
         // Per-update work ceilings. Structural changes are the expensive part, so they are capped
@@ -103,6 +130,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             new Dictionary<Entity, CachedProperty>();
         private readonly List<Entity>[] _cacheBuckets = CreateBuckets();
         private readonly HashSet<Entity>[] _cacheBucketMembers = CreateBucketSets();
+        private readonly int[] _cacheBucketCursor = new int[UpdatePartitions];
         private readonly List<Entity> _dirty = new List<Entity>();
         private readonly HashSet<Entity> _dirtyMembers = new HashSet<Entity>();
         private readonly Dictionary<PropertyRentIdentity, PendingProperty> _pending =
@@ -123,6 +151,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         private readonly List<Entity> _cacheScratch = new List<Entity>();
         private readonly HashSet<Entity> _authorizedMoveAways = new HashSet<Entity>();
         private readonly List<Entity> _authorizedMoveAwayScratch = new List<Entity>();
+        private readonly HashSet<Entity> _lifecyclePropertyScratch = new HashSet<Entity>();
 
         // Host-side change detection. The rolling baseline is always sent; these entries only
         // shorten the time from an occupancy change to the page that carries it.
@@ -130,6 +159,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             new Dictionary<Entity, HostObserved>();
         private readonly List<Entity>[] _hostObservedBuckets = CreateBuckets();
         private readonly bool[] _hostBucketInitialized = new bool[UpdatePartitions];
+        private readonly int[] _hostBucketCursor = new int[UpdatePartitions];
         private readonly Dictionary<Entity, int> _traceSentRosterHashes =
             new Dictionary<Entity, int>();
         private readonly Dictionary<PropertyRentIdentity, int> _traceReceivedRosterHashes =
@@ -197,6 +227,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         private int _priorityChanges;
         private int _priorityDrops;
         private int _captureSkips;
+        private int _observedProperties;
+        private int _probeSkipped;
+        private int _reconcileSkipped;
         private int _receivedPages;
         private int _droppedPages;
         private int _resolved;
@@ -214,13 +247,22 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         private int _retiredHouseholds;
         private int _removedCitizens;
         private int _rewrittenCitizens;
+        private int _healthProblemCorrections;
+        private int _hostDeathTransitions;
+        private int _lifecyclePrioritySignals;
+        private int _lifecycleRepairSignals;
+        private int _clientRenterRepairSignals;
         private int _rentActions;
         private int _refusedMoveIns;
         private int _forcedCompletions;
+        private int _forcedPrefabCorrections;
         private int _alignedBuildRates;
         private int _deferredForConstruction;
         private int _renamedEntities;
         private int _economyCorrections;
+        private int _economyDeferred;
+        private int _feeInputCorrections;
+        private int _feeInputDeferred;
 
         private sealed class CachedProperty
         {
@@ -228,6 +270,11 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             public Entity Prefab;
             public ulong Revision;
             public byte ConstructionSpeed;
+            public bool HasElectricityConsumer;
+            public int ElectricityFulfilledConsumption;
+            public bool HasWaterConsumer;
+            public int WaterFulfilledFresh;
+            public int WaterFulfilledSewage;
             public OccupancyHousehold[] Households;
             public int Bucket;
             public uint LastSeenSweep;
@@ -264,6 +311,13 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         {
             public int Hash;
             public int Bucket;
+
+            /// <summary>
+            /// Set when a renter event queued this property: the stored hash describes a roster
+            /// that no longer exists, and the next rolling pass must re-baseline it without
+            /// treating the difference as a second, independent change.
+            /// </summary>
+            public bool Stale;
         }
 
         private sealed class HostDeparture
@@ -273,7 +327,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             public bool Unhoused;
         }
 
-        private sealed class HostCitizenObservation
+        // A struct: a city of a quarter of a million residents keeps one of these per person, and
+        // a boxed object each would be a large permanently live heap graph for the GC to walk.
+        private struct HostCitizenObservation
         {
             public Entity Entity;
             public ulong HouseholdId;
@@ -306,19 +362,10 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 ComponentType.ReadOnly<ArchetypeData>());
             _arrivalOutsideConnections = GetEntityQuery(new EntityQueryDesc
             {
-                All = new[]
-                {
-                    ComponentType.ReadOnly<global::Game.Objects.OutsideConnection>(),
-                    ComponentType.ReadOnly<PrefabRef>(),
-                    ComponentType.ReadOnly<global::Game.Objects.Transform>(),
-                },
-                None = new[]
-                {
-                    ComponentType.ReadOnly<global::Game.Objects.ElectricityOutsideConnection>(),
-                    ComponentType.ReadOnly<global::Game.Objects.WaterPipeOutsideConnection>(),
-                    ComponentType.ReadOnly<Deleted>(),
-                    ComponentType.ReadOnly<Temp>(),
-                },
+                All = SyncQuery.ReadOnly<global::Game.Objects.OutsideConnection, PrefabRef,
+                    global::Game.Objects.Transform>(),
+                None = SyncQuery.ReadOnly<global::Game.Objects.ElectricityOutsideConnection,
+                    global::Game.Objects.WaterPipeOutsideConnection, Deleted, Temp>(),
             });
             _prefabIndex = new PrefabIndex(_prefabSystem, _prefabs);
             _objectSearch = new ObjectSearch(
@@ -327,51 +374,22 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             _propertyProcessing = World.GetOrCreateSystemManaged<PropertyProcessingSystem>();
             _properties = GetEntityQuery(new EntityQueryDesc
             {
-                All = new[]
-                {
-                    ComponentType.ReadOnly<Building>(),
-                    ComponentType.ReadOnly<ResidentialProperty>(),
-                    ComponentType.ReadOnly<Renter>(),
-                    ComponentType.ReadOnly<PrefabRef>(),
-                    ComponentType.ReadOnly<global::Game.Objects.Transform>(),
-                    ComponentType.ReadOnly<UpdateFrame>(),
-                },
-                None = new[]
-                {
-                    ComponentType.ReadOnly<Temp>(),
-                    ComponentType.ReadOnly<Deleted>(),
-                    ComponentType.ReadOnly<Owner>(),
-                },
+                All = SyncQuery.ReadOnly<Building, ResidentialProperty, Renter, PrefabRef,
+                    global::Game.Objects.Transform, UpdateFrame>(),
+                None = SyncQuery.ReadOnly<Temp, Deleted, Owner>(),
             });
             _bootstrapHouseholds = GetEntityQuery(new EntityQueryDesc
             {
-                All = new[]
-                {
-                    ComponentType.ReadOnly<global::Game.Citizens.Household>(),
-                    ComponentType.ReadOnly<global::Game.Citizens.HouseholdCitizen>(),
-                    ComponentType.ReadOnly<PrefabRef>(),
-                },
-                None = new[]
-                {
-                    ComponentType.ReadOnly<Deleted>(),
-                    ComponentType.ReadOnly<Temp>(),
-                    ComponentType.ReadOnly<global::Game.Citizens.TouristHousehold>(),
-                    ComponentType.ReadOnly<global::Game.Citizens.CommuterHousehold>(),
-                },
+                All = SyncQuery.ReadOnly<global::Game.Citizens.Household,
+                    global::Game.Citizens.HouseholdCitizen, PrefabRef>(),
+                None = SyncQuery.ReadOnly<Deleted, Temp, global::Game.Citizens.TouristHousehold,
+                    global::Game.Citizens.CommuterHousehold>(),
             });
             _bootstrapCitizens = GetEntityQuery(new EntityQueryDesc
             {
-                All = new[]
-                {
-                    ComponentType.ReadOnly<global::Game.Citizens.Citizen>(),
-                    ComponentType.ReadOnly<global::Game.Citizens.HouseholdMember>(),
-                    ComponentType.ReadOnly<PrefabRef>(),
-                },
-                None = new[]
-                {
-                    ComponentType.ReadOnly<Deleted>(),
-                    ComponentType.ReadOnly<Temp>(),
-                },
+                All = SyncQuery.ReadOnly<global::Game.Citizens.Citizen,
+                    global::Game.Citizens.HouseholdMember, PrefabRef>(),
+                None = SyncQuery.ReadOnly<Deleted, Temp>(),
             });
             // Households nothing can ever house again on a client. Tourists and commuters are a
             // different simulation with their own lifecycle and are never ours to retire; a
@@ -379,54 +397,27 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             // yet.
             _unreachableHouseholds = GetEntityQuery(new EntityQueryDesc
             {
-                All = new[]
-                {
-                    ComponentType.ReadOnly<global::Game.Citizens.Household>(),
-                    ComponentType.ReadOnly<PrefabRef>(),
-                },
-                None = new[]
-                {
-                    ComponentType.ReadOnly<PropertyRenter>(),
-                    ComponentType.ReadOnly<global::Game.Citizens.HomelessHousehold>(),
-                    ComponentType.ReadOnly<global::Game.Agents.MovingAway>(),
-                    ComponentType.ReadOnly<global::Game.Citizens.CurrentBuilding>(),
-                    ComponentType.ReadOnly<global::Game.Citizens.TouristHousehold>(),
-                    ComponentType.ReadOnly<global::Game.Citizens.CommuterHousehold>(),
-                    ComponentType.ReadOnly<Deleted>(),
-                    ComponentType.ReadOnly<Temp>(),
-                },
+                All = SyncQuery.ReadOnly<global::Game.Citizens.Household, PrefabRef>(),
+                None = SyncQuery.ReadOnly<PropertyRenter, global::Game.Citizens.HomelessHousehold,
+                    global::Game.Agents.MovingAway, global::Game.Citizens.CurrentBuilding,
+                    global::Game.Citizens.TouristHousehold, global::Game.Citizens.CommuterHousehold,
+                    Deleted, Temp>(),
             });
             _departingHouseholds = GetEntityQuery(new EntityQueryDesc
             {
-                All = new[]
-                {
-                    ComponentType.ReadOnly<global::Game.Citizens.Household>(),
-                    ComponentType.ReadOnly<global::Game.Agents.MovingAway>(),
-                },
-                None = new[]
-                {
-                    ComponentType.ReadOnly<Deleted>(),
-                    ComponentType.ReadOnly<Temp>(),
-                    ComponentType.ReadOnly<global::Game.Citizens.TouristHousehold>(),
-                    ComponentType.ReadOnly<global::Game.Citizens.CommuterHousehold>(),
-                },
+                All = SyncQuery.ReadOnly<global::Game.Citizens.Household,
+                    global::Game.Agents.MovingAway>(),
+                None = SyncQuery.ReadOnly<Deleted, Temp, global::Game.Citizens.TouristHousehold,
+                    global::Game.Citizens.CommuterHousehold>(),
             });
             // PropertySeeker is enableable, so this query only contains households whose local
             // behaviour has actively asked to find a property. The host owns that decision.
             _clientPropertySeekers = GetEntityQuery(new EntityQueryDesc
             {
-                All = new[]
-                {
-                    ComponentType.ReadOnly<global::Game.Citizens.Household>(),
-                    ComponentType.ReadOnly<global::Game.Agents.PropertySeeker>(),
-                },
-                None = new[]
-                {
-                    ComponentType.ReadOnly<Deleted>(),
-                    ComponentType.ReadOnly<Temp>(),
-                    ComponentType.ReadOnly<global::Game.Citizens.TouristHousehold>(),
-                    ComponentType.ReadOnly<global::Game.Citizens.CommuterHousehold>(),
-                },
+                All = SyncQuery.ReadOnly<global::Game.Citizens.Household,
+                    global::Game.Agents.PropertySeeker>(),
+                None = SyncQuery.ReadOnly<Deleted, Temp, global::Game.Citizens.TouristHousehold,
+                    global::Game.Citizens.CommuterHousehold>(),
             });
             // PropertyProcessingSystem emits this exact event whenever a renter is added to or
             // removed from a property. A dedicated every-frame boundary consumes the signal so a
@@ -435,8 +426,6 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 ComponentType.ReadOnly<global::Game.Common.Event>(),
                 ComponentType.ReadOnly<RentersUpdated>());
             SyncInbox.RegisterDrain(DrainForWorldChange);
-            Mod.log.Info(nameof(ResidentialOccupancySyncSystem) +
-                         " ready (host-authoritative residential occupancy).");
         }
 
         protected override void OnDestroy()
@@ -476,349 +465,34 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 _simulationSystem.frameIndex, UpdateIntervalFrames, UpdatePartitions) %
                 UpdatePartitions);
 
+            // Two sibling scopes rather than one around the method: the branches are mutually
+            // exclusive, so the profiler's total stays a sum of what it lists.
             if (session.Role == SessionRole.Host)
             {
-                DropIncomingPages();
-                ScanHostDepartures(service.NowMs);
-                ScanTrackedHostHouseholds(service.NowMs);
-                ScanTrackedHostCitizens(service.NowMs);
-                ScanHostChanges(bucket);
+                using (Diagnostics.SyncProfiler.Measure("Occupancy.HostScan", Diagnostics.SyncZone.Residential))
+                {
+                    DropIncomingPages();
+                    // Departures are sampled by ResidentialOccupancyDepartureCaptureSystem, which
+                    // sits directly in front of the native executor at that executor's own
+                    // interval. Repeating the walk here only ever re-read a query it had already
+                    // drained on a more recent frame.
+                    ScanTrackedHostHouseholds(service.NowMs);
+                    ScanTrackedHostCitizens(service.NowMs);
+                    ScanHostChanges(bucket);
+                }
             }
             else
             {
-                // Normally the city-state pump has already turned every arrived page into cache
-                // entries. Pump once more as a harmless fallback before this bucket is consumed.
-                PumpIncoming();
-                ApplyPending(bucket);
+                using (Diagnostics.SyncProfiler.Measure("Occupancy.Apply", Diagnostics.SyncZone.Residential))
+                {
+                    // Normally the city-state pump has already turned every arrived page into
+                    // cache entries. Pump once more as a harmless fallback before this bucket
+                    // is consumed.
+                    PumpIncoming();
+                    ApplyPending(bucket);
+                }
             }
             ReportStats(session, service.NowMs);
-        }
-
-        /// <summary>
-        /// Kept engaged from the city-state pump as well as from <see cref="OnUpdate"/>. The
-        /// GameSimulation phase stops ticking the moment a player pauses, so a client that leaves
-        /// a session while paused would otherwise keep its household systems held forever.
-        /// </summary>
-        internal void MaintainAuthority()
-        {
-            MultiplayerService service = Mod.Service;
-            if (service == null || service.Session.Role != SessionRole.Client)
-            {
-                RestoreLocalAuthority();
-                return;
-            }
-            ApplyLocalAuthority(service.Session);
-        }
-
-        /// <summary>
-        /// Called every simulation frame immediately before the native move-away consumer. The
-        /// main occupancy system runs at a wider interval and can otherwise miss a short-lived
-        /// MovingAway entity entirely.
-        /// </summary>
-        internal void ProcessHouseholdLifecycleBoundary()
-        {
-            MultiplayerService service = Mod.Service;
-            if (service == null || !service.GameplaySyncReady) return;
-            if (service.Session.Role == SessionRole.Host)
-                ScanHostDepartures(service.NowMs);
-            else
-                CancelClientLifecycleDecisions();
-        }
-
-        /// <summary>
-        /// HouseholdBehaviorSystem must run locally because it produces shopping needs and car
-        /// demand. It also proposes moves. Remove only those proposals at the last safe boundary;
-        /// retirements explicitly requested by the received host roster are whitelisted.
-        /// </summary>
-        private void CancelClientLifecycleDecisions()
-        {
-            if (!_departingHouseholds.IsEmptyIgnoreFilter)
-            {
-                NativeArray<Entity> departures = _departingHouseholds.ToEntityArray(Allocator.Temp);
-                try
-                {
-                    for (int i = 0; i < departures.Length; i++)
-                    {
-                        Entity household = departures[i];
-                        if (_authorizedMoveAways.Contains(household)) continue;
-                        if (EntityManager.Exists(household) &&
-                            EntityManager.HasComponent<global::Game.Agents.MovingAway>(household))
-                            EntityManager.RemoveComponent<global::Game.Agents.MovingAway>(household);
-                        if (EntityManager.Exists(household) &&
-                            EntityManager.HasComponent<global::Game.Agents.PropertySeeker>(household))
-                            EntityManager.SetComponentEnabled<global::Game.Agents.PropertySeeker>(
-                                household, false);
-                    }
-                }
-                finally
-                {
-                    departures.Dispose();
-                }
-            }
-
-            if (!_clientPropertySeekers.IsEmptyIgnoreFilter)
-            {
-                NativeArray<Entity> seekers = _clientPropertySeekers.ToEntityArray(Allocator.Temp);
-                try
-                {
-                    for (int i = 0; i < seekers.Length; i++)
-                    {
-                        Entity household = seekers[i];
-                        if (EntityManager.Exists(household) &&
-                            EntityManager.HasComponent<global::Game.Agents.PropertySeeker>(household))
-                            EntityManager.SetComponentEnabled<global::Game.Agents.PropertySeeker>(
-                                household, false);
-                    }
-                }
-                finally
-                {
-                    seekers.Dispose();
-                }
-            }
-
-            if (_authorizedMoveAways.Count <= 4096) return;
-            _authorizedMoveAwayScratch.Clear();
-            foreach (Entity household in _authorizedMoveAways)
-                if (!EntityManager.Exists(household) || EntityManager.HasComponent<Deleted>(household))
-                    _authorizedMoveAwayScratch.Add(household);
-            for (int i = 0; i < _authorizedMoveAwayScratch.Count; i++)
-                _authorizedMoveAways.Remove(_authorizedMoveAwayScratch[i]);
-            _authorizedMoveAwayScratch.Clear();
-        }
-
-        /// <summary>
-        /// The channel's reset. Called both when a session ends and on an in-session world
-        /// replacement, so authority is only handed back in the first case.
-        /// </summary>
-        internal void ResetPending()
-        {
-            DrainForWorldChange();
-            MultiplayerService service = Mod.Service;
-            if (service != null && service.Session.Role == SessionRole.Client)
-                ApplyLocalAuthority(service.Session);
-            else if (service == null || !service.GameplaySyncReady)
-                RestoreLocalAuthority();
-        }
-
-        /// <summary>Called by the state channel on the receiving side; never requests a resync.</summary>
-        internal void Enqueue(ResidentialOccupancySnapshot snapshot)
-        {
-            if (snapshot == null) return;
-            lock (_incoming)
-            {
-                _incoming.Enqueue(snapshot);
-                while (_incoming.Count > MaxIncomingPages)
-                {
-                    ResidentialOccupancySnapshot dropped;
-                    if (!_incoming.TryDequeue(out dropped)) break;
-                    _droppedPages++;
-                }
-            }
-        }
-
-        internal void DrainForWorldChange()
-        {
-            lock (_incoming) SyncInbox.Clear(_incoming);
-            RestoreAllStagedTransferLinks();
-            _cache.Clear();
-            _cacheScratch.Clear();
-            _authorizedMoveAways.Clear();
-            _authorizedMoveAwayScratch.Clear();
-            ClearBuckets(_cacheBuckets);
-            ClearBucketSets(_cacheBucketMembers);
-            _dirty.Clear();
-            _dirtyMembers.Clear();
-            _pending.Clear();
-            PropertyRentIdentity discardedPending;
-            while (_pendingOrder.TryDequeue(out discardedPending)) { }
-            _pendingMoveIns.Clear();
-            ulong discardedMoveIn;
-            while (_pendingMoveInOrder.TryDequeue(out discardedMoveIn)) { }
-            _stagedTransfers.Clear();
-            _stagedTransferCooldownUntil.Clear();
-            _stagedTransferScratch.Clear();
-            _pendingCitizenRetirementIds.Clear();
-            ulong discardedCitizenRetirement;
-            while (_pendingCitizenRetirements.TryDequeue(out discardedCitizenRetirement)) { }
-            _settling.Clear();
-            _unreachableSince.Clear();
-            _unboundHouseholdSince.Clear();
-            _unboundCitizenSince.Clear();
-            _bootstrapHouseholdIndex.Clear();
-            _bootstrapCitizenIndex.Clear();
-            _bootstrapIdentityIndexBuilt = false;
-            _unreachableSeen.Clear();
-            _localHouseholds.Clear();
-            _memberScratch.Clear();
-            _claimedHouseholds.Clear();
-            _claimedCitizens.Clear();
-            _claimedPets.Clear();
-            _wantedHouseholdIds.Clear();
-            _wantedCitizenIds.Clear();
-            _missingPetPrefabs.Clear();
-            _localVehiclePrefabCounts.Clear();
-            _matchedVehiclePrefabCounts.Clear();
-            _vehicleSpawnWarnings.Clear();
-            _arrivalSources.Clear();
-            _settlingScratch.Clear();
-            _appliedThisUpdate.Clear();
-            _reapply.Clear();
-            ClearIdentityState();
-            ClearRentAuthorityState();
-            _applyWarned = false;
-            _arrivalSourceWarned = false;
-            _nextPendingPumpMs = 0;
-            _prefabIndex = new PrefabIndex(_prefabSystem, _prefabs);
-            _citizenCreationPrefab = Entity.Null;
-
-            _hostObserved.Clear();
-            ClearBuckets(_hostObservedBuckets);
-            Array.Clear(_hostBucketInitialized, 0, _hostBucketInitialized.Length);
-            _traceSentRosterHashes.Clear();
-            _traceReceivedRosterHashes.Clear();
-            _tracePlacedHouseholds.Clear();
-            _priority.Clear();
-            PropertyRentIdentity discardedPriority;
-            while (_priorityOrder.TryDequeue(out discardedPriority)) { }
-            _hostDepartures.Clear();
-            _hostDepartureOrderMembers.Clear();
-            ulong discardedDeparture;
-            while (_hostDepartureOrder.TryDequeue(out discardedDeparture)) { }
-            _hostCitizenDepartures.Clear();
-            _hostCitizenDepartureOrderMembers.Clear();
-            ulong discardedCitizenDeparture;
-            while (_hostCitizenDepartureOrder.TryDequeue(out discardedCitizenDeparture)) { }
-            _hostCitizens.Clear();
-            _hostCitizenOrderMembers.Clear();
-            ulong discardedTrackedCitizen;
-            while (_hostCitizenOrder.TryDequeue(out discardedTrackedCitizen)) { }
-            _hostHouseholds.Clear();
-            _hostHouseholdOrderMembers.Clear();
-            ulong discardedTrackedHousehold;
-            while (_hostHouseholdOrder.TryDequeue(out discardedTrackedHousehold)) { }
-            _hostHouseholdCitizens.Clear();
-            _clientSweepId = 0;
-            _clientNextPage = 0;
-            _clientSweepIntact = false;
-            _hostCaptureRevision = 1;
-            RestartHostSweep();
-        }
-
-        private static void ClearBuckets(List<Entity>[] buckets)
-        {
-            for (int i = 0; i < buckets.Length; i++) buckets[i].Clear();
-        }
-
-        private static void ClearBucketSets(HashSet<Entity>[] buckets)
-        {
-            for (int i = 0; i < buckets.Length; i++) buckets[i].Clear();
-        }
-
-        private void RestartHostSweep()
-        {
-            _hostSweepEntities = null;
-            _captureCursor = 0;
-            _capturePageIndex = 0;
-            _captureSweepId = 1;
-            _captureSweepHadSkips = false;
-            _captureBaselineNeedsEmptyPage = false;
-        }
-
-        private ulong NextHostRevision()
-        {
-            ulong revision = _hostCaptureRevision++;
-            if (revision != 0) return revision;
-            revision = _hostCaptureRevision++;
-            return revision == 0 ? 1UL : revision;
-        }
-
-        private ulong LastHostRevision()
-        {
-            ulong revision = _hostCaptureRevision - 1;
-            return revision == 0 ? 1UL : revision;
-        }
-
-        private void AdvanceHostSweep()
-        {
-            _capturePageIndex = 0;
-            _captureSweepId = unchecked(_captureSweepId + 1);
-            if (_captureSweepId == 0) _captureSweepId = 1;
-            _captureSweepHadSkips = false;
-            _captureBaselineNeedsEmptyPage = false;
-        }
-
-        private void DropIncomingPages()
-        {
-            if (_incoming.IsEmpty) return;
-            lock (_incoming)
-            {
-                ResidentialOccupancySnapshot ignored;
-                while (_incoming.TryDequeue(out ignored)) _droppedPages++;
-            }
-        }
-
-        private bool IsLiveProperty(Entity property) =>
-            property != Entity.Null && EntityManager.Exists(property) &&
-            EntityManager.HasComponent<Building>(property) &&
-            EntityManager.HasComponent<ResidentialProperty>(property) &&
-            EntityManager.HasBuffer<Renter>(property) &&
-            EntityManager.HasComponent<PrefabRef>(property) &&
-            EntityManager.HasComponent<global::Game.Objects.Transform>(property) &&
-            EntityManager.HasComponent<UpdateFrame>(property) &&
-            !EntityManager.HasComponent<Temp>(property) &&
-            !EntityManager.HasComponent<Deleted>(property) &&
-            !EntityManager.HasComponent<Owner>(property);
-
-        private void ReportStats(MultiplayerSession session, long now)
-        {
-            if (_lastStatsMs == 0) { _lastStatsMs = now; return; }
-            if (now - _lastStatsMs < StatsIntervalMs) return;
-            _lastStatsMs = now;
-
-            if (session.Role == SessionRole.Host)
-            {
-                int clients = 0;
-                foreach (Peer peer in session.Peers) if (peer.Handshaked) clients++;
-                Mod.Verbose("[MP] Occupancy/30s host: pages=" + _sentPages + ", properties=" +
-                            _sentProperties + ", bytes=" + _sentBytes + ", clients=" + clients +
-                            ", estimatedFanoutBytes=" + _sentBytes * clients +
-                            ", transportPendingBytes=" + session.PendingSendBytes +
-                            ", changedPriority=" + _priorityChanges + ", priorityQueued=" +
-                            _priority.Count + ", priorityDropped=" + _priorityDrops +
-                            ", departuresTracked=" + _hostDepartures.Count +
-                            ", citizenDeparturesTracked=" + _hostCitizenDepartures.Count +
-                            ", captureSkipped=" + _captureSkips + ".");
-            }
-            else
-            {
-                Mod.Verbose("[MP] Occupancy/30s client: pages=" + _receivedPages +
-                            ", queueDropped=" + _droppedPages + ", cached=" + _cache.Count +
-                            ", pending=" + _pending.Count + ", resolved=" + _resolved +
-                            ", unresolved=" + _unresolved + ", ambiguous=" + _ambiguous +
-                            ", expired=" + _expired + ", stale=" + _stalePages +
-                            ", pruned=" + _pruned + ", cacheDropped=" + _cacheDrops +
-                            ", appliedProperties=" + _appliedProperties + ", households +" +
-                            _createdHouseholds + "/-" + _retiredHouseholds + ", citizens +" +
-                            _createdCitizens + "/-" + _removedCitizens + "/~" +
-                            _rewrittenCitizens + ", pets +" + _createdPets + ", renamed=" +
-                            _renamedEntities + ", vehicles +" + _createdVehicles +
-                            ", rentActions=" + _rentActions +
-                            ", refusedMoveIns=" + _refusedMoveIns + ", buildRatesAligned=" +
-                            _alignedBuildRates + ", forcedCompletions=" + _forcedCompletions +
-                            ", deferredForConstruction=" + _deferredForConstruction +
-                            ", economyCorrections=" + _economyCorrections +
-                            ", pendingMoveIns=" + _pendingMoveIns.Count + ", dirty=" +
-                            _dirty.Count + ".");
-            }
-            _sentPages = _sentProperties = _priorityChanges = _priorityDrops = _captureSkips = 0;
-            _sentBytes = 0;
-            _receivedPages = _droppedPages = _resolved = _unresolved = _ambiguous = 0;
-            _expired = _stalePages = _pruned = _cacheDrops = _appliedProperties = 0;
-            _createdHouseholds = _createdCitizens = _createdPets = _createdVehicles = 0;
-            _retiredHouseholds = _removedCitizens = _rewrittenCitizens = 0;
-            _rentActions = _refusedMoveIns = 0;
-            _forcedCompletions = _alignedBuildRates = _deferredForConstruction = 0;
-            _renamedEntities = _economyCorrections = 0;
         }
     }
 }

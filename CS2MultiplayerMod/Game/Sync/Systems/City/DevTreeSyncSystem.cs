@@ -6,9 +6,10 @@ using Game.Prefabs;
 using Game.Tools;
 using Unity.Collections;
 using Unity.Entities;
+using CS2MultiplayerMod.Core.Diagnostics;
 using CS2MultiplayerMod.Core.Protocol.Messages;
 using CS2MultiplayerMod.Core.Session;
-
+using CS2MultiplayerMod.Game.Diagnostics;
 using CS2MultiplayerMod.Game.Sync.Infrastructure;
 using CS2MultiplayerMod.Game.Sync.Commands;
 using CS2MultiplayerMod.Game.Sync.Channels;
@@ -40,7 +41,6 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         protected override void OnCreate()
         {
             base.OnCreate();
-            Mod.log.Info(nameof(DevTreeSyncSystem) + " ready.");
 
             _prefabSystem = World.GetOrCreateSystemManaged<PrefabSystem>();
             // Unlock events must be raised through the same barrier the game uses so
@@ -49,8 +49,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             // DevTree nodes are prefab entities — IncludePrefab so the query finds them.
             _nodes = GetEntityQuery(new EntityQueryDesc
             {
-                All = new[] { ComponentType.ReadOnly<DevTreeNodeData>() },
-                None = new[] { ComponentType.ReadOnly<Temp>() },
+                All = SyncQuery.ReadOnly<DevTreeNodeData>(),
+                None = SyncQuery.ReadOnly<Temp>(),
                 Options = EntityQueryOptions.IncludePrefab,
             });
             _pointsQuery = GetEntityQuery(ComponentType.ReadWrite<DevTreePoints>());
@@ -58,49 +58,48 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             _unlockArchetype = EntityManager.CreateArchetype(
                 ComponentType.ReadWrite<Unlock>(), ComponentType.ReadWrite<global::Game.Common.Event>());
 
-            if (Mod.Service != null)
-            {
-                _observer = new CommandObserver(_incoming, DevTreePurchaseCommand.Id);
-                Mod.Service.Session.AddObserver(_observer);
-            }
+            _observer = SyncObserverBinding.Bind(
+                () => new CommandObserver(_incoming, DevTreePurchaseCommand.Id));
         }
 
         protected override void OnDestroy()
         {
-            if (_observer != null && Mod.Service != null)
-                Mod.Service.Session.RemoveObserver(_observer);
+            SyncObserverBinding.Unbind(_observer);
             base.OnDestroy();
         }
 
         protected override void OnUpdate()
         {
-            MultiplayerService service = Mod.Service;
-            if (service == null) return;
-
-            MultiplayerSession session = service.Session;
-            if (!service.GameplaySyncReady)
+            using (Diagnostics.SyncProfiler.Measure("DevTree"))
             {
-                _initialized = false;
-                return;
+                MultiplayerService service = Mod.Service;
+                if (service == null) return;
+
+                MultiplayerSession session = service.Session;
+                if (!service.GameplaySyncReady)
+                {
+                    _initialized = false;
+                    return;
+                }
+
+                long now = service.NowMs;
+                _guard.Prune(now);
+
+                // Apply remote purchases first so their unlocks are accounted for before we
+                // diff for local ones.
+                ApplyIncoming(session, now);
+
+                // First ready tick: adopt the current unlocked set as the baseline so the
+                // already-unlocked nodes from the loaded save are never re-broadcast.
+                if (!_initialized)
+                {
+                    SeedKnown();
+                    _initialized = true;
+                    return;
+                }
+
+                DetectLocalPurchases(session, now);
             }
-
-            long now = service.NowMs;
-            _guard.Prune(now);
-
-            // Apply remote purchases first so their unlocks are accounted for before we
-            // diff for local ones.
-            ApplyIncoming(session, now);
-
-            // First ready tick: adopt the current unlocked set as the baseline so the
-            // already-unlocked nodes from the loaded save are never re-broadcast.
-            if (!_initialized)
-            {
-                SeedKnown();
-                _initialized = true;
-                return;
-            }
-
-            DetectLocalPurchases(session, now);
         }
 
         private bool IsLocked(Entity node) =>
@@ -142,7 +141,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
                         var command = new DevTreePurchaseCommand { NodePrefabName = name };
                         session.SendCommand(0, DevTreePurchaseCommand.Id, command.Encode());
-                        Mod.Verbose("[MP] DevTreeSync: broadcast purchase of '" + name + "'.");
+                        SyncLog.Detail(LogTopic.City, "DevTreeSync: broadcast purchase of '" + name +
+                            "'.");
                     }
                     else if (!unlocked && known)
                     {
@@ -164,13 +164,14 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
                 DevTreePurchaseCommand command;
                 try { command = DevTreePurchaseCommand.Decode(message.Body); }
-                catch (System.Exception ex) { Mod.log.Warn("[MP] DevTreeSync: dropping malformed command: " + ex.Message); continue; }
+                catch (System.Exception ex) { SyncLog.Warn(LogTopic.City, "DevTreeSync: dropping malformed command: " + ex.Message); continue; }
 
                 Entity node = ResolveNode(command.NodePrefabName);
                 if (node == Entity.Null)
                 {
-                    Mod.log.Warn("[MP] DevTreeSync: unknown node '" + command.NodePrefabName +
-                                 "' from player " + message.OriginPlayerId + "; skipping.");
+                    SyncLog.Warn(LogTopic.City, "DevTreeSync: unknown node '" +
+                        command.NodePrefabName + "' from player " + message.OriginPlayerId +
+                        "; skipping.");
                     continue;
                 }
                 if (!IsLocked(node)) continue; // already unlocked here — nothing to do
@@ -198,8 +199,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     _pointsQuery.SetSingleton(points);
                 }
 
-                Mod.Verbose("[MP] DevTreeSync: applied purchase of '" + command.NodePrefabName +
-                             "' from player " + message.OriginPlayerId + ".");
+                SyncLog.Detail(LogTopic.City, "DevTreeSync: applied purchase of '" +
+                    command.NodePrefabName + "' from player " + message.OriginPlayerId + ".");
             }
         }
 

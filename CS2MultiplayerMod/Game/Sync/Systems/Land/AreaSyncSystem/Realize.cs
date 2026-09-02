@@ -6,6 +6,8 @@ using Game.Tools;
 using Unity.Collections;
 using Unity.Entities;
 using Unity.Mathematics;
+using CS2MultiplayerMod.Core.Diagnostics;
+using CS2MultiplayerMod.Game.Diagnostics;
 using CS2MultiplayerMod.Game.Sync.Commands;
 using CS2MultiplayerMod.Game.Sync.Infrastructure;
 
@@ -36,12 +38,10 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 // offering another snapshot. Escalating instead cost a full save-stream-reload for
                 // a lot outline, and did so on a fixed ten-second timer after any placement whose
                 // owner this machine could not match.
-                Mod.log.Warn("[MP] AreaSync: owner '" +
-                             pending.command.OwnerPrefabName +
-                             "' did not appear in time for its owned area " +
-                             DescribeOwnedAreaOwnerSearch(pending.command) +
-                             "; dropping this snapshot - a later redraw will carry the polygon.");
-                Diagnostics.FlightRecorder.Note("owned area owner expired; snapshot dropped");
+                SyncLog.Warn(LogTopic.Land, "AreaSync: owner '" + pending.command.OwnerPrefabName +
+                    "' did not appear in time for its owned area " +
+                    DescribeOwnedAreaOwnerSearch(pending.command) +
+                    "; dropping this snapshot - a later redraw will carry the polygon.");
             }
         }
 
@@ -51,9 +51,12 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             if (_ownedAreaRetry.Count >= MaxPendingOwnedAreas)
             {
                 _ownedAreaRetry.Clear();
-                Diagnostics.FlightRecorder.Note(
-                    "owned area retry queue overflow; recovery requested");
-                SyncInbox.RequestResync("owned area retry queue overflow");
+                SyncLog.Trace(LogTopic.Land, "owned area retry queue overflow; recovery requested");
+                SyncInbox.RequestResync(CS2MultiplayerMod.Game.Diagnostics.ResyncReport
+                    .Create("owned area retry queue overflow", "area",
+                        CS2MultiplayerMod.Game.Diagnostics.ResyncEvidence.StreamLoss)
+                    .About("owned area retry queue")
+                    .Tried("nothing - the queue was full and was cleared"));
             }
             _ownedAreaRetry.Add((command, originPlayerId, deadline));
         }
@@ -73,9 +76,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 !IsSpecializedAreaPrefab(areaPrefab) ||
                 !PrefabDeclaresOwnedArea(ownerPrefab, areaPrefab))
             {
-                Mod.log.Warn("[MP] AreaSync: rejected incompatible owned area '" +
-                             command.AreaPrefabName + "' on '" +
-                             command.OwnerPrefabName + "'.");
+                SyncLog.Warn(LogTopic.Land, "AreaSync: rejected incompatible owned area '" +
+                    command.AreaPrefabName + "' on '" + command.OwnerPrefabName + "'.");
                 return true;
             }
 
@@ -96,10 +98,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             if (area == Entity.Null)
             {
                 CreateMissingOwnedArea(command, areaPrefab, owner, nodeCount);
-                Mod.Verbose("[MP] AreaSync: restored owned area '" +
-                            command.AreaPrefabName + "' on '" +
-                            command.OwnerPrefabName + "' from player " +
-                            originPlayerId + ".");
+                SyncLog.Detail(LogTopic.Land, "AreaSync: restored owned area '" +
+                    command.AreaPrefabName + "' on '" + command.OwnerPrefabName + "' from player " +
+                    originPlayerId + ".");
                 return true;
             }
 
@@ -120,10 +121,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             MarkAreaAndSubAreasUpdated(area);
             EnsureOwnerSubAreaReference(owner, area);
             _knownRings[area] = ring;
-            Mod.Verbose("[MP] AreaSync: redrew owned area '" +
-                        command.AreaPrefabName + "' on '" +
-                        command.OwnerPrefabName + "' (" + nodeCount +
-                        " nodes) from player " + originPlayerId + ".");
+            SyncLog.Detail(LogTopic.Land, "AreaSync: redrew owned area '" + command.AreaPrefabName +
+                "' on '" + command.OwnerPrefabName + "' (" + nodeCount + " nodes) from player " +
+                originPlayerId + ".");
             return true;
         }
 
@@ -316,7 +316,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             Entity prefab;
             if (!_prefabIndex.TryResolve(command.PrefabName, out prefab))
             {
-                Mod.log.Warn("[MP] AreaSync update: unknown prefab '" + command.PrefabName + "'; skipping.");
+                SyncLog.Warn(LogTopic.Land, "AreaSync update: unknown prefab '" + command.PrefabName +
+                    "'; skipping.");
                 return;
             }
             if (command.NodeX == null || command.NodeX.Length < 3) return;
@@ -347,8 +348,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
             if (best == Entity.Null)
             {
-                Mod.log.Warn("[MP] AreaSync update: no local '" + command.PrefabName +
-                             "' near the old centroid; skipping redraw.");
+                SyncLog.Warn(LogTopic.Land, "AreaSync update: no local '" + command.PrefabName +
+                    "' near the old centroid; skipping redraw.");
                 return;
             }
 
@@ -370,12 +371,13 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 // Suppress the echo both ways: spatial guard + the scan cache itself.
                 _guard.Mark(AreaUpdateKey(command.PrefabName, CentroidOf(newRing)), now);
                 _knownRings[best] = newRing;
-                Mod.Verbose("[MP] AreaSync update: redrew '" + command.PrefabName + "' (" +
-                             command.NodeX.Length + " nodes) from player " + originPlayerId + ".");
+                SyncLog.Detail(LogTopic.Land, "AreaSync update: redrew '" + command.PrefabName +
+                    "' (" + command.NodeX.Length + " nodes) from player " + originPlayerId + ".");
             }
             catch (System.Exception ex)
             {
-                Mod.log.Error("[MP] AreaSync update FAILED for '" + command.PrefabName + "': " + ex);
+                SyncLog.Error(LogTopic.Land, "AreaSync update FAILED for '" + command.PrefabName +
+                    "': " + ex);
             }
         }
 
@@ -384,7 +386,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             Entity prefab;
             if (!_prefabIndex.TryResolve(command.PrefabName, out prefab))
             {
-                Mod.log.Warn("[MP] AreaSync realize: unknown prefab '" + command.PrefabName + "'; skipping.");
+                SyncLog.Warn(LogTopic.Land, "AreaSync realize: unknown prefab '" +
+                    command.PrefabName + "'; skipping.");
                 return;
             }
             if (command.NodeX == null || command.NodeX.Length < 3) return;
@@ -411,12 +414,13 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     });
                 EntityManager.AddComponent<Updated>(definition);
                 EntityManager.AddComponent<Deleted>(definition);
-                Mod.Verbose("[MP] AreaSync realize: drew '" + command.PrefabName + "' (" +
-                             command.NodeX.Length + " nodes) from player " + originPlayerId + ".");
+                SyncLog.Detail(LogTopic.Land, "AreaSync realize: drew '" + command.PrefabName +
+                    "' (" + command.NodeX.Length + " nodes) from player " + originPlayerId + ".");
             }
             catch (System.Exception ex)
             {
-                Mod.log.Error("[MP] AreaSync realize FAILED for '" + command.PrefabName + "': " + ex);
+                SyncLog.Error(LogTopic.Land, "AreaSync realize FAILED for '" + command.PrefabName +
+                    "': " + ex);
             }
         }
 
@@ -463,8 +467,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             }
 
             if (deleted > 0 || targets.Count > 0)
-                Mod.Verbose("[MP] AreaSync: removed " + deleted + " area(s); " + targets.Count +
-                             " already gone (no local match).");
+                SyncLog.Detail(LogTopic.Land, "AreaSync: removed " + deleted + " area(s); " +
+                    targets.Count + " already gone (no local match).");
         }
 
     }

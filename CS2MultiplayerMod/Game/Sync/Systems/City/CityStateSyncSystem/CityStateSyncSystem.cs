@@ -4,10 +4,11 @@ using System.Diagnostics;
 using System.Threading;
 using Game;
 using Unity.Entities;
+using CS2MultiplayerMod.Core.Diagnostics;
 using CS2MultiplayerMod.Core.Protocol;
 using CS2MultiplayerMod.Core.Protocol.Messages;
 using CS2MultiplayerMod.Core.Session;
-
+using CS2MultiplayerMod.Game.Diagnostics;
 using CS2MultiplayerMod.Game.Sync.Infrastructure;
 using CS2MultiplayerMod.Game.Sync.Channels;
 namespace CS2MultiplayerMod.Game.Sync.Systems
@@ -15,7 +16,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
     /// <summary>
     /// Replicates city state via <see cref="IStateChannel"/> snapshots: host periodically
     /// captures and broadcasts; clients apply snapshots and detect edits via <see cref="StateEditMessage"/>.
-    /// Two channel types: authoritative (money, population, etc., host to clients);
+    /// Two channel types: authoritative (money, XP, etc., host to clients);
     /// editable (taxes, policies, etc., client edit -> host -> broadcast). Host is arbiter.
     /// </summary>
     public partial class CityStateSyncSystem : GameSystemBase
@@ -72,19 +73,28 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
             // Simulation-owned values: one source of truth, host → clients.
             Register(new MoneyStateChannel());
-            Register(new PopulationStateChannel());
+            // No population channel: the HUD population count is a cosmetic output of each
+            // peer's own simulation. Overwriting it once a second made the client's number
+            // flicker as the local sim and the snapshot fought over it. Channel id 2 is retired.
             Register(new XpStateChannel());
             Register(new MilestoneStateChannel());
             Register(new DevTreePointsStateChannel());
             Register(new TourismStateChannel());
             Register(new StatisticsStateChannel());
+            // Taxation's displayed residential/commercial/industrial/office amounts come from
+            // parameterized taxable-income statistics, independently of the editable rate table.
+            Register(new TaxIncomeStateChannel());
+            // Fee events from every service path and the collected building/net upkeep records
+            // converge into one native accounting view. Keep that terminal view host-owned while
+            // channel 8 remains the separately editable fee-slider table.
+            Register(new ServiceAccountingStateChannel(
+                World.GetOrCreateSystemManaged<ServiceAccountingCorrectionSystem>()));
             Register(new WeatherStateChannel());
             Register(new GameClockStateChannel());
             _treeStateChannel = new TreeStateChannel();
             Register(_treeStateChannel);
-            // Reports rather than writes: zone demand is recomputed locally from the city's own
-            // state several times a second, so this carries the host's figures for comparison and
-            // logs the gap. See ZoneDemandChannel.
+            // Full native demand state. On a client the channel holds the three redundant demand
+            // writers after its first valid snapshot and feeds their host arrays to native readers.
             Register(new ZoneDemandChannel());
             // Numeric rent only. The channel queues rolling absolute pages; its runtime applies
             // them in GameSimulation after vanilla recalculates rent and before rent is charged.
@@ -95,6 +105,11 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             // renter pipeline. See ResidentialOccupancySyncSystem.
             Register(new ResidentialOccupancyChannel(
                 World.GetOrCreateSystemManaged<ResidentialOccupancySyncSystem>()));
+            // The money-facing figures behind every shop, factory and office, and the goods they
+            // hold. Rolling absolute pages; the runtime corrects them in GameSimulation in the
+            // same frame the game recomputes them. See CompanyStatsSyncSystem.
+            Register(new CompanyStatsStateChannel(
+                World.GetOrCreateSystemManaged<CompanyStatsSyncSystem>()));
 
             // Player-editable settings: every player may change them; the host arbitrates.
             RegisterEditable(new TaxStateChannel());
@@ -105,23 +120,18 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             RegisterEditable(new LoanStateChannel());
             RegisterEditable(new CityNameStateChannel());
 
-            Mod.log.Info(nameof(CityStateSyncSystem) + " ready with " + _channels.Count +
-                         " state channel(s), " + _editable.Count + " player-editable.");
+            SyncLog.Detail(LogTopic.City, nameof(CityStateSyncSystem) + " ready with " +
+                _channels.Count + " state channel(s), " + _editable.Count + " player-editable.");
 
-            if (Mod.Service != null)
-            {
-                _observer = new Observer(_incoming, _incomingEdits, RequestOrderedPoison,
-                    channelId => _editable.Contains(channelId));
-                Mod.Service.Session.AddObserver(_observer);
-            }
-            SyncInbox.RegisterDrain(DrainQueues);
+            _observer = SyncObserverBinding.Bind(
+                () => new Observer(_incoming, _incomingEdits, RequestOrderedPoison,
+                    channelId => _editable.Contains(channelId)),
+                DrainQueues);
         }
 
         protected override void OnDestroy()
         {
-            SyncInbox.UnregisterDrain(DrainQueues);
-            if (_observer != null && Mod.Service != null)
-                Mod.Service.Session.RemoveObserver(_observer);
+            SyncObserverBinding.Unbind(_observer, DrainQueues);
             if (_treeStateChannel != null) _treeStateChannel.Dispose();
             base.OnDestroy();
         }
@@ -148,37 +158,40 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
         protected override void OnUpdate()
         {
-            if (Interlocked.Exchange(ref _orderedPoisonRequested, 0) != 0)
-                PoisonOrderedStream("invalid or overflowed ordered-state ingress");
-            MultiplayerService service = Mod.Service;
-            if (service == null) return;
+            using (Diagnostics.SyncProfiler.Measure("CityState"))
+            {
+                if (Interlocked.Exchange(ref _orderedPoisonRequested, 0) != 0)
+                    PoisonOrderedStream("invalid or overflowed ordered-state ingress");
+                MultiplayerService service = Mod.Service;
+                if (service == null) return;
 
-            MultiplayerSession session = service.Session;
-            if (!service.GameplaySyncReady)
-            {
-                // Leaving a session invalidates everything we knew about the host's state.
-                if (_lastHostPayload.Count > 0) { _lastHostPayload.Clear(); _pendingEdits.Clear(); }
-                for (int i = 0; i < _pumped.Count; i++) _pumped[i].ResetPending();
-                SyncInbox.Clear(_incoming);
-                SyncInbox.Clear(_incomingEdits);
-                SyncInbox.Clear(_orderedDeferred);
-                _newestSnapshot.Clear();
-                _newestOrder.Clear();
-                _orderedInvalidated = false;
-                Interlocked.Exchange(ref _orderedPoisonRequested, 0);
-                return;
-            }
+                MultiplayerSession session = service.Session;
+                if (!service.GameplaySyncReady)
+                {
+                    // Leaving a session invalidates everything we knew about the host's state.
+                    if (_lastHostPayload.Count > 0) { _lastHostPayload.Clear(); _pendingEdits.Clear(); }
+                    for (int i = 0; i < _pumped.Count; i++) _pumped[i].ResetPending();
+                    SyncInbox.Clear(_incoming);
+                    SyncInbox.Clear(_incomingEdits);
+                    SyncInbox.Clear(_orderedDeferred);
+                    _newestSnapshot.Clear();
+                    _newestOrder.Clear();
+                    _orderedInvalidated = false;
+                    Interlocked.Exchange(ref _orderedPoisonRequested, 0);
+                    return;
+                }
 
-            if (session.Role == SessionRole.Host)
-            {
-                ApplyIncomingEdits();
-                CaptureAndBroadcast(session);
-            }
-            else
-            {
-                DetectLocalEdits(session);
-                ApplyIncoming();
-                PumpChannels();
+                if (session.Role == SessionRole.Host)
+                {
+                    ApplyIncomingEdits();
+                    CaptureAndBroadcast(session);
+                }
+                else
+                {
+                    DetectLocalEdits(session);
+                    ApplyIncoming();
+                    PumpChannels();
+                }
             }
         }
 
@@ -199,7 +212,12 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             }
 
             // Heartbeat every ~30 s so the log shows state replication is alive without spam.
-            if (now - _lastLogMs >= 30000) { _lastLogMs = now; Mod.Verbose("[MP] CityState: broadcasting " + sent + " channel(s)/snapshot to clients."); }
+            if (now - _lastLogMs >= 30000)
+            {
+                _lastLogMs = now;
+                SyncLog.Detail(LogTopic.City, "CityState: broadcasting " + sent +
+                    " channel(s)/snapshot to clients.");
+            }
         }
 
         // ---- Client ------------------------------------------------------------
@@ -237,7 +255,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
                 _pendingEdits[channelId] = new PendingEdit { Payload = local, SentMs = now };
                 session.SendStateEdit(channelId, local);
-                Mod.Verbose("[MP] CityState: local edit on channel " + channelId + " sent to host.");
+                SyncLog.Detail(LogTopic.City, "CityState: local edit on channel " + channelId +
+                    " sent to host.");
             }
         }
 
@@ -307,7 +326,12 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             if (_orderedInvalidated) return;
             _orderedInvalidated = true;
             SyncInbox.Clear(_orderedDeferred);
-            SyncInbox.RequestResync(reason);
+            // The ordered city-state stream is revisioned: once a page is lost or refused, every
+            // later page describes a state this machine never reached. Nothing local supplies it.
+            SyncInbox.RequestResync(CS2MultiplayerMod.Game.Diagnostics.ResyncReport
+                .Create(reason, "city-state", CS2MultiplayerMod.Game.Diagnostics.ResyncEvidence.StreamLoss)
+                .About("ordered city-state stream")
+                .Tried("nothing - the ordered stream was invalidated and its deferred pages dropped"));
         }
     }
 }

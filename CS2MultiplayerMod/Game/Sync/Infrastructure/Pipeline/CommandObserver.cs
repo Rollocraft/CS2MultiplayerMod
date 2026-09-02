@@ -49,9 +49,13 @@ namespace CS2MultiplayerMod.Game.Sync.Infrastructure
                 if (command.CommandId != _ids[i]) continue;
                 if (command.Body != null && command.Body.Length > MaxBodyBytes)
                 {
-                    WarnThrottled("[MP] Dropping oversized command id " + command.CommandId +
+                    WarnThrottled("Dropping oversized command id " + command.CommandId +
                                   " body=" + command.Body.Length + " > " + MaxBodyBytes + ".");
-                    SyncInbox.RequestResync("oversized sync command rejected");
+                    SyncInbox.RequestResync(CS2MultiplayerMod.Game.Diagnostics.ResyncReport
+                        .Create("oversized sync command rejected", "stream",
+                            CS2MultiplayerMod.Game.Diagnostics.ResyncEvidence.StreamLoss)
+                        .About("oversized command")
+                        .Tried("nothing - the command exceeded its size cap and was refused at the door"));
                     return;
                 }
                 SyncInbox.Push(_sink, command, QueueCap);

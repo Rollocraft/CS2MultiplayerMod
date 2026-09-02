@@ -100,9 +100,6 @@ namespace CS2MultiplayerMod.Core.Session
             if (!string.IsNullOrEmpty(address)) _records.Remove(address);
         }
 
-        /// <summary>Number of addresses currently tracked. For tests/diagnostics.</summary>
-        public int TrackedAddresses => _records.Count;
-
         /// <summary>
         /// Drop records that can no longer influence a decision: the failure window has
         /// passed and no ban is active. Records are otherwise only removed on a

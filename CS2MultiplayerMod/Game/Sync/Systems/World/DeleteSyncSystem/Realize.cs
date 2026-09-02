@@ -9,6 +9,8 @@ using Game.Tools;
 using Unity.Collections;
 using Unity.Entities;
 using Unity.Mathematics;
+using CS2MultiplayerMod.Core.Diagnostics;
+using CS2MultiplayerMod.Game.Diagnostics;
 using CS2MultiplayerMod.Game.Sync.Commands;
 using CS2MultiplayerMod.Game.Sync.Infrastructure;
 
@@ -94,7 +96,11 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                                 if (_objectRetry.Count >= MaxPendingDeletes)
                                 {
                                     _objectRetry.Clear();
-                                    SyncInbox.RequestResync("object delete retry queue overflow");
+                                    SyncInbox.RequestResync(CS2MultiplayerMod.Game.Diagnostics.ResyncReport
+                                        .Create("object delete retry queue overflow", "delete",
+                                            CS2MultiplayerMod.Game.Diagnostics.ResyncEvidence.StreamLoss)
+                                        .About("object delete retry queue")
+                                        .Tried("nothing - the queue was full and was cleared"));
                                 }
                                 else _objectRetry.Add(commands[t]);
                                 waiting++;
@@ -102,9 +108,14 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                             else
                             {
                                 expired++;
-                                SyncInbox.RequestResync("object delete graph validation failed");
-                                Mod.log.Warn("[MP] DeleteSync: rejected stale building graph: " +
-                                             invalidReason + ".");
+                                SyncInbox.RequestResync(CS2MultiplayerMod.Game.Diagnostics.ResyncReport
+                                    .Create("object delete graph validation failed", "delete",
+                                        CS2MultiplayerMod.Game.Diagnostics.ResyncEvidence.Contradiction)
+                                    .About("object delete graph")
+                                    .Tried("nothing - the ownership graph under this object cannot be torn down safely"));
+                                SyncLog.Warn(LogTopic.Buildings,
+                                    "DeleteSync: rejected stale building graph: " + invalidReason +
+                                    ".");
                             }
                             continue;
                         }
@@ -144,11 +155,12 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                         expired++;
                         // Name the target: a delete that never finds a victim means the two cities
                         // disagree about what stands here, and the prefab says which kind.
-                        Mod.log.Warn("[MP] DeleteSync: no local match for '" + targets[t].name +
-                                     "' at " + targets[t].pos + " within " + ObjectMatchRadius +
-                                     "m (" + candidates.Length + " object(s) in range, prefab " +
-                                     (targets[t].prefab == Entity.Null ? "unknown here" : "resolved") +
-                                     "); dropping this delete.");
+                        SyncLog.Warn(LogTopic.Buildings, "DeleteSync: no local match for '" +
+                            targets[t].name + "' at " + targets[t].pos + " within " +
+                            ObjectMatchRadius + "m (" + candidates.Length +
+                            " object(s) in range, prefab " +
+                            (targets[t].prefab == Entity.Null ? "unknown here" : "resolved") +
+                            "); dropping this delete.");
                     }
                 }
             }
@@ -158,9 +170,17 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             }
 
             if (deleted > 0 || waiting > 0 || expired > 0)
-                Mod.Verbose("[MP] DeleteSync: removed " + deleted + " object root(s) and " +
-                             deletedOwned + " owned upgrade/subobject(s); " + waiting +
-                             " awaiting a local match, " + expired + " gave up (already gone, or geometry diverged).");
+                SyncLog.Detail(LogTopic.Buildings, "DeleteSync: removed " + deleted +
+                    " object root(s) and " + deletedOwned + " owned upgrade/subobject(s); " +
+                    waiting + " awaiting a local match, " + expired +
+                    " gave up (already gone, or geometry diverged).");
+            // Same reasoning as the road case: a demolition that found nothing to demolish leaves
+            // this city holding a building the other player has already removed.
+            if (expired > 0)
+                Diagnostics.SyncLog.Warn(LogTopic.Buildings, "Build sync: " + expired +
+                    " demolished object(s) had no match here and were " + "dropped after " +
+                    (DeleteRetryWindowMs / 1000) + " s. Those objects still " +
+                    "stand in this city and no longer stand in the other player's.");
         }
 
         private bool TryCollectObjectDeleteGraph(Entity root, out List<Entity> ownedObjects,
@@ -371,10 +391,20 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             }
             if (deleted > 0 || waiting > 0 || expired > 0)
             {
-                Mod.Verbose("[MP] DeleteSync: bulldozing " + deleted + " road segment(s); " + waiting +
-                             " awaiting a local match, " + expired +
-                             " gave up (already gone, or geometry diverged).");
+                SyncLog.Detail(LogTopic.Buildings, "DeleteSync: bulldozing " + deleted +
+                    " road segment(s); " + waiting + " awaiting a local match, " + expired +
+                    " gave up (already gone, or geometry diverged).");
             }
+            // A bulldoze that never found its road is a road the other player no longer has and
+            // this one still does - a silent divergence, and one that surfaces later as somebody
+            // else's edit failing to resolve. It was only ever visible with verbose logging on,
+            // which is exactly the switch nobody has set during the session that needs explaining.
+            // Production level, always.
+            if (expired > 0)
+                Diagnostics.SyncLog.Warn(LogTopic.Buildings, "Road sync: " + expired +
+                    " bulldozed road segment(s) had no match here and " + "were dropped after " +
+                    (DeleteRetryWindowMs / 1000) + " s. Those roads still " +
+                    "stand in this city and no longer stand in the other player's.");
         }
 
         /// <summary>
@@ -448,7 +478,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             }
             catch (System.Exception ex)
             {
-                Mod.log.Warn("[MP] DeleteSync: failed to build edge delete-definition: " + ex.Message);
+                SyncLog.Warn(LogTopic.Buildings,
+                    "DeleteSync: failed to build edge delete-definition: " + ex.Message);
                 return Entity.Null;
             }
             finally

@@ -16,9 +16,25 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             _occupancy = World.GetOrCreateSystemManaged<ResidentialOccupancySyncSystem>();
         }
 
+        /// <summary>
+        /// RentAdjustSystem's own interval. The seed only has to land before that system's first
+        /// pass over a freshly downloaded world, so running it on every frame in between bought
+        /// nothing; matching the interval also hands this system RentAdjust's update offset, which
+        /// is what actually guarantees the "before" in the registration.
+        /// </summary>
+        public override int GetUpdateInterval(SystemUpdatePhase phase) =>
+            phase == SystemUpdatePhase.GameSimulation
+                ? 262144 / (RentAdjustUpdatesPerDay * 16) : 1;
+
+        /// <summary>Matches <c>RentAdjustSystem.kUpdatesPerDay</c>.</summary>
+        private const int RentAdjustUpdatesPerDay = 16;
+
         protected override void OnUpdate()
         {
-            if (_occupancy != null) _occupancy.SeedLoadedWorldHouseholdRents();
+            using (Diagnostics.SyncProfiler.Measure("Occupancy.RentSeed", Diagnostics.SyncZone.Residential))
+            {
+                if (_occupancy != null) _occupancy.SeedLoadedWorldHouseholdRents();
+            }
         }
     }
 }

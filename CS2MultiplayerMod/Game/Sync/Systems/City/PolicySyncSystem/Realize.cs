@@ -6,8 +6,10 @@ using Game.Routes;
 using Unity.Collections;
 using Unity.Entities;
 using Unity.Mathematics;
+using CS2MultiplayerMod.Core.Diagnostics;
 using CS2MultiplayerMod.Core.Protocol.Messages;
 using CS2MultiplayerMod.Core.Session;
+using CS2MultiplayerMod.Game.Diagnostics;
 using CS2MultiplayerMod.Game.Sync.Commands;
 using CS2MultiplayerMod.Game.Sync.Infrastructure;
 
@@ -15,8 +17,19 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 {
     public partial class PolicySyncSystem
     {
+        private readonly HeldTime _targetHold = new HeldTime();
+
         private void ApplyIncoming(MultiplayerSession session, long now)
         {
+            // A policy waits for the building it applies to, and a zone-grown building is what the
+            // realize pipeline holds back while terrain or roads catch up. See RealizeGate: without
+            // this the window expires against a target that could not yet have arrived.
+            long heldMs = _targetHold.Observe(now, RealizeGate.WorldBuildingHeld);
+            if (heldMs > 0)
+                for (int h = 0; h < _targetRetry.Count; h++)
+                    _targetRetry[h] = (_targetRetry[h].cmd, _targetRetry[h].origin,
+                        _targetRetry[h].deadline + heldMs);
+
             for (int i = 0; i < _targetRetry.Count;)
             {
                 var pending = _targetRetry[i];
@@ -27,13 +40,17 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 }
                 if (now >= pending.deadline)
                 {
-                    Mod.log.Warn("[MP] PolicySync: no local " +
-                                 KindName(pending.cmd.TargetKind) + " '" +
-                                 pending.cmd.TargetPrefabName + "' appeared within " +
-                                 (TargetRetryWindowMs / 1000) + " s for policy '" +
-                                 pending.cmd.PolicyPrefabName +
-                                 "'; requesting world recovery.");
-                    SyncInbox.RequestResync("policy target did not resolve");
+                    SyncLog.Warn(LogTopic.City, "PolicySync: no local " +
+                        KindName(pending.cmd.TargetKind) + " '" + pending.cmd.TargetPrefabName +
+                        "' appeared within " + (TargetRetryWindowMs / 1000) + " s for policy '" +
+                        pending.cmd.PolicyPrefabName + "'; requesting world recovery.");
+                    SyncInbox.RequestResync(CS2MultiplayerMod.Game.Diagnostics.ResyncReport
+                        .Create("policy target did not resolve", "policy",
+                            CS2MultiplayerMod.Game.Diagnostics.ResyncEvidence.MissingTarget)
+                        .About("'" + pending.cmd.PolicyPrefabName + "' on " +
+                               KindName(pending.cmd.TargetKind) + " '" +
+                               pending.cmd.TargetPrefabName + "'")
+                        .Tried("retried for 15 s of attempts, not counting time the buildings were held back"));
                     _targetRetry.RemoveAt(i);
                     continue;
                 }
@@ -47,7 +64,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
                 EntityPolicyCommand command;
                 try { command = EntityPolicyCommand.Decode(message.Body); }
-                catch (System.Exception ex) { Mod.log.Warn("[MP] PolicySync: dropping malformed command: " + ex.Message); continue; }
+                catch (System.Exception ex) { SyncLog.Warn(LogTopic.City, "PolicySync: dropping malformed command: " + ex.Message); continue; }
 
                 if (!TryApplyPolicy(command, message.OriginPlayerId, now))
                     QueuePolicyRetry(command, message.OriginPlayerId, now);
@@ -63,8 +80,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             Entity policy;
             if (!_prefabIndex.TryResolve(command.PolicyPrefabName, out policy))
             {
-                Mod.log.Warn("[MP] PolicySync: unknown policy '" +
-                             command.PolicyPrefabName + "'; skipping.");
+                SyncLog.Warn(LogTopic.City, "PolicySync: unknown policy '" +
+                    command.PolicyPrefabName + "'; skipping.");
                 return true;
             }
 
@@ -76,16 +93,19 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             try
             {
                 _policiesUI.SetPolicy(target, policy, command.Active, command.Adjustment);
-                Mod.Verbose("[MP] PolicySync realize: '" + command.PolicyPrefabName + "' " +
-                             (command.Active ? "on" : "off") + " for " +
-                             KindName(command.TargetKind) + " '" +
-                             command.TargetPrefabName + "' from player " + origin + ".");
+                SyncLog.Detail(LogTopic.City, "PolicySync realize: '" + command.PolicyPrefabName +
+                    "' " + (command.Active ? "on" : "off") + " for " + KindName(command.TargetKind) +
+                    " '" + command.TargetPrefabName + "' from player " + origin + ".");
             }
             catch (System.Exception ex)
             {
-                Mod.log.Error("[MP] PolicySync realize FAILED for '" +
-                              command.PolicyPrefabName + "': " + ex);
-                SyncInbox.RequestResync("building policy application failed");
+                SyncLog.Error(LogTopic.City, "PolicySync realize FAILED for '" +
+                    command.PolicyPrefabName + "': " + ex);
+                SyncInbox.RequestResync(CS2MultiplayerMod.Game.Diagnostics.ResyncReport
+                    .Create("building policy application failed", "policy",
+                        CS2MultiplayerMod.Game.Diagnostics.ResyncEvidence.Contradiction)
+                    .About("policy application")
+                    .Tried("nothing - applying the policy threw"));
             }
             return true;
         }
@@ -103,14 +123,18 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             if (_targetRetry.Count >= MaxPendingTargets)
             {
                 _targetRetry.RemoveAt(0);
-                Mod.log.Warn("[MP] PolicySync: pending-target queue reached its bounded limit; " +
-                             "requesting world recovery.");
-                SyncInbox.RequestResync("policy target retry queue overflow");
+                SyncLog.Warn(LogTopic.City,
+                    "PolicySync: pending-target queue reached its bounded limit; " +
+                    "requesting world recovery.");
+                SyncInbox.RequestResync(CS2MultiplayerMod.Game.Diagnostics.ResyncReport
+                    .Create("policy target retry queue overflow", "policy",
+                        CS2MultiplayerMod.Game.Diagnostics.ResyncEvidence.StreamLoss)
+                    .About("policy retry queue")
+                    .Tried("nothing - the oldest queued policy was shed to stay within the bound"));
             }
             _targetRetry.Add((command, origin, now + TargetRetryWindowMs));
-            Diagnostics.FlightRecorder.Note("policy target retrying kind=" +
-                                              KindName(command.TargetKind) +
-                                              " prefab=" + command.TargetPrefabName);
+            SyncLog.Trace(LogTopic.City, "policy target retrying kind=" +
+                KindName(command.TargetKind) + " prefab=" + command.TargetPrefabName);
         }
 
         private static string PendingPolicyKey(EntityPolicyCommand command) =>

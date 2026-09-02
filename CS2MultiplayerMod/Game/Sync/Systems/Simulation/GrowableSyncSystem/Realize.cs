@@ -6,13 +6,20 @@ using Game.Tools;
 using Unity.Collections;
 using Unity.Entities;
 using Unity.Mathematics;
+using CS2MultiplayerMod.Core.Diagnostics;
 using CS2MultiplayerMod.Core.Protocol.Messages;
 using CS2MultiplayerMod.Core.Session;
+using CS2MultiplayerMod.Game.Diagnostics;
 using CS2MultiplayerMod.Game.Sync.Commands;
-using CS2MultiplayerMod.Game.Sync.Infrastructure;
 
 namespace CS2MultiplayerMod.Game.Sync.Systems
 {
+    // Applying the host's zoned-building lifecycle: a building spawns, changes level, is removed,
+    // or has its condition and state corrected. A correction that arrives before the building does
+    // is held and retried rather than dropped.
+    //
+    // Finding the building a command refers to is in RealizeMatch.cs; keeping a client from
+    // growing its own is in RealizeGuard.cs.
     public partial class GrowableSyncSystem
     {
         /// <summary>Zone cells are 8 m; a lot's half-extent is therefore its cell count times four.</summary>
@@ -33,10 +40,37 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         /// Applies the host's zoned-building decisions. Called from <see cref="SyncRealizeSystem"/>
         /// during ToolUpdate, the only phase in which a creation definition becomes a building.
         /// </summary>
+        /// <summary>
+        /// Called by <see cref="SyncRealizeSystem"/> on frames this system is not allowed to run -
+        /// terrain is catching up, or the net pipeline still has placements queued.
+        ///
+        /// A pending state correction's window is for waiting on its building to be generated, not
+        /// for waiting on permission to look for it. Against the wall it expired while this system
+        /// was gated off, and expiring asks for a world reload over a correction that was never
+        /// once attempted. A stalled net placement holds this gate for its whole retry window.
+        /// </summary>
+        public void NotifyRealizeHeld(long nowMs)
+        {
+            ExtendPendingStateWindows(nowMs);
+        }
+
+        /// <summary>When this system last got to attempt its pending corrections.</summary>
+        private long _lastGrowableRealizeMs;
+
+        private void ExtendPendingStateWindows(long nowMs)
+        {
+            long heldMs = _lastGrowableRealizeMs == 0 ? 0 : nowMs - _lastGrowableRealizeMs;
+            _lastGrowableRealizeMs = nowMs;
+            if (heldMs <= 0) return;
+            for (int i = 0; i < _pendingStateCorrections.Count; i++)
+                _pendingStateCorrections[i].Expiry += heldMs;
+        }
+
         public void RealizePending()
         {
             MultiplayerService service = Mod.Service;
-            if (service == null || !service.GameplaySyncReady) return;
+            if (service == null) return;
+            if (!service.GameplaySyncReady) { ExtendPendingStateWindows(service.NowMs); return; }
 
             MultiplayerSession session = service.Session;
             long now = service.NowMs;
@@ -51,7 +85,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
             // A zoned building's transmitted height was sampled on the sender's terrain. Realizing
             // it while remote terraforming is still backlogged buries or floats it.
-            if (DeferForTerrain) return;
+            if (DeferForTerrain) { ExtendPendingStateWindows(now); return; }
+            _lastGrowableRealizeMs = now;
 
             _applied.Prune(now);
             RetryPendingStateCorrections(now);
@@ -64,17 +99,18 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 try { command = GrowableLifecycleCommand.Decode(message.Body); }
                 catch (System.Exception ex)
                 {
-                    Mod.log.Warn("[MP] GrowableSync: dropping malformed command from player " +
-                                 message.OriginPlayerId + ": " + ex.Message);
+                    SyncLog.Warn(LogTopic.Buildings,
+                        "GrowableSync: dropping malformed command from player " +
+                        message.OriginPlayerId + ": " + ex.Message);
                     continue;
                 }
 
                 if (_applied.Contains(command.Sequence, now))
                 {
                     _duplicates++;
-                    Mod.Verbose("[MP] GrowableSync: ignoring duplicate " +
-                                GrowableLifecycleCommand.OpName(command.Op) + " seq=" +
-                                command.Sequence + " (already applied).");
+                    SyncLog.Detail(LogTopic.Buildings, "GrowableSync: ignoring duplicate " +
+                        GrowableLifecycleCommand.OpName(command.Op) + " seq=" + command.Sequence +
+                        " (already applied).");
                     continue;
                 }
 
@@ -114,8 +150,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 // is not a zoned building at all. Neither is retryable.
                 _unknownPrefab++;
                 _applied.Remember(command.Sequence, now, ReplayWindowMs);
-                Mod.log.Warn("[MP] GrowableSync: unknown zoned-building prefab '" +
-                             command.PrefabName + "' at " + Format(position) + "; spawn dropped.");
+                SyncLog.Warn(LogTopic.Buildings, "GrowableSync: unknown zoned-building prefab '" +
+                    command.PrefabName + "' at " + Format(position) + "; spawn dropped.");
                 return true;
             }
 
@@ -141,8 +177,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     }
                     _duplicates++;
                     _applied.Remember(command.Sequence, now, ReplayWindowMs);
-                    Mod.Verbose("[MP] GrowableSync: '" + command.PrefabName + "' already stands at " +
-                                Format(position) + "; spawn seq=" + command.Sequence + " ignored.");
+                    SyncLog.Detail(LogTopic.Buildings, "GrowableSync: '" + command.PrefabName +
+                        "' already stands at " + Format(position) + "; spawn seq=" +
+                        command.Sequence + " ignored.");
                     return true;
                 }
 
@@ -154,11 +191,10 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     // the two cities agreeing about the building that was deliberately placed.
                     _conflicts++;
                     _applied.Remember(command.Sequence, now, ReplayWindowMs);
-                    Mod.log.Warn("[MP] GrowableSync conflict: '" + command.PrefabName + "' at " +
-                                 Format(position) + " overlaps " +
-                                 DescribeBlocker(placedBlocker, now) +
-                                 "; spawn refused (seq=" + command.Sequence + ").");
-                    Diagnostics.FlightRecorder.Note("growable spawn refused (placed building)");
+                    SyncLog.Warn(LogTopic.Buildings, "GrowableSync conflict: '" + command.PrefabName +
+                        "' at " + Format(position) + " overlaps " +
+                        DescribeBlocker(placedBlocker, now) + "; spawn refused (seq=" +
+                        command.Sequence + ").");
                     return true;
                 }
 
@@ -168,11 +204,12 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 for (int i = 0; i < blockers.Length; i++)
                 {
                     _conflicts++;
-                    Mod.log.Warn("[MP] GrowableSync conflict: evicting locally grown " +
-                                 DescribeBlocker(blockers[i], now) + " for the host's '" +
-                                 command.PrefabName + "' at " + Format(position) + ".");
+                    SyncLog.Warn(LogTopic.Buildings,
+                        "GrowableSync conflict: evicting locally grown " +
+                        DescribeBlocker(blockers[i], now) + " for the host's '" + command.PrefabName +
+                        "' at " + Format(position) + ".");
                     EntityManager.AddComponent<Deleted>(blockers[i]);
-                    Diagnostics.FlightRecorder.Note("growable evicted for host spawn");
+                    SyncLog.Trace(LogTopic.Buildings, "growable evicted for host spawn");
                 }
             }
             finally
@@ -185,9 +222,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             NoteSelfRealized(prefab, position, command, now);
             _applied.Remember(command.Sequence, now, ReplayWindowMs);
             _gotSpawn++;
-            Mod.Verbose("[MP] GrowableSync realize: built '" + command.PrefabName + "' at " +
-                        Format(position) + " seed=" + command.RandomSeed + " seq=" +
-                        command.Sequence + ".");
+            SyncLog.Detail(LogTopic.Buildings, "GrowableSync realize: built '" + command.PrefabName +
+                "' at " + Format(position) + " seed=" + command.RandomSeed + " seq=" +
+                command.Sequence + ".");
             return true;
         }
 
@@ -207,8 +244,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             {
                 _unknownPrefab++;
                 _applied.Remember(command.Sequence, now, ReplayWindowMs);
-                Mod.log.Warn("[MP] GrowableSync: unknown level-change prefab '" +
-                             command.PrefabName + "' at " + Format(position) + "; skipped.");
+                SyncLog.Warn(LogTopic.Buildings, "GrowableSync: unknown level-change prefab '" +
+                    command.PrefabName + "' at " + Format(position) + "; skipped.");
                 return true;
             }
 
@@ -217,8 +254,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             {
                 _unmatched++;
                 _applied.Remember(command.Sequence, now, ReplayWindowMs);
-                Mod.Verbose("[MP] GrowableSync: no building at " + Format(position) +
-                            " to level to '" + command.PrefabName + "'; skipped.");
+                SyncLog.Detail(LogTopic.Buildings, "GrowableSync: no building at " +
+                    Format(position) + " to level to '" + command.PrefabName + "'; skipped.");
                 return true;
             }
 
@@ -236,9 +273,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     return true;
                 }
                 if (current.m_NewPrefab != Entity.Null)
-                    Mod.Verbose("[MP] GrowableSync: replacing this machine's own level-change target " +
-                                "at " + Format(position) + " with the host's '" +
-                                command.PrefabName + "'.");
+                    SyncLog.Detail(LogTopic.Buildings,
+                        "GrowableSync: replacing this machine's own level-change target " + "at " +
+                        Format(position) + " with the host's '" + command.PrefabName + "'.");
                 current.m_NewPrefab = prefab;
                 current.m_Progress = command.ConstructionProgress;
                 current.m_Speed = command.ConstructionSpeed;
@@ -258,8 +295,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             EntityManager.AddComponent<Updated>(building);
             _applied.Remember(command.Sequence, now, ReplayWindowMs);
             _gotLevel++;
-            Mod.Verbose("[MP] GrowableSync realize: level change to '" + command.PrefabName +
-                        "' at " + Format(position) + " seq=" + command.Sequence + ".");
+            SyncLog.Detail(LogTopic.Buildings, "GrowableSync realize: level change to '" +
+                command.PrefabName + "' at " + Format(position) + " seq=" + command.Sequence + ".");
             return true;
         }
 
@@ -276,16 +313,16 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 // built here (its spawn was refused), or a player already bulldozed it.
                 _unmatched++;
                 _applied.Remember(command.Sequence, now, ReplayWindowMs);
-                Mod.Verbose("[MP] GrowableSync: no building at " + Format(position) +
-                            " to remove ('" + command.PrefabName + "'); already gone.");
+                SyncLog.Detail(LogTopic.Buildings, "GrowableSync: no building at " +
+                    Format(position) + " to remove ('" + command.PrefabName + "'); already gone.");
                 return true;
             }
 
             EntityManager.AddComponent<Deleted>(building);
             _applied.Remember(command.Sequence, now, ReplayWindowMs);
             _gotRemove++;
-            Mod.Verbose("[MP] GrowableSync realize: removed '" + command.PrefabName + "' at " +
-                        Format(position) + " seq=" + command.Sequence + ".");
+            SyncLog.Detail(LogTopic.Buildings, "GrowableSync realize: removed '" +
+                command.PrefabName + "' at " + Format(position) + " seq=" + command.Sequence + ".");
             return true;
         }
 
@@ -307,8 +344,11 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 {
                     if (_pendingStateCorrections.Count >= MaxPendingStateCorrections)
                     {
+                        // Convergent to shed: corrections are progress ticks sent twice a
+                        // second, and completion is announced by its own command.
                         _pendingStateSequences.Remove(command.Sequence);
-                        SyncInbox.RequestResync("growable state retry queue overflow");
+                        _unmatched++;
+                        _applied.Remember(command.Sequence, now, ReplayWindowMs);
                     }
                     else
                     {
@@ -322,6 +362,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 return true;
             }
 
+            RepairCompletedPrefab(building, prefab, command);
             ApplyConditionAndState(building, command);
             EntityManager.AddComponent<Updated>(building);
             _applied.Remember(command.Sequence, now, ReplayWindowMs);
@@ -340,11 +381,18 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 PendingStateCorrection pending = _pendingStateCorrections[i];
                 if (pending.Expiry <= now)
                 {
+                    // Skipped, like the level change and the removal that cannot find their
+                    // building either. Completed state can also repair a missed level prefab, but
+                    // the absolute occupancy/company pages carry the same completed identity and
+                    // remain its backstop after this short ordering window.
                     _pendingStateSequences.Remove(pending.Command.Sequence);
                     _pendingStateCorrections.RemoveAt(i);
                     _unmatched++;
                     _applied.Remember(pending.Command.Sequence, now, ReplayWindowMs);
-                    SyncInbox.RequestResync("growable state target did not resolve");
+                    SyncLog.Detail(LogTopic.Buildings, "GrowableSync: no building at " +
+                        Format(new float3(pending.Command.AnchorX, pending.Command.AnchorY,
+                            pending.Command.AnchorZ)) + " to correct ('" +
+                        pending.Command.PrefabName + "'); skipped.");
                     continue;
                 }
 
@@ -407,397 +455,42 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             }
         }
 
+        /// <summary>
+        /// A completion state is also an absolute statement of what prefab now stands at this
+        /// anchor. If the earlier level command was dropped or arrived before its building, route
+        /// that correction through BuildingConstructionSystem instead of directly replacing
+        /// PrefabRef, preserving all native level-completion side effects.
+        /// </summary>
+        private void RepairCompletedPrefab(Entity building, Entity hostPrefab,
+            GrowableLifecycleCommand command)
+        {
+            if ((command.Flags & GrowableLifecycleCommand.FlagUnderConstruction) != 0 ||
+                !IsGrowablePrefab(hostPrefab) ||
+                !EntityManager.HasComponent<PrefabRef>(building)) return;
+
+            Entity currentPrefab = EntityManager.GetComponentData<PrefabRef>(building).m_Prefab;
+            bool localConstructing = EntityManager.HasComponent<UnderConstruction>(building);
+            if (currentPrefab == hostPrefab && !localConstructing) return;
+
+            UnderConstruction completion = localConstructing
+                ? EntityManager.GetComponentData<UnderConstruction>(building)
+                : default(UnderConstruction);
+            if (completion.m_NewPrefab == hostPrefab && completion.m_Progress >= 100) return;
+
+            completion.m_NewPrefab = hostPrefab;
+            completion.m_Progress = byte.MaxValue;
+            if (completion.m_Speed == 0) completion.m_Speed = 1;
+            if (localConstructing) EntityManager.SetComponentData(building, completion);
+            else EntityManager.AddComponentData(building, completion);
+            _repairedPrefabs++;
+        }
+
         private void SetMarker<T>(Entity entity, bool wanted) where T : unmanaged, IComponentData
         {
             bool has = EntityManager.HasComponent<T>(entity);
             if (has == wanted) return;
             if (wanted) EntityManager.AddComponent<T>(entity);
             else EntityManager.RemoveComponent<T>(entity);
-        }
-
-        /// <summary>
-        /// The building standing at an anchor. Positions are computed from the same road and block
-        /// geometry on both machines, so the tolerance only absorbs float noise and a terrain
-        /// height that was sampled independently.
-        /// </summary>
-        private Entity FindGrowableAt(float3 position, Entity prefab, long now)
-        {
-            var candidates = new NativeList<Entity>(16, Allocator.Temp);
-            try
-            {
-                _objectSearch.CollectNear(position, AnchorSearchRadius, candidates);
-
-                Entity best = Entity.Null;
-                float bestDistance = AnchorMatchDistance * AnchorMatchDistance;
-                bool bestIsExact = false;
-
-                for (int i = 0; i < candidates.Length; i++)
-                {
-                    Entity candidate = candidates[i];
-                    if (!IsLiveGrowable(candidate, now)) continue;
-
-                    float distance = math.distancesq(
-                        EntityManager.GetComponentData<global::Game.Objects.Transform>(candidate)
-                            .m_Position.xz, position.xz);
-                    if (distance > AnchorMatchDistance * AnchorMatchDistance) continue;
-
-                    // Prefer the named prefab, but stay tolerant of a different one: a building
-                    // that levelled up no longer carries the prefab a removal names, and that
-                    // removal still has to reach it.
-                    bool exact = prefab != Entity.Null &&
-                                 EntityManager.GetComponentData<PrefabRef>(candidate).m_Prefab == prefab;
-                    if (bestIsExact && !exact) continue;
-                    if (exact && !bestIsExact)
-                    {
-                        best = candidate;
-                        bestDistance = distance;
-                        bestIsExact = true;
-                        continue;
-                    }
-                    if (best != Entity.Null && distance > bestDistance) continue;
-                    best = candidate;
-                    bestDistance = distance;
-                }
-                return best;
-            }
-            finally
-            {
-                candidates.Dispose();
-            }
-        }
-
-        /// <summary>
-        /// Everything already standing on the lot this spawn wants. Compares the two lot rectangles
-        /// rather than the two pivots: buildings of different sizes conflict long before their
-        /// centres coincide, and two neighbours on one street share a centre-to-centre distance
-        /// that says nothing about whether they fit.
-        /// </summary>
-        private void CollectOverlapping(Entity prefab, float3 position, quaternion rotation,
-            NativeList<Entity> blockers)
-        {
-            blockers.Clear();
-            if (!EntityManager.HasComponent<BuildingData>(prefab)) return;
-            float2 wantedExtent = LotExtent(EntityManager.GetComponentData<BuildingData>(prefab).m_LotSize);
-            float reach = math.length(wantedExtent) + ZoneCellSize;
-
-            var candidates = new NativeList<Entity>(32, Allocator.Temp);
-            try
-            {
-                _objectSearch.CollectNear(position, reach, candidates);
-                for (int i = 0; i < candidates.Length; i++)
-                {
-                    Entity candidate = candidates[i];
-                    if (!EntityManager.Exists(candidate) ||
-                        !EntityManager.HasComponent<Building>(candidate) ||
-                        !EntityManager.HasComponent<global::Game.Objects.Transform>(candidate) ||
-                        !EntityManager.HasComponent<PrefabRef>(candidate) ||
-                        EntityManager.HasComponent<Temp>(candidate) ||
-                        EntityManager.HasComponent<Deleted>(candidate) ||
-                        EntityManager.HasComponent<Owner>(candidate)) continue;
-
-                    Entity candidatePrefab = EntityManager.GetComponentData<PrefabRef>(candidate).m_Prefab;
-                    if (!EntityManager.HasComponent<BuildingData>(candidatePrefab)) continue;
-
-                    global::Game.Objects.Transform transform =
-                        EntityManager.GetComponentData<global::Game.Objects.Transform>(candidate);
-                    float2 extent = LotExtent(
-                        EntityManager.GetComponentData<BuildingData>(candidatePrefab).m_LotSize);
-
-                    if (RectanglesOverlap(position, rotation, wantedExtent,
-                            transform.m_Position, transform.m_Rotation, extent))
-                        blockers.Add(candidate);
-                }
-            }
-            finally
-            {
-                candidates.Dispose();
-            }
-        }
-
-        /// <summary>
-        /// True when the host's building is the one already standing here. Same prefab on the same
-        /// lot is the redelivery case; a different prefab at the same anchor is a real level
-        /// difference and has to be resolved, not ignored.
-        /// </summary>
-        private bool AlreadySatisfied(NativeList<Entity> blockers, Entity prefab, float3 position,
-            long now)
-        {
-            for (int i = 0; i < blockers.Length; i++)
-            {
-                Entity blocker = blockers[i];
-                if (!IsAutonomousGrowable(blocker, now)) continue;
-                if (EntityManager.GetComponentData<PrefabRef>(blocker).m_Prefab != prefab) continue;
-                float distance = math.distancesq(
-                    EntityManager.GetComponentData<global::Game.Objects.Transform>(blocker)
-                        .m_Position.xz, position.xz);
-                if (distance <= AnchorMatchDistance * AnchorMatchDistance) return true;
-            }
-            return false;
-        }
-
-        /// <summary>A building a player placed, as opposed to one a simulation grew.</summary>
-        private Entity FirstPlayerPlaced(NativeList<Entity> blockers, long now)
-        {
-            for (int i = 0; i < blockers.Length; i++)
-            {
-                if (!IsAutonomousGrowable(blockers[i], now)) return blockers[i];
-            }
-            return Entity.Null;
-        }
-
-        private static float2 LotExtent(int2 lotSize) =>
-            new float2(lotSize.x, lotSize.y) * (ZoneCellSize * 0.5f) - OverlapTolerance;
-
-        /// <summary>
-        /// Separating-axis test between two rotated lot rectangles. Four axes suffice: the two
-        /// rectangles' own edge normals, which for rectangles are their local x and z.
-        /// </summary>
-        private static bool RectanglesOverlap(float3 centreA, quaternion rotationA, float2 extentA,
-            float3 centreB, quaternion rotationB, float2 extentB)
-        {
-            if (extentA.x <= 0f || extentA.y <= 0f || extentB.x <= 0f || extentB.y <= 0f) return false;
-
-            float2 rightA = math.normalizesafe(math.rotate(rotationA, new float3(1f, 0f, 0f)).xz,
-                new float2(1f, 0f));
-            float2 forwardA = math.normalizesafe(math.rotate(rotationA, new float3(0f, 0f, 1f)).xz,
-                new float2(0f, 1f));
-            float2 rightB = math.normalizesafe(math.rotate(rotationB, new float3(1f, 0f, 0f)).xz,
-                new float2(1f, 0f));
-            float2 forwardB = math.normalizesafe(math.rotate(rotationB, new float3(0f, 0f, 1f)).xz,
-                new float2(0f, 1f));
-
-            float2 delta = centreB.xz - centreA.xz;
-            return !(SeparatedOn(rightA, delta, rightA, forwardA, extentA, rightB, forwardB, extentB) ||
-                     SeparatedOn(forwardA, delta, rightA, forwardA, extentA, rightB, forwardB, extentB) ||
-                     SeparatedOn(rightB, delta, rightA, forwardA, extentA, rightB, forwardB, extentB) ||
-                     SeparatedOn(forwardB, delta, rightA, forwardA, extentA, rightB, forwardB, extentB));
-        }
-
-        private static bool SeparatedOn(float2 axis, float2 delta,
-            float2 rightA, float2 forwardA, float2 extentA,
-            float2 rightB, float2 forwardB, float2 extentB)
-        {
-            float reachA = math.abs(math.dot(rightA, axis)) * extentA.x +
-                           math.abs(math.dot(forwardA, axis)) * extentA.y;
-            float reachB = math.abs(math.dot(rightB, axis)) * extentB.x +
-                           math.abs(math.dot(forwardB, axis)) * extentB.y;
-            return math.abs(math.dot(delta, axis)) > reachA + reachB;
-        }
-
-        private bool IsLiveGrowable(Entity entity, long now) =>
-            EntityManager.Exists(entity) &&
-            EntityManager.HasComponent<Building>(entity) &&
-            EntityManager.HasComponent<PrefabRef>(entity) &&
-            EntityManager.HasComponent<global::Game.Objects.Transform>(entity) &&
-            !EntityManager.HasComponent<Temp>(entity) &&
-            !EntityManager.HasComponent<Deleted>(entity) &&
-            !EntityManager.HasComponent<Owner>(entity) &&
-            IsAutonomousGrowable(entity, now);
-
-        private string DescribeBlocker(Entity blocker, long now)
-        {
-            Entity prefab = EntityManager.GetComponentData<PrefabRef>(blocker).m_Prefab;
-            string name = PrefabIndexSafeName(prefab);
-            bool grown = IsAutonomousGrowable(blocker, now);
-            return (grown ? "a grown '" : "a placed '") + (name ?? "?") + "'";
-        }
-
-        private int SeedFor(GrowableLifecycleCommand command)
-        {
-            // The built entity keeps the low 16 bits as its PseudoRandomSeed, which is the variant.
-            // Zero is the one value the game's own random rejects, so it is nudged rather than
-            // passed through - a building with no seed at all would fail to pick a mesh.
-            int seed = command.RandomSeed;
-            return seed == 0 ? 1 : seed;
-        }
-
-        /// <summary>
-        /// Remembers that a building was just asked for at this spot. The definition does not
-        /// become an entity until a later phase, so the only way to recognise our own building when
-        /// it appears is the position we asked for it at.
-        /// </summary>
-        private void NoteSelfRealized(Entity prefab, float3 position,
-            GrowableLifecycleCommand command, long now)
-        {
-            if (_selfRealized.Count >= MaxSelfRealized) _selfRealized.RemoveAt(0);
-            _selfRealized.Add(new PendingRealizedSpawn
-            {
-                Prefab = prefab,
-                Position = position,
-                Expiry = now + SelfRealizedWindowMs,
-                Command = command,
-            });
-        }
-
-        private bool TryTakeSelfRealized(Entity prefab, float3 position, long now,
-            out GrowableLifecycleCommand command)
-        {
-            command = null;
-            for (int i = _selfRealized.Count - 1; i >= 0; i--)
-            {
-                PendingRealizedSpawn entry = _selfRealized[i];
-                if (entry.Expiry <= now) { _selfRealized.RemoveAt(i); continue; }
-                if (entry.Prefab != prefab ||
-                    math.distancesq(entry.Position.xz, position.xz) >
-                    AnchorMatchDistance * AnchorMatchDistance) continue;
-                command = entry.Command;
-                _selfRealized.RemoveAt(i);
-                return true;
-            }
-            return false;
-        }
-
-        /// <summary>
-        /// Removes zoned buildings this client grew by itself. Its spawner is held for as long as
-        /// the session is synchronized, so in normal running this finds nothing - but authority is
-        /// handed back whenever sync drops (a resync, a world reload), and anything grown in that
-        /// window would otherwise stand forever on a lot the host has its own plans for.
-        ///
-        /// Catching them as they appear is what keeps the invariant simple: on a client, every
-        /// zoned building came from the host.
-        /// </summary>
-        private void RejectLocallyGrownBuildings(long now)
-        {
-            if (_createdBuildings.IsEmptyIgnoreFilter) return;
-
-            NativeArray<Entity> entities = _createdBuildings.ToEntityArray(Allocator.Temp);
-            try
-            {
-                for (int i = 0; i < entities.Length; i++)
-                {
-                    Entity entity = entities[i];
-                    Entity prefab = EntityManager.GetComponentData<PrefabRef>(entity).m_Prefab;
-                    if (!IsAutonomousGrowable(entity, now)) continue;
-
-                    float3 position = EntityManager
-                        .GetComponentData<global::Game.Objects.Transform>(entity).m_Position;
-                    GrowableLifecycleCommand command;
-                    if (TryTakeSelfRealized(prefab, position, now, out command))
-                    {
-                        // The definition is now a real native building. This is the first point at
-                        // which its construction clock and state payload can be applied safely.
-                        ApplyConditionAndState(entity, command);
-                        EntityManager.AddComponent<Updated>(entity);
-                        if (_realizationValidations.Count >= MaxRealizationValidations)
-                        {
-                            SyncInbox.RequestResync("growable realization validation overflow");
-                        }
-                        else _realizationValidations.Add(new RealizationValidation
-                        {
-                            Building = entity,
-                            Prefab = prefab,
-                            Position = position,
-                            Expiry = now + RealizationValidationWindowMs,
-                        });
-                        continue;
-                    }
-
-                    EntityManager.AddComponent<Deleted>(entity);
-                    _rejectedLocal++;
-                    Mod.log.Warn("[MP] GrowableSync: this client grew '" +
-                                 PrefabIndexSafeName(prefab) + "' at " + Format(position) +
-                                 " on its own; removed (the host decides zoned buildings).");
-                    Diagnostics.FlightRecorder.Note("locally grown building rejected");
-                }
-            }
-            finally
-            {
-                entities.Dispose();
-            }
-        }
-
-        /// <summary>
-        /// A definition being accepted is not yet proof that the generated building joined the
-        /// road/service graph. Re-run native Updated initialization until the root has a road,
-        /// reciprocal road buffer, and the standard utility consumers. Persistent failure is
-        /// structural divergence and escalates to the existing world-repair path.
-        /// </summary>
-        private void ValidateRealizedBuildings(long now)
-        {
-            for (int i = _realizationValidations.Count - 1; i >= 0; i--)
-            {
-                RealizationValidation pending = _realizationValidations[i];
-                Entity building = pending.Building;
-                if (building == Entity.Null || !EntityManager.Exists(building) ||
-                    EntityManager.HasComponent<Deleted>(building))
-                {
-                    _realizationValidations.RemoveAt(i);
-                    continue;
-                }
-
-                bool connected = HasNativeRoadConnection(building, pending.Prefab);
-                bool utilities = HasExpectedUtilityConsumers(building, pending.Prefab);
-                if (connected && utilities)
-                {
-                    _realizationValidations.RemoveAt(i);
-                    continue;
-                }
-
-                if (pending.Expiry <= now)
-                {
-                    _realizationValidations.RemoveAt(i);
-                    Mod.log.Warn("[MP] GrowableSync: generated building '" +
-                                 PrefabIndexSafeName(pending.Prefab) + "' at " +
-                                 Format(pending.Position) + " did not join its road/service graph; " +
-                                 "requesting world repair.");
-                    Diagnostics.FlightRecorder.Note("growable realization invalid/resync");
-                    SyncInbox.RequestResync("growable building failed road/service realization");
-                    continue;
-                }
-
-                if (!EntityManager.HasComponent<Updated>(building))
-                    EntityManager.AddComponent<Updated>(building);
-                Building data = EntityManager.GetComponentData<Building>(building);
-                if (data.m_RoadEdge != Entity.Null && EntityManager.Exists(data.m_RoadEdge) &&
-                    !EntityManager.HasComponent<Updated>(data.m_RoadEdge))
-                    EntityManager.AddComponent<Updated>(data.m_RoadEdge);
-            }
-        }
-
-        private bool HasNativeRoadConnection(Entity building, Entity prefab)
-        {
-            if (!EntityManager.HasComponent<BuildingData>(prefab)) return true;
-            BuildingData data = EntityManager.GetComponentData<BuildingData>(prefab);
-            if ((data.m_Flags & global::Game.Prefabs.BuildingFlags.RequireRoad) == 0) return true;
-
-            Building live = EntityManager.GetComponentData<Building>(building);
-            Entity road = live.m_RoadEdge;
-            if (road == Entity.Null || !EntityManager.Exists(road) ||
-                !EntityManager.HasBuffer<ConnectedBuilding>(road)) return false;
-            DynamicBuffer<ConnectedBuilding> connected =
-                EntityManager.GetBuffer<ConnectedBuilding>(road, true);
-            for (int i = 0; i < connected.Length; i++)
-                if (connected[i].m_Building == building) return true;
-            return false;
-        }
-
-        private bool HasExpectedUtilityConsumers(Entity building, Entity prefab)
-        {
-            if (EntityManager.HasComponent<UnderConstruction>(building) ||
-                EntityManager.HasComponent<Abandoned>(building) ||
-                EntityManager.HasComponent<Destroyed>(building) ||
-                !EntityManager.HasComponent<ConsumptionData>(prefab)) return true;
-            return EntityManager.HasComponent<ElectricityConsumer>(building) &&
-                   EntityManager.HasComponent<WaterConsumer>(building);
-        }
-
-        /// <summary>
-        /// Drain rather than apply: applying would duplicate the building the host already has.
-        ///
-        /// The host's own send loops back through the local observers, so nearly everything drained
-        /// here is the host's own echo - routine, and the same thing every other sync system skips
-        /// on <c>OriginPlayerId</c>. Only a command another player authored is worth a warning; it
-        /// means a peer is authoring zoned buildings it has no authority over.
-        /// </summary>
-        private void SyncInboxDrop(int localPlayerId)
-        {
-            int foreign = 0;
-            SimulationCommandMessage message;
-            while (_incoming.TryDequeue(out message))
-                if (message.OriginPlayerId != localPlayerId) foreign++;
-            if (foreign == 0) return;
-            Mod.log.Warn("[MP] GrowableSync: host discarded " + foreign +
-                         " zoned-building command(s) from another player; only a host may author them.");
         }
     }
 }

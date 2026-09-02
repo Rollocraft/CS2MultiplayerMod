@@ -3,6 +3,7 @@ using System.Threading.Tasks;
 using Colossal.Serialization.Entities;
 using Game;
 using Game.SceneFlow;
+using CS2MultiplayerMod.Core.Diagnostics;
 using CS2MultiplayerMod.Core.Session;
 using CS2MultiplayerMod.Game.Diagnostics;
 
@@ -179,8 +180,8 @@ namespace CS2MultiplayerMod.Game
             _clientMainMenuAttempts = 0;
             _clientMainMenuNextAttemptMs = NowMs;
             _clientMainMenuFailed = false;
-            _log.Info("[MP] Client session ended (" + reason + "); returning to the main menu.");
-            FlightRecorder.Note("client world exit queued: " + reason);
+            _log.Event(LogTopic.Session, "Client session ended (" + reason +
+                "); returning to the main menu.");
         }
 
         /// <summary>
@@ -209,8 +210,8 @@ namespace CS2MultiplayerMod.Game
             _clientMainMenuAttempts = 0;
             _clientMainMenuNextAttemptMs = NowMs;
             _clientMainMenuFailed = false;
-            _log.Info("[MP] Retrying the return from the disconnected host world to the main menu.");
-            FlightRecorder.Note("client world exit retry requested");
+            _log.Detail(LogTopic.Session,
+                "Retrying the return from the disconnected host world to the main menu.");
         }
 
         private void ClearClientExitNotice()
@@ -311,16 +312,17 @@ namespace CS2MultiplayerMod.Game
                 // beneath an open world. The UI stays blocking and offers an explicit retry.
                 _clientMainMenuPending = false;
                 _clientMainMenuFailed = true;
-                _log.Error("[MP] Could not close the disconnected client's host world after " +
-                           ClientMainMenuMaxAttempts + " attempts: " + failure);
-                FlightRecorder.Note("client world exit failed: " + failure);
+                _log.Error(LogTopic.Session,
+                    "Could not close the disconnected client's host world after " +
+                    ClientMainMenuMaxAttempts + " attempts: " + failure);
                 return;
             }
 
             _clientMainMenuNextAttemptMs = NowMs + ClientMainMenuRetryDelayMs;
-            _log.Warn("[MP] Returning the disconnected client to the main menu failed (attempt " +
-                      _clientMainMenuAttempts + "/" + ClientMainMenuMaxAttempts + "): " +
-                      failure + ". Retrying.");
+            _log.Warn(LogTopic.Session,
+                "Returning the disconnected client to the main menu failed (attempt " +
+                _clientMainMenuAttempts + "/" + ClientMainMenuMaxAttempts + "): " + failure +
+                ". Retrying.");
         }
 
         private void ForgetClientHostWorld()
@@ -344,9 +346,8 @@ namespace CS2MultiplayerMod.Game
             try
             {
                 bool host = _session.Role == SessionRole.Host;
-                _log.Info("[MP] " + logReason + " - " +
-                          (host ? "closing the session for every player." : "disconnecting from the host."));
-                FlightRecorder.Note("session end: " + logReason + " role=" + _session.Role);
+                _log.Event(LogTopic.Session, logReason + " - " +
+                    (host ? "closing the session for every player." : "disconnecting from the host."));
 
                 // The world is being torn down or replaced: restoring the simulation speed
                 // into it would write to a world that is on its way out.
@@ -359,8 +360,8 @@ namespace CS2MultiplayerMod.Game
             }
             catch (Exception ex)
             {
-                _log.Error("[MP] Failed to close the session while leaving the game: " + ex.Message);
-                FlightRecorder.NoteException("session-leave", ex);
+                _log.Error(LogTopic.Session, "Failed to close the session while leaving the game.",
+                    ex);
             }
             finally
             {

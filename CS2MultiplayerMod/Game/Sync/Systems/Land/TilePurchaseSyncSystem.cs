@@ -7,9 +7,10 @@ using Game.Tools;
 using Unity.Collections;
 using Unity.Entities;
 using Unity.Mathematics;
+using CS2MultiplayerMod.Core.Diagnostics;
 using CS2MultiplayerMod.Core.Protocol.Messages;
 using CS2MultiplayerMod.Core.Session;
-
+using CS2MultiplayerMod.Game.Diagnostics;
 using CS2MultiplayerMod.Game.Sync.Infrastructure;
 using CS2MultiplayerMod.Game.Sync.Commands;
 namespace CS2MultiplayerMod.Game.Sync.Systems
@@ -36,73 +37,50 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         {
             base.OnCreate();
 
-            Mod.log.Info(nameof(TilePurchaseSyncSystem) + " ready.");
             _purchase = World.GetOrCreateSystemManaged<MapTilePurchaseSystem>();
 
             // Owned-this-frame: Updated map tiles that (no longer) carry Native.
             _flippedTiles = GetEntityQuery(new EntityQueryDesc
             {
-                All = new[]
-                {
-                    ComponentType.ReadOnly<MapTile>(),
-                    ComponentType.ReadOnly<Area>(),
-                    ComponentType.ReadOnly<Node>(),
-                    ComponentType.ReadOnly<Updated>(),
-                },
-                None = new[]
-                {
-                    ComponentType.ReadOnly<Native>(),
-                    ComponentType.ReadOnly<Temp>(),
-                    ComponentType.ReadOnly<Deleted>(),
-                },
+                All = SyncQuery.ReadOnly<MapTile, Area, Node, Updated>(),
+                None = SyncQuery.ReadOnly<Native, Temp, Deleted>(),
             });
 
             // Still-purchasable tiles — the candidate pool for realizing a remote purchase.
             _nativeTiles = GetEntityQuery(new EntityQueryDesc
             {
-                All = new[]
-                {
-                    ComponentType.ReadOnly<MapTile>(),
-                    ComponentType.ReadOnly<Area>(),
-                    ComponentType.ReadOnly<Node>(),
-                    ComponentType.ReadOnly<Native>(),
-                },
-                None = new[]
-                {
-                    ComponentType.ReadOnly<Temp>(),
-                    ComponentType.ReadOnly<Deleted>(),
-                },
+                All = SyncQuery.ReadOnly<MapTile, Area, Node, Native>(),
+                None = SyncQuery.ReadOnly<Temp, Deleted>(),
             });
 
-            if (Mod.Service != null)
-            {
-                _observer = new CommandObserver(_incoming, TilePurchaseCommand.Id);
-                Mod.Service.Session.AddObserver(_observer);
-            }
+            _observer = SyncObserverBinding.Bind(
+                () => new CommandObserver(_incoming, TilePurchaseCommand.Id));
         }
 
         protected override void OnDestroy()
         {
-            if (_observer != null && Mod.Service != null)
-                Mod.Service.Session.RemoveObserver(_observer);
+            SyncObserverBinding.Unbind(_observer);
             base.OnDestroy();
         }
 
         protected override void OnUpdate()
         {
-            MultiplayerService service = Mod.Service;
-            if (service == null) return;
+            using (Diagnostics.SyncProfiler.Measure("TilePurchase"))
+            {
+                MultiplayerService service = Mod.Service;
+                if (service == null) return;
 
-            MultiplayerSession session = service.Session;
-            if (!service.GameplaySyncReady) return;
+                MultiplayerSession session = service.Session;
+                if (!service.GameplaySyncReady) return;
 
-            // The exact price disappears with the selection the moment the purchase
-            // lands, so remember the last quoted cost while the player is selecting.
-            if (_purchase.selecting && _purchase.cost > 0) _lastSelectionCost = _purchase.cost;
+                // The exact price disappears with the selection the moment the purchase
+                // lands, so remember the last quoted cost while the player is selecting.
+                if (_purchase.selecting && _purchase.cost > 0) _lastSelectionCost = _purchase.cost;
 
-            long now = service.NowMs;
-            _guard.Prune(now);
-            CapturePurchases(session, now);
+                long now = service.NowMs;
+                _guard.Prune(now);
+                CapturePurchases(session, now);
+            }
         }
 
         /// <summary>Called by <see cref="SyncRealizeSystem"/> during ToolUpdate (see there for why).</summary>
@@ -160,8 +138,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 _lastSelectionCost = 0;
 
                 session.SendCommand(0, TilePurchaseCommand.Id, command.Encode());
-                Mod.Verbose("[MP] TilePurchaseSync captured " + count + " tile(s), price " +
-                             command.TotalCost + ".");
+                SyncLog.Detail(LogTopic.Land, "TilePurchaseSync captured " + count +
+                    " tile(s), price " + command.TotalCost + ".");
             }
             finally
             {
@@ -178,7 +156,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
                 TilePurchaseCommand command;
                 try { command = TilePurchaseCommand.Decode(message.Body); }
-                catch (System.Exception ex) { Mod.log.Warn("[MP] TilePurchaseSync: dropping malformed command: " + ex.Message); continue; }
+                catch (System.Exception ex) { SyncLog.Warn(LogTopic.Land, "TilePurchaseSync: dropping malformed command: " + ex.Message); continue; }
                 if (command.CenterX == null || command.CenterX.Length == 0) continue;
 
                 int unlocked = 0;
@@ -216,8 +194,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                         (long)command.TotalCost * unlocked / command.CenterX.Length,
                         "map tiles x" + unlocked + " (player " + message.OriginPlayerId + ")");
 
-                Mod.Verbose("[MP] TilePurchaseSync realize: unlocked " + unlocked + "/" +
-                             command.CenterX.Length + " tile(s) from player " + message.OriginPlayerId + ".");
+                SyncLog.Detail(LogTopic.Land, "TilePurchaseSync realize: unlocked " + unlocked + "/" +
+                    command.CenterX.Length + " tile(s) from player " + message.OriginPlayerId +
+                    ".");
             }
         }
 

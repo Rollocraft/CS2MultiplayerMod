@@ -10,9 +10,10 @@ using Game.Routes;
 using Game.Tools;
 using Unity.Entities;
 using Unity.Mathematics;
+using CS2MultiplayerMod.Core.Diagnostics;
 using CS2MultiplayerMod.Core.Protocol.Messages;
 using CS2MultiplayerMod.Core.Session;
-
+using CS2MultiplayerMod.Game.Diagnostics;
 using CS2MultiplayerMod.Game.Sync.Infrastructure;
 using CS2MultiplayerMod.Game.Sync.Commands;
 namespace CS2MultiplayerMod.Game.Sync.Systems
@@ -64,49 +65,26 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         {
             base.OnCreate();
 
-            Mod.log.Info(nameof(PolicySyncSystem) + " ready.");
             _prefabSystem = World.GetOrCreateSystemManaged<PrefabSystem>();
             _prefabIndex = new PrefabIndex(_prefabSystem, GetEntityQuery(ComponentType.ReadOnly<PrefabData>()));
             _policiesUI = World.GetOrCreateSystemManaged<global::Game.UI.InGame.PoliciesUISystem>();
 
             _districts = GetEntityQuery(new EntityQueryDesc
             {
-                All = new[]
-                {
-                    ComponentType.ReadOnly<District>(),
-                    ComponentType.ReadOnly<Node>(),
-                    ComponentType.ReadOnly<PrefabRef>(),
-                    ComponentType.ReadOnly<Policy>(),
-                },
-                None = new[] { ComponentType.ReadOnly<Temp>(), ComponentType.ReadOnly<Deleted>() },
+                All = SyncQuery.ReadOnly<District, Node, PrefabRef, Policy>(),
+                None = SyncQuery.ReadOnly<Temp, Deleted>(),
             });
 
             _routes = GetEntityQuery(new EntityQueryDesc
             {
-                All = new[]
-                {
-                    ComponentType.ReadOnly<Route>(),
-                    ComponentType.ReadOnly<PrefabRef>(),
-                    ComponentType.ReadOnly<Policy>(),
-                },
-                None = new[] { ComponentType.ReadOnly<Temp>(), ComponentType.ReadOnly<Deleted>() },
+                All = SyncQuery.ReadOnly<Route, PrefabRef, Policy>(),
+                None = SyncQuery.ReadOnly<Temp, Deleted>(),
             });
 
             _buildings = GetEntityQuery(new EntityQueryDesc
             {
-                All = new[]
-                {
-                    ComponentType.ReadOnly<Building>(),
-                    ComponentType.ReadOnly<PrefabRef>(),
-                    ComponentType.ReadOnly<global::Game.Objects.Transform>(),
-                    ComponentType.ReadOnly<Policy>(),
-                },
-                None = new[]
-                {
-                    ComponentType.ReadOnly<Temp>(),
-                    ComponentType.ReadOnly<Deleted>(),
-                    ComponentType.ReadOnly<Owner>(),
-                },
+                All = SyncQuery.ReadOnly<Building, PrefabRef, global::Game.Objects.Transform, Policy>(),
+                None = SyncQuery.ReadOnly<Temp, Deleted, Owner>(),
             });
 
             // Disabling a service upgrade is not a component edit: the game routes it through the
@@ -122,59 +100,45 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             // diff had nothing to compare against and the toggle was never sent.
             _ownedUpgrades = GetEntityQuery(new EntityQueryDesc
             {
-                All = new[]
-                {
-                    ComponentType.ReadOnly<PrefabRef>(),
-                    ComponentType.ReadOnly<global::Game.Objects.Transform>(),
-                    ComponentType.ReadOnly<Owner>(),
-                },
-                Any = new[]
-                {
-                    ComponentType.ReadOnly<global::Game.Buildings.ServiceUpgrade>(),
-                    ComponentType.ReadOnly<Extension>(),
-                },
-                None = new[]
-                {
-                    ComponentType.ReadOnly<Temp>(),
-                    ComponentType.ReadOnly<Deleted>(),
-                },
+                All = SyncQuery.ReadOnly<PrefabRef, global::Game.Objects.Transform, Owner>(),
+                Any = SyncQuery.ReadOnly<global::Game.Buildings.ServiceUpgrade, Extension>(),
+                None = SyncQuery.ReadOnly<Temp, Deleted>(),
             });
 
-            if (Mod.Service != null)
-            {
-                _observer = new CommandObserver(_incoming, EntityPolicyCommand.Id);
-                Mod.Service.Session.AddObserver(_observer);
-            }
+            _observer = SyncObserverBinding.Bind(
+                () => new CommandObserver(_incoming, EntityPolicyCommand.Id));
         }
 
         protected override void OnDestroy()
         {
-            if (_observer != null && Mod.Service != null)
-                Mod.Service.Session.RemoveObserver(_observer);
+            SyncObserverBinding.Unbind(_observer);
             base.OnDestroy();
         }
 
         protected override void OnUpdate()
         {
-            MultiplayerService service = Mod.Service;
-            if (service == null) return;
-
-            MultiplayerSession session = service.Session;
-            if (!service.GameplaySyncReady)
+            using (Diagnostics.SyncProfiler.Measure("PolicySync"))
             {
-                if (_known.Count > 0) { _known.Clear(); _primed = false; }
-                _targetRetry.Clear();
-                SyncInbox.Clear(_incoming);
-                return;
+                MultiplayerService service = Mod.Service;
+                if (service == null) return;
+
+                MultiplayerSession session = service.Session;
+                if (!service.GameplaySyncReady)
+                {
+                    if (_known.Count > 0) { _known.Clear(); _primed = false; }
+                    _targetRetry.Clear();
+                    SyncInbox.Clear(_incoming);
+                    return;
+                }
+
+                long now = service.NowMs;
+                _guard.Prune(now);
+                ApplyIncoming(session, now);
+
+                if (now - _lastScanMs < ScanIntervalMs) return;
+                _lastScanMs = now;
+                Scan(session, now);
             }
-
-            long now = service.NowMs;
-            _guard.Prune(now);
-            ApplyIncoming(session, now);
-
-            if (now - _lastScanMs < ScanIntervalMs) return;
-            _lastScanMs = now;
-            Scan(session, now);
         }
 
         // ---- Detect ------------------------------------------------------------

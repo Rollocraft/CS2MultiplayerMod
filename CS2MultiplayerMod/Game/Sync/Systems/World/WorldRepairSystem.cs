@@ -7,6 +7,9 @@ using Game.SceneFlow;
 using Game.Tools;
 using Unity.Collections;
 using Unity.Entities;
+using CS2MultiplayerMod.Core.Diagnostics;
+using CS2MultiplayerMod.Game.Diagnostics;
+using CS2MultiplayerMod.Game.Sync.Infrastructure;
 
 namespace CS2MultiplayerMod.Game.Sync.Systems
 {
@@ -35,29 +38,16 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         protected override void OnCreate()
         {
             base.OnCreate();
-            Mod.log.Info(nameof(WorldRepairSystem) + " ready.");
             _prefabSystem = World.GetOrCreateSystemManaged<PrefabSystem>();
 
             // Top-level mover instances. Simulation-owned vehicles normally carry Owner;
             // pedestrians and pets are retained or removed by their explicit linkage below.
             _moverCandidates = GetEntityQuery(new EntityQueryDesc
             {
-                All = new[]
-                {
-                    ComponentType.ReadOnly<PrefabRef>(),
-                    ComponentType.ReadOnly<global::Game.Objects.Transform>(),
-                },
-                Any = new[]
-                {
-                    ComponentType.ReadOnly<global::Game.Vehicles.Vehicle>(),
-                    ComponentType.ReadOnly<global::Game.Creatures.Creature>(),
-                },
-                None = new[]
-                {
-                    ComponentType.ReadOnly<Temp>(),
-                    ComponentType.ReadOnly<Deleted>(),
-                    ComponentType.ReadOnly<Owner>(),
-                },
+                All = SyncQuery.ReadOnly<PrefabRef, global::Game.Objects.Transform>(),
+                Any = SyncQuery.ReadOnly<global::Game.Vehicles.Vehicle,
+                    global::Game.Creatures.Creature>(),
+                None = SyncQuery.ReadOnly<Temp, Deleted, Owner>(),
             });
         }
 
@@ -69,31 +59,34 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
         protected override void OnUpdate()
         {
-            if (!MultiplayerService.ModEnabled)
+            using (Diagnostics.SyncProfiler.Measure("WorldRepair"))
             {
-                CancelSweep();
-                _sawLoading = true;
-                return;
+                if (!MultiplayerService.ModEnabled)
+                {
+                    CancelSweep();
+                    _sawLoading = true;
+                    return;
+                }
+
+                GameManager manager = GameManager.instance;
+                if (manager == null) return;
+
+                if (manager.isGameLoading)
+                {
+                    CancelSweep();
+                    _sawLoading = true;
+                    return;
+                }
+
+                if (_sawLoading)
+                {
+                    _sawLoading = false;
+                    if (!manager.gameMode.IsGame()) return;
+                    BeginSweep();
+                }
+
+                if (_sweeping) SweepStep();
             }
-
-            GameManager manager = GameManager.instance;
-            if (manager == null) return;
-
-            if (manager.isGameLoading)
-            {
-                CancelSweep();
-                _sawLoading = true;
-                return;
-            }
-
-            if (_sawLoading)
-            {
-                _sawLoading = false;
-                if (!manager.gameMode.IsGame()) return;
-                BeginSweep();
-            }
-
-            if (_sweeping) SweepStep();
         }
 
         private void BeginSweep()
@@ -190,8 +183,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             _sweepIndex = 0;
             _sweeping = false;
 
-            Diagnostics.FlightRecorder.Note("world repair scanned=" + scanned +
-                                              " removed=" + _sweepRemoved);
+            SyncLog.Trace(LogTopic.Resync, "world repair scanned=" + scanned + " removed=" +
+                _sweepRemoved);
             if (_sweepRemoved == 0) return;
 
             var detail = new StringBuilder();
@@ -206,9 +199,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     break;
                 }
             }
-            Mod.log.Info("[MP] World repair: removed " + _sweepRemoved +
-                         " stranded mover instance(s) left by an earlier session [" +
-                         detail + "].");
+            SyncLog.Event(LogTopic.Resync, "World repair: removed " + _sweepRemoved +
+                " stranded mover instance(s) left by an earlier session [" + detail + "].");
         }
 
         private void CancelSweep()

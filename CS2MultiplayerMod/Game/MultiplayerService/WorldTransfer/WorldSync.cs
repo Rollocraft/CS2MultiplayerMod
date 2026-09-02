@@ -1,8 +1,10 @@
 using System;
 using System.Collections.Generic;
+using CS2MultiplayerMod.Core.Diagnostics;
 using CS2MultiplayerMod.Core.Networking;
 using CS2MultiplayerMod.Core.Protocol.Messages;
 using CS2MultiplayerMod.Core.Session;
+using CS2MultiplayerMod.Game.Diagnostics;
 using CS2MultiplayerMod.Game.Sync.Infrastructure;
 using CS2MultiplayerMod.Game.Sync.Systems.Net;
 using Game.Simulation;
@@ -36,7 +38,6 @@ namespace CS2MultiplayerMod.Game
 
         /// <summary>True while all gameplay traffic and local tools are quiesced for a snapshot.</summary>
         public bool WorldSyncBarrierActive => _worldSyncBarrierActive;
-        public long ActiveWorldSyncEpoch => _activeWorldSyncEpoch;
 
         /// <summary>
         /// Capture which newly connected players caused this epoch. Periodic/manual
@@ -82,12 +83,13 @@ namespace CS2MultiplayerMod.Game
             _worldSyncBarrierActive = true;
             _hostWorldSyncUiStage = HostWorldSyncUiStage.WaitingForQuiescence;
             SyncInbox.DrainAll();
+            // Held evidence describes the world that is about to be replaced. Keeping it would let
+            // a fault from before the barrier settle a second reload after it.
+            Diagnostics.ResyncArbiter.Reset();
             MaintainWorldSyncBarrier();
             resumeSpeed = _worldSyncResumeSpeed;
-            _log.Info("[MP] World sync epoch " + epoch +
-                      " entered the local quiescence barrier (resume speed " + resumeSpeed + ").");
-            Diagnostics.FlightRecorder.Note("world-sync begin epoch=" + epoch +
-                                              " resumeSpeed=" + resumeSpeed);
+            _log.Detail(LogTopic.WorldTransfer, "World sync epoch " + epoch +
+                " entered the local quiescence barrier (resume speed " + resumeSpeed + ").");
             return true;
         }
 
@@ -96,8 +98,8 @@ namespace CS2MultiplayerMod.Game
             if (!_worldSyncBarrierActive || epoch != _activeWorldSyncEpoch) return;
             _worldSyncResumeSpeed = SanitizeSpeed(resumeSpeed);
             ResetWorldSyncState(restoreSpeed: true);
-            _log.Info("[MP] World sync epoch " + epoch + " completed; gameplay resumed.");
-            Diagnostics.FlightRecorder.Note("world-sync resume epoch=" + epoch);
+            _log.Event(LogTopic.WorldTransfer, "World sync epoch " + epoch +
+                " completed; gameplay resumed.");
         }
 
         internal void AbortHostWorldSync(long epoch, float resumeSpeed)
@@ -105,9 +107,8 @@ namespace CS2MultiplayerMod.Game
             if (!_worldSyncBarrierActive || epoch != _activeWorldSyncEpoch) return;
             _worldSyncResumeSpeed = SanitizeSpeed(resumeSpeed);
             ResetWorldSyncState(restoreSpeed: true);
-            _log.Warn("[MP] World sync epoch " + epoch +
-                      " aborted before a snapshot was installed; previous world resumed.");
-            Diagnostics.FlightRecorder.Note("world-sync abort epoch=" + epoch);
+            _log.Warn(LogTopic.WorldTransfer, "World sync epoch " + epoch +
+                " aborted before a snapshot was installed; previous world resumed.");
         }
 
         private void HandleWorldSyncControl(WorldSyncStage stage, long epoch, float resumeSpeed)
@@ -127,11 +128,10 @@ namespace CS2MultiplayerMod.Game
                     _clientQuiescenceCleanFrames = 0;
                     _clientQuiescedEpoch = 0;
                     SyncInbox.DrainAll();
+                    Diagnostics.ResyncArbiter.Reset();
                     SetPhase(ClientWorldPhase.WaitingForMap);
-                    _log.Info("[MP] World sync epoch " + epoch +
-                              " began; local gameplay is paused while native transactions drain.");
-                    Diagnostics.FlightRecorder.Note(
-                        "world-sync client draining native work epoch=" + epoch);
+                    _log.Detail(LogTopic.WorldTransfer, "World sync epoch " + epoch +
+                        " began; local gameplay is paused while native transactions drain.");
                 }
                 MaintainWorldSyncBarrier();
                 if (_clientQuiescedEpoch == epoch)
@@ -146,20 +146,26 @@ namespace CS2MultiplayerMod.Game
                 _worldSyncResumeSpeed = SanitizeSpeed(resumeSpeed);
                 if (_phase != ClientWorldPhase.WaitingForResume)
                 {
-                    _log.Error("[MP] Host resumed world-sync epoch " + epoch +
-                               " before this client installed its snapshot; requesting a new epoch.");
+                    Diagnostics.SyncLog.Error(LogTopic.WorldTransfer,
+                        "World sync: the host finished epoch " + epoch +
+                        " before this city had installed its snapshot. Asking for the world again.");
                     ResetWorldSyncState(restoreSpeed: false);
                     SetPhase(ClientWorldPhase.WaitingForMap);
-                    SyncInbox.RequestResync("resume arrived before snapshot load completed");
+                    // Deliberately NOT the resync arbiter. Two things would swallow it: the session
+                    // is still inside its epoch at this point and coalesces the request away, and
+                    // the WaitingForMap phase set on the line above makes WorldRecoveryInFlight
+                    // true, which is read as "a reload is already running". Neither is the case -
+                    // nothing is coming - so the client sat in WaitingForMap for the rest of the
+                    // session, waiting for a world nobody had been asked for.
+                    RequestMapAgainNextTick();
                     return;
                 }
 
                 if (_worldInstallGeneration < long.MaxValue) _worldInstallGeneration++;
                 ResetWorldSyncState(restoreSpeed: true);
                 SetPhase(ClientWorldPhase.InSession);
-                _log.Info("[MP] World sync epoch " + epoch +
-                          " resumed after the authoritative snapshot was installed.");
-                Diagnostics.FlightRecorder.Note("world-sync client resumed epoch=" + epoch);
+                _log.Event(LogTopic.WorldTransfer, "World sync epoch " + epoch +
+                    " resumed after the authoritative snapshot was installed.");
                 return;
             }
 
@@ -169,7 +175,7 @@ namespace CS2MultiplayerMod.Game
                 _worldSyncResumeSpeed = SanitizeSpeed(resumeSpeed);
                 ResetWorldSyncState(restoreSpeed: canResumeOldWorld);
                 SetPhase(canResumeOldWorld ? ClientWorldPhase.InSession : ClientWorldPhase.WaitingForMap);
-                _log.Warn("[MP] Host aborted world-sync epoch " + epoch + ".");
+                _log.Warn(LogTopic.WorldTransfer, "Host aborted world-sync epoch " + epoch + ".");
             }
         }
 
@@ -194,7 +200,8 @@ namespace CS2MultiplayerMod.Game
             {
                 // Worlds are replaced between UI frames. A stale World reference is expected for
                 // that one boundary frame; the next MultiplayerSystem supplies the new instance.
-                Mod.Verbose("[MP] Could not enforce world-sync pause on this frame: " + ex.Message);
+                SyncLog.Warn(LogTopic.WorldTransfer,
+                    "Could not enforce world-sync pause on this frame: " + ex.Message);
             }
         }
 
@@ -235,9 +242,8 @@ namespace CS2MultiplayerMod.Game
             _clientQuiescencePending = false;
             _clientQuiescedEpoch = epoch;
             _session.SendWorldSyncStage(epoch, WorldSyncStage.Quiesced);
-            _log.Info("[MP] World sync epoch " + epoch +
-                      ": local native transactions drained; quiescence acknowledged.");
-            Diagnostics.FlightRecorder.Note("world-sync client quiesced epoch=" + epoch);
+            _log.Detail(LogTopic.WorldTransfer, "World sync epoch " + epoch +
+                ": local native transactions drained; quiescence acknowledged.");
         }
 
         private float ReadSimulationSpeed()
@@ -276,7 +282,8 @@ namespace CS2MultiplayerMod.Game
             }
             catch (Exception ex)
             {
-                Mod.Verbose("[MP] Could not restore simulation speed after world sync: " + ex.Message);
+                SyncLog.Warn(LogTopic.WorldTransfer,
+                    "Could not restore simulation speed after world sync: " + ex.Message);
             }
         }
 

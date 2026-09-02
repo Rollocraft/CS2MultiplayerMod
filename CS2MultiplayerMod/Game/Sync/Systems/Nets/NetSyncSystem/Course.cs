@@ -133,12 +133,18 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
             {
                 PlaceableNetData placeable = EntityManager.GetComponentData<PlaceableNetData>(prefab);
                 info.SnapDistance = math.max(placeable.m_SnapDistance, 1f);
+                info.HasElevationRange = true;
+                info.ElevationRangeMin = placeable.m_ElevationRange.min;
+                info.ElevationRangeMax = placeable.m_ElevationRange.max;
             }
             if (EntityManager.HasComponent<NetGeometryData>(prefab))
             {
                 NetGeometryData geometry = EntityManager.GetComponentData<NetGeometryData>(prefab);
                 info.HalfWidth = geometry.m_DefaultWidth * 0.5f;
                 info.ElevationLimit = geometry.m_ElevationLimit;
+                info.MaxSlopeSteepness = geometry.m_MaxSlopeSteepness;
+                info.RequireElevated =
+                    (geometry.m_Flags & global::Game.Net.GeometryFlags.RequireElevated) != 0;
             }
             _netInfoCache[prefab] = info;
             return info;
@@ -185,21 +191,31 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
         }
 
         /// <summary>
-        /// Project a utility endpoint's source-relative elevation onto this machine's surface for
+        /// Project an endpoint's source-relative elevation onto this machine's surface for
         /// connection lookup only. The committed geometry still uses <see cref="EndElevation"/> and
         /// therefore preserves the source height unless an existing node is actually reused.
         /// Trying raw source Y first remains important for already-synchronised geometry; this
-        /// alternate catches a locally-created pipe/cable node whose terrain or water reference
-        /// differs from the sender's by more than the vertical snap tolerance.
+        /// alternate catches a locally-created node whose terrain or water reference differs from
+        /// the sender's by more than the vertical snap tolerance.
+        ///
+        /// <paramref name="anyLayer"/> widens it past pipes and cables to roads and rails. It is
+        /// set only on the last-resort pass, once an operation has already spent a full retry
+        /// window, and it closes a gap the mod's own diagnostics had been reporting for a while:
+        /// the surface under a road endpoint routinely drifts by more than
+        /// <see cref="VerticalSnapTol"/> between two machines (the realize pass logs corrections of
+        /// over three metres), and past that point the endpoint cannot be matched at all - so a
+        /// perfectly ordinary road drawn near drifted ground could only ever end in a world reload.
+        /// Identity stays strict either way: prefab, layer contract, owner and curve direction are
+        /// still required, so only the height reference moves.
         /// </summary>
-        private bool TryProjectUtilityEndpointToLocalSurface(Entity prefab, NetPrefabInfo placedInfo,
-            float3 sourcePoint, float2 sourceElevation,
+        private bool TryProjectEndpointToLocalSurface(Entity prefab, NetPrefabInfo placedInfo,
+            float3 sourcePoint, float2 sourceElevation, bool anyLayer,
             ref TerrainHeightData heightData, ref WaterSurfaceData<SurfaceWater> waterData,
             out float3 projected)
         {
             projected = sourcePoint;
             Layer utilityLayers = placedInfo.RequiredLayers | placedInfo.ConnectLayers;
-            if ((utilityLayers & UtilityConnectLayers) == Layer.None) return false;
+            if (!anyLayer && (utilityLayers & UtilityConnectLayers) == Layer.None) return false;
 
             float surface = SurfaceHeightAt(sourcePoint, sourceElevation.x,
                 NetInfoOf(prefab).ElevationLimit, ref heightData, ref waterData);
@@ -272,8 +288,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
         /// through Temp + ApplyTool so late contacts and splits cannot bypass native commit handling.
         /// </summary>
         private Entity CreateCourse(Entity prefab, Bezier4x3 bez, float length,
-            Entity startSnap, float startT, Entity endSnap, float endT,
-            float2 startElevation, float2 endElevation)
+            Entity startSnap, float startT, int startKind, Entity endSnap, float endT, int endKind,
+            float2 startElevation, float2 endElevation, bool pinProfile)
         {
             // Never bake a dead entity into the course: a snap/split target resolved this frame could
             // have been torn down (a remote bulldoze, the local sim) before the course is consumed.
@@ -282,6 +298,14 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
             // but the entity still lingers) — the second half is the spam build↔bulldoze crash guard.
             if (CourseTargetIsStale(startSnap)) { startSnap = Entity.Null; startT = 0f; }
             if (CourseTargetIsStale(endSnap)) { endSnap = Entity.Null; endT = 0f; }
+
+            // The fallback course has no free-height endpoints to strip; the pin only has to move
+            // the two elevations, which is what collapses the generator's clamp band onto the span.
+            uint startFlags = 0u, endFlags = 0u;
+            if (pinProfile)
+                ApplyProfilePin(prefab,
+                    ref startFlags, bez.a.y, startSnap, startKind, startT, ref startElevation,
+                    ref endFlags, bez.d.y, endSnap, endKind, endT, ref endElevation);
 
             Entity definition = EntityManager.CreateEntity();
             bool completed = false;
@@ -356,6 +380,13 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
             if (CourseTargetIsStale(startSnap)) startSnap = Entity.Null;
             if (CourseTargetIsStale(endSnap)) endSnap = Entity.Null;
 
+            NetEndpointIntent start = command.Start;
+            NetEndpointIntent end = command.End;
+            if (command.PinProfile)
+                ApplyProfilePin(prefab,
+                    ref start.Flags, start.PosY, startSnap, startKind, startT, ref startElevation,
+                    ref end.Flags, end.PosY, endSnap, endKind, endT, ref endElevation);
+
             CreationFlags flags = (CreationFlags)command.CreationFlags;
 
             float2 courseElevation =
@@ -390,9 +421,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                     m_Elevation = courseElevation,
                     m_Length = command.Length,
                     m_FixedIndex = command.FixedIndex,
-                    m_StartPosition = MakeNativeCoursePos(command.Start, startSnap, startT, startKind,
+                    m_StartPosition = MakeNativeCoursePos(start, startSnap, startT, startKind,
                         startElevation),
-                    m_EndPosition = MakeNativeCoursePos(command.End, endSnap, endT, endKind,
+                    m_EndPosition = MakeNativeCoursePos(end, endSnap, endT, endKind,
                         endElevation),
                 });
                 EntityManager.AddComponent<Updated>(definition);

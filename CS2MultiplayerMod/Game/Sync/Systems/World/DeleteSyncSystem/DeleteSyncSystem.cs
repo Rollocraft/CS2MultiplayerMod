@@ -8,9 +8,10 @@ using Game.Prefabs;
 using Game.Tools;
 using Unity.Entities;
 using Unity.Mathematics;
+using CS2MultiplayerMod.Core.Diagnostics;
 using CS2MultiplayerMod.Core.Protocol.Messages;
 using CS2MultiplayerMod.Core.Session;
-
+using CS2MultiplayerMod.Game.Diagnostics;
 using CS2MultiplayerMod.Game.Sync.Infrastructure;
 using CS2MultiplayerMod.Game.Sync.Commands;
 using CS2MultiplayerMod.Game.Sync.Systems.Net;
@@ -26,6 +27,14 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
     public partial class DeleteSyncSystem : GameSystemBase
     {
         public bool DeferNetForTerrain;
+
+        /// <summary>
+        /// Set by <see cref="SyncRealizeSystem"/> while a remote placement is still waiting for the
+        /// road it anchors to. A bulldoze can only ever take that road away, and applying one here
+        /// inverts the order the two edits were made in - which is how a placement came to be
+        /// rejected for a "missing" target this system had removed a moment earlier.
+        /// </summary>
+        public bool DeferNetForPendingPlacement;
         private readonly ConcurrentQueue<SimulationCommandMessage> _incoming =
             new ConcurrentQueue<SimulationCommandMessage>();
         private readonly ReplicationGuard _guard = new ReplicationGuard();
@@ -80,7 +89,6 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         {
             base.OnCreate();
 
-            Mod.log.Info(nameof(DeleteSyncSystem) + " ready.");
             _prefabSystem = World.GetOrCreateSystemManaged<PrefabSystem>();
             _prefabIndex = new PrefabIndex(_prefabSystem, GetEntityQuery(ComponentType.ReadOnly<PrefabData>()));
             // Edge deletes are committed through NetSync's ApplyTool pipeline (see RealizeEdgeDeletes).
@@ -102,20 +110,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             // on where a vehicle is), so they stay off the wire entirely.
             _deletedObjects = GetEntityQuery(new EntityQueryDesc
             {
-                All = new[]
-                {
-                    ComponentType.ReadOnly<Deleted>(),
-                    ComponentType.ReadOnly<PrefabRef>(),
-                    ComponentType.ReadOnly<Transform>(),
-                },
-                None = new[]
-                {
-                    ComponentType.ReadOnly<Temp>(),
-                    ComponentType.ReadOnly<Owner>(),
-                    ComponentType.ReadOnly<Edge>(),
-                    ComponentType.ReadOnly<global::Game.Vehicles.Vehicle>(),
-                    ComponentType.ReadOnly<global::Game.Creatures.Creature>(),
-                },
+                All = SyncQuery.ReadOnly<Deleted, PrefabRef, Transform>(),
+                None = SyncQuery.ReadOnly<Temp, Owner, Edge, global::Game.Vehicles.Vehicle,
+                    global::Game.Creatures.Creature>(),
             });
 
             // Owned service upgrades removed on their own (the building properties panel tags just
@@ -123,60 +120,25 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             // delete's children are not published here.
             _deletedOwnedUpgrades = GetEntityQuery(new EntityQueryDesc
             {
-                All = new[]
-                {
-                    ComponentType.ReadOnly<Deleted>(),
-                    ComponentType.ReadOnly<PrefabRef>(),
-                    ComponentType.ReadOnly<Transform>(),
-                    ComponentType.ReadOnly<Owner>(),
-                },
-                Any = new[]
-                {
-                    ComponentType.ReadOnly<global::Game.Buildings.ServiceUpgrade>(),
-                    ComponentType.ReadOnly<global::Game.Buildings.Extension>(),
-                },
-                None = new[]
-                {
-                    ComponentType.ReadOnly<Temp>(),
-                    ComponentType.ReadOnly<Edge>(),
-                    ComponentType.ReadOnly<global::Game.Vehicles.Vehicle>(),
-                    ComponentType.ReadOnly<global::Game.Creatures.Creature>(),
-                },
+                All = SyncQuery.ReadOnly<Deleted, PrefabRef, Transform, Owner>(),
+                Any = SyncQuery.ReadOnly<global::Game.Buildings.ServiceUpgrade,
+                    global::Game.Buildings.Extension>(),
+                None = SyncQuery.ReadOnly<Temp, Edge, global::Game.Vehicles.Vehicle,
+                    global::Game.Creatures.Creature>(),
             });
 
             _deletedEdges = GetEntityQuery(new EntityQueryDesc
             {
-                All = new[]
-                {
-                    ComponentType.ReadOnly<Deleted>(),
-                    ComponentType.ReadOnly<Edge>(),
-                    ComponentType.ReadOnly<Curve>(),
-                    ComponentType.ReadOnly<PrefabRef>(),
-                },
-                None = new[]
-                {
-                    ComponentType.ReadOnly<Temp>(),
-                    ComponentType.ReadOnly<Owner>(),
-                },
+                All = SyncQuery.ReadOnly<Deleted, Edge, Curve, PrefabRef>(),
+                None = SyncQuery.ReadOnly<Temp, Owner>(),
             });
 
             // Edges freshly Created this frame — used to tell a mid-span SPLIT (the original edge is
             // deleted and its two halves are created on its centreline) from a genuine bulldoze.
             _createdEdges = GetEntityQuery(new EntityQueryDesc
             {
-                All = new[]
-                {
-                    ComponentType.ReadOnly<Edge>(),
-                    ComponentType.ReadOnly<Curve>(),
-                    ComponentType.ReadOnly<Created>(),
-                    ComponentType.ReadOnly<PrefabRef>(),
-                },
-                None = new[]
-                {
-                    ComponentType.ReadOnly<Temp>(),
-                    ComponentType.ReadOnly<Owner>(),
-                    ComponentType.ReadOnly<Deleted>(),
-                },
+                All = SyncQuery.ReadOnly<Edge, Curve, Created, PrefabRef>(),
+                None = SyncQuery.ReadOnly<Temp, Owner, Deleted>(),
             });
 
             // Pre-existing edges whose geometry CHANGED this frame (Updated but NOT freshly Created).
@@ -187,81 +149,72 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             // CaptureDeletedEdges).
             _updatedEdges = GetEntityQuery(new EntityQueryDesc
             {
-                All = new[]
-                {
-                    ComponentType.ReadOnly<Updated>(),
-                    ComponentType.ReadOnly<Edge>(),
-                    ComponentType.ReadOnly<Curve>(),
-                    ComponentType.ReadOnly<PrefabRef>(),
-                },
-                None = new[]
-                {
-                    ComponentType.ReadOnly<Created>(),
-                    ComponentType.ReadOnly<Temp>(),
-                    ComponentType.ReadOnly<Deleted>(),
-                    ComponentType.ReadOnly<Owner>(),
-                },
+                All = SyncQuery.ReadOnly<Updated, Edge, Curve, PrefabRef>(),
+                None = SyncQuery.ReadOnly<Created, Temp, Deleted, Owner>(),
             });
 
             // Remote object deletes match against the game's object search tree, not a query —
             // see RealizeObjectDeletes. Edges have no equivalent pool small enough to matter.
             _liveEdges = GetEntityQuery(new EntityQueryDesc
             {
-                All = new[]
-                {
-                    ComponentType.ReadOnly<Edge>(),
-                    ComponentType.ReadOnly<Curve>(),
-                    ComponentType.ReadOnly<PrefabRef>(),
-                },
-                None = new[]
-                {
-                    ComponentType.ReadOnly<Temp>(),
-                    ComponentType.ReadOnly<Owner>(),
-                    ComponentType.ReadOnly<Deleted>(),
-                },
+                All = SyncQuery.ReadOnly<Edge, Curve, PrefabRef>(),
+                None = SyncQuery.ReadOnly<Temp, Owner, Deleted>(),
             });
 
-            if (Mod.Service != null)
-            {
-                _observer = new CommandObserver(_incoming, ObjectDeleteCommand.Id, NetDeleteCommand.Id);
-                Mod.Service.Session.AddObserver(_observer);
-            }
-            SyncInbox.RegisterDrain(DrainQueue);
+            _observer = SyncObserverBinding.Bind(
+                () => new CommandObserver(_incoming, ObjectDeleteCommand.Id, NetDeleteCommand.Id), DrainQueue);
         }
 
         protected override void OnDestroy()
         {
-            SyncInbox.UnregisterDrain(DrainQueue);
-            if (_observer != null && Mod.Service != null)
-                Mod.Service.Session.RemoveObserver(_observer);
+            SyncObserverBinding.Unbind(_observer, DrainQueue);
             base.OnDestroy();
+        }
+
+        /// <summary>When this system last got to run its match pass. See ExtendPendingDeleteWindows.</summary>
+        private long _lastDeleteRealizeMs;
+
+        private void ExtendPendingDeleteWindows(long now)
+        {
+            long frozenMs = _lastDeleteRealizeMs == 0 ? 0 : now - _lastDeleteRealizeMs;
+            _lastDeleteRealizeMs = now;
+            if (frozenMs <= 0) return;
+            for (int i = 0; i < _objectRetry.Count; i++)
+                _objectRetry[i] = (_objectRetry[i].cmd, _objectRetry[i].deadline + frozenMs);
+            for (int i = 0; i < _edgeRetry.Count; i++)
+                _edgeRetry[i] = (_edgeRetry[i].cmd, _edgeRetry[i].deadline + frozenMs);
         }
 
         private void DrainQueue()
         {
             SyncInbox.Clear(_incoming);
+            _lastDeleteRealizeMs = 0;
             _replayEdgeDeletes.Clear();
             _objectRetry.Clear();
             _edgeRetry.Clear();
             DeferNetForTerrain = false;
+            DeferNetForPendingPlacement = false;
         }
 
         protected override void OnUpdate()
         {
-            MultiplayerService service = Mod.Service;
-            if (service == null) return;
-
-            MultiplayerSession session = service.Session;
-            if (!service.GameplaySyncReady)
+            using (Diagnostics.SyncProfiler.Measure("DeleteSync"))
             {
-                DrainQueue();
-                return;
-            }
+                MultiplayerService service = Mod.Service;
+                if (service == null) return;
 
-            long now = service.NowMs;
-            _guard.Prune(now);
-            CaptureDeletedObjects(session, now);
-            CaptureDeletedEdges(session, now);
+                MultiplayerSession session = service.Session;
+                if (!service.GameplaySyncReady)
+                {
+                    DrainQueue();
+                    return;
+                }
+
+                long now = service.NowMs;
+                _guard.Prune(now);
+                CaptureDeletedObjects(session, now);
+                CaptureDeletedEdges(session, now);
+            }
         }
 
         /// <summary>Called by <see cref="SyncRealizeSystem"/> during ToolUpdate (see there for why).</summary>
@@ -282,11 +235,21 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             // applies) we leave incoming edge deletes queued and retry next cycle. A selected build
             // tool only blocks on its actual Apply/Clear frame. Object deletes (a raw Deleted tag on
             // a real entity) always proceed.
-            bool netBusy = DeferNetForTerrain || _netSync == null || !_netSync.CanBuildDefinitions;
+            bool netBusy = DeferNetForTerrain || DeferNetForPendingPlacement ||
+                           _netSync == null || !_netSync.CanBuildDefinitions;
             // Object deletion also tears down SubObject/SubNet/SubArea ownership. Keep it behind the
             // same graph lock as network work so it cannot invalidate an original while an isolated
             // building/connector transaction is being generated, applied, or drained.
-            if (netBusy) return;
+            if (netBusy)
+            {
+                // Time spent locked out is not the delete's fault. A pending delete's window is for
+                // waiting on its own build to arrive; letting it burn down while this system is not
+                // even allowed to look would drop a bulldoze that would have matched, and a dropped
+                // bulldoze is exactly the divergence that ends in a world reload later.
+                ExtendPendingDeleteWindows(service.NowMs);
+                return;
+            }
+            _lastDeleteRealizeMs = service.NowMs;
             long now = service.NowMs;
             long freshDeadline = now + DeleteRetryWindowMs;
             List<(ObjectDeleteCommand cmd, long deadline)> objects = null;
@@ -310,7 +273,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                                 .Add((NetDeleteCommand.Decode(message.Body), freshDeadline));
                     }
                 }
-                catch (System.Exception ex) { Mod.log.Warn("[MP] DeleteSync: dropping malformed command: " + ex.Message); }
+                catch (System.Exception ex) { SyncLog.Warn(LogTopic.Buildings, "DeleteSync: dropping malformed command: " + ex.Message); }
             }
 
             // Re-queue edge deletes that arrived while the net pipeline was mid-commit (the drain loop

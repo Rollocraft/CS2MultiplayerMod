@@ -8,8 +8,10 @@ using Game.Tools;
 using Unity.Entities;
 using Unity.Mathematics;
 using Colossal.Mathematics;
+using CS2MultiplayerMod.Core.Diagnostics;
 using CS2MultiplayerMod.Core.Protocol.Messages;
 using CS2MultiplayerMod.Core.Session;
+using CS2MultiplayerMod.Game.Diagnostics;
 using CS2MultiplayerMod.Game.Sync.Commands;
 using CS2MultiplayerMod.Game.Sync.Infrastructure;
 
@@ -118,7 +120,6 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         {
             base.OnCreate();
 
-            Mod.log.Info(nameof(NameSyncSystem) + " ready.");
             _prefabSystem = World.GetOrCreateSystemManaged<PrefabSystem>();
             _prefabIndex = new PrefabIndex(_prefabSystem, GetEntityQuery(ComponentType.ReadOnly<PrefabData>()));
             _nameSystem = World.GetOrCreateSystemManaged<global::Game.UI.NameSystem>();
@@ -131,12 +132,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             // number of things a player has actually renamed.
             _namedEntities = GetEntityQuery(new EntityQueryDesc
             {
-                All = new[]
-                {
-                    ComponentType.ReadOnly<global::Game.UI.CustomName>(),
-                    ComponentType.ReadOnly<PrefabRef>(),
-                },
-                None = new[] { ComponentType.ReadOnly<Temp>(), ComponentType.ReadOnly<Deleted>() },
+                All = SyncQuery.ReadOnly<global::Game.UI.CustomName, PrefabRef>(),
+                None = SyncQuery.ReadOnly<Temp, Deleted>(),
             });
 
             // A street's draw is published whenever its edge set changes, not only when the street
@@ -145,75 +142,47 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             // aggregate is built from carries it alongside Created.
             _changedStreets = GetEntityQuery(new EntityQueryDesc
             {
-                All = new[]
-                {
-                    ComponentType.ReadOnly<Updated>(),
-                    ComponentType.ReadOnly<global::Game.Net.Aggregate>(),
-                    ComponentType.ReadOnly<RandomLocalizationIndex>(),
-                    ComponentType.ReadOnly<PrefabRef>(),
-                },
-                None = new[] { ComponentType.ReadOnly<Temp>(), ComponentType.ReadOnly<Deleted>() },
+                All = SyncQuery.ReadOnly<Updated, global::Game.Net.Aggregate,
+                    RandomLocalizationIndex, PrefabRef>(),
+                None = SyncQuery.ReadOnly<Temp, Deleted>(),
             });
             _streets = GetEntityQuery(new EntityQueryDesc
             {
-                All = new[]
-                {
-                    ComponentType.ReadOnly<global::Game.Net.Aggregate>(),
-                    ComponentType.ReadOnly<RandomLocalizationIndex>(),
-                    ComponentType.ReadOnly<PrefabRef>(),
-                },
-                None = new[] { ComponentType.ReadOnly<Temp>(), ComponentType.ReadOnly<Deleted>() },
+                All = SyncQuery.ReadOnly<global::Game.Net.Aggregate, RandomLocalizationIndex,
+                    PrefabRef>(),
+                None = SyncQuery.ReadOnly<Temp, Deleted>(),
             });
 
             // Districts are never merged, so their draw still travels from the one frame the area
             // appears. Loading a world does not tag entities Created, so a join never re-broadcasts.
             _createdDistricts = GetEntityQuery(new EntityQueryDesc
             {
-                All = new[]
-                {
-                    ComponentType.ReadOnly<Created>(),
-                    ComponentType.ReadOnly<District>(),
-                    ComponentType.ReadOnly<RandomLocalizationIndex>(),
-                    ComponentType.ReadOnly<Node>(),
-                    ComponentType.ReadOnly<PrefabRef>(),
-                },
-                None = new[] { ComponentType.ReadOnly<Temp>(), ComponentType.ReadOnly<Deleted>() },
+                All = SyncQuery.ReadOnly<Created, District, RandomLocalizationIndex, Node, PrefabRef>(),
+                None = SyncQuery.ReadOnly<Temp, Deleted>(),
             });
 
             _districts = GetEntityQuery(new EntityQueryDesc
             {
-                All = new[]
-                {
-                    ComponentType.ReadOnly<District>(),
-                    ComponentType.ReadOnly<Node>(),
-                    ComponentType.ReadOnly<PrefabRef>(),
-                },
-                None = new[] { ComponentType.ReadOnly<Temp>(), ComponentType.ReadOnly<Deleted>() },
+                All = SyncQuery.ReadOnly<District, Node, PrefabRef>(),
+                None = SyncQuery.ReadOnly<Temp, Deleted>(),
             });
             _routes = GetEntityQuery(new EntityQueryDesc
             {
-                All = new[]
-                {
-                    ComponentType.ReadOnly<global::Game.Routes.Route>(),
-                    ComponentType.ReadOnly<PrefabRef>(),
-                },
-                None = new[] { ComponentType.ReadOnly<Temp>(), ComponentType.ReadOnly<Deleted>() },
+                All = SyncQuery.ReadOnly<global::Game.Routes.Route, PrefabRef>(),
+                None = SyncQuery.ReadOnly<Temp, Deleted>(),
             });
 
-            if (Mod.Service != null)
-            {
-                _observer = new CommandObserver(_incoming, EntityNameCommand.Id);
-                _observer.MaxBodyBytes = EntityNameCommand.MaxEncodedBytes;
-                Mod.Service.Session.AddObserver(_observer);
-            }
-            SyncInbox.RegisterDrain(DrainQueue);
+            _observer = SyncObserverBinding.Bind(
+                () => new CommandObserver(_incoming, EntityNameCommand.Id)
+                    {
+                        MaxBodyBytes = EntityNameCommand.MaxEncodedBytes,
+                    },
+                DrainQueue);
         }
 
         protected override void OnDestroy()
         {
-            SyncInbox.UnregisterDrain(DrainQueue);
-            if (_observer != null && Mod.Service != null)
-                Mod.Service.Session.RemoveObserver(_observer);
+            SyncObserverBinding.Unbind(_observer, DrainQueue);
             base.OnDestroy();
         }
 
@@ -233,31 +202,34 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
         protected override void OnUpdate()
         {
-            MultiplayerService service = Mod.Service;
-            if (service == null) return;
-
-            MultiplayerSession session = service.Session;
-            if (!service.GameplaySyncReady)
+            using (Diagnostics.SyncProfiler.Measure("NameSync"))
             {
-                // Anything queued while a world is loading is already part of that world; holding it
-                // would only fill the inbox until it overflowed.
-                DrainQueue();
-                return;
+                MultiplayerService service = Mod.Service;
+                if (service == null) return;
+
+                MultiplayerSession session = service.Session;
+                if (!service.GameplaySyncReady)
+                {
+                    // Anything queued while a world is loading is already part of that world; holding it
+                    // would only fill the inbox until it overflowed.
+                    DrainQueue();
+                    return;
+                }
+
+                long now = service.NowMs;
+                ApplyIncoming(session, now);
+                CaptureAutoNames(session, now);
+
+                if (now - _lastPruneMs >= PublishedPruneIntervalMs)
+                {
+                    _lastPruneMs = now;
+                    PrunePublished();
+                }
+
+                if (now - _lastScanMs < ScanIntervalMs) return;
+                _lastScanMs = now;
+                ScanCustomNames(session);
             }
-
-            long now = service.NowMs;
-            ApplyIncoming(session, now);
-            CaptureAutoNames(session, now);
-
-            if (now - _lastPruneMs >= PublishedPruneIntervalMs)
-            {
-                _lastPruneMs = now;
-                PrunePublished();
-            }
-
-            if (now - _lastScanMs < ScanIntervalMs) return;
-            _lastScanMs = now;
-            ScanCustomNames(session);
         }
 
         /// <summary>Which of the four wire identities this entity is named through.</summary>

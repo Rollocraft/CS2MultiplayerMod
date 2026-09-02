@@ -59,7 +59,8 @@ namespace CS2MultiplayerMod.Core.Networking.Tcp
         private void ConnectLoop(string host, int port, bool useTls)
         {
             var elapsed = Stopwatch.StartNew();
-            _log.Info("Connecting to " + host + ":" + port + (useTls ? " (TLS)..." : " (plaintext)..."));
+            _log.Detail(LogTopic.Transport, "Connecting to " + host + ":" + port +
+                (useTls ? " (TLS)..." : " (plaintext)..."));
 
             IPAddress literal;
             if (!IPAddress.TryParse(host, out literal))
@@ -70,12 +71,13 @@ namespace CS2MultiplayerMod.Core.Networking.Tcp
                 try
                 {
                     IPAddress[] resolved = Dns.GetHostAddresses(host);
-                    _log.Info("Resolved '" + host + "' to " +
-                              string.Join(", ", Array.ConvertAll(resolved, a => a.ToString())) + ".");
+                    _log.Detail(LogTopic.Transport, "Resolved '" + host + "' to " +
+                        string.Join(", ", Array.ConvertAll(resolved, a => a.ToString())) + ".");
                 }
                 catch (Exception ex)
                 {
-                    _log.Warn("DNS lookup for '" + host + "' failed: " + ex.Message);
+                    _log.Warn(LogTopic.Transport, "DNS lookup for '" + host + "' failed: " +
+                        ex.Message);
                 }
             }
 
@@ -93,15 +95,17 @@ namespace CS2MultiplayerMod.Core.Networking.Tcp
                 try { client.Close(); } catch { /* ignore */ }
                 if (canceled)
                 {
-                    _log.Info("Join canceled while connecting to " + host + ":" + port + ".");
+                    _log.Detail(LogTopic.Transport, "Join canceled while connecting to " + host +
+                        ":" + port + ".");
                     return;
                 }
                 var socketEx = ex as SocketException;
                 string errorCode = socketEx != null ? " [" + socketEx.SocketErrorCode + "]" : "";
                 Enqueue(TransportEvent.Disconnected(ConnectionId.Server,
                     "connect failed" + errorCode + ": " + ex.Message));
-                _log.Warn("Connect to " + host + ":" + port + " failed after " + elapsed.ElapsedMilliseconds +
-                          " ms: " + ex.Message + DescribeConnectFailure(ex));
+                _log.Warn(LogTopic.Transport, "Connect to " + host + ":" + port + " failed after " +
+                    elapsed.ElapsedMilliseconds + " ms: " + ex.Message +
+                    DescribeConnectFailure(ex));
                 return;
             }
             _dialing = null;
@@ -112,14 +116,16 @@ namespace CS2MultiplayerMod.Core.Networking.Tcp
             if (!_active)
             {
                 try { client.Close(); } catch { /* ignore */ }
-                _log.Info("Join canceled while connecting to " + host + ":" + port + ".");
+                _log.Detail(LogTopic.Transport, "Join canceled while connecting to " + host + ":" +
+                    port + ".");
                 return;
             }
 
             string local = "?";
             try { local = client.Client.LocalEndPoint.ToString(); } catch { /* cosmetic only */ }
-            _log.Info("TCP connected to " + host + ":" + port + " in " + elapsed.ElapsedMilliseconds +
-                      " ms (local endpoint " + local + ")" + (useTls ? "; starting TLS handshake." : "."));
+            _log.Detail(LogTopic.Transport, "TCP connected to " + host + ":" + port + " in " +
+                elapsed.ElapsedMilliseconds + " ms (local endpoint " + local + ")" +
+                (useTls ? "; starting TLS handshake." : "."));
 
             var connection = new FramedConnection(ConnectionId.Server, client, null, useTls)
             {
@@ -128,7 +134,8 @@ namespace CS2MultiplayerMod.Core.Networking.Tcp
                 OnReady = cid =>
                 {
                     Enqueue(TransportEvent.Connected(cid));
-                    _log.Info("Connected to host " + host + ":" + port + (useTls ? " (TLS)." : " (PLAINTEXT)."));
+                    _log.Event(LogTopic.Transport, "Connected to host " + host + ":" + port +
+                        (useTls ? " (TLS)." : " (PLAINTEXT)."));
                 },
                 OnData = (cid, payload) => Enqueue(TransportEvent.Data(cid, payload)),
                 OnClosed = (cid, reason) =>
@@ -164,7 +171,8 @@ namespace CS2MultiplayerMod.Core.Networking.Tcp
             if (Interlocked.Increment(ref _queuedEvents) > MaxQueuedEvents)
             {
                 Interlocked.Decrement(ref _queuedEvents);
-                _log.Warn("Transport event queue full; disconnecting from host.");
+                _log.Warn(LogTopic.Transport,
+                    "Transport event queue full; disconnecting from host.");
                 var c = _connection;
                 if (c != null) c.Close("event queue overflow");
                 return;
@@ -259,7 +267,7 @@ namespace CS2MultiplayerMod.Core.Networking.Tcp
             if (connection != null) connection.Close("client shutting down");
             _connection = null;
 
-            _log.Info("Client stopped.");
+            _log.Detail(LogTopic.Transport, "Client stopped.");
         }
 
         public void ShutdownAfterFlush(int timeoutMs)
@@ -278,7 +286,7 @@ namespace CS2MultiplayerMod.Core.Networking.Tcp
             connection.Close("client shutting down");
             _connection = null;
 
-            _log.Info("Client stopped.");
+            _log.Detail(LogTopic.Transport, "Client stopped.");
         }
 
         public void Dispose() => Shutdown();

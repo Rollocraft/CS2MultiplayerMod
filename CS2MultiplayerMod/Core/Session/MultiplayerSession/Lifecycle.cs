@@ -1,5 +1,6 @@
 using System;
 using System.Net.Sockets;
+using CS2MultiplayerMod.Core.Diagnostics;
 using CS2MultiplayerMod.Core.Networking;
 using CS2MultiplayerMod.Core.Networking.Tcp;
 using CS2MultiplayerMod.Core.Protocol;
@@ -47,8 +48,9 @@ namespace CS2MultiplayerMod.Core.Session
             // into the city. Said loudly, but allowed — private games with trusted
             // friends over a forwarded port are this mod's main use case.
             if (!config.LanOnly && string.IsNullOrEmpty(config.Password))
-                _log.Warn("[security] Hosting PUBLICLY with NO PASSWORD: anyone who can reach port " +
-                          config.Port + " can join and receive the city. Setting a password is strongly recommended.");
+                _log.Warn(LogTopic.Session,
+                    "Hosting PUBLICLY with NO PASSWORD: anyone who can reach port " + config.Port +
+                    " can join and receive the city. Setting a password is strongly recommended.");
 
             _config = config;
             LocalPlayerName = WireGuard.SanitizePlayerName(config.PlayerName);
@@ -65,9 +67,9 @@ namespace CS2MultiplayerMod.Core.Session
                 {
                     if (config.LanOnly)
                     {
-                        _log.Warn("TLS unavailable on this runtime (" + certError +
-                                  "); continuing without TLS because the session is LAN-only. " +
-                                  "Clients must disable encryption too.");
+                        _log.Warn(LogTopic.Session, "TLS unavailable on this runtime (" + certError +
+                            "); continuing without TLS because the session is LAN-only. " +
+                            "Clients must disable encryption too.");
                     }
                     else
                     {
@@ -82,8 +84,9 @@ namespace CS2MultiplayerMod.Core.Session
             }
 
             if (!config.LanOnly)
-                _log.Warn("PUBLIC HOSTING ENABLED: your machine accepts connections from the internet " +
-                          "on port " + config.Port + ". Keep the password strong and private.");
+                _log.Warn(LogTopic.Session,
+                    "PUBLIC HOSTING ENABLED: your machine accepts connections from the internet " +
+                    "on port " + config.Port + ". Keep the password strong and private.");
 
             var server = new TcpServerTransport(_log);
             _transport = server;
@@ -238,7 +241,7 @@ namespace CS2MultiplayerMod.Core.Session
             if (_transport != null)
             {
                 try { _transport.ShutdownAfterFlush(GracefulCloseTimeoutMs); }
-                catch (Exception ex) { _log.Warn("Graceful close failed (" + ex.Message + "); closing now."); }
+                catch (Exception ex) { _log.Warn(LogTopic.Session, "Graceful close failed (" + ex.Message + "); closing now."); }
             }
 
             Stop();

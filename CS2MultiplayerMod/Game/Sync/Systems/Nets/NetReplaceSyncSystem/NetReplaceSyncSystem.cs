@@ -9,9 +9,10 @@ using Game.Tools;
 using Unity.Collections;
 using Unity.Entities;
 using Unity.Mathematics;
+using CS2MultiplayerMod.Core.Diagnostics;
 using CS2MultiplayerMod.Core.Protocol.Messages;
 using CS2MultiplayerMod.Core.Session;
-
+using CS2MultiplayerMod.Game.Diagnostics;
 using CS2MultiplayerMod.Game.Sync.Infrastructure;
 using CS2MultiplayerMod.Game.Sync.Commands;
 using CS2MultiplayerMod.Game.Sync.Systems.Net;
@@ -68,10 +69,22 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         // them. Edges shorter than a few times this are skipped as ambiguous.
         private const float EndpointMatchTol = 2f;
 
+        /// <summary>
+        /// Set by <see cref="SyncRealizeSystem"/> while a remote placement is still waiting for the
+        /// road it anchors to. A replacement can only change or remove that road out from under the
+        /// placement, so it waits - and its own retry windows are extended by the time it waited,
+        /// because a replacement dropped for "not resolving" while it was not allowed to look is
+        /// the same divergence, one step later.
+        /// </summary>
+        public bool DeferForPendingPlacement;
+
         private readonly ConcurrentQueue<SimulationCommandMessage> _incoming =
             new ConcurrentQueue<SimulationCommandMessage>();
         private readonly List<(NetReplaceCommand command, long deadline)> _retry =
             new List<(NetReplaceCommand, long)>();
+
+        /// <summary>When this system last got to run a match pass. See RealizePending.</summary>
+        private long _lastReplaceRealizeMs;
 
         // Replacements whose armed commit was destroyed before it ran (the player's tool cleared the
         // Temps — see NetSyncSystem's commit-lost handling). Unlike _retry these carry no deadline:
@@ -110,7 +123,6 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         {
             base.OnCreate();
 
-            Mod.log.Info(nameof(NetReplaceSyncSystem) + " ready.");
             _prefabSystem = World.GetOrCreateSystemManaged<PrefabSystem>();
             _prefabIndex = new PrefabIndex(_prefabSystem, GetEntityQuery(ComponentType.ReadOnly<PrefabData>()));
             // Replacements are committed through NetSync's ApplyTool pipeline (see Realize).
@@ -122,20 +134,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             // ours. Temp/Deleted/Owner excluded so we never look at previews, dying edges or sub-nets.
             _updatedEdges = GetEntityQuery(new EntityQueryDesc
             {
-                All = new[]
-                {
-                    ComponentType.ReadOnly<Updated>(),
-                    ComponentType.ReadOnly<Edge>(),
-                    ComponentType.ReadOnly<Curve>(),
-                    ComponentType.ReadOnly<PrefabRef>(),
-                },
-                None = new[]
-                {
-                    ComponentType.ReadOnly<Created>(),
-                    ComponentType.ReadOnly<Temp>(),
-                    ComponentType.ReadOnly<Deleted>(),
-                    ComponentType.ReadOnly<Owner>(),
-                },
+                All = SyncQuery.ReadOnly<Updated, Edge, Curve, PrefabRef>(),
+                None = SyncQuery.ReadOnly<Created, Temp, Deleted, Owner>(),
             });
 
             // Edges built this frame (locally drawn or realized from a remote command). They enter the
@@ -144,51 +144,24 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             // baseline and swallow exactly that replacement.
             _createdEdges = GetEntityQuery(new EntityQueryDesc
             {
-                All = new[]
-                {
-                    ComponentType.ReadOnly<Created>(),
-                    ComponentType.ReadOnly<Edge>(),
-                    ComponentType.ReadOnly<Curve>(),
-                    ComponentType.ReadOnly<PrefabRef>(),
-                },
-                None = new[]
-                {
-                    ComponentType.ReadOnly<Temp>(),
-                    ComponentType.ReadOnly<Deleted>(),
-                    ComponentType.ReadOnly<Owner>(),
-                },
+                All = SyncQuery.ReadOnly<Created, Edge, Curve, PrefabRef>(),
+                None = SyncQuery.ReadOnly<Temp, Deleted, Owner>(),
             });
 
             // Match pool for realizing remote replacements, and the seed pool for the baseline.
             _liveEdges = GetEntityQuery(new EntityQueryDesc
             {
-                All = new[]
-                {
-                    ComponentType.ReadOnly<Edge>(),
-                    ComponentType.ReadOnly<Curve>(),
-                    ComponentType.ReadOnly<PrefabRef>(),
-                },
-                None = new[]
-                {
-                    ComponentType.ReadOnly<Temp>(),
-                    ComponentType.ReadOnly<Owner>(),
-                    ComponentType.ReadOnly<Deleted>(),
-                },
+                All = SyncQuery.ReadOnly<Edge, Curve, PrefabRef>(),
+                None = SyncQuery.ReadOnly<Temp, Owner, Deleted>(),
             });
 
-            if (Mod.Service != null)
-            {
-                _observer = new CommandObserver(_incoming, NetReplaceCommand.Id);
-                Mod.Service.Session.AddObserver(_observer);
-            }
-            SyncInbox.RegisterDrain(DrainQueue);
+            _observer = SyncObserverBinding.Bind(
+                () => new CommandObserver(_incoming, NetReplaceCommand.Id), DrainQueue);
         }
 
         protected override void OnDestroy()
         {
-            SyncInbox.UnregisterDrain(DrainQueue);
-            if (_observer != null && Mod.Service != null)
-                Mod.Service.Session.RemoveObserver(_observer);
+            SyncObserverBinding.Unbind(_observer, DrainQueue);
             base.OnDestroy();
         }
 
@@ -199,6 +172,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             _retry.Clear();
             _replayCommands.Clear();
             _expectedMixedGeometryChanges.Clear();
+            _lastReplaceRealizeMs = 0;
+            DeferForPendingPlacement = false;
             _seeded = false;
         }
 
@@ -209,22 +184,25 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
         protected override void OnUpdate()
         {
-            MultiplayerService service = Mod.Service;
-            if (service == null) return;
-
-            MultiplayerSession session = service.Session;
-            if (!service.GameplaySyncReady)
+            using (Diagnostics.SyncProfiler.Measure("NetReplace"))
             {
-                // Drop the baseline between sessions/world-loads so the next world re-seeds cleanly.
-                DrainQueue();
-                return;
-            }
+                MultiplayerService service = Mod.Service;
+                if (service == null) return;
 
-            long now = service.NowMs;
-            if (!_seeded) SeedBaseline();
-            SeedCreatedEdges();
-            CaptureReplacements(session, now);
-            PruneDeadBaseline(now);
+                MultiplayerSession session = service.Session;
+                if (!service.GameplaySyncReady)
+                {
+                    // Drop the baseline between sessions/world-loads so the next world re-seeds cleanly.
+                    DrainQueue();
+                    return;
+                }
+
+                long now = service.NowMs;
+                if (!_seeded) SeedBaseline();
+                SeedCreatedEdges();
+                CaptureReplacements(session, now);
+                PruneDeadBaseline(now);
+            }
         }
 
         private EdgeBaseline BaselineOf(Entity e)
@@ -259,7 +237,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 entities.Dispose();
             }
             _seeded = true;
-            Mod.Verbose("[MP] NetReplaceSync: baselined " + _edgeBaseline.Count + " edge(s).");
+            SyncLog.Detail(LogTopic.Nets, "NetReplaceSync: baselined " + _edgeBaseline.Count +
+                " edge(s).");
         }
 
         /// <summary>
@@ -404,10 +383,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     OldDx = old.d.x, OldDy = old.d.y, OldDz = old.d.z,
                 };
                 session.SendCommand(0, NetReplaceCommand.Id, command.Encode());
-                Mod.Verbose("[MP] NetReplaceSync captured " +
-                            (prefabChanged ? "replacement -> '" + name + "'" :
-                             reversed ? "direction flip of '" + name + "'" :
-                             "mixed-operation geometry update of '" + name + "'") + ".");
+                SyncLog.Detail(LogTopic.Nets, "NetReplaceSync captured " +
+                    (prefabChanged ? "replacement -> '" + name + "'" : reversed ? "direction flip of '" + name + "'" : "mixed-operation geometry update of '" + name + "'") +
+                    ".");
             }
 
             // Advance every touched baseline to the committed state — whether we sent or not — so a
@@ -505,8 +483,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 End = { ElevationLeft = elevation.x, ElevationRight = elevation.y },
             };
             session.SendCommand(0, NetPlacementCommand.Id, command.Encode());
-            Mod.Verbose("[MP] NetReplaceSync: captured merged continuation of '" + name + "' (" +
-                        length.ToString("F1") + " m).");
+            SyncLog.Detail(LogTopic.Nets, "NetReplaceSync: captured merged continuation of '" + name +
+                "' (" + length.ToString("F1") + " m).");
         }
     }
 }

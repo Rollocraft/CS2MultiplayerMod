@@ -6,7 +6,9 @@ using Game.Prefabs;
 using Game.Simulation;
 using Unity.Collections;
 using Unity.Entities;
+using CS2MultiplayerMod.Core.Diagnostics;
 using CS2MultiplayerMod.Core.Session;
+using CS2MultiplayerMod.Game.Diagnostics;
 using CS2MultiplayerMod.Game.Sync.Commands;
 using CS2MultiplayerMod.Game.Sync.Infrastructure;
 
@@ -76,7 +78,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                         StateFlags = CaptureStateFlags(entity),
                     };
                     Send(session, command);
-                    _hostStateFlags[entity] = command.StateFlags;
+                    ObserveHostState(entity, command);
                     if ((command.Flags & GrowableLifecycleCommand.FlagUnderConstruction) != 0)
                     {
                         _hostConstruction[entity] = new HostConstructionObservation
@@ -86,9 +88,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                         };
                     }
                     _sentSpawn++;
-                    Mod.Verbose("[MP] GrowableSync capture: grew '" + name + "' at " +
-                                Format(transform.m_Position) + " seed=" + seed + " seq=" +
-                                command.Sequence + ".");
+                    SyncLog.Detail(LogTopic.Buildings, "GrowableSync capture: grew '" + name +
+                        "' at " + Format(transform.m_Position) + " seed=" + seed + " seq=" +
+                        command.Sequence + ".");
                 }
             }
             finally
@@ -124,7 +126,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                         EntityManager.GetComponentData<global::Game.Objects.Transform>(entity);
                     _announcedLevelChange.Remove(entity);
                     _hostConstruction.Remove(entity);
-                    _hostStateFlags.Remove(entity);
+                    _hostState.Remove(entity);
 
                     var command = new GrowableLifecycleCommand
                     {
@@ -136,8 +138,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     };
                     Send(session, command);
                     _sentRemove++;
-                    Mod.Verbose("[MP] GrowableSync capture: retired '" + name + "' at " +
-                                Format(transform.m_Position) + " seq=" + command.Sequence + ".");
+                    SyncLog.Detail(LogTopic.Buildings, "GrowableSync capture: retired '" + name +
+                        "' at " + Format(transform.m_Position) + " seq=" + command.Sequence + ".");
                 }
             }
             finally
@@ -187,9 +189,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                         // Only reachable if buildings are levelling faster than they finish. Drop
                         // the memory rather than the cap: a repeat announcement is idempotent on
                         // the receiver, an unbounded dictionary is not recoverable.
-                        Mod.log.Warn("[MP] GrowableSync: level-change memory hit " +
-                                     MaxTrackedLevelChanges + " entries and was cleared; " +
-                                     "some level changes may be announced twice.");
+                        SyncLog.Warn(LogTopic.Buildings, "GrowableSync: level-change memory hit " +
+                            MaxTrackedLevelChanges + " entries and was cleared; " +
+                            "some level changes may be announced twice.");
                         _announcedLevelChange.Clear();
                     }
                     _announcedLevelChange[entity] = newPrefab;
@@ -212,15 +214,16 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                         StateFlags = CaptureStateFlags(entity),
                     };
                     Send(session, command);
-                    _hostStateFlags[entity] = command.StateFlags;
+                    ObserveHostState(entity, command);
                     _hostConstruction[entity] = new HostConstructionObservation
                     {
                         Progress = command.ConstructionProgress,
                         Speed = command.ConstructionSpeed,
                     };
                     _sentLevel++;
-                    Mod.Verbose("[MP] GrowableSync capture: level change to '" + name + "' at " +
-                                Format(transform.m_Position) + " seq=" + command.Sequence + ".");
+                    SyncLog.Detail(LogTopic.Buildings, "GrowableSync capture: level change to '" +
+                        name + "' at " + Format(transform.m_Position) + " seq=" + command.Sequence +
+                        ".");
                 }
             }
             finally
@@ -278,6 +281,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                         if (TryCreateStateCommand(entity, out command))
                         {
                             Send(session, command);
+                            ObserveHostState(entity, command);
                             _sentState++;
                         }
                         _hostConstruction[entity] = new HostConstructionObservation
@@ -308,6 +312,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 if (!TryCreateStateCommand(entity, out command)) continue;
                 // No UnderConstruction component is the authoritative completion edge.
                 Send(session, command);
+                ObserveHostState(entity, command);
                 _sentState++;
             }
             for (int i = 0; i < _constructionScratch.Count; i++)
@@ -316,40 +321,65 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         }
 
         /// <summary>
-        /// Announces abandonment/condemnation/destruction transitions. The first observation is a
-        /// baseline shared by the downloaded world; later differences are host decisions.
+        /// Announces condition (the LevelSection progress input) together with
+        /// abandonment/condemnation/destruction transitions. The first observation is a baseline
+        /// shared by the downloaded world; later differences are host decisions.
         /// </summary>
         private void CaptureStateChanges(MultiplayerSession session, long now)
         {
             _stateBuildings.SetSharedComponentFilter(new UpdateFrame((uint)_stateScanBucket));
-            _stateScanBucket = (_stateScanBucket + 1) % 16;
             try
             {
-                if (_stateBuildings.IsEmptyIgnoreFilter) return;
+                if (_stateBuildings.IsEmptyIgnoreFilter)
+                {
+                    _stateScanCursor = 0;
+                    _stateScanBucket = (_stateScanBucket + 1) % 16;
+                    return;
+                }
                 NativeArray<Entity> entities = _stateBuildings.ToEntityArray(Allocator.Temp);
                 try
                 {
-                    for (int i = 0; i < entities.Length; i++)
+                    // A partition of a large city holds thousands of buildings and each of these
+                    // checks reaches into several component chunks. Walk a window and resume from
+                    // it next time; the bucket only advances once the window has been all the way
+                    // round, so no building is skipped, it is merely revisited less often.
+                    int cursor = _stateScanCursor;
+                    if (cursor >= entities.Length) cursor = 0;
+                    int examine = entities.Length < MaxStateBuildingsPerScan
+                        ? entities.Length : MaxStateBuildingsPerScan;
+                    for (int i = 0; i < examine; i++)
                     {
-                        Entity entity = entities[i];
+                        if (cursor >= entities.Length) cursor = 0;
+                        Entity entity = entities[cursor++];
                         if (!IsAutonomousGrowable(entity, now)) continue;
                         byte flags = CaptureStateFlags(entity);
-                        byte previous;
-                        if (!_hostStateFlags.TryGetValue(entity, out previous))
+                        int condition = CaptureCondition(entity);
+                        HostStateObservation previous;
+                        if (!_hostState.TryGetValue(entity, out previous))
                         {
-                            _hostStateFlags[entity] = flags;
+                            _hostState[entity] = new HostStateObservation
+                            {
+                                Flags = flags,
+                                Condition = condition,
+                            };
                             continue;
                         }
-                        if (flags == previous) continue;
+                        if (flags == previous.Flags && condition == previous.Condition) continue;
 
                         GrowableLifecycleCommand command;
                         if (TryCreateStateCommand(entity, out command))
                         {
                             Send(session, command);
+                            ObserveHostState(entity, command);
                             _sentState++;
                         }
-                        _hostStateFlags[entity] = flags;
                     }
+                    if (cursor >= entities.Length)
+                    {
+                        cursor = 0;
+                        _stateScanBucket = (_stateScanBucket + 1) % 16;
+                    }
+                    _stateScanCursor = cursor;
                 }
                 finally
                 {
@@ -399,8 +429,16 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             return true;
         }
 
-        private string PrefabIndexSafeName(Entity prefab) =>
-            PrefabIndex.SafeName(_prefabSystem, prefab);
+        private void ObserveHostState(Entity entity, GrowableLifecycleCommand command)
+        {
+            _hostState[entity] = new HostStateObservation
+            {
+                Flags = command.StateFlags,
+                Condition = command.Condition,
+            };
+        }
+
+        private string PrefabIndexSafeName(Entity prefab) => _prefabIndex.NameOf(prefab);
 
         private static string Format(Unity.Mathematics.float3 position) =>
             "(" + position.x.ToString("F1") + ", " + position.y.ToString("F1") + ", " +

@@ -1,4 +1,6 @@
 using System;
+using CS2MultiplayerMod.Core.Diagnostics;
+using CS2MultiplayerMod.Game.Diagnostics;
 
 namespace CS2MultiplayerMod.Game
 {
@@ -9,10 +11,6 @@ namespace CS2MultiplayerMod.Game
     /// </summary>
     internal static class HelpLinks
     {
-        /// <summary>The help directory requested by the project documentation.</summary>
-        public const string Root =
-            "https://github.com/Rollocraft/CS2MultiplayerMod/tree/master/help";
-
         // GitHub uses /tree/ for a directory and /blob/ for an individual Markdown
         // file. Open the latter so headings such as #mod-version-issues work too.
         private const string PageRoot =
@@ -42,11 +40,12 @@ namespace CS2MultiplayerMod.Game
             try
             {
                 UnityEngine.Application.OpenURL(url);
-                Mod.log.Info("[MP] Opened help page: " + page);
+                SyncLog.Detail(LogTopic.Ui, "Opened help page: " + page);
             }
             catch (Exception ex)
             {
-                Mod.log.Warn("[MP] Could not open the help page " + url + ": " + ex.Message);
+                SyncLog.Warn(LogTopic.Ui, "Could not open the help page " + url + ": " +
+                    ex.Message);
             }
         }
 

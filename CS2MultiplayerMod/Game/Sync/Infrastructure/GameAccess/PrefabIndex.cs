@@ -1,5 +1,7 @@
 using System;
 using System.Collections.Generic;
+using CS2MultiplayerMod.Core.Diagnostics;
+using CS2MultiplayerMod.Game.Diagnostics;
 using Game.Prefabs;
 using Unity.Collections;
 using Unity.Entities;
@@ -19,6 +21,11 @@ namespace CS2MultiplayerMod.Game.Sync.Infrastructure
         private readonly Dictionary<string, Entity> _byName = new Dictionary<string, Entity>();
         private readonly Dictionary<string, List<Entity>> _allByName =
             new Dictionary<string, List<Entity>>();
+        // Reading PrefabBase.name is a native call that returns a freshly allocated string every
+        // time. Capture paths ask for the same few thousand prefab names thousands of times a
+        // second, so hold the answer for as long as the name -> entity table itself is valid.
+        private readonly Dictionary<Entity, string> _namesByPrefab =
+            new Dictionary<Entity, string>();
         private bool _built;
         private bool _warnedUnusable;
         private int _builtCount = -1;
@@ -58,7 +65,21 @@ namespace CS2MultiplayerMod.Game.Sync.Infrastructure
             return TryResolveBuilt(name, compatible, out prefab);
         }
 
-        public string NameOf(Entity prefab) => SafeName(_prefabs, prefab);
+        /// <summary>
+        /// The cached form of <see cref="SafeName(PrefabSystem, Entity)"/>. Entity handles carry a
+        /// version, so a recycled prefab index cannot read another prefab's cached name, and the
+        /// table is dropped whenever the catalogue is rebuilt. A miss is never cached: a name that
+        /// could not be read is either a retired prefab or a torn-down asset, and both can change.
+        /// </summary>
+        public string NameOf(Entity prefab)
+        {
+            if (prefab == Entity.Null) return null;
+            string name;
+            if (_namesByPrefab.TryGetValue(prefab, out name)) return name;
+            name = SafeName(_prefabs, prefab);
+            if (!string.IsNullOrEmpty(name)) _namesByPrefab[prefab] = name;
+            return name;
+        }
 
         /// <summary>
         /// The prefab's name, or null when nothing usable stands behind the entity.
@@ -101,6 +122,7 @@ namespace CS2MultiplayerMod.Game.Sync.Infrastructure
         {
             _byName.Clear();
             _allByName.Clear();
+            _namesByPrefab.Clear();
             NativeArray<Entity> prefabs = _allPrefabs.ToEntityArray(Allocator.Temp);
             try
             {
@@ -121,6 +143,7 @@ namespace CS2MultiplayerMod.Game.Sync.Infrastructure
                         continue;
                     }
                     _byName[name] = prefabs[i];
+                    _namesByPrefab[prefabs[i]] = name;
                     List<Entity> matches;
                     if (!_allByName.TryGetValue(name, out matches))
                     {
@@ -133,9 +156,10 @@ namespace CS2MultiplayerMod.Game.Sync.Infrastructure
                 if (tornDownCount > 0 && !_warnedUnusable)
                 {
                     _warnedUnusable = true;
-                    Mod.log.Warn("[MP] PrefabIndex: " + tornDownCount + " of " + prefabs.Length +
-                                 " catalogue entries still point at a torn-down asset (first entity " +
-                                 firstTornDown + "); skipped. " + retired + " more were retired normally.");
+                    SyncLog.Warn(LogTopic.Pipeline, "PrefabIndex: " + tornDownCount + " of " +
+                        prefabs.Length +
+                        " catalogue entries still point at a torn-down asset (first entity " +
+                        firstTornDown + "); skipped. " + retired + " more were retired normally.");
                 }
             }
             finally

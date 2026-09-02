@@ -3,7 +3,9 @@ using Game.Prefabs;
 using Unity.Collections;
 using Unity.Entities;
 using Unity.Mathematics;
+using CS2MultiplayerMod.Core.Diagnostics;
 using CS2MultiplayerMod.Core.Session;
+using CS2MultiplayerMod.Game.Diagnostics;
 using CS2MultiplayerMod.Game.Sync.Commands;
 
 namespace CS2MultiplayerMod.Game.Sync.Systems
@@ -127,9 +129,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                             ownedCommand.NodeZ, ownedCommand.NodeElevation);
                         session.SendCommand(0, OwnedAreaSnapshotCommand.Id,
                             ownedCommand.Encode());
-                        Mod.Verbose("[MP] AreaSync captured owned redraw of '" + name +
-                                    "' on '" + ownerName + "' (" + ring.Length +
-                                    " nodes).");
+                        SyncLog.Detail(LogTopic.Land, "AreaSync captured owned redraw of '" + name +
+                            "' on '" + ownerName + "' (" + ring.Length + " nodes).");
                         continue;
                     }
 
@@ -149,7 +150,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     CopyNodes(nodes, command.NodeX, command.NodeY,
                         command.NodeZ, command.NodeElevation);
                     session.SendCommand(0, AreaUpdateCommand.Id, command.Encode());
-                    Mod.Verbose("[MP] AreaSync captured redraw of '" + name + "' (" + ring.Length + " nodes).");
+                    SyncLog.Detail(LogTopic.Land, "AreaSync captured redraw of '" + name + "' (" +
+                        ring.Length + " nodes).");
                 }
             }
             finally
@@ -204,7 +206,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                         command.NodeElevation[n] = nodes[n].m_Elevation;
                     }
                     session.SendCommand(0, AreaCreateCommand.Id, command.Encode());
-                    Mod.Verbose("[MP] AreaSync captured '" + name + "' (" + nodes.Length + " nodes).");
+                    SyncLog.Detail(LogTopic.Land, "AreaSync captured '" + name + "' (" +
+                        nodes.Length + " nodes).");
                 }
             }
             finally

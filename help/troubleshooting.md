@@ -1,5 +1,6 @@
 ---
 title: Troubleshooting guide
+description: "Fixes for the problems players hit most often: joining, desyncs, crashes and world reloads."
 ---
 
 # Troubleshooting guide

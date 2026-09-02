@@ -1,6 +1,7 @@
 using Game;
 using Game.SceneFlow;
 using Unity.Entities;
+using CS2MultiplayerMod.Core.Diagnostics;
 using CS2MultiplayerMod.Core.Session;
 using CS2MultiplayerMod.Game.Diagnostics;
 
@@ -25,7 +26,7 @@ namespace CS2MultiplayerMod.Game
         protected override void OnCreate()
         {
             base.OnCreate();
-            Mod.log.Info(nameof(MultiplayerSystem) + " created.");
+            SyncLog.Detail(LogTopic.Startup, nameof(MultiplayerSystem) + " created.");
 
             // Trend counters for the flight log: live preview Temps and definition
             // entities should both hover near zero between edits - either climbing
@@ -53,8 +54,8 @@ namespace CS2MultiplayerMod.Game
             }
             catch (System.Exception ex)
             {
-                Mod.log.Error("[MP] Session close on world transition failed: " + ex.Message);
-                FlightRecorder.NoteException("world-transition", ex);
+                SyncLog.Error(LogTopic.Startup, "Closing the session on a world transition failed.",
+                    ex);
             }
         }
 
@@ -67,7 +68,8 @@ namespace CS2MultiplayerMod.Game
             {
                 if (service.Session.Role != SessionRole.None)
                 {
-                    Mod.log.Info("[MP] Mod disabled in settings - closing the active session.");
+                    SyncLog.Detail(LogTopic.Startup,
+                        "Mod disabled in settings - closing the active session.");
                     service.Disconnect();
                 }
 
@@ -97,7 +99,7 @@ namespace CS2MultiplayerMod.Game
         /// </summary>
         private void PumpHealth(MultiplayerService service)
         {
-            if (!FlightRecorder.Enabled) return;
+            if (!SyncLog.IsRecording(LogTopic.Performance)) return;
             MultiplayerSession session = service.Session;
             long now = service.NowMs;
             bool active = session.Role != SessionRole.None ||
@@ -115,7 +117,8 @@ namespace CS2MultiplayerMod.Game
             catch (System.Exception ex)
             {
                 // Diagnostics are never allowed to become the crash they are meant to explain.
-                FlightRecorder.NoteException("health-snapshot", ex);
+                SyncLog.Error(LogTopic.Performance, "Could not write the periodic health snapshot.",
+                    ex);
             }
         }
 
@@ -166,25 +169,17 @@ namespace CS2MultiplayerMod.Game
                 ? "none"
                 : session.IncomingBlobChannel;
 
-            FlightRecorder.Note("health role=" + session.Role +
-                " status=" + session.Status +
-                " phase=" + service.WorldPhase +
-                " gameLoading=" + gameLoading +
-                " playerId=" + session.LocalPlayerId +
-                " peers=" + peers +
-                " pendingPeers=" + pendingPeers +
-                " remotePlayers=" + remotePlayers +
-                " latencyMS=" + latency +
-                " oldestPeerAgeMS=" + oldestPeerAge +
-                " entities=" + Value(entities) +
-                " temps=" + Value(temps) +
-                " defs=" + Value(definitions) +
-                " sendKB=" + (session.PendingSendBytes >> 10) +
-                " incomingBlob=" + incomingChannel +
-                " incomingKB=" + (session.IncomingBlobReceived >> 10) + "/" + (session.IncomingBlobTotal >> 10) +
-                " outgoingBlob=" + session.OutgoingBlobActive +
-                " outgoingKB=" + (session.OutgoingBlobSent >> 10) + "/" + (session.OutgoingBlobTotal >> 10) +
-                " " + service.CommandDiagnosticSnapshot(now) +
+            SyncLog.Trace(LogTopic.Performance, "health role=" + session.Role + " status=" +
+                session.Status + " phase=" + service.WorldPhase + " gameLoading=" + gameLoading +
+                " playerId=" + session.LocalPlayerId + " peers=" + peers + " pendingPeers=" +
+                pendingPeers + " remotePlayers=" + remotePlayers + " latencyMS=" + latency +
+                " oldestPeerAgeMS=" + oldestPeerAge + " entities=" + Value(entities) + " temps=" +
+                Value(temps) + " defs=" + Value(definitions) + " sendKB=" +
+                (session.PendingSendBytes >> 10) + " incomingBlob=" + incomingChannel +
+                " incomingKB=" + (session.IncomingBlobReceived >> 10) + "/" +
+                (session.IncomingBlobTotal >> 10) + " outgoingBlob=" + session.OutgoingBlobActive +
+                " outgoingKB=" + (session.OutgoingBlobSent >> 10) + "/" +
+                (session.OutgoingBlobTotal >> 10) + " " + service.CommandDiagnosticSnapshot(now) +
                 " " + FlightRecorder.ProcessSnapshot());
         }
 

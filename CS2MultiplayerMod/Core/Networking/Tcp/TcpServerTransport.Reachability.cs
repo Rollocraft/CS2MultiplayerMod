@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Net;
 using System.Net.NetworkInformation;
 using System.Net.Sockets;
+using CS2MultiplayerMod.Core.Diagnostics;
 
 namespace CS2MultiplayerMod.Core.Networking.Tcp
 {
@@ -28,19 +29,20 @@ namespace CS2MultiplayerMod.Core.Networking.Tcp
                     }
                 }
 
-                _log.Info(locals.Count > 0
-                    ? "Players on your network join via: " + string.Join(", ", locals.ToArray())
-                    : "Could not find any local network address - is this machine connected to a network?");
+                _log.Event(LogTopic.Transport,
+                    locals.Count > 0 ? "Players on your network join via: " +
+                    string.Join(", ", locals.ToArray()) : "Could not find any local network address - is this machine connected to a network?");
 
                 if (!lanOnly)
-                    _log.Info("Players on the internet need your PUBLIC IP and TCP port " + port +
-                              " reaching this machine through the Windows Firewall. The router is being asked " +
-                              "to forward it automatically - see the [upnp] lines below for whether it agreed. " +
-                              "If it did not, forward the port by hand or host over the Steam relay instead.");
+                    _log.Event(LogTopic.Transport,
+                        "Players on the internet need your PUBLIC IP and TCP port " + port +
+                        " reaching this machine through the Windows Firewall. The router is being asked " +
+                        "to forward it automatically - see the [upnp] lines below for whether it agreed. " +
+                        "If it did not, forward the port by hand or host over the Steam relay instead.");
             }
             catch (Exception ex)
             {
-                _log.Warn("Could not enumerate local addresses: " + ex.Message);
+                _log.Warn(LogTopic.Transport, "Could not enumerate local addresses: " + ex.Message);
             }
         }
 

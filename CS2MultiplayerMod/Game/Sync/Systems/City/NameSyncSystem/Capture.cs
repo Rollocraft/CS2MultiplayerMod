@@ -3,7 +3,9 @@ using Game.Common;
 using Unity.Collections;
 using Unity.Entities;
 using Unity.Mathematics;
+using CS2MultiplayerMod.Core.Diagnostics;
 using CS2MultiplayerMod.Core.Session;
+using CS2MultiplayerMod.Game.Diagnostics;
 using CS2MultiplayerMod.Game.Sync.Commands;
 
 namespace CS2MultiplayerMod.Game.Sync.Systems
@@ -114,7 +116,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             {
                 entities.Dispose();
             }
-            Mod.Verbose("[MP] NameSync: baselined " + _publishedAuto.Count + " street draw(s).");
+            SyncLog.Detail(LogTopic.City, "NameSync: baselined " + _publishedAuto.Count +
+                " street draw(s).");
         }
 
         /// <summary>
@@ -269,9 +272,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             {
                 // Expected for citizens, vehicles and animals. Naming the prefab keeps the line
                 // useful if some other kind of entity ever turns up here.
-                Mod.Verbose("[MP] NameSync: '" + name + "' is on '" +
-                            (LocalPrefabName(entity) ?? "?") + "', which has no cross-machine " +
-                            "identity; not replicated.");
+                SyncLog.Detail(LogTopic.City, "NameSync: '" + name + "' is on '" +
+                    (LocalPrefabName(entity) ?? "?") + "', which has no cross-machine " +
+                    "identity; not replicated.");
                 return;
             }
 
@@ -296,14 +299,14 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             try { body = command.Encode(); }
             catch (Exception ex)
             {
-                Mod.log.Warn("[MP] NameSync: could not encode " + what + " for " +
-                             KindName(command.TargetKind) + " '" + command.TargetPrefabName +
-                             "': " + ex.Message);
+                SyncLog.Warn(LogTopic.City, "NameSync: could not encode " + what + " for " +
+                    KindName(command.TargetKind) + " '" + command.TargetPrefabName + "': " +
+                    ex.Message);
                 return;
             }
             session.SendCommand(0, EntityNameCommand.Id, body);
-            Mod.Verbose("[MP] NameSync captured " + what + " on " + KindName(command.TargetKind) +
-                        " '" + command.TargetPrefabName + "'.");
+            SyncLog.Detail(LogTopic.City, "NameSync captured " + what + " on " +
+                KindName(command.TargetKind) + " '" + command.TargetPrefabName + "'.");
         }
 
         /// <summary>The entity's current auto-name draw, one index per name slot its prefab has.</summary>

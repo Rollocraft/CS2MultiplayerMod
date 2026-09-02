@@ -10,9 +10,10 @@ using Game.Tools;
 using Unity.Collections;
 using Unity.Entities;
 using Unity.Mathematics;
+using CS2MultiplayerMod.Core.Diagnostics;
 using CS2MultiplayerMod.Core.Protocol.Messages;
 using CS2MultiplayerMod.Core.Session;
-
+using CS2MultiplayerMod.Game.Diagnostics;
 using CS2MultiplayerMod.Game.Sync.Infrastructure;
 using CS2MultiplayerMod.Game.Sync.Commands;
 using CS2MultiplayerMod.Game.Sync.Systems.Net;
@@ -119,7 +120,6 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         {
             base.OnCreate();
 
-            Mod.log.Info(nameof(BuildSyncSystem) + " ready.");
             _prefabSystem = World.GetOrCreateSystemManaged<PrefabSystem>();
             _cityStateSync = World.GetOrCreateSystemManaged<CityStateSyncSystem>();
             _toolSystem = World.GetOrCreateSystemManaged<ToolSystem>();
@@ -141,22 +141,10 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             // (Temp), not an owned sub-object (Owner), not being deleted, not a net edge.
             _createdObjects = GetEntityQuery(new EntityQueryDesc
             {
-                All = new[]
-                {
-                    ComponentType.ReadOnly<Created>(),
-                    ComponentType.ReadOnly<PrefabRef>(),
-                    ComponentType.ReadOnly<Transform>(),
-                },
-                None = new[]
-                {
-                    ComponentType.ReadOnly<Temp>(),
-                    ComponentType.ReadOnly<Owner>(),
-                    ComponentType.ReadOnly<Deleted>(),
-                    ComponentType.ReadOnly<global::Game.Net.Edge>(),
-                    ComponentType.ReadOnly<global::Game.Objects.Moving>(),
-                    ComponentType.ReadOnly<global::Game.Vehicles.Vehicle>(),
-                    ComponentType.ReadOnly<global::Game.Creatures.Creature>(),
-                },
+                All = SyncQuery.ReadOnly<Created, PrefabRef, Transform>(),
+                None = SyncQuery.ReadOnly<Temp, Owner, Deleted, global::Game.Net.Edge,
+                    global::Game.Objects.Moving, global::Game.Vehicles.Vehicle,
+                    global::Game.Creatures.Creature>(),
             });
 
             // Full object-tool transactions can commit through an owned extension rather than a
@@ -164,62 +152,29 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             // exact preview graph cached before the click.
             _createdAppliedObjects = GetEntityQuery(new EntityQueryDesc
             {
-                All = new[]
-                {
-                    ComponentType.ReadOnly<Created>(),
-                    ComponentType.ReadOnly<Applied>(),
-                    ComponentType.ReadOnly<PrefabRef>(),
-                    ComponentType.ReadOnly<Transform>(),
-                    ComponentType.ReadOnly<PseudoRandomSeed>(),
-                    ComponentType.ReadOnly<global::Game.Objects.Object>(),
-                },
-                None = new[]
-                {
-                    ComponentType.ReadOnly<Temp>(),
-                    ComponentType.ReadOnly<Deleted>(),
-                },
+                All = SyncQuery.ReadOnly<Created, Applied, PrefabRef, Transform, PseudoRandomSeed,
+                    global::Game.Objects.Object>(),
+                None = SyncQuery.ReadOnly<Temp, Deleted>(),
             });
 
             // Attach targets for incoming net objects, matched by position.
             _liveNodes = GetEntityQuery(new EntityQueryDesc
             {
-                All = new[] { ComponentType.ReadOnly<global::Game.Net.Node>() },
-                None = new[]
-                {
-                    ComponentType.ReadOnly<Temp>(),
-                    ComponentType.ReadOnly<Deleted>(),
-                },
+                All = SyncQuery.ReadOnly<global::Game.Net.Node>(),
+                None = SyncQuery.ReadOnly<Temp, Deleted>(),
             });
             _liveEdges = GetEntityQuery(new EntityQueryDesc
             {
-                All = new[]
-                {
-                    ComponentType.ReadOnly<global::Game.Net.Edge>(),
-                    ComponentType.ReadOnly<global::Game.Net.Curve>(),
-                },
-                None = new[]
-                {
-                    ComponentType.ReadOnly<Temp>(),
-                    ComponentType.ReadOnly<Deleted>(),
-                },
+                All = SyncQuery.ReadOnly<global::Game.Net.Edge, global::Game.Net.Curve>(),
+                None = SyncQuery.ReadOnly<Temp, Deleted>(),
             });
 
             // Standing placed objects (buildings, props), for the duplicate-placement guard in
             // Realize.cs. Static excludes vehicles/cims; Owner excludes sub-objects.
             _liveStaticObjects = GetEntityQuery(new EntityQueryDesc
             {
-                All = new[]
-                {
-                    ComponentType.ReadOnly<PrefabRef>(),
-                    ComponentType.ReadOnly<Transform>(),
-                    ComponentType.ReadOnly<global::Game.Objects.Static>(),
-                },
-                None = new[]
-                {
-                    ComponentType.ReadOnly<Temp>(),
-                    ComponentType.ReadOnly<Owner>(),
-                    ComponentType.ReadOnly<Deleted>(),
-                },
+                All = SyncQuery.ReadOnly<PrefabRef, Transform, global::Game.Objects.Static>(),
+                None = SyncQuery.ReadOnly<Temp, Owner, Deleted>(),
             });
 
             _diagAnyCreated = GetEntityQuery(ComponentType.ReadOnly<Created>());
@@ -230,24 +185,19 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             InitializeNativeObjectOperations();
             InitializeNativeDerive();
 
-            if (Mod.Service != null)
-            {
-                _observer = new CommandObserver(_incoming,
-                    ObjectPlacementCommand.Id, ObjectToolOperationCommand.Id,
-                    AssetStampCommand.Id)
-                {
-                    MaxBodyBytes = ObjectToolOperationCommand.MaxEncodedBytes,
-                };
-                Mod.Service.Session.AddObserver(_observer);
-            }
-            SyncInbox.RegisterDrain(DrainQueue);
+            _observer = SyncObserverBinding.Bind(
+                () => new CommandObserver(_incoming,
+                        ObjectPlacementCommand.Id, ObjectToolOperationCommand.Id,
+                        AssetStampCommand.Id)
+                    {
+                        MaxBodyBytes = ObjectToolOperationCommand.MaxEncodedBytes,
+                    },
+                DrainQueue);
         }
 
         protected override void OnDestroy()
         {
-            SyncInbox.UnregisterDrain(DrainQueue);
-            if (_observer != null && Mod.Service != null)
-                Mod.Service.Session.RemoveObserver(_observer);
+            SyncObserverBinding.Unbind(_observer, DrainQueue);
             base.OnDestroy();
         }
 
@@ -265,11 +215,10 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             // specialized placement went missing on one machine with nothing in the log.
             if (_pendingSpecializedObjectOperation != null)
             {
-                Mod.log.Warn("[MP] BuildSync: discarding a held specialized placement (" +
-                             _pendingSpecializedObjectOperation.Definitions.Length +
-                             " definitions) that was still waiting for its polygon.");
-                Diagnostics.FlightRecorder.Note("specialized handoff discarded by reset defs=" +
-                    _pendingSpecializedObjectOperation.Definitions.Length);
+                SyncLog.Warn(LogTopic.Buildings,
+                    "BuildSync: discarding a held specialized placement (" +
+                    _pendingSpecializedObjectOperation.Definitions.Length +
+                    " definitions) that was still waiting for its polygon.");
             }
             ClearSpecializedAreaCapture();
             _nativeLifecycleCapturedThisFrame = false;
@@ -289,34 +238,37 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
         protected override void OnUpdate()
         {
-            MultiplayerService service = Mod.Service;
-            if (service == null) return;
-
-            bool ready = service.GameplaySyncReady;
-            _hbUpdates++;
-            // These probes walk broad Created queries. They are troubleshooting-only work,
-            // so keep them off the normal frame path unless their verbose summary is enabled.
-            if (ready && Mod.Setting != null && Mod.Setting.VerboseLogging)
+            using (Diagnostics.SyncProfiler.Measure("BuildSync"))
             {
-                _hbAnyCreated = System.Math.Max(_hbAnyCreated, _diagAnyCreated.CalculateEntityCount());
-                _hbCreatedPrefab = System.Math.Max(_hbCreatedPrefab, _diagCreatedPrefab.CalculateEntityCount());
-                _hbCreatedTransform = System.Math.Max(_hbCreatedTransform, _diagCreatedTransform.CalculateEntityCount());
-                _hbFiltered = System.Math.Max(_hbFiltered, _createdObjects.CalculateEntityCount());
-            }
+                MultiplayerService service = Mod.Service;
+                if (service == null) return;
 
-            long now = service.NowMs;
-            MultiplayerSession session = service.Session;
-            if (ready)
-            {
-                CaptureCompletedSpecializedArea();
-                PrioritizeCreatedTrees(session);
-                _guard.Prune(now);
-                TryPublishCommittedObjectGraph(now);
-                CaptureNewObjects(session, now);
+                bool ready = service.GameplaySyncReady;
+                _hbUpdates++;
+                // These probes walk broad Created queries. They are troubleshooting-only work, so
+                // keep them off the normal frame path unless the summary they feed is switched on.
+                if (ready && SyncLog.IsEnabled(LogTopic.Buildings))
+                {
+                    _hbAnyCreated = System.Math.Max(_hbAnyCreated, _diagAnyCreated.CalculateEntityCount());
+                    _hbCreatedPrefab = System.Math.Max(_hbCreatedPrefab, _diagCreatedPrefab.CalculateEntityCount());
+                    _hbCreatedTransform = System.Math.Max(_hbCreatedTransform, _diagCreatedTransform.CalculateEntityCount());
+                    _hbFiltered = System.Math.Max(_hbFiltered, _createdObjects.CalculateEntityCount());
+                }
+
+                long now = service.NowMs;
+                MultiplayerSession session = service.Session;
+                if (ready)
+                {
+                    CaptureCompletedSpecializedArea();
+                    PrioritizeCreatedTrees(session);
+                    _guard.Prune(now);
+                    TryPublishCommittedObjectGraph(now);
+                    CaptureNewObjects(session, now);
+                }
+                else DrainQueue();
+                _localObjectApplyThisFrame = false;
+                FlushDiagnostics(now, ready);
             }
-            else DrainQueue();
-            _localObjectApplyThisFrame = false;
-            FlushDiagnostics(now, ready);
         }
 
         private void PrioritizeCreatedTrees(MultiplayerSession session)
@@ -417,7 +369,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             _localLifecycleApplyThisFrame = _localObjectApplyThisFrame;
 
             if (objectToOwnedAreaHandoff && applying)
-                Diagnostics.FlightRecorder.Note(
+                SyncLog.Trace(LogTopic.Buildings,
                     "object lifecycle apply retained across owned-area handoff");
         }
 
@@ -475,7 +427,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             if (connected || _hbAnyCreated > 0 || _diagTotal > 0)
             {
                 var sb = new StringBuilder();
-                sb.Append("[MP] BuildSync/5s: updates=").Append(_hbUpdates)
+                sb.Append("BuildSync/5s: updates=").Append(_hbUpdates)
                   .Append(" created[any/+prefab/+transform/filtered]=")
                   .Append(_hbAnyCreated).Append('/').Append(_hbCreatedPrefab).Append('/')
                   .Append(_hbCreatedTransform).Append('/').Append(_hbFiltered)
@@ -492,13 +444,13 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     }
                     sb.Append(']');
                 }
-                Mod.Verbose(sb.ToString());
+                SyncLog.Detail(LogTopic.Buildings, sb.ToString());
             }
 
             if (_refusedTotal > 0)
             {
                 var sb = new StringBuilder();
-                sb.Append("[MP] BuildSync realize: refused ").Append(_refusedTotal)
+                sb.Append("BuildSync realize: refused ").Append(_refusedTotal)
                   .Append(" simulation-only placement(s) in the last 5s [");
                 int n = 0;
                 foreach (KeyValuePair<string, int> pair in _refused)
@@ -508,7 +460,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     if (++n >= 10) { sb.Append(", ..."); break; }
                 }
                 sb.Append(']');
-                Mod.log.Warn(sb.ToString());
+                SyncLog.Warn(LogTopic.Buildings, sb.ToString());
                 _refused.Clear();
                 _refusedTotal = 0;
             }
@@ -578,10 +530,11 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                         if (!_partialPlacementRecoveryRequested)
                         {
                             _partialPlacementRecoveryRequested = true;
-                            Mod.log.Error("[MP] BuildSync: complete lifecycle capture was missed for '" +
-                                          name + "'; requesting (debounced) world recovery instead of " +
-                                          "sending a partial object graph. " +
-                                          (_lastObjectGraphMissDetail ?? "no correlation detail"));
+                            SyncLog.Error(LogTopic.Buildings,
+                                "BuildSync: complete lifecycle capture was missed for '" + name +
+                                "'; requesting (debounced) world recovery instead of " +
+                                "sending a partial object graph. " +
+                                (_lastObjectGraphMissDetail ?? "no correlation detail"));
                             Mod.Service.RequestAutomaticWorldRecovery("building placement capture missed");
                         }
                         continue;

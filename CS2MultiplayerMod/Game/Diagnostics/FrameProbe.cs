@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using CS2MultiplayerMod.Core.Diagnostics;
 
 namespace CS2MultiplayerMod.Game.Diagnostics
 {
@@ -55,6 +56,7 @@ namespace CS2MultiplayerMod.Game.Diagnostics
         /// <summary>Drop the window without reporting it - a world load is not a frame time.</summary>
         public static void Reset()
         {
+            SyncProfiler.Reset();
             _lastFrameMs = -1;
             _frames = 0;
             _totalMs = 0;
@@ -67,14 +69,19 @@ namespace CS2MultiplayerMod.Game.Diagnostics
             long seconds = (now - _lastReportMs) / 1000;
             if (seconds <= 0) seconds = 1;
 
-            string line = "[MP] Frames/" + seconds + "s: " + _frames +
+            string line = "Frames/" + seconds + "s: " + _frames +
                           " (" + (_frames / seconds) + "/s, mean " + (_totalMs / _frames) +
                           " ms, worst " + _worstMs + " ms) " + Histogram();
 
-            Mod.Verbose(line);
-            // The flight log keeps it regardless of the verbose setting: a performance report is
-            // exactly the case where the log was already captured before anyone asked for detail.
-            FlightRecorder.Note(line);
+            // Trace, not Detail: the flight log keeps both lines whether or not the switch is on,
+            // because a performance report is exactly the case where the log was already captured
+            // before anyone thought to turn one on.
+            SyncLog.Trace(LogTopic.Performance, line);
+
+            // Immediately after the frame times, so a slow window and the mod's share of it are
+            // always read together.
+            string cost = SyncProfiler.Report(now - _lastReportMs);
+            if (cost != null) SyncLog.Trace(LogTopic.Performance, cost);
 
             _lastReportMs = now;
             _frames = 0;

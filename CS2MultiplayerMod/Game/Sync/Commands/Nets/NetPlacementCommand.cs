@@ -94,6 +94,14 @@ namespace CS2MultiplayerMod.Game.Sync.Commands
 
         public int RandomSeed;
         public uint CreationFlags;
+        /// <summary>
+        /// The receiver must reproduce the deck between the two endpoints instead of re-deriving it.
+        /// Set by capture when the span crosses water: the generator rebuilds a course's whole
+        /// vertical profile from the LOCAL terrain and water every few metres, and water is live
+        /// simulation state that is never replicated. A pinned course carries endpoint heights the
+        /// source measured and is committed with its clamp band collapsed onto them.
+        /// </summary>
+        public bool PinProfile;
         public float CourseElevationLeft, CourseElevationRight;
         public int FixedIndex;
         public NetEndpointIntent Start;
@@ -125,6 +133,7 @@ namespace CS2MultiplayerMod.Game.Sync.Commands
                 w.WriteFloat(Start.ElevationRight);
                 w.WriteFloat(End.ElevationLeft);
                 w.WriteFloat(End.ElevationRight);
+                w.WriteBool(PinProfile);
                 return;
             }
 
@@ -136,6 +145,7 @@ namespace CS2MultiplayerMod.Game.Sync.Commands
             w.WriteFloat(CourseElevationLeft);
             w.WriteFloat(CourseElevationRight);
             w.WriteInt(FixedIndex);
+            w.WriteBool(PinProfile);
             WriteEndpoint(w, Start);
             WriteEndpoint(w, End);
         }
@@ -168,6 +178,7 @@ namespace CS2MultiplayerMod.Game.Sync.Commands
                 FixedIndex = r.ReadInt();
                 if (FixedIndex < -1 || FixedIndex > 1000000)
                     throw new ProtocolException("Implausible fixed-net index " + FixedIndex + ".");
+                PinProfile = r.ReadBool();
                 Start = ReadEndpoint(r);
                 End = ReadEndpoint(r);
             }
@@ -177,6 +188,7 @@ namespace CS2MultiplayerMod.Game.Sync.Commands
                 Start.ElevationRight = ReadBounded(r, -100000f, 100000f, "endpoint elevation");
                 End.ElevationLeft = ReadBounded(r, -100000f, 100000f, "endpoint elevation");
                 End.ElevationRight = ReadBounded(r, -100000f, 100000f, "endpoint elevation");
+                PinProfile = r.ReadBool();
             }
 
             if (r.Remaining != 0)
