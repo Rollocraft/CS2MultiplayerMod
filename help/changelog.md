@@ -5,7 +5,7 @@ description: "What changed in each release of the mod: new features, sync work a
 
 # Changelog
 
-## Version 0.1.6.1
+## Version 0.1.6.1 - 2026-09-02
 
 This update marks a major step forward for the project.
 
