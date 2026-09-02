@@ -5,6 +5,13 @@ description: "What changed in each release of the mod: new features, sync work a
 
 # Changelog
 
+## Version 0.1.6.1h1 - 2026-09-03
+
+### Fixes
+
+* The main-menu Multiplayer button could be missing on the launch that installs a mod update. Paradox Mods can finish enabling the mod tens of seconds after the main menu is already drawn, and the menu does not pick the button up on its own once it is on screen. The mod now notices that the button never reached the menu and rebuilds the menu interface, instead of needing a game restart.
+* The log now records whether the button actually reached the menu, not just that the interface module registered.
+
 ## Version 0.1.6.1 - 2026-09-02
 
 This update marks a major step forward for the project.

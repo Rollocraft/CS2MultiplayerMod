@@ -122,6 +122,19 @@ at the cost of desyncs, broken cities and crashes. Full details:
 
 ## Menu issues
 
+### The Multiplayer button is missing right after a mod update
+
+On the launch that installs a mod update, Paradox Mods can finish downloading and
+enabling the mod long after the main menu is already on screen. Until that finishes the
+mod is not running at all, so no Multiplayer button exists yet.
+
+**Restart the game once.** On the next launch the mod is already installed and loads
+before the menu is drawn. This is not a broken install, and nothing needs reinstalling.
+
+If the button is still missing after a restart, continue below.
+
+### The Multiplayer button is missing at every launch
+
 Go to options. Check that CS2MultiplayerMod appears in settings. If not:
 
 Remove the mod on PDXMods. Restart the game. Reinstall the mod on PDXMods. Restart the game.

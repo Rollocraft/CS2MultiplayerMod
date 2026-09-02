@@ -810,6 +810,13 @@ export const MultiplayerMenuButton = () => {
     const t = useT();
     const accepted = useValue(disclaimerAccepted$);
 
+    // Registering the append is not the same as being on screen: the menu column only
+    // picks it up the next time it renders. This is what tells the C# side the button
+    // actually made it, so a mod that loaded after the menu can be recovered.
+    useEffect(() => {
+        trigger(GROUP, "menuButtonMounted");
+    }, []);
+
     return (
         <MenuButton tinted src="Media/Glyphs/Passenger.svg"
                     onSelect={() => accepted

@@ -28,7 +28,7 @@
 	<!--Link to the forum post where the mod can be discussed-->
 	<ForumLink Value="" />
 	<!--Version of the mod-->
-	<ModVersion Value="0.1.6.1" />
+	<ModVersion Value="0.1.6.1h1" />
 	<!--Recommended version of the base game to use the mod-->
 	<GameVersion Value="1.6.*" />
 	<!--Dependency for the mod, can be set multiple times-->
@@ -37,13 +37,11 @@
 	<RequiredDLC Value="" />
 	<!--Change log for new version. Single line or multi line. Supports minimal markdown subset-->
 	<ChangeLog>
-		With 0.1.6.1, we have expanded the core synchronization system to include some parts of the simulation itself.
+		Hotfix 0.1.6.1h1
 
-		Naturally spawned buildings, population and economy values are now synchronized more closely between players.
+		- Fixed the Multiplayer button missing from the main menu on the first launch after a mod update.
 
-		We also improved synchronization stability, reduced unnecessary world reloads and fixed several bugs.
-
-		Large cities may still experience lag due to the significantly higher amount of simulation data being synchronized.
+		Paradox Mods can finish enabling the mod after the main menu is already on screen, and the menu did not pick the button up on its own. The mod now rebuilds the menu itself instead of needing a game restart.
 	</ChangeLog>
 	<!--External link, can be set multiple times. supported types are "discord", "github", "youtube", "twitch", "x", "paypal", "patreon", "buymeacoffee", "kofi", "crowdin", "gitlab", "gofundme"-->
 	<ExternalLink Type="discord" Url="https://discord.gg/KFZTW2YSJt" />

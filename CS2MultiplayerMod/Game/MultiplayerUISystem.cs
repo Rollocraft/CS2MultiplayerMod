@@ -34,8 +34,16 @@ namespace CS2MultiplayerMod.Game
         /// </summary>
         private const float UiReadyGraceSeconds = 120f;
 
+        // Latched for the process, not the world: the UI module registers once per game
+        // run, so a menu -> city -> menu round trip creates a system that would otherwise
+        // wait for a trigger that can no longer arrive.
+        private static bool s_UiModuleReady;
+        private static float s_UiModuleReadyAt = float.NaN;
+        private static bool s_MenuButtonSeen;
+
+        private static readonly MenuUiRecovery Recovery = new MenuUiRecovery();
+
         private float _createdAt;
-        private bool _uiModuleReady;
         private bool _uiModuleWarned;
         private bool _hostAfterWorldLoad;
         private bool _hostWorldLoadStarted;
@@ -57,10 +65,21 @@ namespace CS2MultiplayerMod.Game
             // this trigger never arrives and OnUpdate logs a diagnosis.
             AddBinding(new TriggerBinding(Group, "uiReady", () =>
             {
-                if (_uiModuleReady) return;
-                _uiModuleReady = true;
-                SyncLog.Detail(LogTopic.Ui,
-                    "UI module loaded and registered - the main-menu Multiplayer button is available.");
+                if (s_UiModuleReady) return;
+                s_UiModuleReady = true;
+                s_UiModuleReadyAt = UnityEngine.Time.realtimeSinceStartup;
+                SyncLog.Detail(LogTopic.Ui, "UI module loaded and registered.");
+            }));
+
+            // Sent when the button actually mounts in the menu column. Registering the
+            // append is not the same as being on screen: the column only picks the
+            // extension up the next time it renders, which never happens on its own once
+            // the menu is already up (see MenuUiRecovery).
+            AddBinding(new TriggerBinding(Group, "menuButtonMounted", () =>
+            {
+                if (s_MenuButtonSeen) return;
+                s_MenuButtonSeen = true;
+                SyncLog.Detail(LogTopic.Ui, "Main-menu Multiplayer button is on screen.");
             }));
 
             // Field values: polled from Setting every UI frame, pushed on change.
@@ -440,7 +459,12 @@ namespace CS2MultiplayerMod.Game
                 }
             }
 
-            if (_uiModuleReady || _uiModuleWarned) return;
+            // The mod can finish loading long after the main menu is already up - the
+            // launch that installs a mod update is the usual case - and the menu column
+            // does not re-read our append on its own once it has rendered.
+            Recovery.Update(World, s_UiModuleReady, s_UiModuleReadyAt, s_MenuButtonSeen);
+
+            if (s_UiModuleReady || _uiModuleWarned) return;
             if (UnityEngine.Time.realtimeSinceStartup - _createdAt < UiReadyGraceSeconds) return;
 
             _uiModuleWarned = true;
