@@ -292,12 +292,12 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         }
 
         /// <summary>
-        /// Re-run a rooted placement from the object tool's inputs. A finished service-building or
-        /// specialized-industry
-        /// batch also contains road-alignment and driveway definitions which identify the sender's
-        /// exact edge subdivision. Resolving those definitions one-for-one is impossible when the
-        /// receiver has an equivalent road split into different entities; regenerating the batch
-        /// from the snapped local edge avoids that accidental dependency.
+        /// Re-run an ordinary rooted placement from the object tool's inputs. A finished service
+        /// building batch can contain road-alignment and driveway definitions which identify the
+        /// sender's exact edge subdivision. Resolving those definitions one-for-one is impossible
+        /// when the receiver has an equivalent road split into different entities; regenerating the
+        /// batch from the snapped local edge avoids that accidental dependency. Composite
+        /// specialized industries retain their complete captured graph below.
         /// </summary>
         private bool TryRealizePlacementInput(SimulationCommandMessage message,
             ObjectToolOperationCommand command, NativeObjectOperationKey key, long now,
@@ -305,6 +305,19 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         {
             result = NativeObjectResult.Rejected;
             if (!command.HasPlacementInput) return false;
+
+            // A specialized-industry preview carries attachment selection, lot-surface and access
+            // definitions which are not recoverable from its single placement control point. The
+            // compact generator consequently produces only the placeholder and area. Replay the
+            // complete captured graph below so the visible building and its owned topology commit
+            // as the same transaction.
+            if (IsSpecializedIndustryPlacement(command))
+            {
+                SyncLog.Trace(LogTopic.Buildings,
+                    "specialized placement using complete captured graph defs=" +
+                    command.Definitions.Length);
+                return false;
+            }
 
             ObjectToolDefinitionIntent root = command.Definitions[command.RootIndex];
             Entity prefab;

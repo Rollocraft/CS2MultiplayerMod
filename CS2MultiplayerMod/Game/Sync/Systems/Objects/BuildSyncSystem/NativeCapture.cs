@@ -37,6 +37,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             public float3 Position;
             public float4 Rotation;
             public ushort RandomSeed;
+            public bool AllowAttachmentEnvelope;
             public long ExpiryMs;
         }
 
@@ -159,7 +160,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
                 if (active is AreaToolSystem)
                 {
-                    _cachedLocalObjectOperation = null;
+                    // The recreate area can become visible one output frame before its owner path
+                    // is fully linked. Keep the object operation and retry the correlation instead
+                    // of discarding the only complete capture and recovering the whole world later.
                     return;
                 }
             }

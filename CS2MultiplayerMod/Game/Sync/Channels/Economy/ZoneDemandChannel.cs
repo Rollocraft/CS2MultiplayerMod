@@ -15,23 +15,23 @@ using CS2MultiplayerMod.Game.Sync.Infrastructure;
 namespace CS2MultiplayerMod.Game.Sync.Channels
 {
     /// <summary>
-    /// Reports the host's zone demand and the population living behind it, and logs how far this
-    /// machine has drifted from either.
+    /// Replicates the complete host zone-demand state and reports population/building drift behind
+    /// it. The old implementation only compared seven headline values. It never wrote them, so a
+    /// client's commercial/office demand was replaced by its local simulation again every sixteen
+    /// frames; matching low-density values were incidental while high-density/resource arrays kept
+    /// diverging.
     ///
-    /// Demand is not written here, deliberately. It carries no randomness at all: each demand
-    /// system recomputes it from the city's own buildings, households and taxes every sixteen
-    /// simulation frames. Forcing a value would be overwritten within a fraction of a second, and
-    /// holding it would mean stopping systems whose other readers are not enumerable. What makes
-    /// two players see the same demand is the same buildings standing in both cities - which is
-    /// what <see cref="Systems.GrowableSyncSystem"/> establishes. This channel is how you tell
-    /// whether that worked: a demand gap that persists means the building sets have drifted apart.
+    /// Once the first valid host snapshot arrives, the three local demand writers are held and the
+    /// channel installs both their current/lagged headline values and every factor/resource array
+    /// serialized by Game.dll. Native consumers remain alive and read genuine host state; only the
+    /// redundant client-side calculation is stopped.
     ///
     /// The occupancy counts are here for the same reason. Households, citizens and pets are
     /// separate entities driven by each machine's own random stream; they start identical because a
     /// joining client loads the host's city, and they drift from there. Nothing corrects them yet,
     /// so the gap is what is reported.
     /// </summary>
-    public sealed class ZoneDemandChannel : IStateChannel
+    public sealed class ZoneDemandChannel : IStateChannel, IPumpedStateChannel
     {
         public const byte Id = 18;
         public byte ChannelId => Id;
@@ -62,6 +62,14 @@ namespace CS2MultiplayerMod.Game.Sync.Channels
         private int _snapshots;
         private int _hostSnapshots;
         private bool _hostSpawnerChecked;
+        private bool _hasAuthoritativeSnapshot;
+        private bool _captureWarned;
+        private World _world;
+
+        private readonly LocalAuthorityHold _authority = new LocalAuthorityHold(
+            "ZoneDemand", "zone demand", "all residential, commercial, industrial and office demand",
+            "zone-demand authority", typeof(ResidentialDemandSystem),
+            typeof(CommercialDemandSystem), typeof(IndustrialDemandSystem));
 
         private void Ensure(EntityManager em)
         {
@@ -111,14 +119,26 @@ namespace CS2MultiplayerMod.Game.Sync.Channels
             var industrial = em.World.GetExistingSystemManaged<IndustrialDemandSystem>();
             if (residential == null || commercial == null || industrial == null) return false;
 
+            DemandStateSnapshot demand;
+            try
+            {
+                if (!DemandStateAccess.TryCapture(residential, commercial, industrial, out demand))
+                    return false;
+                demand.Write(writer);
+            }
+            catch (System.Exception ex)
+            {
+                if (!_captureWarned)
+                {
+                    _captureWarned = true;
+                    SyncLog.Warn(LogTopic.City,
+                        "ZoneDemand: complete Game.dll demand capture failed (logged once): " +
+                        ex.Message);
+                }
+                return false;
+            }
+
             Unity.Mathematics.int3 residentialDemand = residential.buildingDemand;
-            writer.WriteInt(residentialDemand.x);
-            writer.WriteInt(residentialDemand.y);
-            writer.WriteInt(residentialDemand.z);
-            writer.WriteInt(commercial.buildingDemand);
-            writer.WriteInt(industrial.industrialBuildingDemand);
-            writer.WriteInt(industrial.officeBuildingDemand);
-            writer.WriteInt(industrial.storageBuildingDemand);
 
             int growables = _growables.CalculateEntityCount();
             int residentialProperties = _residentialProperties.CalculateEntityCount();
@@ -205,13 +225,7 @@ namespace CS2MultiplayerMod.Game.Sync.Channels
         public void Apply(EntityManager em, NetworkReader reader)
         {
             Ensure(em);
-            int hostResidentialLow = reader.ReadInt();
-            int hostResidentialMedium = reader.ReadInt();
-            int hostResidentialHigh = reader.ReadInt();
-            int hostCommercial = reader.ReadInt();
-            int hostIndustrial = reader.ReadInt();
-            int hostOffice = reader.ReadInt();
-            int hostStorage = reader.ReadInt();
+            DemandStateSnapshot hostDemand = DemandStateSnapshot.Read(reader);
             int hostBuildings = reader.ReadInt();
             int hostResidentialProperties = reader.ReadInt();
             int hostCommercialProperties = reader.ReadInt();
@@ -219,23 +233,52 @@ namespace CS2MultiplayerMod.Game.Sync.Channels
             int hostHouseholds = reader.ReadInt();
             int hostCitizens = reader.ReadInt();
             int hostPets = reader.ReadInt();
-
-            if (++_snapshots % ReportEverySnapshots != 0) return;
+            if (reader.Remaining != 0)
+                throw new ProtocolException("Trailing bytes in zone-demand state.");
 
             var residential = em.World.GetExistingSystemManaged<ResidentialDemandSystem>();
             var commercial = em.World.GetExistingSystemManaged<CommercialDemandSystem>();
             var industrial = em.World.GetExistingSystemManaged<IndustrialDemandSystem>();
-            if (residential == null || commercial == null || industrial == null) return;
+            if (residential == null || commercial == null || industrial == null)
+                throw new System.InvalidOperationException("Vanilla zone-demand systems are unavailable.");
 
             Unity.Mathematics.int3 localResidential = residential.buildingDemand;
+            int localCommercial = commercial.buildingDemand;
+            int localIndustrial = industrial.industrialBuildingDemand;
+            int localOffice = industrial.officeBuildingDemand;
+            int localStorage = industrial.storageBuildingDemand;
+
+            _world = em.World;
+            MultiplayerService service = Mod.Service;
+            if (service != null && service.GameplaySyncReady)
+                _authority.Apply(em.World, service.Session);
+            try
+            {
+                DemandStateAccess.Apply(residential, commercial, industrial, hostDemand);
+                _hasAuthoritativeSnapshot = true;
+            }
+            catch
+            {
+                _hasAuthoritativeSnapshot = false;
+                _authority.Restore(em.World);
+                throw;
+            }
+
+            if (++_snapshots % ReportEverySnapshots != 0) return;
+
+            Unity.Mathematics.int3 hostResidential = hostDemand.ResidentialLastBuilding;
+            int hostCommercial = hostDemand.CommercialLastBuilding;
+            int hostIndustrial = hostDemand.IndustrialLast[1];
+            int hostStorage = hostDemand.IndustrialLast[3];
+            int hostOffice = hostDemand.IndustrialLast[5];
             int worstDemandGap = Max(
-                Gap(localResidential.x, hostResidentialLow),
-                Gap(localResidential.y, hostResidentialMedium),
-                Gap(localResidential.z, hostResidentialHigh),
-                Gap(commercial.buildingDemand, hostCommercial),
-                Gap(industrial.industrialBuildingDemand, hostIndustrial),
-                Gap(industrial.officeBuildingDemand, hostOffice),
-                Gap(industrial.storageBuildingDemand, hostStorage));
+                Gap(localResidential.x, hostResidential.x),
+                Gap(localResidential.y, hostResidential.y),
+                Gap(localResidential.z, hostResidential.z),
+                Gap(localCommercial, hostCommercial),
+                Gap(localIndustrial, hostIndustrial),
+                Gap(localOffice, hostOffice),
+                Gap(localStorage, hostStorage));
 
             int localBuildings = _growables.CalculateEntityCount();
             bool buildingsDiverged = Diverged(localBuildings, hostBuildings);
@@ -249,11 +292,11 @@ namespace CS2MultiplayerMod.Game.Sync.Channels
             if (worstDemandGap >= DemandGapThreshold)
                 SyncLog.Warn(LogTopic.City, "ZoneDemand: demand differs from the host by up to " +
                     worstDemandGap + " (res " + localResidential.x + "/" + localResidential.y + "/" +
-                    localResidential.z + " vs " + hostResidentialLow + "/" + hostResidentialMedium +
-                    "/" + hostResidentialHigh + ", com " + commercial.buildingDemand + " vs " +
-                    hostCommercial + ", ind " + industrial.industrialBuildingDemand + " vs " +
-                    hostIndustrial + ", off " + industrial.officeBuildingDemand + " vs " +
-                    hostOffice + ", sto " + industrial.storageBuildingDemand + " vs " + hostStorage +
+                    localResidential.z + " vs " + hostResidential.x + "/" + hostResidential.y +
+                    "/" + hostResidential.z + ", com " + localCommercial + " vs " +
+                    hostCommercial + ", ind " + localIndustrial + " vs " +
+                    hostIndustrial + ", off " + localOffice + " vs " +
+                    hostOffice + ", sto " + localStorage + " vs " + hostStorage +
                     ").");
 
             int localCitizens = _citizens.CalculateEntityCount();
@@ -272,6 +315,23 @@ namespace CS2MultiplayerMod.Game.Sync.Channels
                 ", com " + _commercialProperties.CalculateEntityCount() + "/" +
                 hostCommercialProperties + ", ind " + _industrialProperties.CalculateEntityCount() +
                 "/" + hostIndustrialProperties + ".");
+        }
+
+        public void Pump(EntityManager em)
+        {
+            _world = em.World;
+            MultiplayerService service = Mod.Service;
+            if (_hasAuthoritativeSnapshot && service != null && service.GameplaySyncReady &&
+                service.Session.Role == SessionRole.Client)
+                _authority.Apply(em.World, service.Session);
+            else
+                _authority.Restore(em.World);
+        }
+
+        public void ResetPending()
+        {
+            _hasAuthoritativeSnapshot = false;
+            if (_world != null) _authority.Restore(_world);
         }
 
         private static int Gap(int local, int host) =>

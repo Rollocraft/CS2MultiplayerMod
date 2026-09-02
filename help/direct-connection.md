@@ -1,5 +1,6 @@
 ---
 title: Direct connection
+description: "Connect straight to the host's address on TCP port 25001. Works on every copy of the game, including Xbox App, Microsoft Store and Game Pass."
 ---
 
 # Direct connection

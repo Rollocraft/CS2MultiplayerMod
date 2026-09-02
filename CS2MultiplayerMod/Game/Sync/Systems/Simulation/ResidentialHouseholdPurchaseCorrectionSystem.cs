@@ -1,3 +1,4 @@
+using CS2MultiplayerMod.Game.Sync.Infrastructure;
 using Game;
 using Game.Buildings;
 using Game.Citizens;
@@ -6,16 +7,15 @@ using Game.Economy;
 using Game.Tools;
 using Unity.Collections;
 using Unity.Entities;
-using CS2MultiplayerMod.Game.Sync.Infrastructure;
 
 namespace CS2MultiplayerMod.Game.Sync.Systems
 {
     /// <summary>
-    /// Corrects only household chunks touched since the preceding simulation update. This follows
-    /// household-level writers instead of assuming that every family shares its building's update
-    /// partition, which is not true for multi-unit residential buildings.
+    /// Captures household money/resource-cost writes made by ResourceBuyerSystem after the earlier
+    /// daily-economy boundary. Native shoppers and their SaleEvents remain real and keep running;
+    /// only the resulting host-owned accounting scalars are corrected.
     /// </summary>
-    public sealed partial class ResidentialHouseholdEconomyCorrectionSystem : GameSystemBase
+    public sealed partial class ResidentialHouseholdPurchaseCorrectionSystem : GameSystemBase
     {
         private ResidentialOccupancySyncSystem _occupancy;
         private EntityQuery _changedHouseholds;
@@ -36,9 +36,20 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             });
         }
 
+        /// <summary>
+        /// ResourceBuyerSystem's own interval, which is what this pass exists to follow. The query
+        /// here is identical to the one in
+        /// <see cref="ResidentialHouseholdEconomyCorrectionSystem"/>, and both enqueue into the
+        /// same retained correction queue that the same bounded drain empties - so the only thing
+        /// full rate bought was building the same entity array a second time every frame.
+        /// </summary>
+        public override int GetUpdateInterval(SystemUpdatePhase phase) =>
+            phase == SystemUpdatePhase.GameSimulation ? 16 : 1;
+
         protected override void OnUpdate()
         {
-            using (Diagnostics.SyncProfiler.Measure("Occupancy.Economy", Diagnostics.SyncZone.Residential))
+            using (Diagnostics.SyncProfiler.Measure("Occupancy.Purchases",
+                       Diagnostics.SyncZone.Residential))
             {
                 if (_occupancy == null) return;
                 if (!_occupancy.WantsHouseholdEconomyCorrection)
@@ -46,6 +57,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     _occupancy.ClearHouseholdEconomyCorrections();
                     return;
                 }
+
                 NativeArray<Entity> households = default(NativeArray<Entity>);
                 try
                 {
@@ -60,8 +72,6 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 {
                     if (households.IsCreated) households.Dispose();
                 }
-                // Drain even on a frame whose changed-version query is empty: those are the
-                // retained entities that did not fit the previous frame's bounded correction.
                 _occupancy.CorrectHouseholdEconomyAfterLocalUpdate();
             }
         }

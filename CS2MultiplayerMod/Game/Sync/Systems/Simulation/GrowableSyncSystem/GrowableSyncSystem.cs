@@ -162,6 +162,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         private int _sentSpawn, _sentLevel, _sentRemove, _sentState;
         private int _gotSpawn, _gotLevel, _gotRemove, _gotState;
         private int _duplicates, _conflicts, _unmatched, _unknownPrefab, _rejectedLocal;
+        private int _repairedPrefabs;
 
         private PrefabSystem _prefabSystem;
         private PrefabIndex _prefabIndex;
@@ -403,13 +404,15 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             _lastStatsMs = now;
 
             if (_gotSpawn + _gotLevel + _gotRemove + _gotState + _duplicates + _conflicts +
-                _unmatched + _unknownPrefab + _rejectedLocal == 0) return;
+                _unmatched + _unknownPrefab + _rejectedLocal + _repairedPrefabs == 0) return;
             SyncLog.Detail(LogTopic.Buildings, "GrowableSync/30s client: spawn=" + _gotSpawn +
                 " level=" + _gotLevel + " remove=" + _gotRemove + " state=" + _gotState +
                 " duplicate=" + _duplicates + " conflict=" + _conflicts + " unmatched=" + _unmatched +
-                " unknownPrefab=" + _unknownPrefab + " rejectedLocal=" + _rejectedLocal + ".");
+                " unknownPrefab=" + _unknownPrefab + " rejectedLocal=" + _rejectedLocal +
+                " prefabRepairs=" + _repairedPrefabs + ".");
             _gotSpawn = _gotLevel = _gotRemove = _gotState = 0;
             _duplicates = _conflicts = _unmatched = _unknownPrefab = _rejectedLocal = 0;
+            _repairedPrefabs = 0;
         }
     }
 }

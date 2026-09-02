@@ -3,10 +3,13 @@ using System.Collections.Generic;
 using CS2MultiplayerMod.Core.Session;
 using CS2MultiplayerMod.Game.Sync.Commands;
 using CS2MultiplayerMod.Game.Sync.Infrastructure;
+using Game.Agents;
 using Game.Buildings;
+using Game.Citizens;
 using Game.Common;
 using Game.Companies;
 using Game.Economy;
+using Game.Objects;
 using Game.Prefabs;
 using Game.Simulation;
 using Unity.Collections;
@@ -64,10 +67,26 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             {
                 pages++;
                 _receivedPages++;
-                _clientSweepId = snapshot.SweepId;
+                if (_clientSweepId != snapshot.SweepId)
+                {
+                    _clientSweepId = snapshot.SweepId;
+                    _clientNextPage = 0;
+                    _clientSweepIntact = true;
+                }
+                if (snapshot.PageIndex != _clientNextPage) _clientSweepIntact = false;
+                if (snapshot.PageIndex >= _clientNextPage)
+                    _clientNextPage = snapshot.PageIndex + 1;
                 for (int i = 0; i < snapshot.Entries.Count; i++)
                     ResolveOrPend(snapshot.Entries[i], snapshot.SweepId, now, search, candidates);
-                if (snapshot.EndOfSweep) PruneCacheAfterCompleteSweep(snapshot.SweepId);
+                if (snapshot.EndOfSweep)
+                {
+                    // Pruning is only safe after every page in the absolute sweep arrived. A
+                    // coalesced/dropped middle page says nothing about the buildings it carried.
+                    if (_clientSweepIntact) PruneCacheAfterCompleteSweep(snapshot.SweepId);
+                    _clientSweepId = 0;
+                    _clientNextPage = 0;
+                    _clientSweepIntact = false;
+                }
             }
         }
 
@@ -212,8 +231,10 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                                       entry.CompanyPrefabName, StringComparison.Ordinal);
             cached.Entry = entry;
             cached.LastSeenSweep = sweepId;
-            // Only a tenancy difference needs the structural pass. A page that merely moves money
-            // is picked up by the figure correction, which costs a comparison.
+            // Every arrived value is applied at the 16-frame state boundary. Waiting for this
+            // company's statistics partition can otherwise take 2,048 frames, during which the
+            // local economy repeatedly overwrites the host values.
+            MarkStateDirty(property);
             if (tenancyChanged) MarkDirty(property);
         }
 
@@ -228,6 +249,15 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             _dirty.RemoveAt(0);
         }
 
+        private void MarkStateDirty(Entity property)
+        {
+            if (!_stateDirtyMembers.Add(property)) return;
+            _stateDirty.Add(property);
+            if (_stateDirty.Count <= MaxDirtyProperties) return;
+            _stateDirtyMembers.Remove(_stateDirty[0]);
+            _stateDirty.RemoveAt(0);
+        }
+
         private void PruneCacheAfterCompleteSweep(uint sweepId)
         {
             _cacheScratch.Clear();
@@ -239,6 +269,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 Entity property = _cacheScratch[i];
                 _cache.Remove(property);
                 _dirtyMembers.Remove(property);
+                _stateDirtyMembers.Remove(property);
                 _settling.Remove(property);
             }
             if (_cacheScratch.Count > 0) RebuildTenancyOrder();
@@ -250,6 +281,139 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             _tenancyOrder.Clear();
             foreach (KeyValuePair<Entity, CachedEntry> pair in _cache) _tenancyOrder.Add(pair.Key);
             _tenancyCursor = 0;
+            _stateCursor = 0;
+        }
+
+        // ---- Fast state boundary --------------------------------------------------------------
+
+        /// <summary>
+        /// Called after the native job-matching cadence. Tenancy and newly arrived state are
+        /// applied here so names, panel figures and real worker links settle within 16 frames.
+        /// </summary>
+        internal void ApplyClientStateBoundary()
+        {
+            MultiplayerService service = Mod.Service;
+            if (service == null || !service.GameplaySyncReady ||
+                service.Session.Role != SessionRole.Client) return;
+
+            PumpIncoming();
+            ApplyTenancy();
+            ApplyChangedState();
+        }
+
+        private void ApplyChangedState()
+        {
+            if (_cache.Count == 0) return;
+            using (Diagnostics.SyncProfiler.Measure("Companies.StateBoundary"))
+            {
+                _stateRetryScratch.Clear();
+                int processed = _stateDirty.Count < MaxStateDirtyPerBoundary
+                    ? _stateDirty.Count : MaxStateDirtyPerBoundary;
+                for (int i = 0; i < processed; i++)
+                {
+                    Entity property = _stateDirty[i];
+                    _stateDirtyMembers.Remove(property);
+                    if (!ApplyCachedCompany(property) && _cache.ContainsKey(property))
+                        _stateRetryScratch.Add(property);
+                }
+                if (processed > 0) _stateDirty.RemoveRange(0, processed);
+                for (int i = 0; i < _stateRetryScratch.Count; i++)
+                    MarkStateDirty(_stateRetryScratch[i]);
+                _stateRetryScratch.Clear();
+
+                int walked = 0;
+                while (walked < MaxStateWalkedPerBoundary && _tenancyOrder.Count > 0)
+                {
+                    if (_stateCursor >= _tenancyOrder.Count) _stateCursor = 0;
+                    Entity property = _tenancyOrder[_stateCursor++];
+                    walked++;
+                    if (!_cache.ContainsKey(property)) continue;
+                    if (!ApplyCachedCompany(property)) MarkStateDirty(property);
+                }
+            }
+        }
+
+        private bool ApplyCachedCompany(Entity property)
+        {
+            CachedEntry cached;
+            if (!_cache.TryGetValue(property, out cached) || !IsLiveWorkplaceProperty(property))
+                return true;
+            // The tenant and worker roster are meaningful only against the same property capacity
+            // as the host. A dropped level command used to leave dense buildings on their old
+            // prefab forever; the next absolute page now completes that level through the game's
+            // own BuildingConstructionSystem before tenancy is touched.
+            if (!EnsurePropertyPrefabConverged(property, cached.Entry)) return false;
+            if (!cached.Entry.HasTenant) return true;
+
+            Entity company = FindTenant(property);
+            if (company == Entity.Null || !TenantMatches(company, cached.Entry) ||
+                EntityManager.HasComponent<Created>(company)) return false;
+
+            bool complete = ApplyCompany(company, cached.Entry);
+            _appliedCompanies++;
+            _zoneApplied[(int)ZoneOf(property)]++;
+            return complete;
+        }
+
+        /// <summary>
+        /// Converges a workplace's construction clock and, once the host is complete, its actual
+        /// prefab. We deliberately install an already-complete UnderConstruction target rather
+        /// than assigning PrefabRef: BuildingConstructionSystem then performs the native
+        /// sub-object, area, net and renter-facing side effects of UpdatePrefab.
+        /// </summary>
+        private bool EnsurePropertyPrefabConverged(Entity property, CompanyStatsEntry entry)
+        {
+            bool localConstructing = EntityManager.HasComponent<UnderConstruction>(property);
+            if (entry.ConstructionSpeed != 0)
+            {
+                // While the host is building, PrefabName is still the old prefab. The level
+                // command owns the target; this absolute channel can safely align only its clock.
+                if (localConstructing)
+                {
+                    UnderConstruction active =
+                        EntityManager.GetComponentData<UnderConstruction>(property);
+                    if (active.m_Speed != entry.ConstructionSpeed)
+                    {
+                        active.m_Speed = entry.ConstructionSpeed;
+                        EntityManager.SetComponentData(property, active);
+                        _alignedPropertyBuildRates++;
+                    }
+                }
+                return true;
+            }
+
+            Entity currentPrefab = EntityManager.GetComponentData<PrefabRef>(property).m_Prefab;
+            string currentName = _prefabIndex.NameOf(currentPrefab);
+            if (!localConstructing &&
+                string.Equals(currentName, entry.PrefabName, StringComparison.Ordinal)) return true;
+
+            Entity hostPrefab;
+            if (!_prefabIndex.TryResolve(entry.PrefabName,
+                    candidate => EntityManager.HasComponent<BuildingPropertyData>(candidate) &&
+                                 EntityManager.HasComponent<SpawnableBuildingData>(candidate) &&
+                                 !EntityManager.HasComponent<SignatureBuildingData>(candidate),
+                    out hostPrefab) || hostPrefab == Entity.Null)
+            {
+                // Non-growable workplaces share this channel but must never be rewritten by a
+                // growable-level fallback. Their ordinary build/object channels remain authority.
+                return true;
+            }
+
+            if (currentPrefab == hostPrefab && !localConstructing) return true;
+            UnderConstruction completion = localConstructing
+                ? EntityManager.GetComponentData<UnderConstruction>(property)
+                : default(UnderConstruction);
+            if (completion.m_NewPrefab == hostPrefab && completion.m_Progress >= 100)
+                return false;
+
+            completion.m_NewPrefab = hostPrefab;
+            completion.m_Progress = byte.MaxValue;
+            if (completion.m_Speed == 0) completion.m_Speed = 1;
+            if (localConstructing) EntityManager.SetComponentData(property, completion);
+            else EntityManager.AddComponentData(property, completion);
+            EntityManager.AddComponent<Updated>(property);
+            _correctedPropertyPrefabs++;
+            return false;
         }
 
         // ---- Figures: correct the partition the game just recomputed --------------------------
@@ -320,7 +484,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     // A business the host does not have in this building gets no figures; the
                     // tenancy pass is what resolves that difference.
                     if (!TenantMatches(company, cached.Entry)) continue;
-                    ApplyCompany(company, cached.Entry);
+                    if (!ApplyCompany(company, cached.Entry)) MarkStateDirty(property);
                     applied++;
                 }
                 _appliedCompanies += applied;
@@ -332,9 +496,12 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         private SyncZone ZoneOf(Entity property)
         {
             if (property == Entity.Null || !EntityManager.Exists(property)) return SyncZone.None;
-            if (EntityManager.HasComponent<CommercialProperty>(property)) return SyncZone.Commercial;
-            if (EntityManager.HasComponent<IndustrialProperty>(property)) return SyncZone.Industrial;
+            // Office growables can also carry the broader industrial marker.
             if (EntityManager.HasComponent<OfficeProperty>(property)) return SyncZone.Office;
+            if (EntityManager.HasComponent<CommercialProperty>(property)) return SyncZone.Commercial;
+            if (EntityManager.HasComponent<IndustrialProperty>(property) ||
+                EntityManager.HasComponent<StorageProperty>(property) ||
+                EntityManager.HasComponent<ExtractorProperty>(property)) return SyncZone.Industrial;
             return SyncZone.None;
         }
 
@@ -346,8 +513,13 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             return string.Equals(local, entry.CompanyPrefabName, StringComparison.Ordinal);
         }
 
-        private void ApplyCompany(Entity company, CompanyStatsEntry entry)
+        private bool ApplyCompany(Entity company, CompanyStatsEntry entry)
         {
+            if (!EntityManager.Exists(company) || EntityManager.HasComponent<Created>(company) ||
+                !EntityManager.HasComponent<CompanyData>(company) ||
+                !EntityManager.HasComponent<CompanyStatisticData>(company)) return false;
+
+            bool complete = ApplyCompanyIdentity(company, entry);
             CompanyStatisticData data = EntityManager.GetComponentData<CompanyStatisticData>(company);
             CompanyStatisticData wanted = data;
             wanted.m_MaxNumberOfCustomers = entry.MaxNumberOfCustomers;
@@ -390,7 +562,97 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 }
             }
 
+            if (entry.HasServiceAvailable &&
+                EntityManager.HasComponent<ServiceAvailable>(company))
+            {
+                ServiceAvailable service = EntityManager.GetComponentData<ServiceAvailable>(company);
+                if (service.m_ServiceAvailable != entry.ServiceAvailable ||
+                    service.m_MeanPriority != entry.ServiceMeanPriority)
+                {
+                    service.m_ServiceAvailable = entry.ServiceAvailable;
+                    service.m_MeanPriority = entry.ServiceMeanPriority;
+                    EntityManager.SetComponentData(company, service);
+                    _correctedFields++;
+                }
+            }
+
+            if (entry.HasLodgingProvider &&
+                EntityManager.HasComponent<LodgingProvider>(company))
+            {
+                LodgingProvider lodging = EntityManager.GetComponentData<LodgingProvider>(company);
+                if (lodging.m_FreeRooms != entry.FreeLodgingRooms ||
+                    lodging.m_Price != entry.LodgingPrice)
+                {
+                    lodging.m_FreeRooms = entry.FreeLodgingRooms;
+                    lodging.m_Price = entry.LodgingPrice;
+                    EntityManager.SetComponentData(company, lodging);
+                    _correctedFields++;
+                }
+            }
+
+            if (entry.HasWorkProvider && EntityManager.HasComponent<WorkProvider>(company))
+            {
+                WorkProvider provider = EntityManager.GetComponentData<WorkProvider>(company);
+                if (provider.m_MaxWorkers != entry.MaxWorkers)
+                {
+                    provider.m_MaxWorkers = entry.MaxWorkers;
+                    EntityManager.SetComponentData(company, provider);
+                    _correctedFields++;
+                }
+            }
+
+            if (entry.HasTaxPayer && EntityManager.HasComponent<TaxPayer>(company))
+            {
+                TaxPayer tax = EntityManager.GetComponentData<TaxPayer>(company);
+                if (tax.m_UntaxedIncome != entry.UntaxedIncome ||
+                    tax.m_AverageTaxRate != entry.AverageTaxRate ||
+                    tax.m_AverageTaxPaid != entry.AverageTaxPaid)
+                {
+                    tax.m_UntaxedIncome = entry.UntaxedIncome;
+                    tax.m_AverageTaxRate = entry.AverageTaxRate;
+                    tax.m_AverageTaxPaid = entry.AverageTaxPaid;
+                    EntityManager.SetComponentData(company, tax);
+                    _correctedFields++;
+                }
+            }
+
             ApplyResources(company, entry);
+            ApplyTradeCosts(company, entry);
+            if (!ApplyEmployees(company, entry)) complete = false;
+            return complete;
+        }
+
+        private bool ApplyCompanyIdentity(Entity company, CompanyStatsEntry entry)
+        {
+            Entity brand;
+            bool resolved = _prefabIndex.TryResolve(entry.BrandPrefabName,
+                candidate => EntityManager.HasComponent<BrandData>(candidate), out brand) &&
+                brand != Entity.Null;
+            if (resolved)
+            {
+                CompanyData companyData = EntityManager.GetComponentData<CompanyData>(company);
+                if (companyData.m_Brand != brand ||
+                    companyData.m_RandomSeed.state != entry.CompanyRandomState)
+                {
+                    companyData.m_Brand = brand;
+                    companyData.m_RandomSeed =
+                        new Unity.Mathematics.Random(entry.CompanyRandomState);
+                    EntityManager.SetComponentData(company, companyData);
+                    _correctedCompanyData++;
+                }
+            }
+
+            string wantedName = entry.CompanyCustomName ?? string.Empty;
+            string currentName;
+            bool hasCurrent = _nameSystem.TryGetCustomName(company, out currentName) &&
+                              !string.IsNullOrEmpty(currentName);
+            if ((wantedName.Length == 0 && hasCurrent) ||
+                (wantedName.Length > 0 && (!hasCurrent || currentName != wantedName)))
+            {
+                _nameSystem.SetCustomName(company, wantedName);
+                _correctedCompanyData++;
+            }
+            return resolved;
         }
 
         /// <summary>
@@ -425,6 +687,293 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 changed = true;
             }
             if (changed) _correctedResources++;
+        }
+
+        private void ApplyTradeCosts(Entity company, CompanyStatsEntry entry)
+        {
+            if (!EntityManager.HasBuffer<TradeCost>(company)) return;
+            CompanyStatsTradeCost[] wanted = entry.TradeCosts;
+            int wantedCount = wanted == null ? 0 : wanted.Length;
+            DynamicBuffer<TradeCost> costs = EntityManager.GetBuffer<TradeCost>(company, true);
+            bool changed = costs.Length != wantedCount;
+            if (!changed)
+            {
+                for (int i = 0; i < costs.Length; i++)
+                {
+                    TradeCost current = costs[i];
+                    if (EconomyUtils.GetResourceIndex(current.m_Resource) == wanted[i].Index &&
+                        current.m_BuyCost == wanted[i].BuyCost &&
+                        current.m_SellCost == wanted[i].SellCost &&
+                        current.m_LastTransferRequestTime == wanted[i].LastTransferRequestTime)
+                        continue;
+                    changed = true;
+                    break;
+                }
+            }
+            if (!changed) return;
+
+            costs = EntityManager.GetBuffer<TradeCost>(company);
+            costs.Clear();
+            for (int i = 0; i < wantedCount; i++)
+            {
+                costs.Add(new TradeCost
+                {
+                    m_Resource = EconomyUtils.GetResource(wanted[i].Index),
+                    m_BuyCost = wanted[i].BuyCost,
+                    m_SellCost = wanted[i].SellCost,
+                    m_LastTransferRequestTime = wanted[i].LastTransferRequestTime,
+                });
+            }
+            _correctedTradeCosts++;
+        }
+
+        /// <summary>
+        /// Rebuild the game's real two-sided employment graph. Each host id has already been
+        /// associated with a local resident by occupancy; setting Worker on that citizen lets the
+        /// native travel simulation send that same pedestrian to work. An incomplete host roster
+        /// is additive only, protecting commuters and tourists for which no shared identity exists.
+        /// </summary>
+        private bool ApplyEmployees(Entity company, CompanyStatsEntry entry)
+        {
+            CompanyStatsEmployee[] wanted = entry.Employees;
+            int wantedCount = wanted == null ? 0 : wanted.Length;
+            if (!EntityManager.HasBuffer<Employee>(company)) return wantedCount == 0;
+
+            _resolvedEmployeeScratch.Clear();
+            _desiredEmployeeEntities.Clear();
+            bool allResolved = true;
+            for (int i = 0; i < wantedCount; i++)
+            {
+                Entity citizen;
+                if (_occupancy == null ||
+                    !_occupancy.TryResolveCompanyCitizen(wanted[i].CitizenId, out citizen) ||
+                    citizen == Entity.Null || !EntityManager.Exists(citizen) ||
+                    !EntityManager.HasComponent<Citizen>(citizen) ||
+                    EntityManager.HasComponent<Deleted>(citizen))
+                {
+                    allResolved = false;
+                    continue;
+                }
+                if (!_desiredEmployeeEntities.Add(citizen))
+                {
+                    allResolved = false;
+                    continue;
+                }
+                _resolvedEmployeeScratch.Add(new ResolvedEmployee
+                {
+                    Citizen = citizen,
+                    State = wanted[i],
+                });
+            }
+
+            // Move a desired resident out of whichever local workplace had claimed them first.
+            // Buffer mutations finish before Worker is added/set, so no live DynamicBuffer handle
+            // crosses a structural component change.
+            for (int i = 0; i < _resolvedEmployeeScratch.Count; i++)
+            {
+                Entity citizen = _resolvedEmployeeScratch[i].Citizen;
+                if (!EntityManager.HasComponent<Worker>(citizen)) continue;
+                Entity previous = EntityManager.GetComponentData<Worker>(citizen).m_Workplace;
+                if (previous == Entity.Null || previous == company) continue;
+                RemoveEmployeeReference(previous, citizen);
+            }
+
+            bool absolute = entry.EmployeeRosterComplete && allResolved;
+            bool changed = ReconcileEmployeeBuffer(company, absolute);
+
+            for (int i = 0; i < _resolvedEmployeeScratch.Count; i++)
+            {
+                ResolvedEmployee employee = _resolvedEmployeeScratch[i];
+                if (SetDesiredWorker(company, employee.Citizen, employee.State)) changed = true;
+                CancelJobSearch(employee.Citizen);
+            }
+
+            // Only a complete, fully resolved roster authorizes removals. These citizens stay real
+            // residents; removing Worker merely makes the native job finder consider them again.
+            if (absolute)
+            {
+                for (int i = 0; i < _employeeRemovalScratch.Count; i++)
+                {
+                    Entity citizen = _employeeRemovalScratch[i];
+                    if (!EntityManager.Exists(citizen) ||
+                        !EntityManager.HasComponent<Worker>(citizen)) continue;
+                    Worker worker = EntityManager.GetComponentData<Worker>(citizen);
+                    if (worker.m_Workplace != company) continue;
+                    EntityManager.RemoveComponent<Worker>(citizen);
+                    changed = true;
+                }
+            }
+
+            RefreshFreeWorkplaces(company);
+            if (changed) _correctedEmployees++;
+            return allResolved;
+        }
+
+        private bool ReconcileEmployeeBuffer(Entity company, bool absolute)
+        {
+            _employeeRemovalScratch.Clear();
+            DynamicBuffer<Employee> employees = EntityManager.GetBuffer<Employee>(company);
+            bool changed = false;
+            if (absolute)
+            {
+                for (int i = 0; i < employees.Length; i++)
+                {
+                    Entity citizen = employees[i].m_Worker;
+                    if (_desiredEmployeeEntities.Contains(citizen) ||
+                        _employeeRemovalScratch.Contains(citizen)) continue;
+                    _employeeRemovalScratch.Add(citizen);
+                }
+
+                bool same = employees.Length == _resolvedEmployeeScratch.Count;
+                if (same)
+                {
+                    for (int i = 0; i < employees.Length; i++)
+                    {
+                        if (employees[i].m_Worker == _resolvedEmployeeScratch[i].Citizen &&
+                            employees[i].m_Level == _resolvedEmployeeScratch[i].State.Level)
+                            continue;
+                        same = false;
+                        break;
+                    }
+                }
+                if (same) return false;
+
+                employees.Clear();
+                for (int i = 0; i < _resolvedEmployeeScratch.Count; i++)
+                {
+                    employees.Add(new Employee
+                    {
+                        m_Worker = _resolvedEmployeeScratch[i].Citizen,
+                        m_Level = _resolvedEmployeeScratch[i].State.Level,
+                    });
+                }
+                return true;
+            }
+
+            // Partial roster: update/add only the residents explicitly named by the host.
+            for (int i = 0; i < _resolvedEmployeeScratch.Count; i++)
+            {
+                ResolvedEmployee wanted = _resolvedEmployeeScratch[i];
+                int first = -1;
+                for (int e = 0; e < employees.Length; e++)
+                {
+                    if (employees[e].m_Worker != wanted.Citizen) continue;
+                    first = e;
+                    break;
+                }
+                if (first < 0)
+                {
+                    employees.Add(new Employee
+                    {
+                        m_Worker = wanted.Citizen,
+                        m_Level = wanted.State.Level,
+                    });
+                    changed = true;
+                    continue;
+                }
+                if (employees[first].m_Level != wanted.State.Level)
+                {
+                    employees[first] = new Employee
+                    {
+                        m_Worker = wanted.Citizen,
+                        m_Level = wanted.State.Level,
+                    };
+                    changed = true;
+                }
+                for (int e = employees.Length - 1; e > first; e--)
+                {
+                    if (employees[e].m_Worker != wanted.Citizen) continue;
+                    employees.RemoveAt(e);
+                    changed = true;
+                }
+            }
+            return changed;
+        }
+
+        private void RemoveEmployeeReference(Entity workplace, Entity citizen)
+        {
+            if (workplace == Entity.Null || !EntityManager.Exists(workplace) ||
+                !EntityManager.HasBuffer<Employee>(workplace)) return;
+            DynamicBuffer<Employee> employees = EntityManager.GetBuffer<Employee>(workplace);
+            bool changed = false;
+            for (int i = employees.Length - 1; i >= 0; i--)
+            {
+                if (employees[i].m_Worker != citizen) continue;
+                employees.RemoveAt(i);
+                changed = true;
+            }
+            if (changed) RefreshFreeWorkplaces(workplace);
+        }
+
+        private bool SetDesiredWorker(Entity company, Entity citizen,
+            CompanyStatsEmployee wanted)
+        {
+            var worker = new Worker
+            {
+                m_Workplace = company,
+                m_Level = wanted.Level,
+                m_LastCommuteTime = wanted.LastCommuteTime,
+                m_Shift = (Workshift)wanted.Shift,
+            };
+            if (!EntityManager.HasComponent<Worker>(citizen))
+            {
+                EntityManager.AddComponentData(citizen, worker);
+                return true;
+            }
+
+            Worker current = EntityManager.GetComponentData<Worker>(citizen);
+            if (current.m_Workplace == worker.m_Workplace && current.m_Level == worker.m_Level &&
+                current.m_LastCommuteTime == worker.m_LastCommuteTime &&
+                current.m_Shift == worker.m_Shift) return false;
+            EntityManager.SetComponentData(citizen, worker);
+            return true;
+        }
+
+        private void CancelJobSearch(Entity citizen)
+        {
+            if (!EntityManager.HasComponent<HasJobSeeker>(citizen)) return;
+            HasJobSeeker state = EntityManager.GetComponentData<HasJobSeeker>(citizen);
+            Entity seeker = state.m_Seeker;
+            if (seeker != Entity.Null && EntityManager.Exists(seeker) &&
+                !EntityManager.HasComponent<Deleted>(seeker))
+                EntityManager.AddComponent<Deleted>(seeker);
+            if (EntityManager.IsComponentEnabled<HasJobSeeker>(citizen))
+                EntityManager.SetComponentEnabled<HasJobSeeker>(citizen, false);
+        }
+
+        private void RefreshFreeWorkplaces(Entity company)
+        {
+            if (company == Entity.Null || !EntityManager.Exists(company) ||
+                !EntityManager.HasBuffer<Employee>(company) ||
+                !EntityManager.HasComponent<FreeWorkplaces>(company) ||
+                !EntityManager.HasComponent<WorkProvider>(company) ||
+                !EntityManager.HasComponent<PrefabRef>(company)) return;
+
+            Entity companyPrefab = EntityManager.GetComponentData<PrefabRef>(company).m_Prefab;
+            if (companyPrefab == Entity.Null || !EntityManager.Exists(companyPrefab) ||
+                !EntityManager.HasComponent<WorkplaceData>(companyPrefab)) return;
+
+            int level = 1;
+            if (EntityManager.HasComponent<PropertyRenter>(company))
+            {
+                Entity property = EntityManager.GetComponentData<PropertyRenter>(company).m_Property;
+                if (property != Entity.Null && EntityManager.Exists(property) &&
+                    EntityManager.HasComponent<PrefabRef>(property))
+                {
+                    Entity propertyPrefab = EntityManager.GetComponentData<PrefabRef>(property).m_Prefab;
+                    if (propertyPrefab != Entity.Null && EntityManager.Exists(propertyPrefab) &&
+                        EntityManager.HasComponent<SpawnableBuildingData>(propertyPrefab))
+                        level = EntityManager.GetComponentData<SpawnableBuildingData>(propertyPrefab)
+                            .m_Level;
+                }
+            }
+
+            WorkProvider provider = EntityManager.GetComponentData<WorkProvider>(company);
+            WorkplaceData workplace = EntityManager.GetComponentData<WorkplaceData>(companyPrefab);
+            DynamicBuffer<Employee> employees = EntityManager.GetBuffer<Employee>(company);
+            FreeWorkplaces free = EntityManager.GetComponentData<FreeWorkplaces>(company);
+            free.Refresh(employees, provider.m_MaxWorkers, workplace.m_Complexity, level);
+            EntityManager.SetComponentData(company, free);
         }
 
         private static bool SameStatistics(CompanyStatisticData first, CompanyStatisticData second) =>
@@ -502,6 +1051,11 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             CachedEntry cached;
             if (!_cache.TryGetValue(property, out cached)) return;
             if (!IsLiveWorkplaceProperty(property)) return;
+            if (!EnsurePropertyPrefabConverged(property, cached.Entry))
+            {
+                _deferredActions++;
+                return;
+            }
             // The move-in this building asked for is still in the native queue. Acting again
             // before it drains opens a second business or undoes the first.
             if (IsSettling(property)) { _deferredActions++; return; }

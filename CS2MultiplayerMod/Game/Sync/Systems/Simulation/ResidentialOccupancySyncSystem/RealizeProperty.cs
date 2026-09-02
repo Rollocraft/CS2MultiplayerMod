@@ -148,7 +148,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         private void ApplyProperty(Entity property, CachedProperty cached)
         {
             OccupancyHousehold[] wanted = cached.Households;
-            bool localUnderConstruction = ApplyConstruction(property, cached.ConstructionSpeed);
+            ApplyPropertyFeeInputs(property, cached);
+            bool localUnderConstruction = ApplyConstruction(property, cached);
 
             CollectLocalHouseholds(property);
             _claimedHouseholds.Clear();
@@ -365,29 +366,75 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         /// minutes apart on the two cities. Adopting the host's rate makes them finish together;
         /// forcing completion when the host is already done closes the gap that is left.
         /// </summary>
-        private bool ApplyConstruction(Entity property, byte hostSpeed)
+        private bool ApplyConstruction(Entity property, CachedProperty cached)
         {
-            if (!EntityManager.HasComponent<global::Game.Objects.UnderConstruction>(property))
-                return false;
-            global::Game.Objects.UnderConstruction site =
-                EntityManager.GetComponentData<global::Game.Objects.UnderConstruction>(property);
+            byte hostSpeed = cached.ConstructionSpeed;
+            bool localConstructing =
+                EntityManager.HasComponent<global::Game.Objects.UnderConstruction>(property);
 
-            if (hostSpeed == 0)
+            if (hostSpeed != 0)
             {
-                // 100 is where the game stops building and swaps in the finished prefab, so any
-                // value at or above it completes on the next construction update.
-                if (site.m_Progress >= 100) return true;
-                site.m_Progress = byte.MaxValue;
-                EntityManager.SetComponentData(property, site);
-                _forcedCompletions++;
+                // While the host is building, PrefabName still describes the old prefab; only the
+                // level command knows its target. Keep an existing local site's randomized clock
+                // aligned, and let the later completed absolute page repair a missed target.
+                if (!localConstructing) return false;
+                global::Game.Objects.UnderConstruction active = EntityManager
+                    .GetComponentData<global::Game.Objects.UnderConstruction>(property);
+                if (active.m_Speed != hostSpeed)
+                {
+                    active.m_Speed = hostSpeed;
+                    EntityManager.SetComponentData(property, active);
+                    _alignedBuildRates++;
+                }
                 return true;
             }
 
-            if (site.m_Speed != hostSpeed)
+            Entity currentPrefab = EntityManager.GetComponentData<PrefabRef>(property).m_Prefab;
+            string currentName = _prefabIndex.NameOf(currentPrefab);
+            if (!localConstructing &&
+                string.Equals(currentName, cached.Identity.PrefabName,
+                    StringComparison.Ordinal)) return false;
+
+            Entity hostPrefab;
+            bool canRepairPrefab = _prefabIndex.TryResolve(cached.Identity.PrefabName,
+                    candidate => EntityManager.HasComponent<BuildingPropertyData>(candidate) &&
+                                 EntityManager.HasComponent<SpawnableBuildingData>(candidate) &&
+                                 !EntityManager.HasComponent<SignatureBuildingData>(candidate),
+                    out hostPrefab) && hostPrefab != Entity.Null;
+            if (canRepairPrefab)
             {
-                site.m_Speed = hostSpeed;
+                global::Game.Objects.UnderConstruction completion = localConstructing
+                    ? EntityManager.GetComponentData<global::Game.Objects.UnderConstruction>(property)
+                    : default(global::Game.Objects.UnderConstruction);
+                // Already queued for the native construction system. Do not keep rewriting the
+                // component or inflate the correction counter while waiting for its partition.
+                if (completion.m_NewPrefab == hostPrefab && completion.m_Progress >= 100)
+                    return true;
+
+                bool repairsWrongPrefab = currentPrefab != hostPrefab ||
+                    (localConstructing && completion.m_NewPrefab != Entity.Null &&
+                     completion.m_NewPrefab != hostPrefab);
+                completion.m_NewPrefab = hostPrefab;
+                completion.m_Progress = byte.MaxValue;
+                if (completion.m_Speed == 0) completion.m_Speed = 1;
+                if (localConstructing) EntityManager.SetComponentData(property, completion);
+                else EntityManager.AddComponentData(property, completion);
+                EntityManager.AddComponent<Updated>(property);
+                if (repairsWrongPrefab) _forcedPrefabCorrections++;
+                else _forcedCompletions++;
+                return true;
+            }
+
+            // Non-growable residential buildings are not safe targets for prefab replacement.
+            // Preserve the old completion-only behavior if one is locally still being built.
+            if (!localConstructing) return false;
+            global::Game.Objects.UnderConstruction site =
+                EntityManager.GetComponentData<global::Game.Objects.UnderConstruction>(property);
+            if (site.m_Progress < 100)
+            {
+                site.m_Progress = byte.MaxValue;
                 EntityManager.SetComponentData(property, site);
-                _alignedBuildRates++;
+                _forcedCompletions++;
             }
             return true;
         }

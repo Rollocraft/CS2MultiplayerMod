@@ -83,10 +83,13 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             _retry.Clear();
             _retryTargetCount = 0;
             int expiredTargets = 0;
+            string firstExpiredPrefab = null;
             for (int i = 0; i < pending.Length; i++)
             {
                 if (pending[i].DeadlineMs < now)
                 {
+                    if (firstExpiredPrefab == null)
+                        firstExpiredPrefab = pending[i].Command.PrefabName;
                     expiredTargets += pending[i].Command.Targets.Length;
                     continue;
                 }
@@ -99,8 +102,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 SyncInbox.RequestResync(CS2MultiplayerMod.Game.Diagnostics.ResyncReport
                     .Create("visual-customization target did not resolve", "appearance",
                         CS2MultiplayerMod.Game.Diagnostics.ResyncEvidence.MissingTarget)
-                    .About("customization target")
-                    .Tried("retried every 250 ms for 10 s of attempts, not counting time the buildings were held back"));
+                    .About("customization of '" + firstExpiredPrefab + "'")
+                    .Tried("retried every 250 ms for 10 s of attempts, not counting time the buildings were held back")
+                    .Fact("targets that did not appear", expiredTargets));
             }
         }
 

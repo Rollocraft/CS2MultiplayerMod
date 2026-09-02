@@ -86,15 +86,12 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                         // which its construction clock and state payload can be applied safely.
                         ApplyConditionAndState(entity, command);
                         EntityManager.AddComponent<Updated>(entity);
+                        // A full queue costs a check, not a command - the building is already
+                        // realized and its state written - and the oldest entry has had the most
+                        // of its window.
                         if (_realizationValidations.Count >= MaxRealizationValidations)
-                        {
-                            SyncInbox.RequestResync(CS2MultiplayerMod.Game.Diagnostics.ResyncReport
-                                .Create("growable realization validation overflow", "growable",
-                                    CS2MultiplayerMod.Game.Diagnostics.ResyncEvidence.StreamLoss)
-                                .About("realization validation queue")
-                                .Tried("nothing - the validation queue was full"));
-                        }
-                        else _realizationValidations.Add(new RealizationValidation
+                            _realizationValidations.RemoveAt(0);
+                        _realizationValidations.Add(new RealizationValidation
                         {
                             Building = entity,
                             Prefab = prefab,
@@ -173,8 +170,11 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     SyncInbox.RequestResync(CS2MultiplayerMod.Game.Diagnostics.ResyncReport
                         .Create("growable building failed road/service realization", "growable",
                             CS2MultiplayerMod.Game.Diagnostics.ResyncEvidence.MissingTarget)
-                        .About("building road/service graph")
-                        .Tried("re-ran native initialization for 15 s of attempts, not counting time roads were held back"));
+                        .About("road/service graph of '" + PrefabIndexSafeName(pending.Prefab) +
+                               "' at " + Format(pending.Position))
+                        .Tried("re-ran native initialization for 15 s of attempts, not counting time roads were held back")
+                        .Fact("joined its road", connected)
+                        .Fact("has its utility consumers", utilities));
                     continue;
                 }
 

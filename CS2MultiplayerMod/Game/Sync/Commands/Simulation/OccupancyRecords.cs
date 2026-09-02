@@ -30,6 +30,18 @@ namespace CS2MultiplayerMod.Game.Sync.Commands
         /// </summary>
         public byte ConstructionSpeed;
 
+        /// <summary>
+        /// Fee inputs shown by the residents panel. The native electricity and water dispatch
+        /// systems derive these from each machine's utility graph, so equal buildings can still
+        /// report different household fees when those graphs are a frame or a rounding step apart.
+        /// Only the fulfilled quantities travel; connectivity, warnings and demand remain native.
+        /// </summary>
+        public bool HasElectricityConsumer;
+        public int ElectricityFulfilledConsumption;
+        public bool HasWaterConsumer;
+        public int WaterFulfilledFresh;
+        public int WaterFulfilledSewage;
+
         public OccupancyHousehold[] Households;
 
         /// <summary>
@@ -60,6 +72,15 @@ namespace CS2MultiplayerMod.Game.Sync.Commands
 
         /// <summary>The money resource in the household's own resource buffer.</summary>
         public int Money;
+
+        /// <summary>
+        /// Rolling residential tax state. Tax rates alone are insufficient: the native tax pass
+        /// accumulates these values per family and the next pass starts from that local history.
+        /// </summary>
+        public bool HasTaxPayer;
+        public int UntaxedIncome;
+        public int AverageTaxRate;
+        public int AverageTaxPaid;
 
         /// <summary>Salary recorded by the host's household behavior pass for the last day.</summary>
         public int SalaryLastDay;
@@ -103,6 +124,13 @@ namespace CS2MultiplayerMod.Game.Sync.Commands
         public byte Health;
         public byte WellBeing;
 
+        /// <summary>
+        /// Host-owned <c>HealthProblem</c> presence and flags. Bit 7 means the component exists;
+        /// bits 0-6 are the game's <c>HealthProblemFlags</c>. Death cannot be inferred from the
+        /// citizen fields above: illness and accident deaths use a per-world random stream.
+        /// </summary>
+        public byte HealthProblem;
+
         /// <summary>Bit 0: holds a job. Bits 4-7: wage level.</summary>
         public byte Employment;
 
@@ -114,9 +142,14 @@ namespace CS2MultiplayerMod.Game.Sync.Commands
 
         public bool Employed => (Employment & 1) != 0;
         public byte WorkerLevel => (byte)((Employment >> 4) & 0xF);
+        public bool HasHealthProblem => (HealthProblem & 0x80) != 0;
+        public byte HealthProblemFlags => (byte)(HealthProblem & 0x7F);
 
         public static byte PackEmployment(bool employed, byte level) =>
             (byte)((employed ? 1 : 0) | ((level & 0xF) << 4));
+
+        public static byte PackHealthProblem(bool present, byte flags) =>
+            (byte)((present ? 0x80 : 0) | (flags & 0x7F));
     }
 
     /// <summary>

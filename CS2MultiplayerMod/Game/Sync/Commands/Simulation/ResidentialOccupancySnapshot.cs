@@ -56,6 +56,9 @@ namespace CS2MultiplayerMod.Game.Sync.Commands
         /// </summary>
         public const int MaxMoney = 1000000000;
 
+        /// <summary>Bound for fulfilled electricity, fresh-water and sewage quantities.</summary>
+        public const int MaxUtilityConsumption = 1000000000;
+
         /// <summary>Highest wage bracket a worker can be paid at.</summary>
         public const int MaxWorkerLevel = 4;
 
@@ -138,7 +141,7 @@ namespace CS2MultiplayerMod.Game.Sync.Commands
                 if (households > MaxHouseholdsPerPage)
                     throw new ProtocolException("Occupancy page exceeds its household cap.");
                 Intern(names, property);
-                encodedBytes += 24;
+                encodedBytes += 38;
                 for (int h = 0; h < property.Households.Length; h++)
                 {
                     OccupancyHousehold household = property.Households[h];
@@ -153,14 +156,14 @@ namespace CS2MultiplayerMod.Game.Sync.Commands
                     vehicles += household.OwnedVehicles.Length;
                     if (vehicles > MaxVehiclesPerPage)
                         throw new ProtocolException("Occupancy page exceeds its vehicle cap.");
-                    encodedBytes += 50L + household.NameIndices.Length * 4L +
+                    encodedBytes += 63L + household.NameIndices.Length * 4L +
                                     (household.Pets.Length + household.OwnedVehicles.Length) * 2L;
                     for (int c = 0; c < household.Citizens.Length; c++)
                     {
                         OccupancyCitizen citizen = household.Citizens[c];
                         if (!citizenIds.Add(citizen.CitizenId))
                             throw new ProtocolException("Duplicate citizen id in occupancy page.");
-                        encodedBytes += 24L + citizen.NameIndices.Length * 4L;
+                        encodedBytes += 25L + citizen.NameIndices.Length * 4L;
                     }
                 }
             }
@@ -202,6 +205,11 @@ namespace CS2MultiplayerMod.Game.Sync.Commands
                 writer.WriteFloat(property.AnchorZ);
                 writer.WriteLong(unchecked((long)property.Revision));
                 writer.WriteByte(property.ConstructionSpeed);
+                writer.WriteBool(property.HasElectricityConsumer);
+                writer.WriteInt(property.ElectricityFulfilledConsumption);
+                writer.WriteBool(property.HasWaterConsumer);
+                writer.WriteInt(property.WaterFulfilledFresh);
+                writer.WriteInt(property.WaterFulfilledSewage);
                 writer.WriteByte((byte)property.Households.Length);
                 for (int h = 0; h < property.Households.Length; h++)
                 {
@@ -219,6 +227,10 @@ namespace CS2MultiplayerMod.Game.Sync.Commands
                     writer.WriteInt(unchecked((int)household.ShoppedValueLastDay));
                     writer.WriteInt(unchecked((int)household.LastDayFrameIndex));
                     writer.WriteInt(household.MoneySpentOnBuildingLevelingLastDay);
+                    writer.WriteBool(household.HasTaxPayer);
+                    writer.WriteInt(household.UntaxedIncome);
+                    writer.WriteInt(household.AverageTaxRate);
+                    writer.WriteInt(household.AverageTaxPaid);
                     WriteNameIndices(writer, household.NameIndices);
                     writer.WriteByte((byte)household.Citizens.Length);
                     for (int c = 0; c < household.Citizens.Length; c++)
@@ -231,6 +243,7 @@ namespace CS2MultiplayerMod.Game.Sync.Commands
                         writer.WriteShort(citizen.BirthDay);
                         writer.WriteByte(citizen.Health);
                         writer.WriteByte(citizen.WellBeing);
+                        writer.WriteByte(citizen.HealthProblem);
                         writer.WriteByte(citizen.Employment);
                         writer.WriteInt(citizen.UnemploymentCounter);
                         WriteNameIndices(writer, citizen.NameIndices);
@@ -314,9 +327,9 @@ namespace CS2MultiplayerMod.Game.Sync.Commands
                 snapshot.CitizenDepartures.Add(departure);
             }
 
-            // 24 bytes is the smallest a property with no households can encode to: name index,
-            // three coordinates, revision, construction speed, and household count.
-            int propertyCount = WireGuard.ReadCount(reader, 24, MaxProperties);
+            // 38 bytes is the smallest a property with no households can encode to: identity,
+            // construction state, the fee-driving utility quantities, and household count.
+            int propertyCount = WireGuard.ReadCount(reader, 38, MaxProperties);
             var identities = new HashSet<PropertyRentIdentity>();
             var householdIds = new HashSet<ulong>();
             var citizenIds = new HashSet<ulong>();
@@ -331,6 +344,11 @@ namespace CS2MultiplayerMod.Game.Sync.Commands
                     AnchorZ = WireGuard.ReadCoordinate(reader),
                     Revision = unchecked((ulong)reader.ReadLong()),
                     ConstructionSpeed = reader.ReadByte(),
+                    HasElectricityConsumer = ReadStrictBool(reader),
+                    ElectricityFulfilledConsumption = reader.ReadInt(),
+                    HasWaterConsumer = ReadStrictBool(reader),
+                    WaterFulfilledFresh = reader.ReadInt(),
+                    WaterFulfilledSewage = reader.ReadInt(),
                 };
                 int householdCount = reader.ReadByte();
                 if (householdCount > MaxHouseholdsPerProperty)
@@ -356,6 +374,10 @@ namespace CS2MultiplayerMod.Game.Sync.Commands
                         ShoppedValueLastDay = unchecked((uint)reader.ReadInt()),
                         LastDayFrameIndex = unchecked((uint)reader.ReadInt()),
                         MoneySpentOnBuildingLevelingLastDay = reader.ReadInt(),
+                        HasTaxPayer = ReadStrictBool(reader),
+                        UntaxedIncome = reader.ReadInt(),
+                        AverageTaxRate = reader.ReadInt(),
+                        AverageTaxPaid = reader.ReadInt(),
                         NameIndices = ReadNameIndices(reader),
                     };
                     if (!householdIds.Add(household.HouseholdId))
@@ -377,6 +399,7 @@ namespace CS2MultiplayerMod.Game.Sync.Commands
                             BirthDay = reader.ReadShort(),
                             Health = reader.ReadByte(),
                             WellBeing = reader.ReadByte(),
+                            HealthProblem = reader.ReadByte(),
                             Employment = reader.ReadByte(),
                             UnemploymentCounter = reader.ReadInt(),
                             NameIndices = ReadNameIndices(reader),

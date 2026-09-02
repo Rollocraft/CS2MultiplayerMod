@@ -79,13 +79,15 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             Register(new DevTreePointsStateChannel());
             Register(new TourismStateChannel());
             Register(new StatisticsStateChannel());
+            // Taxation's displayed residential/commercial/industrial/office amounts come from
+            // parameterized taxable-income statistics, independently of the editable rate table.
+            Register(new TaxIncomeStateChannel());
             Register(new WeatherStateChannel());
             Register(new GameClockStateChannel());
             _treeStateChannel = new TreeStateChannel();
             Register(_treeStateChannel);
-            // Reports rather than writes: zone demand is recomputed locally from the city's own
-            // state several times a second, so this carries the host's figures for comparison and
-            // logs the gap. See ZoneDemandChannel.
+            // Full native demand state. On a client the channel holds the three redundant demand
+            // writers after its first valid snapshot and feeds their host arrays to native readers.
             Register(new ZoneDemandChannel());
             // Numeric rent only. The channel queues rolling absolute pages; its runtime applies
             // them in GameSimulation after vanilla recalculates rent and before rent is charged.

@@ -8,29 +8,6 @@ namespace CS2MultiplayerMod.Core.Session
     public sealed partial class MultiplayerSession
     {
         /// <summary>
-        /// Host-only: refuse new joins without ending the session. Everyone already connected
-        /// stays; only the admission path consults this. Useful once a session has the players
-        /// it wants, so a public listing does not have to be taken down to stop new arrivals.
-        /// </summary>
-        public bool IsLobbyLocked { get; set; }
-
-        /// <summary>Addresses the host has banned for this hosting session.</summary>
-        public System.Collections.Generic.IReadOnlyCollection<string> BannedAddresses =>
-            _hostBannedAddresses;
-
-        /// <summary>
-        /// Lift one ban. Bans live only as long as the hosting session, so this exists for the
-        /// case that motivates it: banning the wrong player and needing to undo it immediately.
-        /// </summary>
-        public bool UnbanAddress(string address)
-        {
-            if (string.IsNullOrEmpty(address)) return false;
-            bool removed = _hostBannedAddresses.Remove(address.Trim());
-            if (removed) _log.Event(LogTopic.Session, "Ban lifted for " + address.Trim() + ".");
-            return removed;
-        }
-
-        /// <summary>
         /// Host-only administrative removal. The explanation is flushed to the selected
         /// client before the socket closes, so it sees a useful error instead of a generic
         /// "remote closed" message.

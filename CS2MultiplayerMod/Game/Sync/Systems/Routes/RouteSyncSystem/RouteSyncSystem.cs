@@ -406,8 +406,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 SyncInbox.RequestResync(CS2MultiplayerMod.Game.Diagnostics.ResyncReport
                     .Create("route " + operation + " dependency did not resolve", "route",
                         CS2MultiplayerMod.Game.Diagnostics.ResyncEvidence.MissingTarget)
-                    .About("route dependency")
-                    .Tried("retried with backoff for 30 s of attempts, not counting time this system was held back"));
+                    .About(operation + " of '" + prefabName + "'")
+                    .Tried("retried with backoff for 30 s of attempts, not counting time this system was held back")
+                    .Fact("last failure", pending.LastFailure));
             SyncLog.Warn(LogTopic.Routes, "RouteSync " + operation + " for '" + prefabName +
                 "' did not resolve within " + (RetryWindowMs / 1000) + " s" +
                 (pending.LastFailure != null ? " (" + pending.LastFailure + ")" : string.Empty) +

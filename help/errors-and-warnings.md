@@ -1,5 +1,6 @@
 ---
 title: Errors and warnings
+description: "Every error and warning the mod can show, what it means and what to do about it."
 ---
 
 # Error and Warning Reference

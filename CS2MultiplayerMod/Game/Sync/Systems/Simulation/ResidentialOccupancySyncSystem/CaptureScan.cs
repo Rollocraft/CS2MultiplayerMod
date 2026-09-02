@@ -32,7 +32,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             int citizens = 0;
             int pets = 0;
             int vehicles = 0;
-            int bytes = 24;
+            int bytes = 38;
             _pageEntryNames.Clear();
             _pageEntryNames.Add(property.PrefabName);
             for (int h = 0; h < property.Households.Length; h++)
@@ -43,7 +43,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 citizens += household.Citizens.Length;
                 pets += household.Pets.Length;
                 vehicles += household.OwnedVehicles.Length;
-                bytes += 50 + household.NameIndices.Length * 4 +
+                bytes += 63 + household.NameIndices.Length * 4 +
                          (household.Pets.Length + household.OwnedVehicles.Length) * 2;
                 _pageEntryNames.Add(household.PrefabName);
                 for (int c = 0; c < household.Citizens.Length; c++)
@@ -51,7 +51,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     OccupancyCitizen citizen = household.Citizens[c];
                     if (budget.CitizenIds.Contains(citizen.CitizenId))
                         return PageAddResult.Invalid;
-                    bytes += 24 + citizen.NameIndices.Length * 4;
+                    bytes += 25 + citizen.NameIndices.Length * 4;
                     _pageEntryNames.Add(citizen.PrefabName);
                 }
                 for (int p = 0; p < household.Pets.Length; p++)
@@ -121,11 +121,22 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     if (cursor >= properties.Length) { cursor = 0; wrapped = true; }
                     Entity property = properties[cursor++];
                     _observedProperties++;
+
+                    // The allocation-free probe decides this; almost every property it looks at is
+                    // unchanged and stops here. See CaptureProbe.cs for why the full capture is
+                    // the wrong instrument for the question.
+                    int hash;
+                    if (!TryHashProperty(property, out hash)) continue;
+                    HostObserved observed;
+                    bool known = _hostObserved.TryGetValue(property, out observed);
+                    if (known && !observed.Stale && observed.Hash == hash) continue;
+
+                    // Something moved, or this is a first sighting. Take the real capture now: it
+                    // is what validates the roster and what registers the households and residents
+                    // the tombstone scans watch, and this property is about to be paged anyway.
                     OccupancyProperty captured;
                     if (!TryCaptureProperty(property, out captured)) continue;
-                    int hash = Hash(captured);
-                    HostObserved observed;
-                    if (!_hostObserved.TryGetValue(property, out observed))
+                    if (!known)
                     {
                         _hostObserved[property] = new HostObserved { Hash = hash, Bucket = bucket };
                         _hostObservedBuckets[bucket].Add(property);
@@ -137,7 +148,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                         observed.Stale = false;
                         observed.Hash = hash;
                     }
-                    else if (observed.Hash != hash)
+                    else
                     {
                         observed.Hash = hash;
                         if (initialized) Prioritize(property, captured.Identity);
@@ -164,7 +175,6 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         {
             MultiplayerService service = Mod.Service;
             if (service == null || !service.GameplaySyncReady ||
-                service.Session.Role != Core.Session.SessionRole.Host ||
                 _renterUpdates.IsEmptyIgnoreFilter) return;
 
             NativeArray<RentersUpdated> updates = default(NativeArray<RentersUpdated>);
@@ -174,6 +184,17 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 for (int i = 0; i < updates.Length; i++)
                 {
                     Entity property = updates[i].m_Property;
+                    if (service.Session.Role == Core.Session.SessionRole.Client)
+                    {
+                        // PropertyProcessing and removal systems are intentionally still live on
+                        // the client. If either changes a renter link, immediately reassert the
+                        // last absolute host roster instead of waiting up to a full rolling sweep.
+                        if (!IsLiveProperty(property) || !_cache.ContainsKey(property)) continue;
+                        MarkDirty(property);
+                        _clientRenterRepairSignals++;
+                        continue;
+                    }
+
                     // Only the portable identity is needed to queue the signal. Serializing the
                     // whole roster here was work thrown away: the page builder recaptures a
                     // priority property at send time anyway, and this runs every simulation frame

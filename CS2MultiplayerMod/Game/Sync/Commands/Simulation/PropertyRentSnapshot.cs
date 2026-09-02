@@ -11,9 +11,12 @@ namespace CS2MultiplayerMod.Game.Sync.Commands
     /// </summary>
     public sealed class PropertyRentSnapshot
     {
-        public const int MaxEntries = 96;
+        // A rent entry is small, but the former 96-entry page needed minutes to cover a large
+        // city. Keep client-side spatial resolution bounded while bringing the rolling baseline
+        // back to a useful cadence.
+        public const int MaxEntries = 256;
         public const int MaxPagesPerSweep = 4096;
-        public const int MaxEncodedBytes = 48 * 1024;
+        public const int MaxEncodedBytes = 240 * 1024;
         // Far above any plausible in-game daily rent while still preventing a corrupt host from
         // feeding a near-int.MaxValue charge into the economy systems.
         public const int MaxRent = 100000000;

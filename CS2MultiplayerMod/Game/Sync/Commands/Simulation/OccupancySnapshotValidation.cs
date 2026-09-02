@@ -25,6 +25,17 @@ namespace CS2MultiplayerMod.Game.Sync.Commands
             if (property.Revision == 0) return false;
             if (!IsValidCoordinate(property.AnchorX) || !IsValidCoordinate(property.AnchorY) ||
                 !IsValidCoordinate(property.AnchorZ)) return false;
+            if (property.ElectricityFulfilledConsumption < 0 ||
+                property.ElectricityFulfilledConsumption > MaxUtilityConsumption ||
+                (!property.HasElectricityConsumer &&
+                 property.ElectricityFulfilledConsumption != 0)) return false;
+            if (property.WaterFulfilledFresh < 0 ||
+                property.WaterFulfilledFresh > MaxUtilityConsumption ||
+                property.WaterFulfilledSewage < 0 ||
+                property.WaterFulfilledSewage > MaxUtilityConsumption ||
+                (!property.HasWaterConsumer &&
+                 (property.WaterFulfilledFresh != 0 ||
+                  property.WaterFulfilledSewage != 0))) return false;
             if (property.Households == null ||
                 property.Households.Length > MaxHouseholdsPerProperty) return false;
             var householdIds = new HashSet<ulong>();
@@ -39,6 +50,15 @@ namespace CS2MultiplayerMod.Game.Sync.Commands
                 if (household.Rent < 0 || household.Rent > MaxRent) return false;
                 if (household.Savings < -MaxMoney || household.Savings > MaxMoney) return false;
                 if (household.Money < -MaxMoney || household.Money > MaxMoney) return false;
+                if (household.UntaxedIncome < -MaxMoney ||
+                    household.UntaxedIncome > MaxMoney ||
+                    household.AverageTaxRate < -MaxMoney ||
+                    household.AverageTaxRate > MaxMoney ||
+                    household.AverageTaxPaid < -MaxMoney ||
+                    household.AverageTaxPaid > MaxMoney ||
+                    (!household.HasTaxPayer &&
+                     (household.UntaxedIncome != 0 || household.AverageTaxRate != 0 ||
+                      household.AverageTaxPaid != 0))) return false;
                 if (household.SalaryLastDay < -MaxMoney ||
                     household.SalaryLastDay > MaxMoney) return false;
                 if (household.MoneySpentOnBuildingLevelingLastDay < -MaxMoney ||
@@ -51,6 +71,8 @@ namespace CS2MultiplayerMod.Game.Sync.Commands
                     if (citizen.CitizenId == 0 || !citizenIds.Add(citizen.CitizenId)) return false;
                     if (!IsValidName(citizen.PrefabName)) return false;
                     if (!IsValidNameIndices(citizen.NameIndices)) return false;
+                    if (!citizen.HasHealthProblem &&
+                        (citizen.HealthProblemFlags != 0)) return false;
                     if (citizen.WorkerLevel > MaxWorkerLevel) return false;
                     if (citizen.UnemploymentCounter < 0 ||
                         citizen.UnemploymentCounter > MaxMoney) return false;

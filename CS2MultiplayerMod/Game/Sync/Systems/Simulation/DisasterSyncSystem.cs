@@ -174,14 +174,6 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     Entity entity = events[i];
                     if (WasRealizedThisFrame(entity)) continue;
 
-                    // A disaster event is short-lived by nature: the simulation ends and reaps
-                    // one at its own cadence, which can fall between this query snapshot and the
-                    // read below. Reading a component off the reaped handle throws out of the
-                    // whole capture pass, taking every other live event with it.
-                    if (!EntityManager.Exists(entity) ||
-                        !EntityManager.HasComponent<global::Game.Events.WeatherPhenomenon>(entity) ||
-                        !EntityManager.HasComponent<global::Game.Events.Duration>(entity)) continue;
-
                     Entity prefab;
                     string prefabName;
                     if (!TryNamePrefab(entity, out prefab, out prefabName)) continue;
@@ -239,11 +231,6 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 {
                     Entity entity = events[i];
                     if (WasRealizedThisFrame(entity)) continue;
-
-                    // Same reap window as the phenomenon scan above.
-                    if (!EntityManager.Exists(entity) ||
-                        !EntityManager.HasComponent<global::Game.Events.WaterLevelChange>(entity) ||
-                        !EntityManager.HasComponent<global::Game.Events.Duration>(entity)) continue;
 
                     Entity prefab;
                     string prefabName;

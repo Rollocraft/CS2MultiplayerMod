@@ -18,10 +18,6 @@ namespace CS2MultiplayerMod.Game
             text = text.Trim();
             if (text.Length == 0) return;
 
-            // Local slash commands never reach the wire. An unrecognised one is not claimed
-            // and goes out as ordinary text, so a typo is visible rather than swallowed.
-            if (TryHandleChatCommand(text)) return;
-
             if (!text.Equals("/sync", StringComparison.OrdinalIgnoreCase))
             {
                 string echo = WireGuard.SanitizeText(text, WireGuard.MaxChatLength);

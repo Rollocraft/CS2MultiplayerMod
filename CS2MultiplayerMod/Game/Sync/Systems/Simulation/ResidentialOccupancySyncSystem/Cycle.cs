@@ -151,6 +151,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             _cacheScratch.Clear();
             _authorizedMoveAways.Clear();
             _authorizedMoveAwayScratch.Clear();
+            _lifecyclePropertyScratch.Clear();
             ClearBuckets(_cacheBuckets);
             ClearBucketSets(_cacheBucketMembers);
             Array.Clear(_cacheBucketCursor, 0, _cacheBucketCursor.Length);
@@ -193,7 +194,6 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             _reapply.Clear();
             ClearIdentityState();
             ClearRentAuthorityState();
-            _economyCursor = 0;
             _applyWarned = false;
             _arrivalSourceWarned = false;
             _nextPendingPumpMs = 0;
@@ -316,6 +316,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     _priorityChanges + ", priorityQueued=" + _priority.Count + ", priorityDropped=" +
                     _priorityDrops + ", departuresTracked=" + _hostDepartures.Count +
                     ", citizenDeparturesTracked=" + _hostCitizenDepartures.Count +
+                    ", lifecyclePriority=" + _lifecyclePrioritySignals +
                     ", captureSkipped=" + _captureSkips + ", observed=" + _observedProperties +
                     ".");
             }
@@ -329,12 +330,18 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     ", appliedProperties=" + _appliedProperties + ", households +" +
                     _createdHouseholds + "/-" + _retiredHouseholds + ", citizens +" +
                     _createdCitizens + "/-" + _removedCitizens + "/~" + _rewrittenCitizens +
+                    ", healthCorrections=" + _healthProblemCorrections + ", hostDeaths=" +
+                    _hostDeathTransitions + ", lifecycleRepairs=" + _lifecycleRepairSignals +
+                    ", renterRepairs=" + _clientRenterRepairSignals +
                     ", pets +" + _createdPets + ", renamed=" + _renamedEntities + ", vehicles +" +
                     _createdVehicles + ", rentActions=" + _rentActions + ", refusedMoveIns=" +
                     _refusedMoveIns + ", buildRatesAligned=" + _alignedBuildRates +
-                    ", forcedCompletions=" + _forcedCompletions + ", deferredForConstruction=" +
+                    ", forcedCompletions=" + _forcedCompletions + ", prefabCorrections=" +
+                    _forcedPrefabCorrections + ", deferredForConstruction=" +
                     _deferredForConstruction + ", economyCorrections=" + _economyCorrections +
-                    "/deferred " + _economyDeferred + ", pendingMoveIns=" + _pendingMoveIns.Count +
+                    "/deferred " + _economyDeferred + ", feeInputs=" + _feeInputCorrections +
+                    "/deferred " + _feeInputDeferred + ", pendingMoveIns=" +
+                    _pendingMoveIns.Count +
                     ", dirty=" + _dirty.Count + ".");
             }
             _sentPages = _sentProperties = _priorityChanges = _priorityDrops = _captureSkips = 0;
@@ -344,9 +351,14 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             _expired = _stalePages = _pruned = _cacheDrops = _appliedProperties = 0;
             _createdHouseholds = _createdCitizens = _createdPets = _createdVehicles = 0;
             _retiredHouseholds = _removedCitizens = _rewrittenCitizens = 0;
+            _healthProblemCorrections = _hostDeathTransitions = 0;
+            _lifecyclePrioritySignals = _lifecycleRepairSignals = 0;
+            _clientRenterRepairSignals = 0;
             _rentActions = _refusedMoveIns = 0;
-            _forcedCompletions = _alignedBuildRates = _deferredForConstruction = 0;
+            _forcedCompletions = _forcedPrefabCorrections = _alignedBuildRates = 0;
+            _deferredForConstruction = 0;
             _renamedEntities = _economyCorrections = _economyDeferred = 0;
+            _feeInputCorrections = _feeInputDeferred = 0;
         }
     }
 }

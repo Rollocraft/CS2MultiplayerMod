@@ -47,7 +47,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     SyncInbox.RequestResync(CS2MultiplayerMod.Game.Diagnostics.ResyncReport
                         .Create("policy target did not resolve", "policy",
                             CS2MultiplayerMod.Game.Diagnostics.ResyncEvidence.MissingTarget)
-                        .About("policy target building")
+                        .About("'" + pending.cmd.PolicyPrefabName + "' on " +
+                               KindName(pending.cmd.TargetKind) + " '" +
+                               pending.cmd.TargetPrefabName + "'")
                         .Tried("retried for 15 s of attempts, not counting time the buildings were held back"));
                     _targetRetry.RemoveAt(i);
                     continue;

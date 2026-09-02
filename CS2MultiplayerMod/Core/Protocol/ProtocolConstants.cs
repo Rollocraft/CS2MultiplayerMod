@@ -4,17 +4,50 @@ namespace CS2MultiplayerMod.Core.Protocol
     {
         /// <summary>
         /// Wire-format version. Bump when message layout changes to refuse handshake on mismatch.
-        /// Current v52 adds command id 30, a transport line's ticket price. The price lives on the
-        /// line's runtime TransportLine component rather than in its Policy buffer, so the policy
-        /// scan never saw it and no state channel carried it: geometry, stops, colour and name all
-        /// replicated while the two cities disagreed about fare revenue, which compounds every
-        /// transport tick and shows up as budget drift rather than as anything on the map.
-        /// v51 adds command id 29, a map ping: a transient "look here" beacon with an
-        /// optional note. It mutates nothing, so it is never replayed, snapshotted or resynced -
-        /// a ping that does not arrive is simply a ping nobody saw. It is a command rather than a
-        /// chat line so that the sender's identity comes from the message envelope the session
-        /// already authenticates; encoded into chat, anyone could drop a marker signed with
-        /// another player's name.
+        /// Current v58 raises the bounded rolling-page throughput for property rent, residential
+        /// occupancy and workplace state. Game.dll stores every apartment household in the
+        /// building's Renter buffer and every real employee in the company's Employee buffer, so
+        /// records grow with density; the former small-page quotas permanently fell behind in
+        /// mid/high-density cities even though low-density records kept up. Pages remain below the
+        /// StateSnapshot transport's 256 KiB ceiling, but priority and retained-departure rotation
+        /// can now drain faster than the native high-capacity writers mutate those buffers.
+        /// Workplace records also carry construction presence, allowing completed absolute
+        /// occupancy/company pages to repair a missed growable level transition through the
+        /// game's native prefab-completion path.
+        /// v57 makes residential citizen lifecycle authoritative as well as the absolute
+        /// household roster. Channel 21 now carries HealthProblem presence/flags because sickness
+        /// and sick/injured deaths draw from a per-world random stream; changed household-member
+        /// and health buffers prioritize their property immediately. v57 peers also use renter
+        /// events on clients as repair triggers, covering move-in/out mutations in dense towers.
+        /// Workplace renter events and changed Employee buffers provide the same immediate path
+        /// for commercial, industrial and office tenant/hiring changes.
+        /// This channel-21 layout is intentionally incompatible with v56.
+        /// v56 makes the displayed economy authoritative at the state that actually feeds
+        /// the simulation and UI. Channel 6 now carries TaxSystem's complete 92-slot table rather
+        /// than four headline rates; channel 23 carries the four taxable-income statistic families;
+        /// and channel 18 carries the complete residential/commercial/industrial/office demand
+        /// scalars and resource arrays consumed by zone spawning. Channel 21 adds household
+        /// TaxPayer history and the fulfilled utility quantities used for residential fees. These
+        /// layouts are intentionally incompatible with v55.
+        /// v55 stops water-pinning a span the receiver already reproduces. A course with
+        /// both endpoint elevations at or past the prefab's limit - any bridge raised a full step or
+        /// more - carries its own height band: the generator holds the whole deck between the two
+        /// transmitted endpoint heights and never consults the water. Pinning it replaced a deck the
+        /// receiver derives exactly with one measured here and predicted for there, and the
+        /// prediction did not model that band at all, so a raised deck dived to whatever shoal or
+        /// island sat under it. The band is now reproduced for the spans that are still pinned.
+        /// v54 expands company-state channel 22 with the tenant's brand/custom name,
+        /// random state, service/trade/tax/work-provider state and host resident employee roster.
+        /// Employee ids resolve through residential occupancy, allowing the receiver to rebuild
+        /// real Employee/Worker links rather than displaying invented headcounts. Entry flags are
+        /// now 16-bit and pages are byte-budgeted, so v53 peers cannot decode this layout.
+        /// v53 fixes the length a water-pinned net course carries. A pinned span is
+        /// published as straight pieces of the deck it commits, and each piece was measured on the
+        /// source curve it was cut from rather than on the piece itself - whose two ends had just
+        /// been moved onto that deck. The receiver re-measures the curve it is given and refuses
+        /// the whole operation when the two disagree, so every bridge crossing water was dropped
+        /// entirely. The layout is unchanged; the bump refuses a stale peer, whose spans this
+        /// build would now answer with a resync instead of a silent hole.
         /// v50 adds a reason string to ResyncRequest. It is log text only - nothing
         /// branches on it - but without it the host's log cannot tell a player pressing the sync
         /// button apart from a client whose pipeline gave up on an edit, which is the single most
@@ -130,7 +163,7 @@ namespace CS2MultiplayerMod.Core.Protocol
         /// islands) reattach on the receiver.
         /// See <see cref="Messages.HandshakeRequest"/> and version notes in doc/internals.
         /// </summary>
-        public const int ProtocolVersion = 52;
+        public const int ProtocolVersion = 58;
 
         /// <summary>
         /// Hard cap on a single payload, guarding against corrupt length prefixes.

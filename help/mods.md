@@ -1,5 +1,6 @@
 ---
 title: Mods and compatibility
+description: "How other mods affect multiplayer, why hosting and joining are blocked while they are loaded, and what is planned."
 ---
 
 # Mods and compatibility

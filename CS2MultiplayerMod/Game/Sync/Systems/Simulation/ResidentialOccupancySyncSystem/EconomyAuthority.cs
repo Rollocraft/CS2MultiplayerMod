@@ -1,6 +1,8 @@
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using CS2MultiplayerMod.Core.Session;
 using CS2MultiplayerMod.Game.Sync.Commands;
+using Game.Agents;
 using Game.Buildings;
 using Game.Citizens;
 using Game.Economy;
@@ -18,6 +20,10 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             public int Rent;
             public int Savings;
             public int Money;
+            public bool HasTaxPayer;
+            public int UntaxedIncome;
+            public int AverageTaxRate;
+            public int AverageTaxPaid;
             public short ConsumptionPerDay;
             public uint ShoppedValuePerDay;
             public uint ShoppedValueLastDay;
@@ -34,6 +40,10 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     Rent = household.Rent,
                     Savings = household.Savings,
                     Money = household.Money,
+                    HasTaxPayer = household.HasTaxPayer,
+                    UntaxedIncome = household.UntaxedIncome,
+                    AverageTaxRate = household.AverageTaxRate,
+                    AverageTaxPaid = household.AverageTaxPaid,
                     ConsumptionPerDay = household.ConsumptionPerDay,
                     ShoppedValuePerDay = household.ShoppedValuePerDay,
                     ShoppedValueLastDay = household.ShoppedValueLastDay,
@@ -54,7 +64,13 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         /// </summary>
         private const int MaxHouseholdEconomyCorrectionsPerFrame = 512;
 
-        private int _economyCursor;
+        // Changed-version queries advance their LastSystemVersion after one update. Keeping only a
+        // cursor into that update's temporary array meant the unvisited suffix was never returned
+        // again, which permanently starved families near the end of a large residential chunk.
+        // Retain every changed entity until its bounded correction has actually run.
+        private readonly ConcurrentQueue<Entity> _economyCorrectionQueue =
+            new ConcurrentQueue<Entity>();
+        private readonly HashSet<Entity> _economyCorrectionMembers = new HashSet<Entity>();
 
         private void ObserveDesiredHouseholdEconomy(ulong householdId,
             PropertyRentIdentity propertyIdentity, ulong revision, OccupancyHousehold household)
@@ -93,35 +109,41 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         }
 
         /// <summary>
-        /// Restore host scalars for the household chunks changed by local daily-economy systems.
+        /// Retain every entity returned by a changed-version query before that query advances its
+        /// version. Duplicate writes by multiple native systems coalesce while the entity waits.
+        /// </summary>
+        internal void QueueHouseholdEconomyCorrections(NativeArray<Entity> households)
+        {
+            for (int i = 0; i < households.Length; i++)
+            {
+                Entity household = households[i];
+                if (_economyCorrectionMembers.Add(household))
+                    _economyCorrectionQueue.Enqueue(household);
+            }
+        }
+
+        /// <summary>
+        /// Restore host scalars for a bounded set of households touched by local economy systems.
         /// The household's current property and the latest identity observation must agree before
         /// any value is written, so a delayed source-property page cannot affect a move destination.
         /// </summary>
-        internal void CorrectHouseholdEconomyAfterLocalUpdate(NativeArray<Entity> households)
+        internal void CorrectHouseholdEconomyAfterLocalUpdate()
         {
             MultiplayerService service = Mod.Service;
             if (service == null || !service.GameplaySyncReady ||
-                service.Session.Role != SessionRole.Client) return;
+                service.Session.Role != SessionRole.Client)
+            {
+                ClearHouseholdEconomyCorrections();
+                return;
+            }
 
-            // This is the one pass that runs every simulation frame over city-scale input: the
-            // query hands back every household chunk a local economy writer touched, which in a
-            // large city is thousands of families per frame. Correct a bounded window and carry
-            // the cursor forward, wrapping, so coverage stays even instead of starving the tail
-            // of a stable chunk order. A family that waits is only briefly showing its own
-            // locally drifted money; the next roster page for its property restores it anyway.
-            int length = households.Length;
-            if (length == 0) return;
-            int start = _economyCursor;
-            if (start >= length) start = 0;
-            int examine = length < MaxHouseholdEconomyCorrectionsPerFrame
-                ? length : MaxHouseholdEconomyCorrectionsPerFrame;
-            if (examine < length) _economyDeferred += length - examine;
-
-            int cursor = start;
+            int examine = _economyCorrectionQueue.Count < MaxHouseholdEconomyCorrectionsPerFrame
+                ? _economyCorrectionQueue.Count : MaxHouseholdEconomyCorrectionsPerFrame;
             for (int i = 0; i < examine; i++)
             {
-                if (cursor >= length) cursor = 0;
-                Entity household = households[cursor++];
+                Entity household;
+                if (!_economyCorrectionQueue.TryDequeue(out household)) break;
+                _economyCorrectionMembers.Remove(household);
                 ulong householdId;
                 DesiredHouseholdEconomy wanted;
                 if (!TryGetBoundHouseholdId(household, out householdId) ||
@@ -141,7 +163,15 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 if (ApplyHouseholdEconomy(household, property, wanted))
                     _economyCorrections++;
             }
-            _economyCursor = cursor >= length ? 0 : cursor;
+            if (_economyCorrectionQueue.Count != 0)
+                _economyDeferred += _economyCorrectionQueue.Count;
+        }
+
+        internal void ClearHouseholdEconomyCorrections()
+        {
+            Entity discarded;
+            while (_economyCorrectionQueue.TryDequeue(out discarded)) { }
+            _economyCorrectionMembers.Clear();
         }
 
         private bool ApplyHouseholdEconomy(Entity household, Entity property,
@@ -178,6 +208,38 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     EconomyUtils.SetResources(Resource.Money, resources, wanted.Money);
                     changed = true;
                 }
+            }
+
+            bool hasTaxPayer = EntityManager.HasComponent<TaxPayer>(household);
+            if (wanted.HasTaxPayer)
+            {
+                var taxPayer = new TaxPayer
+                {
+                    m_UntaxedIncome = wanted.UntaxedIncome,
+                    m_AverageTaxRate = wanted.AverageTaxRate,
+                    m_AverageTaxPaid = wanted.AverageTaxPaid,
+                };
+                if (!hasTaxPayer)
+                {
+                    EntityManager.AddComponentData(household, taxPayer);
+                    changed = true;
+                }
+                else
+                {
+                    TaxPayer current = EntityManager.GetComponentData<TaxPayer>(household);
+                    if (current.m_UntaxedIncome != taxPayer.m_UntaxedIncome ||
+                        current.m_AverageTaxRate != taxPayer.m_AverageTaxRate ||
+                        current.m_AverageTaxPaid != taxPayer.m_AverageTaxPaid)
+                    {
+                        EntityManager.SetComponentData(household, taxPayer);
+                        changed = true;
+                    }
+                }
+            }
+            else if (hasTaxPayer)
+            {
+                EntityManager.RemoveComponent<TaxPayer>(household);
+                changed = true;
             }
 
             if (EntityManager.HasComponent<PropertyRenter>(household))

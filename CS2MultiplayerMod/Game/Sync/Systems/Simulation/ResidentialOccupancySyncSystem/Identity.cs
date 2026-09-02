@@ -59,6 +59,22 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             return ((ulong)(uint)entity.Version << 32) | (uint)entity.Index;
         }
 
+        /// <summary>
+        /// Session-scoped citizen identity shared with company employment snapshots. The packed
+        /// value is only a wire key; a receiver must resolve it through this system's binding map
+        /// and must never reinterpret it as one of its own entity handles.
+        /// </summary>
+        internal static ulong PackNetworkCitizenId(Entity citizen) =>
+            PackHostEntityId(citizen);
+
+        /// <summary>
+        /// Resolve an employee from the same authoritative resident mapping used by occupancy.
+        /// This narrow seam is what lets the company channel attach a job to a real local citizen
+        /// instead of creating a display-only worker count.
+        /// </summary>
+        internal bool TryResolveCompanyCitizen(ulong citizenId, out Entity citizen) =>
+            TryResolveCitizen(citizenId, out citizen);
+
         private bool TryResolveHousehold(ulong householdId, out Entity household)
         {
             household = Entity.Null;
@@ -361,6 +377,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             _propertiesByIdentity.Clear();
             _desiredHouseholds.Clear();
             _desiredHouseholdEconomies.Clear();
+            ClearHouseholdEconomyCorrections();
+            ClearPropertyFeeCorrections();
             _desiredCitizens.Clear();
             _desiredCitizensByHousehold.Clear();
         }

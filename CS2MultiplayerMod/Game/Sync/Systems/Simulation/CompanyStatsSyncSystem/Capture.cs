@@ -2,6 +2,9 @@ using System.Collections.Generic;
 using CS2MultiplayerMod.Core.Protocol;
 using CS2MultiplayerMod.Core.Session;
 using CS2MultiplayerMod.Game.Sync.Commands;
+using Game.Agents;
+using Game.Buildings;
+using Game.Citizens;
 using Game.Companies;
 using Game.Economy;
 using Game.Prefabs;
@@ -36,17 +39,39 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 PageIndex = _capturePageIndex,
             };
             var identities = new HashSet<PropertyRentIdentity>();
-            AddPriorityEntries(snapshot, identities);
+            int estimatedBytes = AddPriorityEntries(snapshot, identities, 9);
 
             int index = _captureCursor;
             while (index < _hostSweepEntities.Length &&
                    snapshot.Entries.Count < CompanyStatsSnapshot.MaxEntries)
             {
                 CompanyStatsEntry entry;
-                if (TryCaptureEntry(_hostSweepEntities[index], out entry) &&
-                    identities.Add(entry.Identity))
-                    snapshot.Entries.Add(entry);
-                else _captureSkips++;
+                if (!TryCaptureEntry(_hostSweepEntities[index], out entry))
+                {
+                    _captureSkips++;
+                    index++;
+                    continue;
+                }
+                if (identities.Contains(entry.Identity))
+                {
+                    index++;
+                    continue;
+                }
+
+                int entryBytes = CompanyStatsSnapshot.EstimateEncodedBytes(entry);
+                if (estimatedBytes + entryBytes > PageByteBudget)
+                {
+                    // Keep this baseline entity for the next page. Validation caps one employer's
+                    // roster so a single entry always fits an otherwise empty page.
+                    if (snapshot.Entries.Count > 0) break;
+                    _captureSkips++;
+                    index++;
+                    continue;
+                }
+
+                identities.Add(entry.Identity);
+                snapshot.Entries.Add(entry);
+                estimatedBytes += entryBytes;
                 index++;
             }
 
@@ -119,8 +144,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             return true;
         }
 
-        private void AddPriorityEntries(CompanyStatsSnapshot snapshot,
-            HashSet<PropertyRentIdentity> identities)
+        private int AddPriorityEntries(CompanyStatsSnapshot snapshot,
+            HashSet<PropertyRentIdentity> identities, int estimatedBytes)
         {
             int added = 0;
             while (added < PriorityEntriesPerPage &&
@@ -131,15 +156,36 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 if (!_priorityOrder.TryDequeue(out identity)) break;
                 Entity property;
                 if (!_priority.TryGetValue(identity, out property)) continue;
-                _priority.Remove(identity);
                 // Recapture at send time: the queued signal says only "this changed", and a stale
                 // copy could otherwise lose to a fresher baseline entry in the same page.
                 CompanyStatsEntry entry;
-                if (!TryCaptureEntry(property, out entry)) continue;
-                if (!identities.Add(entry.Identity)) continue;
+                if (!TryCaptureEntry(property, out entry))
+                {
+                    _priority.Remove(identity);
+                    continue;
+                }
+                if (!identities.Add(entry.Identity))
+                {
+                    _priority.Remove(identity);
+                    continue;
+                }
+                int entryBytes = CompanyStatsSnapshot.EstimateEncodedBytes(entry);
+                // Priority entries may consume most of a page, but always leave enough room for
+                // the baseline to advance. Keep the first entry that does not fit queued for the
+                // following page. Continuing here used to drain and silently discard the whole
+                // remaining priority queue once a dense employee roster filled the byte budget.
+                if (estimatedBytes + entryBytes > PriorityByteBudget)
+                {
+                    identities.Remove(entry.Identity);
+                    _priorityOrder.Enqueue(identity);
+                    break;
+                }
+                _priority.Remove(identity);
                 snapshot.Entries.Add(entry);
+                estimatedBytes += entryBytes;
                 added++;
             }
+            return estimatedBytes;
         }
 
         /// <summary>
@@ -216,6 +262,122 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         }
 
         /// <summary>
+        /// Fast path for company move-in/out. PropertyProcessing emits the same RentersUpdated
+        /// event for business tenants as for households; using it avoids waiting for the workplace
+        /// property's 2,048-frame rolling change rotation.
+        /// </summary>
+        internal void CaptureTenancyChanges()
+        {
+            MultiplayerService service = Mod.Service;
+            if (service == null || !service.GameplaySyncReady ||
+                _renterUpdates.IsEmptyIgnoreFilter) return;
+
+            NativeArray<RentersUpdated> updates = default(NativeArray<RentersUpdated>);
+            try
+            {
+                updates = _renterUpdates.ToComponentDataArray<RentersUpdated>(Allocator.Temp);
+                for (int i = 0; i < updates.Length; i++)
+                {
+                    Entity property = updates[i].m_Property;
+                    if (!IsLiveWorkplaceProperty(property)) continue;
+                    if (service.Session.Role == SessionRole.Host)
+                    {
+                        PropertyRentIdentity identity;
+                        if (!TryGetWorkplaceIdentity(property, out identity)) continue;
+                        // Recapture at page-send time, after company initialization has removed
+                        // Created. Capturing the event frame itself can misreport a new tenant as
+                        // vacancy while its native initialization is still in flight.
+                        Prioritize(property, identity);
+                        _hostLifecycleSignals++;
+                    }
+                    else if (_cache.ContainsKey(property))
+                    {
+                        MarkDirty(property);
+                        MarkStateDirty(property);
+                        _clientLifecycleRepairs++;
+                    }
+                }
+            }
+            finally
+            {
+                if (updates.IsCreated) updates.Dispose();
+            }
+        }
+
+        /// <summary>
+        /// Employee is a dynamic buffer, so hiring and firing do not emit a renter event. Called
+        /// directly after FindJobSystem with only chunks whose buffer version changed.
+        /// </summary>
+        internal void CaptureEmployeeChanges(NativeArray<Entity> companies)
+        {
+            MultiplayerService service = Mod.Service;
+            if (service == null || !service.GameplaySyncReady) return;
+
+            for (int i = 0; i < companies.Length; i++)
+            {
+                Entity company = companies[i];
+                if (company == Entity.Null || !EntityManager.Exists(company) ||
+                    !EntityManager.HasComponent<CompanyData>(company) ||
+                    !EntityManager.HasComponent<PropertyRenter>(company) ||
+                    EntityManager.HasComponent<global::Game.Common.Created>(company) ||
+                    EntityManager.HasComponent<global::Game.Common.Deleted>(company) ||
+                    EntityManager.HasComponent<global::Game.Tools.Temp>(company)) continue;
+                Entity property = EntityManager.GetComponentData<PropertyRenter>(company).m_Property;
+                if (!IsLiveWorkplaceProperty(property)) continue;
+
+                if (service.Session.Role == SessionRole.Host)
+                {
+                    int hash = HashEmployeeBuffer(company);
+                    int previous;
+                    if (_hostEmployeeObserved.TryGetValue(company, out previous) &&
+                        previous == hash) continue;
+                    _hostEmployeeObserved[company] = hash;
+                    PropertyRentIdentity identity;
+                    if (!TryGetWorkplaceIdentity(property, out identity)) continue;
+                    Prioritize(property, identity);
+                    _hostLifecycleSignals++;
+                }
+                else if (_cache.ContainsKey(property))
+                {
+                    MarkStateDirty(property);
+                    _clientLifecycleRepairs++;
+                }
+            }
+        }
+
+        private int HashEmployeeBuffer(Entity company)
+        {
+            unchecked
+            {
+                if (!EntityManager.HasBuffer<Employee>(company)) return 0;
+                DynamicBuffer<Employee> employees = EntityManager.GetBuffer<Employee>(company, true);
+                int hash = ((int)2166136261 ^ employees.Length) * 16777619;
+                for (int i = 0; i < employees.Length; i++)
+                {
+                    Employee employee = employees[i];
+                    hash = (hash ^ employee.m_Worker.Index) * 16777619;
+                    hash = (hash ^ employee.m_Worker.Version) * 16777619;
+                    hash = (hash ^ employee.m_Level) * 16777619;
+                }
+                return hash;
+            }
+        }
+
+        private bool TryGetWorkplaceIdentity(Entity property, out PropertyRentIdentity identity)
+        {
+            identity = default(PropertyRentIdentity);
+            if (!IsLiveWorkplaceProperty(property)) return false;
+            string prefabName = _prefabIndex.NameOf(
+                EntityManager.GetComponentData<PrefabRef>(property).m_Prefab);
+            if (string.IsNullOrEmpty(prefabName)) return false;
+            global::Game.Objects.Transform transform =
+                EntityManager.GetComponentData<global::Game.Objects.Transform>(property);
+            identity = new PropertyRentIdentity(prefabName, transform.m_Position.x,
+                transform.m_Position.y, transform.m_Position.z);
+            return true;
+        }
+
+        /// <summary>
         /// One building's complete statement: its identity, and either the business renting it or
         /// nothing at all. A vacant entry is not a failure - it is the point of sweeping buildings
         /// rather than businesses.
@@ -231,19 +393,30 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
             global::Game.Objects.Transform transform =
                 EntityManager.GetComponentData<global::Game.Objects.Transform>(property);
+            byte constructionSpeed = 0;
+            if (EntityManager.HasComponent<global::Game.Objects.UnderConstruction>(property))
+            {
+                byte speed = EntityManager
+                    .GetComponentData<global::Game.Objects.UnderConstruction>(property).m_Speed;
+                // Zero on the wire is reserved for the authoritative completed state.
+                constructionSpeed = speed == 0 ? (byte)1 : speed;
+            }
             entry = new CompanyStatsEntry
             {
                 PrefabName = prefabName,
                 AnchorX = transform.m_Position.x,
                 AnchorY = transform.m_Position.y,
                 AnchorZ = transform.m_Position.z,
+                ConstructionSpeed = constructionSpeed,
                 CompanyPrefabName = string.Empty,
             };
 
             Entity company = FindTenant(property);
             if (company != Entity.Null &&
                 EntityManager.HasComponent<CompanyStatisticData>(company) &&
-                EntityManager.HasComponent<PrefabRef>(company))
+                EntityManager.HasComponent<PrefabRef>(company) &&
+                EntityManager.HasComponent<CompanyData>(company) &&
+                !EntityManager.HasComponent<global::Game.Common.Created>(company))
             {
                 string companyName = _prefabIndex.NameOf(
                     EntityManager.GetComponentData<PrefabRef>(company).m_Prefab);
@@ -252,10 +425,23 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 // whole entry and let the next sweep try again.
                 if (string.IsNullOrEmpty(companyName)) return false;
 
+                CompanyData companyData = EntityManager.GetComponentData<CompanyData>(company);
+                string brandName = _prefabIndex.NameOf(companyData.m_Brand);
+                if (string.IsNullOrEmpty(brandName) || companyData.m_RandomSeed.state == 0)
+                    return false;
+
+                string customName;
+                if (!_nameSystem.TryGetCustomName(company, out customName))
+                    customName = string.Empty;
+                customName = WireGuard.SanitizeText(customName, WireGuard.MaxNameLength);
+
                 CompanyStatisticData data =
                     EntityManager.GetComponentData<CompanyStatisticData>(company);
                 entry.HasTenant = true;
                 entry.CompanyPrefabName = companyName;
+                entry.BrandPrefabName = brandName;
+                entry.CompanyCustomName = customName;
+                entry.CompanyRandomState = companyData.m_RandomSeed.state;
                 entry.MaxNumberOfCustomers = data.m_MaxNumberOfCustomers;
                 entry.MonthlyCustomerCount = data.m_MonthlyCustomerCount;
                 entry.MonthlyCostBuyingResources = data.m_MonthlyCostBuyingResources;
@@ -276,6 +462,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 entry.LastUpdateProduce = data.m_LastUpdateProduce;
                 entry.LastFrameLowIncome = data.m_LastFrameLowIncome;
                 entry.Resources = CaptureResources(company);
+                entry.TradeCosts = CaptureTradeCosts(company);
+                entry.Employees = CaptureEmployees(company, out entry.EmployeeRosterComplete);
 
                 if (EntityManager.HasComponent<Profitability>(company))
                 {
@@ -284,6 +472,40 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     entry.HasProfitability = true;
                     entry.Profitability = profitability.m_Profitability;
                     entry.LastTotalWorth = profitability.m_LastTotalWorth;
+                }
+
+                if (EntityManager.HasComponent<ServiceAvailable>(company))
+                {
+                    ServiceAvailable service =
+                        EntityManager.GetComponentData<ServiceAvailable>(company);
+                    entry.HasServiceAvailable = true;
+                    entry.ServiceAvailable = service.m_ServiceAvailable;
+                    entry.ServiceMeanPriority = service.m_MeanPriority;
+                }
+
+                if (EntityManager.HasComponent<LodgingProvider>(company))
+                {
+                    LodgingProvider lodging =
+                        EntityManager.GetComponentData<LodgingProvider>(company);
+                    entry.HasLodgingProvider = true;
+                    entry.FreeLodgingRooms = lodging.m_FreeRooms;
+                    entry.LodgingPrice = lodging.m_Price;
+                }
+
+                if (EntityManager.HasComponent<WorkProvider>(company))
+                {
+                    entry.HasWorkProvider = true;
+                    entry.MaxWorkers =
+                        EntityManager.GetComponentData<WorkProvider>(company).m_MaxWorkers;
+                }
+
+                if (EntityManager.HasComponent<TaxPayer>(company))
+                {
+                    TaxPayer tax = EntityManager.GetComponentData<TaxPayer>(company);
+                    entry.HasTaxPayer = true;
+                    entry.UntaxedIncome = tax.m_UntaxedIncome;
+                    entry.AverageTaxRate = tax.m_AverageTaxRate;
+                    entry.AverageTaxPaid = tax.m_AverageTaxPaid;
                 }
             }
 
@@ -312,6 +534,103 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             return _resourceScratch.ToArray();
         }
 
+        private CompanyStatsTradeCost[] CaptureTradeCosts(Entity company)
+        {
+            if (!EntityManager.HasBuffer<TradeCost>(company)) return null;
+            DynamicBuffer<TradeCost> costs = EntityManager.GetBuffer<TradeCost>(company, true);
+            _tradeCostScratch.Clear();
+            int count = costs.Length;
+            if (count > CompanyStatsSnapshot.MaxTradeCostSlots)
+                count = CompanyStatsSnapshot.MaxTradeCostSlots;
+            for (int i = 0; i < count; i++)
+            {
+                TradeCost cost = costs[i];
+                int index = EconomyUtils.GetResourceIndex(cost.m_Resource);
+                if (index < 0 || index >= CompanyStatsSnapshot.MaxResourceSlots) continue;
+                _tradeCostScratch.Add(new CompanyStatsTradeCost
+                {
+                    Index = index,
+                    BuyCost = cost.m_BuyCost,
+                    SellCost = cost.m_SellCost,
+                    LastTransferRequestTime = cost.m_LastTransferRequestTime,
+                });
+            }
+            return _tradeCostScratch.Count == 0 ? null : _tradeCostScratch.ToArray();
+        }
+
+        /// <summary>
+        /// Capture only regular residents, because occupancy is what gives those citizens a
+        /// cross-machine identity. A commuter/tourist or a temporarily inconsistent native graph
+        /// makes the roster partial: clients may add the residents listed here, but must not erase
+        /// an unmatched local worker on the strength of an incomplete statement.
+        /// </summary>
+        private CompanyStatsEmployee[] CaptureEmployees(Entity company, out bool complete)
+        {
+            complete = EntityManager.HasBuffer<Employee>(company);
+            if (!complete) return null;
+
+            DynamicBuffer<Employee> employees = EntityManager.GetBuffer<Employee>(company, true);
+            _employeeScratch.Clear();
+            _employeeIdScratch.Clear();
+            if (employees.Length > CompanyStatsSnapshot.MaxEmployeeSlots) complete = false;
+            int count = employees.Length;
+            if (count > CompanyStatsSnapshot.MaxEmployeeSlots)
+                count = CompanyStatsSnapshot.MaxEmployeeSlots;
+
+            for (int i = 0; i < count; i++)
+            {
+                Employee employee = employees[i];
+                Entity citizen = employee.m_Worker;
+                if (citizen == Entity.Null || !EntityManager.Exists(citizen) ||
+                    !EntityManager.HasComponent<Citizen>(citizen) ||
+                    !EntityManager.HasComponent<HouseholdMember>(citizen) ||
+                    !EntityManager.HasComponent<Worker>(citizen) ||
+                    EntityManager.HasComponent<global::Game.Common.Deleted>(citizen) ||
+                    EntityManager.HasComponent<global::Game.Tools.Temp>(citizen))
+                {
+                    complete = false;
+                    continue;
+                }
+
+                Entity household = EntityManager.GetComponentData<HouseholdMember>(citizen)
+                    .m_Household;
+                if (household == Entity.Null || !EntityManager.Exists(household) ||
+                    !EntityManager.HasComponent<Household>(household) ||
+                    EntityManager.HasComponent<TouristHousehold>(household) ||
+                    EntityManager.HasComponent<CommuterHousehold>(household))
+                {
+                    complete = false;
+                    continue;
+                }
+
+                Worker worker = EntityManager.GetComponentData<Worker>(citizen);
+                if (worker.m_Workplace != company || employee.m_Level > 4 ||
+                    (byte)worker.m_Shift > 2 || worker.m_LastCommuteTime < 0f ||
+                    float.IsNaN(worker.m_LastCommuteTime) ||
+                    float.IsInfinity(worker.m_LastCommuteTime))
+                {
+                    complete = false;
+                    continue;
+                }
+
+                ulong citizenId = ResidentialOccupancySyncSystem.PackNetworkCitizenId(citizen);
+                if (citizenId == 0 || !_employeeIdScratch.Add(citizenId))
+                {
+                    complete = false;
+                    continue;
+                }
+                _employeeScratch.Add(new CompanyStatsEmployee
+                {
+                    CitizenId = citizenId,
+                    Level = employee.m_Level,
+                    LastCommuteTime = worker.m_LastCommuteTime,
+                    Shift = (byte)worker.m_Shift,
+                });
+            }
+
+            return _employeeScratch.Count == 0 ? null : _employeeScratch.ToArray();
+        }
+
         /// <summary>
         /// Covers tenancy first, then the figures a player watches. Money drifts continuously by
         /// design and the baseline sweep carries it anyway; what this hash is for is getting a
@@ -322,10 +641,24 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             unchecked
             {
                 int hash = (int)2166136261;
+                // Property level and construction state precede tenancy. Dense buildings depend
+                // on the prefab's property capacity, so completion must be priority traffic even
+                // when the business itself did not change.
+                hash = (hash ^ (entry.PrefabName == null
+                    ? 0 : entry.PrefabName.GetHashCode())) * 16777619;
+                hash = (hash ^ entry.ConstructionSpeed) * 16777619;
                 hash = (hash ^ (entry.HasTenant ? 1 : 0)) * 16777619;
                 hash = (hash ^ (entry.CompanyPrefabName == null
                     ? 0 : entry.CompanyPrefabName.GetHashCode())) * 16777619;
                 if (!entry.HasTenant) return hash;
+                hash = (hash ^ (entry.BrandPrefabName == null
+                    ? 0 : entry.BrandPrefabName.GetHashCode())) * 16777619;
+                hash = (hash ^ (entry.CompanyCustomName == null
+                    ? 0 : entry.CompanyCustomName.GetHashCode())) * 16777619;
+                hash = (hash ^ unchecked((int)entry.CompanyRandomState)) * 16777619;
+                hash = (hash ^ entry.MaxNumberOfCustomers) * 16777619;
+                hash = (hash ^ entry.MonthlyCostBuyingResources) * 16777619;
+                hash = (hash ^ entry.CurrentCostOfBuyingResources) * 16777619;
                 hash = (hash ^ entry.Income) * 16777619;
                 hash = (hash ^ entry.Worth) * 16777619;
                 hash = (hash ^ entry.Profit) * 16777619;
@@ -337,11 +670,37 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 hash = (hash ^ entry.LastUpdateProduce) * 16777619;
                 hash = (hash ^ entry.CostBuyResource) * 16777619;
                 hash = (hash ^ (entry.HasProfitability ? entry.Profitability : 0)) * 16777619;
+                hash = (hash ^ (entry.HasServiceAvailable ? entry.ServiceAvailable : 0)) * 16777619;
+                hash = (hash ^ (entry.HasServiceAvailable
+                    ? entry.ServiceMeanPriority.GetHashCode() : 0)) * 16777619;
+                hash = (hash ^ (entry.HasWorkProvider ? entry.MaxWorkers : 0)) * 16777619;
+                hash = (hash ^ (entry.HasTaxPayer ? entry.UntaxedIncome : 0)) * 16777619;
+                hash = (hash ^ (entry.HasTaxPayer ? entry.AverageTaxRate : 0)) * 16777619;
+                hash = (hash ^ (entry.HasTaxPayer ? entry.AverageTaxPaid : 0)) * 16777619;
                 CompanyStatsResource[] resources = entry.Resources;
                 hash = (hash ^ (resources == null ? 0 : resources.Length)) * 16777619;
                 if (resources != null)
                     for (int i = 0; i < resources.Length; i++)
                         hash = (hash ^ resources[i].Index ^ resources[i].Amount) * 16777619;
+                CompanyStatsTradeCost[] costs = entry.TradeCosts;
+                hash = (hash ^ (costs == null ? 0 : costs.Length)) * 16777619;
+                if (costs != null)
+                    for (int i = 0; i < costs.Length; i++)
+                    {
+                        hash = (hash ^ costs[i].Index ^ costs[i].BuyCost.GetHashCode() ^
+                                costs[i].SellCost.GetHashCode()) * 16777619;
+                        hash = (hash ^ costs[i].LastTransferRequestTime.GetHashCode()) * 16777619;
+                    }
+                CompanyStatsEmployee[] employees = entry.Employees;
+                hash = (hash ^ (entry.EmployeeRosterComplete ? 1 : 0)) * 16777619;
+                hash = (hash ^ (employees == null ? 0 : employees.Length)) * 16777619;
+                if (employees != null)
+                    for (int i = 0; i < employees.Length; i++)
+                    {
+                        hash = (hash ^ employees[i].CitizenId.GetHashCode() ^ employees[i].Level ^
+                                employees[i].Shift ^ employees[i].LastCommuteTime.GetHashCode()) *
+                               16777619;
+                    }
                 return hash;
             }
         }

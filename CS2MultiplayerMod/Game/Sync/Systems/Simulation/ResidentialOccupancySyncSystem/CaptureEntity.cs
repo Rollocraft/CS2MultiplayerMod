@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Text;
 using CS2MultiplayerMod.Game.Sync.Commands;
+using Game.Agents;
 using Game.Buildings;
 using Game.Citizens;
 using Game.Common;
@@ -75,6 +76,14 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     .GetComponentData<global::Game.Objects.UnderConstruction>(property).m_Speed;
                 constructionSpeed = speed == 0 ? (byte)1 : speed;
             }
+            bool hasElectricityConsumer = EntityManager.HasComponent<ElectricityConsumer>(property);
+            ElectricityConsumer electricityConsumer = hasElectricityConsumer
+                ? EntityManager.GetComponentData<ElectricityConsumer>(property)
+                : default(ElectricityConsumer);
+            bool hasWaterConsumer = EntityManager.HasComponent<WaterConsumer>(property);
+            WaterConsumer waterConsumer = hasWaterConsumer
+                ? EntityManager.GetComponentData<WaterConsumer>(property)
+                : default(WaterConsumer);
             result = new OccupancyProperty
             {
                 PrefabName = prefabName,
@@ -83,6 +92,15 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 AnchorZ = transform.m_Position.z,
                 Revision = NextHostRevision(),
                 ConstructionSpeed = constructionSpeed,
+                HasElectricityConsumer = hasElectricityConsumer,
+                ElectricityFulfilledConsumption = Clamp(
+                    electricityConsumer.m_FulfilledConsumption, 0,
+                    ResidentialOccupancySnapshot.MaxUtilityConsumption),
+                HasWaterConsumer = hasWaterConsumer,
+                WaterFulfilledFresh = Clamp(waterConsumer.m_FulfilledFresh, 0,
+                    ResidentialOccupancySnapshot.MaxUtilityConsumption),
+                WaterFulfilledSewage = Clamp(waterConsumer.m_FulfilledSewage, 0,
+                    ResidentialOccupancySnapshot.MaxUtilityConsumption),
                 Households = households.ToArray(),
             };
             // City-state capture is shared: never let a broken local asset name or transform reach
@@ -177,6 +195,11 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             string[] ownedVehicles;
             if (!TryCaptureOwnedVehicles(entity, out ownedVehicles)) return false;
 
+            bool hasTaxPayer = EntityManager.HasComponent<TaxPayer>(entity);
+            TaxPayer taxPayer = hasTaxPayer
+                ? EntityManager.GetComponentData<TaxPayer>(entity)
+                : default(TaxPayer);
+
             result = new OccupancyHousehold
             {
                 HouseholdId = PackHostEntityId(entity),
@@ -187,6 +210,16 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 Savings = Clamp(data.m_Resources, -ResidentialOccupancySnapshot.MaxMoney,
                     ResidentialOccupancySnapshot.MaxMoney),
                 Money = Clamp(EconomyUtils.GetResources(Resource.Money, resources),
+                    -ResidentialOccupancySnapshot.MaxMoney,
+                    ResidentialOccupancySnapshot.MaxMoney),
+                HasTaxPayer = hasTaxPayer,
+                UntaxedIncome = Clamp(taxPayer.m_UntaxedIncome,
+                    -ResidentialOccupancySnapshot.MaxMoney,
+                    ResidentialOccupancySnapshot.MaxMoney),
+                AverageTaxRate = Clamp(taxPayer.m_AverageTaxRate,
+                    -ResidentialOccupancySnapshot.MaxMoney,
+                    ResidentialOccupancySnapshot.MaxMoney),
+                AverageTaxPaid = Clamp(taxPayer.m_AverageTaxPaid,
                     -ResidentialOccupancySnapshot.MaxMoney,
                     ResidentialOccupancySnapshot.MaxMoney),
                 ConsumptionPerDay = data.m_ConsumptionPerDay,
@@ -281,6 +314,10 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 level = worker.m_Level > ResidentialOccupancySnapshot.MaxWorkerLevel
                     ? (byte)ResidentialOccupancySnapshot.MaxWorkerLevel : worker.m_Level;
             }
+            bool hasHealthProblem = EntityManager.HasComponent<HealthProblem>(entity);
+            HealthProblem healthProblem = hasHealthProblem
+                ? EntityManager.GetComponentData<HealthProblem>(entity)
+                : default(HealthProblem);
             result = new OccupancyCitizen
             {
                 CitizenId = PackHostEntityId(entity),
@@ -290,6 +327,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 BirthDay = data.m_BirthDay,
                 Health = data.m_Health,
                 WellBeing = data.m_WellBeing,
+                HealthProblem = OccupancyCitizen.PackHealthProblem(hasHealthProblem,
+                    (byte)healthProblem.m_Flags),
                 Employment = OccupancyCitizen.PackEmployment(employed, level),
                 UnemploymentCounter = Clamp(data.m_UnemploymentCounter, 0,
                     ResidentialOccupancySnapshot.MaxMoney),

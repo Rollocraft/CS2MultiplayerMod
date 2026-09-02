@@ -50,7 +50,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         private const long ResolveRetryMs = 5000;
         private const long ResolveTimeoutMs = 120000;
         private const int MaxPriorityEntries = 2048;
-        private const int PriorityEntriesPerPage = 24;
+        private const int PriorityEntriesPerPage = 64;
         private const long StatsIntervalMs = 30000;
 
         private readonly ConcurrentQueue<PropertyRentSnapshot> _incoming =

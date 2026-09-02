@@ -1,5 +1,4 @@
 using System;
-using System.Runtime.InteropServices;
 using System.Text;
 
 namespace CS2MultiplayerMod.Core.Protocol
@@ -63,28 +62,12 @@ namespace CS2MultiplayerMod.Core.Protocol
             return value;
         }
 
-        /// <summary>
-        /// Mirror of <see cref="NetworkWriter.WriteFloat"/>: assemble the little-endian bits by
-        /// hand, then reinterpret. Replaces <c>BitConverter.ToSingle</c>, which read whatever
-        /// order the runtime happened to use rather than the order the writer states.
-        /// </summary>
         public float ReadFloat()
         {
             Require(4);
-            int bits = _buffer[_position]
-                       | (_buffer[_position + 1] << 8)
-                       | (_buffer[_position + 2] << 16)
-                       | (_buffer[_position + 3] << 24);
+            float value = BitConverter.ToSingle(_buffer, _position);
             _position += 4;
-            return new FloatBits { Int = bits }.Float;
-        }
-
-        /// <summary>IEEE-754 reinterpretation without allocating. Shared shape with the writer.</summary>
-        [StructLayout(LayoutKind.Explicit)]
-        private struct FloatBits
-        {
-            [FieldOffset(0)] public float Float;
-            [FieldOffset(0)] public int Int;
+            return value;
         }
 
         public string ReadString()

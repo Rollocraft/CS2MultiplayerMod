@@ -62,12 +62,15 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                     " split an existing edge (T-junction), " + _rzFreeEnds + " free ground.");
             }
 
-            if (_capPinnedSpans > 0 || _rzPinnedSpans > 0 || _rzPinRefused > 0)
+            if (_capPinnedSpans > 0 || _rzPinnedSpans > 0 || _rzPinRefused > 0 ||
+                _capSelfAnchoredSpans > 0)
             {
                 SyncLog.Detail(LogTopic.Nets, "NetSync water profile/5s: captured " +
                     _capPinnedSpans + " span(s) over water as " + _capPinnedPieces +
-                    " pinned piece(s); realized " + _rzPinnedSpans + " pinned span(s), " +
-                    _rzPinRefused + " refused (those rebuild their deck from local water).");
+                    " pinned piece(s); left " + _capSelfAnchoredSpans +
+                    " raised span(s) to the receiver's own generator; realized " + _rzPinnedSpans +
+                    " pinned span(s), " + _rzPinRefused +
+                    " refused (those rebuild their deck from local water).");
             }
 
             if (_rzSurfaceCorrections > 0)
@@ -90,7 +93,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
             _diagTotal = 0;
             _rzSegments = _rzSnapEnds = _rzMergeEnds = _rzMidEnds = _rzFreeEnds = 0;
             _rzLocalSurfaceMatches = 0;
-            _capPinnedSpans = _capPinnedPieces = 0;
+            _capPinnedSpans = _capPinnedPieces = _capSelfAnchoredSpans = 0;
             _rzPinnedSpans = _rzPinRefused = 0;
             _rzSurfaceCorrections = 0;
             _rzSurfaceCorrectionMax = 0f;
@@ -245,7 +248,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                         End = { ElevationLeft = endElevation.x, ElevationRight = endElevation.y },
                         // Over water the receiver would rebuild the deck from ITS water field; pin
                         // the span to the two committed end-node heights instead.
-                        PinProfile = ShouldPinCommittedEdge(prefab, b),
+                        PinProfile = ShouldPinCommittedEdge(prefab, b, startElevation,
+                            endElevation),
                     };
                     if (command.PinProfile) { _capPinnedSpans++; _capPinnedPieces++; }
                     if (onKeptSpan)

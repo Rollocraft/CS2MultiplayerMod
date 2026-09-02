@@ -45,8 +45,10 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
     /// is what a frame actually feels, so it is budgeted per update and gated behind a settle
     /// window that keeps a page arriving mid-move-in from causing churn.</para>
     ///
-    /// Employment stays local: an <c>Employee</c> buffer names worker citizens, and fabricating
-    /// those would invent people the receiving machine does not have.
+    /// Employment is resolved through <see cref="ResidentialOccupancySyncSystem"/>'s citizen
+    /// identity map. A host worker is attached to the corresponding real local citizen, so the
+    /// native Worker component continues to produce commutes and pedestrians; no display-only
+    /// employee entities are fabricated.
     /// </summary>
     public partial class CompanyStatsSyncSystem : GameSystemBase
     {
@@ -72,7 +74,12 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         private const long ResolveRetryMs = 5000;
         private const long ResolveTimeoutMs = 120000;
         private const int MaxPriorityEntries = 2048;
-        private const int PriorityEntriesPerPage = 32;
+        // A busy dense district changes far more than 32 company records per second. Bytes, not
+        // the old low-density entry count, are the meaningful bound because employee rosters make
+        // entry sizes vary by orders of magnitude.
+        private const int PriorityEntriesPerPage = 224;
+        private const int PageByteBudget = CompanyStatsSnapshot.MaxEncodedBytes - 512;
+        private const int PriorityByteBudget = PageByteBudget * 7 / 8;
 
         /// <summary>
         /// Buildings the rolling change detector examines per update on the host. The baseline
@@ -89,6 +96,14 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         private const int MaxTenancyWalkedPerUpdate = 64;
 
         /// <summary>
+        /// Arrived pages are applied on a 16-frame boundary rather than waiting for the target
+        /// company's 2,048-frame statistics rotation. Dirty entries are immediate; the rolling
+        /// walk is a defence against a native writer changing state without a new host page.
+        /// </summary>
+        private const int MaxStateDirtyPerBoundary = 128;
+        private const int MaxStateWalkedPerBoundary = 64;
+
+        /// <summary>
         /// Structural ceilings. Creating or closing a business moves entities between chunks and
         /// changes how its building draws, so these are the numbers that decide whether a busy
         /// economy is felt as a hitch. Anything over the budget waits for the next update.
@@ -101,7 +116,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         /// still sitting in the native rent-action queue, and acting again before that drains
         /// would create a second business or undo the first.
         /// </summary>
-        private const uint SettleFrames = 4 * CompanyUpdateInterval;
+        private const uint SettleFrames = 4 * 16;
 
         /// <summary>Cap on the queue of just-changed buildings; the rolling walk is the backstop.</summary>
         private const int MaxDirtyProperties = 8192;
@@ -121,14 +136,20 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
         private readonly List<Entity> _dirty = new List<Entity>();
         private readonly HashSet<Entity> _dirtyMembers = new HashSet<Entity>();
+        private readonly List<Entity> _stateDirty = new List<Entity>();
+        private readonly HashSet<Entity> _stateDirtyMembers = new HashSet<Entity>();
+        private readonly List<Entity> _stateRetryScratch = new List<Entity>();
         private readonly List<Entity> _tenancyOrder = new List<Entity>();
         private int _tenancyCursor;
+        private int _stateCursor;
         private readonly Dictionary<Entity, uint> _settling = new Dictionary<Entity, uint>();
         private readonly List<Entity> _settlingScratch = new List<Entity>();
         private readonly HashSet<Entity> _authorizedMoveAways = new HashSet<Entity>();
         private readonly List<Entity> _authorizedScratch = new List<Entity>();
 
         private readonly Dictionary<Entity, int> _hostObserved = new Dictionary<Entity, int>();
+        private readonly Dictionary<Entity, int> _hostEmployeeObserved =
+            new Dictionary<Entity, int>();
         private readonly bool[] _hostPartitionInitialized = new bool[UpdatePartitions];
         private readonly int[] _hostPartitionCursor = new int[UpdatePartitions];
         private readonly Dictionary<PropertyRentIdentity, Entity> _priority =
@@ -138,6 +159,16 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
         private readonly List<CompanyStatsResource> _resourceScratch =
             new List<CompanyStatsResource>();
+        private readonly List<CompanyStatsTradeCost> _tradeCostScratch =
+            new List<CompanyStatsTradeCost>();
+        private readonly List<CompanyStatsEmployee> _employeeScratch =
+            new List<CompanyStatsEmployee>();
+        private readonly HashSet<ulong> _employeeIdScratch = new HashSet<ulong>();
+        private readonly List<ResolvedEmployee> _resolvedEmployeeScratch =
+            new List<ResolvedEmployee>();
+        private readonly HashSet<Entity> _desiredEmployeeEntities = new HashSet<Entity>();
+        private readonly List<Entity> _employeeEntityScratch = new List<Entity>();
+        private readonly List<Entity> _employeeRemovalScratch = new List<Entity>();
 
         // Reused every update: the partition sorted into its three zones so each can be timed and
         // counted on its own.
@@ -152,18 +183,23 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         private EntityQuery _companies;
         private EntityQuery _departingCompanies;
         private EntityQuery _companySeekers;
+        private EntityQuery _renterUpdates;
         private EntityQuery _prefabs;
         private PrefabSystem _prefabSystem;
         private PrefabIndex _prefabIndex;
         private ObjectSearch _objectSearch;
         private SimulationSystem _simulationSystem;
         private PropertyProcessingSystem _propertyProcessing;
+        private ResidentialOccupancySyncSystem _occupancy;
+        private global::Game.UI.NameSystem _nameSystem;
 
         private Entity[] _hostSweepEntities;
         private int _captureCursor;
         private uint _captureSweepId = 1;
         private int _capturePageIndex;
         private uint _clientSweepId;
+        private int _clientNextPage;
+        private bool _clientSweepIntact;
         private bool _syncWasReady;
         private long _nextPendingPumpMs;
 
@@ -172,7 +208,10 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         private int _sentPages, _sentEntries, _priorityChanges, _priorityDrops, _captureSkips;
         private int _receivedPages, _droppedPages, _resolved, _unresolved, _ambiguous, _expired;
         private int _appliedCompanies, _correctedFields, _correctedResources;
+        private int _correctedCompanyData, _correctedTradeCosts, _correctedEmployees;
+        private int _correctedPropertyPrefabs, _alignedPropertyBuildRates;
         private int _createdCompanies, _retiredCompanies, _deferredActions, _cancelledDecisions;
+        private int _hostLifecycleSignals, _clientLifecycleRepairs;
 
         private sealed class CachedEntry
         {
@@ -188,6 +227,12 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             public long NextAttemptMs;
         }
 
+        private struct ResolvedEmployee
+        {
+            public Entity Citizen;
+            public CompanyStatsEmployee State;
+        }
+
         public override int GetUpdateInterval(SystemUpdatePhase phase) =>
             phase == SystemUpdatePhase.GameSimulation ? CompanyUpdateInterval : 1;
 
@@ -201,6 +246,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 World.GetOrCreateSystemManaged<global::Game.Objects.SearchSystem>());
             _simulationSystem = World.GetOrCreateSystemManaged<SimulationSystem>();
             _propertyProcessing = World.GetOrCreateSystemManaged<PropertyProcessingSystem>();
+            _occupancy = World.GetOrCreateSystemManaged<ResidentialOccupancySyncSystem>();
+            _nameSystem = World.GetOrCreateSystemManaged<global::Game.UI.NameSystem>();
 
             // Buildings a business can rent. The host sweeps these rather than its companies,
             // because "nobody rents this one" is the statement a client cannot work out alone.
@@ -208,8 +255,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             {
                 All = SyncQuery.ReadOnly<Building, Renter, PrefabRef,
                     global::Game.Objects.Transform, UpdateFrame>(),
-                Any = SyncQuery.ReadOnly<CommercialProperty, IndustrialProperty, OfficeProperty>(),
-                None = SyncQuery.ReadOnly<StorageProperty, Temp, Deleted, Owner>(),
+                Any = SyncQuery.ReadOnly<CommercialProperty, IndustrialProperty, OfficeProperty,
+                    StorageProperty, ExtractorProperty>(),
+                None = SyncQuery.ReadOnly<Temp, Deleted>(),
             });
 
             // Deliberately the same shape as CompanyEconomyStatisticSystem's own query, so the
@@ -234,6 +282,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 All = SyncQuery.ReadOnly<CompanyData, global::Game.Agents.PropertySeeker>(),
                 None = SyncQuery.ReadOnly<Deleted, Temp>(),
             });
+
+            _renterUpdates = GetEntityQuery(ComponentType.ReadOnly<RentersUpdated>());
 
             SyncInbox.RegisterDrain(DrainForWorldChange);
         }
@@ -287,7 +337,6 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     // Pump once more as a harmless fallback before this partition is corrected.
                     PumpIncoming();
                     ApplyFigures(updateFrame);
-                    ApplyTenancy();
                 }
                 ReportStats(session, service.NowMs);
             }
@@ -346,17 +395,29 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             PropertyRentIdentity discardedPriority;
             while (_priorityOrder.TryDequeue(out discardedPriority)) { }
             _hostObserved.Clear();
+            _hostEmployeeObserved.Clear();
             Array.Clear(_hostPartitionInitialized, 0, _hostPartitionInitialized.Length);
             Array.Clear(_hostPartitionCursor, 0, _hostPartitionCursor.Length);
             _dirty.Clear();
             _dirtyMembers.Clear();
+            _stateDirty.Clear();
+            _stateDirtyMembers.Clear();
+            _stateRetryScratch.Clear();
             _tenancyOrder.Clear();
             _tenancyCursor = 0;
+            _stateCursor = 0;
             _settling.Clear();
             _settlingScratch.Clear();
             _authorizedMoveAways.Clear();
             _authorizedScratch.Clear();
             _resourceScratch.Clear();
+            _tradeCostScratch.Clear();
+            _employeeScratch.Clear();
+            _employeeIdScratch.Clear();
+            _resolvedEmployeeScratch.Clear();
+            _desiredEmployeeEntities.Clear();
+            _employeeEntityScratch.Clear();
+            _employeeRemovalScratch.Clear();
             _commercialBucket.Clear();
             _industrialBucket.Clear();
             _officeBucket.Clear();
@@ -368,6 +429,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             _capturePageIndex = 0;
             _captureSweepId = 1;
             _clientSweepId = 0;
+            _clientNextPage = 0;
+            _clientSweepIntact = false;
             _nextPendingPumpMs = 0;
             _prefabIndex = new PrefabIndex(_prefabSystem, _prefabs);
         }
@@ -383,8 +446,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         }
 
         /// <summary>
-        /// A building a business can rent. Storage is excluded to match the rent channel, and an
-        /// owned or temporary building is never a property in its own right.
+        /// A building a business can rent. Warehouses and extractor properties are part of the
+        /// native industrial property search and must not disappear from this channel merely
+        /// because they carry StorageProperty or Owner in addition to their workplace marker.
         /// </summary>
         private bool IsLiveWorkplaceProperty(Entity property) =>
             property != Entity.Null && EntityManager.Exists(property) &&
@@ -394,11 +458,11 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             EntityManager.HasComponent<global::Game.Objects.Transform>(property) &&
             (EntityManager.HasComponent<CommercialProperty>(property) ||
              EntityManager.HasComponent<IndustrialProperty>(property) ||
-             EntityManager.HasComponent<OfficeProperty>(property)) &&
-            !EntityManager.HasComponent<StorageProperty>(property) &&
+             EntityManager.HasComponent<OfficeProperty>(property) ||
+             EntityManager.HasComponent<StorageProperty>(property) ||
+             EntityManager.HasComponent<ExtractorProperty>(property)) &&
             !EntityManager.HasComponent<Temp>(property) &&
-            !EntityManager.HasComponent<Deleted>(property) &&
-            !EntityManager.HasComponent<Owner>(property);
+            !EntityManager.HasComponent<Deleted>(property);
 
         /// <summary>
         /// The business renting a building, or null. Households share the renter buffer in a mixed
@@ -431,6 +495,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             if (session.Role == SessionRole.Host)
                 WriteToWorkplaceTopics("pages=" + _sentPages + ", entries=" + _sentEntries +
                                        ", bytes=" + _sentBytes + ", changed=" + _priorityChanges +
+                                       ", lifecycleSignals=" + _hostLifecycleSignals +
                                        ", queued=" + _priority.Count + ", dropped=" +
                                        _priorityDrops + ", skipped=" + _captureSkips + ".");
             else
@@ -441,9 +506,16 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                                        ", unresolved=" + _unresolved + ", ambiguous=" + _ambiguous +
                                        ", expired=" + _expired + ", correctedFigures=" +
                                        _correctedFields + ", correctedResources=" +
-                                       _correctedResources + ", deferred=" + _deferredActions +
+                                       _correctedResources + ", correctedCompany=" +
+                                       _correctedCompanyData + ", correctedTrade=" +
+                                       _correctedTradeCosts + ", correctedEmployees=" +
+                                       _correctedEmployees + ", prefabCorrections=" +
+                                       _correctedPropertyPrefabs + ", buildRatesAligned=" +
+                                       _alignedPropertyBuildRates + ", deferred=" + _deferredActions +
+                                       ", lifecycleRepairs=" + _clientLifecycleRepairs +
                                        ", cancelledLocalDecisions=" + _cancelledDecisions +
-                                       ", dirty=" + _dirty.Count + ".");
+                                       ", tenancyDirty=" + _dirty.Count + ", stateDirty=" +
+                                       _stateDirty.Count + ".");
                 ReportZone(SyncZone.Commercial);
                 ReportZone(SyncZone.Industrial);
                 ReportZone(SyncZone.Office);
@@ -453,7 +525,10 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             _sentBytes = 0;
             _receivedPages = _droppedPages = _resolved = _unresolved = _ambiguous = _expired = 0;
             _appliedCompanies = _correctedFields = _correctedResources = 0;
+            _correctedCompanyData = _correctedTradeCosts = _correctedEmployees = 0;
+            _correctedPropertyPrefabs = _alignedPropertyBuildRates = 0;
             _createdCompanies = _retiredCompanies = _deferredActions = _cancelledDecisions = 0;
+            _hostLifecycleSignals = _clientLifecycleRepairs = 0;
             Array.Clear(_zoneApplied, 0, _zoneApplied.Length);
             Array.Clear(_zoneOpened, 0, _zoneOpened.Length);
             Array.Clear(_zoneClosed, 0, _zoneClosed.Length);

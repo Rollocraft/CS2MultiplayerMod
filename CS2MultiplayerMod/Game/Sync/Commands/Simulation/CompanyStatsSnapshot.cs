@@ -1,48 +1,47 @@
 using System;
 using System.Collections.Generic;
+using System.Text;
 using CS2MultiplayerMod.Core.Protocol;
 
 namespace CS2MultiplayerMod.Game.Sync.Commands
 {
     /// <summary>
-    /// One bounded page of host-authoritative workplace state: which business occupies each
-    /// commercial, industrial and office building, the money-facing block behind its panel, and
-    /// the goods it is holding.
-    ///
-    /// An entry is about the <b>building</b>, not the business. That is what lets the host say
-    /// "nobody rents this one" - the single statement a client cannot derive for itself, and the
-    /// reason tenancy can be host-authoritative at all. A vacant entry stops after the identity,
-    /// so an empty shop costs a name and three floats rather than a block of zeroes.
-    ///
-    /// Like the rent and occupancy pages this is an absolute statement about the properties it
-    /// names rather than an ordered delta: losing a page delays those workplaces until the next
-    /// sweep, repeating one is harmless, and malformed data is dropped locally instead of
-    /// escalating into a world resync.
+    /// One bounded page of host-authoritative workplace state. Entries are keyed by the rented
+    /// building, so a vacant entry is an absolute statement and a missing local company can be
+    /// recreated through the game's normal rent transaction.
     /// </summary>
     public sealed class CompanyStatsSnapshot
     {
-        public const int MaxEntries = 64;
+        // Dense offices carry hundreds of real employee identities. At the former 48 KiB/64-entry
+        // ceiling a large city's change queue grew faster than one 1 Hz page could drain, while
+        // one-tenant low-density shops happened to keep up. StateSnapshot allows 256 KiB; retain
+        // envelope headroom and bound both allocation count and spatial resolution work here.
+        public const int MaxEntries = 256;
         public const int MaxPagesPerSweep = 4096;
-        public const int MaxEncodedBytes = 48 * 1024;
-
-        /// <summary>
-        /// Magnitude cap for every signed money/count scalar. Far above any figure the game can
-        /// reach, still short of letting a corrupt host feed a near-int.MaxValue number into the
-        /// economy systems where it would overflow on the next accumulation.
-        /// </summary>
+        public const int MaxEncodedBytes = 240 * 1024;
         public const int MaxStatValue = 1000000000;
-
-        /// <summary>
-        /// Distinct resources one company can hold. The game's resource enum is well under this;
-        /// the cap exists so a forged count cannot make the decoder allocate.
-        /// </summary>
         public const int MaxResourceSlots = 64;
+        public const int MaxTradeCostSlots = 64;
+        public const int MaxEmployeeSlots = 512;
 
-        private const byte FlagHasTenant = 1;
-        private const byte FlagHasProfitability = 2;
-        private const byte FlagsMask = FlagHasTenant | FlagHasProfitability;
+        private const int FlagHasTenant = 1 << 0;
+        private const int FlagHasProfitability = 1 << 1;
+        private const int FlagHasServiceAvailable = 1 << 2;
+        private const int FlagHasLodgingProvider = 1 << 3;
+        private const int FlagHasWorkProvider = 1 << 4;
+        private const int FlagEmployeeRosterComplete = 1 << 5;
+        private const int FlagHasTaxPayer = 1 << 6;
+        private const int FlagsMask = FlagHasTenant | FlagHasProfitability |
+                                      FlagHasServiceAvailable | FlagHasLodgingProvider |
+                                      FlagHasWorkProvider | FlagEmployeeRosterComplete |
+                                      FlagHasTaxPayer;
 
-        private static readonly CompanyStatsResource[] EmptyResources = new CompanyStatsResource[0];
+        private static readonly CompanyStatsResource[] EmptyResources =
+            new CompanyStatsResource[0];
+        private static readonly CompanyStatsTradeCost[] EmptyTradeCosts =
+            new CompanyStatsTradeCost[0];
+        private static readonly CompanyStatsEmployee[] EmptyEmployees =
+            new CompanyStatsEmployee[0];
 
         public uint SweepId;
         public int PageIndex;
@@ -75,10 +74,15 @@ namespace CS2MultiplayerMod.Game.Sync.Commands
                 writer.WriteFloat(entry.AnchorX);
                 writer.WriteFloat(entry.AnchorY);
                 writer.WriteFloat(entry.AnchorZ);
-                writer.WriteByte(EncodeFlags(entry));
+                writer.WriteByte(entry.ConstructionSpeed);
+                writer.WriteShort((short)EncodeFlags(entry));
                 if (!entry.HasTenant) continue;
 
                 writer.WriteString(entry.CompanyPrefabName);
+                writer.WriteString(entry.BrandPrefabName);
+                writer.WriteString(entry.CompanyCustomName ?? string.Empty);
+                writer.WriteInt(unchecked((int)entry.CompanyRandomState));
+
                 writer.WriteInt(entry.MaxNumberOfCustomers);
                 writer.WriteInt(entry.MonthlyCustomerCount);
                 writer.WriteInt(entry.MonthlyCostBuyingResources);
@@ -104,6 +108,23 @@ namespace CS2MultiplayerMod.Game.Sync.Commands
                     writer.WriteByte(entry.Profitability);
                     writer.WriteInt(entry.LastTotalWorth);
                 }
+                if (entry.HasServiceAvailable)
+                {
+                    writer.WriteInt(entry.ServiceAvailable);
+                    writer.WriteFloat(entry.ServiceMeanPriority);
+                }
+                if (entry.HasLodgingProvider)
+                {
+                    writer.WriteInt(entry.FreeLodgingRooms);
+                    writer.WriteInt(entry.LodgingPrice);
+                }
+                if (entry.HasWorkProvider) writer.WriteInt(entry.MaxWorkers);
+                if (entry.HasTaxPayer)
+                {
+                    writer.WriteInt(entry.UntaxedIncome);
+                    writer.WriteInt(entry.AverageTaxRate);
+                    writer.WriteInt(entry.AverageTaxPaid);
+                }
 
                 CompanyStatsResource[] resources = entry.Resources ?? EmptyResources;
                 writer.WriteShort((short)resources.Length);
@@ -111,6 +132,26 @@ namespace CS2MultiplayerMod.Game.Sync.Commands
                 {
                     writer.WriteShort((short)resources[r].Index);
                     writer.WriteInt(resources[r].Amount);
+                }
+
+                CompanyStatsTradeCost[] tradeCosts = entry.TradeCosts ?? EmptyTradeCosts;
+                writer.WriteShort((short)tradeCosts.Length);
+                for (int t = 0; t < tradeCosts.Length; t++)
+                {
+                    writer.WriteShort((short)tradeCosts[t].Index);
+                    writer.WriteFloat(tradeCosts[t].BuyCost);
+                    writer.WriteFloat(tradeCosts[t].SellCost);
+                    writer.WriteLong(tradeCosts[t].LastTransferRequestTime);
+                }
+
+                CompanyStatsEmployee[] employees = entry.Employees ?? EmptyEmployees;
+                writer.WriteShort((short)employees.Length);
+                for (int e = 0; e < employees.Length; e++)
+                {
+                    writer.WriteLong(unchecked((long)employees[e].CitizenId));
+                    writer.WriteByte(employees[e].Level);
+                    writer.WriteFloat(employees[e].LastCommuteTime);
+                    writer.WriteByte(employees[e].Shift);
                 }
             }
 
@@ -142,9 +183,9 @@ namespace CS2MultiplayerMod.Game.Sync.Commands
             if (snapshot.PageIndex < 0 || snapshot.PageIndex >= MaxPagesPerSweep)
                 throw new ProtocolException("Company-stats page index is outside its cap.");
 
-            // Smallest possible entry is a vacant building: one length-prefixed name, three
-            // coordinates and the flag byte.
-            int count = WireGuard.ReadCount(reader, 16, MaxEntries);
+            // A vacant record is a name, three coordinates, construction state and a 16-bit
+            // flag block.
+            int count = WireGuard.ReadCount(reader, 18, MaxEntries);
             var identities = new HashSet<PropertyRentIdentity>();
             for (int i = 0; i < count; i++)
             {
@@ -154,9 +195,12 @@ namespace CS2MultiplayerMod.Game.Sync.Commands
                     AnchorX = WireGuard.ReadCoordinate(reader),
                     AnchorY = WireGuard.ReadCoordinate(reader),
                     AnchorZ = WireGuard.ReadCoordinate(reader),
+                    ConstructionSpeed = reader.ReadByte(),
                     CompanyPrefabName = string.Empty,
+                    BrandPrefabName = string.Empty,
+                    CompanyCustomName = string.Empty,
                 };
-                DecodeFlags(reader.ReadByte(), ref entry);
+                DecodeFlags(unchecked((ushort)reader.ReadShort()), ref entry);
                 if (entry.HasTenant) ReadTenant(reader, ref entry);
 
                 Validate(entry);
@@ -180,9 +224,11 @@ namespace CS2MultiplayerMod.Game.Sync.Commands
 
         private static void ReadTenant(NetworkReader reader, ref CompanyStatsEntry entry)
         {
-            // Required, not optional: the receiver builds a missing business from this archetype,
-            // so an unnamed tenant would be a building nobody can move into.
             entry.CompanyPrefabName = WireGuard.ReadName(reader);
+            entry.BrandPrefabName = WireGuard.ReadName(reader);
+            entry.CompanyCustomName = reader.ReadString() ?? string.Empty;
+            entry.CompanyRandomState = unchecked((uint)reader.ReadInt());
+
             entry.MaxNumberOfCustomers = reader.ReadInt();
             entry.MonthlyCustomerCount = reader.ReadInt();
             entry.MonthlyCostBuyingResources = reader.ReadInt();
@@ -208,43 +254,123 @@ namespace CS2MultiplayerMod.Game.Sync.Commands
                 entry.Profitability = reader.ReadByte();
                 entry.LastTotalWorth = reader.ReadInt();
             }
+            if (entry.HasServiceAvailable)
+            {
+                entry.ServiceAvailable = reader.ReadInt();
+                entry.ServiceMeanPriority = WireGuard.ReadFinite(reader);
+            }
+            if (entry.HasLodgingProvider)
+            {
+                entry.FreeLodgingRooms = reader.ReadInt();
+                entry.LodgingPrice = reader.ReadInt();
+            }
+            if (entry.HasWorkProvider) entry.MaxWorkers = reader.ReadInt();
+            if (entry.HasTaxPayer)
+            {
+                entry.UntaxedIncome = reader.ReadInt();
+                entry.AverageTaxRate = reader.ReadInt();
+                entry.AverageTaxPaid = reader.ReadInt();
+            }
 
             int resourceCount = WireGuard.ReadCount(reader, 6, MaxResourceSlots);
-            if (resourceCount == 0) return;
-            var resources = new CompanyStatsResource[resourceCount];
-            for (int r = 0; r < resourceCount; r++)
+            if (resourceCount > 0)
             {
-                resources[r] = new CompanyStatsResource
+                var resources = new CompanyStatsResource[resourceCount];
+                for (int r = 0; r < resourceCount; r++)
                 {
-                    Index = reader.ReadShort(),
-                    Amount = reader.ReadInt(),
-                };
+                    resources[r] = new CompanyStatsResource
+                    {
+                        Index = reader.ReadShort(),
+                        Amount = reader.ReadInt(),
+                    };
+                }
+                entry.Resources = resources;
             }
-            entry.Resources = resources;
+
+            int tradeCount = WireGuard.ReadCount(reader, 18, MaxTradeCostSlots);
+            if (tradeCount > 0)
+            {
+                var tradeCosts = new CompanyStatsTradeCost[tradeCount];
+                for (int t = 0; t < tradeCount; t++)
+                {
+                    tradeCosts[t] = new CompanyStatsTradeCost
+                    {
+                        Index = reader.ReadShort(),
+                        BuyCost = WireGuard.ReadFinite(reader),
+                        SellCost = WireGuard.ReadFinite(reader),
+                        LastTransferRequestTime = reader.ReadLong(),
+                    };
+                }
+                entry.TradeCosts = tradeCosts;
+            }
+
+            int employeeCount = WireGuard.ReadCount(reader, 14, MaxEmployeeSlots);
+            if (employeeCount > 0)
+            {
+                var employees = new CompanyStatsEmployee[employeeCount];
+                for (int e = 0; e < employeeCount; e++)
+                {
+                    employees[e] = new CompanyStatsEmployee
+                    {
+                        CitizenId = unchecked((ulong)reader.ReadLong()),
+                        Level = reader.ReadByte(),
+                        LastCommuteTime = WireGuard.ReadFinite(reader),
+                        Shift = reader.ReadByte(),
+                    };
+                }
+                entry.Employees = employees;
+            }
         }
 
         /// <summary>
-        /// Shared validation for the wire codec and for host capture. Capture calls this before an
-        /// entry reaches a page: CityState capture has no per-channel exception boundary, so one
-        /// broken local prefab or transform must be skipped rather than made to throw and suppress
-        /// money, clock and demand in the same snapshot.
+        /// Exact encoded size of an entry. Capture uses it before appending variable employee
+        /// rosters, preventing one large employer from wedging a bounded page.
         /// </summary>
+        public static int EstimateEncodedBytes(CompanyStatsEntry entry)
+        {
+            int size = EncodedStringBytes(entry.PrefabName) + 12 + 1 + 2;
+            if (!entry.HasTenant) return size;
+
+            size += EncodedStringBytes(entry.CompanyPrefabName);
+            size += EncodedStringBytes(entry.BrandPrefabName);
+            size += EncodedStringBytes(entry.CompanyCustomName);
+            size += 4;
+            size += 19 * 4;
+            if (entry.HasProfitability) size += 5;
+            if (entry.HasServiceAvailable) size += 8;
+            if (entry.HasLodgingProvider) size += 8;
+            if (entry.HasWorkProvider) size += 4;
+            if (entry.HasTaxPayer) size += 12;
+            size += 2 + 6 * (entry.Resources == null ? 0 : entry.Resources.Length);
+            size += 2 + 18 * (entry.TradeCosts == null ? 0 : entry.TradeCosts.Length);
+            size += 2 + 14 * (entry.Employees == null ? 0 : entry.Employees.Length);
+            return size;
+        }
+
         public static bool IsValidEntry(CompanyStatsEntry entry)
         {
-            if (!IsValidName(entry.PrefabName, false)) return false;
-            if (!IsValidCoordinate(entry.AnchorX) || !IsValidCoordinate(entry.AnchorY) ||
+            if (!IsValidName(entry.PrefabName, false) ||
+                !IsValidCoordinate(entry.AnchorX) || !IsValidCoordinate(entry.AnchorY) ||
                 !IsValidCoordinate(entry.AnchorZ)) return false;
 
             if (!entry.HasTenant)
             {
-                // A vacant building carries nothing else. A rating and a shelf of goods both
-                // belong to a business, so either one here means the entry was built wrong.
-                return !entry.HasProfitability &&
+                return !entry.HasProfitability && !entry.HasServiceAvailable &&
+                       !entry.HasLodgingProvider && !entry.HasWorkProvider &&
+                       !entry.EmployeeRosterComplete && !entry.HasTaxPayer &&
                        string.IsNullOrEmpty(entry.CompanyPrefabName) &&
-                       (entry.Resources == null || entry.Resources.Length == 0);
+                       string.IsNullOrEmpty(entry.BrandPrefabName) &&
+                       string.IsNullOrEmpty(entry.CompanyCustomName) &&
+                       entry.CompanyRandomState == 0 &&
+                       IsEmpty(entry.Resources) && IsEmpty(entry.TradeCosts) &&
+                       IsEmpty(entry.Employees);
             }
 
-            if (!IsValidName(entry.CompanyPrefabName, false)) return false;
+            if (!IsValidName(entry.CompanyPrefabName, false) ||
+                !IsValidName(entry.BrandPrefabName, false) ||
+                !IsValidName(entry.CompanyCustomName, true) ||
+                entry.CompanyRandomState == 0) return false;
+
             if (!IsValidStat(entry.MaxNumberOfCustomers) ||
                 !IsValidStat(entry.MonthlyCustomerCount) ||
                 !IsValidStat(entry.MonthlyCostBuyingResources) ||
@@ -257,40 +383,105 @@ namespace CS2MultiplayerMod.Game.Sync.Commands
                 !IsValidStat(entry.GarbagePaid) || !IsValidStat(entry.TaxPaid) ||
                 !IsValidStat(entry.CostBuyResource) || !IsValidStat(entry.LastUpdateWorth) ||
                 !IsValidStat(entry.LastUpdateProduce)) return false;
-            // LastFrameLowIncome is a frame stamp whose "never" value is uint.MaxValue, so the
-            // whole range is meaningful and it is deliberately not bounded here.
 
             if (entry.HasProfitability && !IsValidStat(entry.LastTotalWorth)) return false;
+            if (entry.HasServiceAvailable &&
+                (!IsValidStat(entry.ServiceAvailable) ||
+                 !IsValidFiniteScalar(entry.ServiceMeanPriority))) return false;
+            if (entry.HasLodgingProvider &&
+                (!IsValidStat(entry.FreeLodgingRooms) || !IsValidStat(entry.LodgingPrice)))
+                return false;
+            if (entry.HasWorkProvider && !IsValidStat(entry.MaxWorkers)) return false;
+            if (entry.HasTaxPayer &&
+                (!IsValidStat(entry.UntaxedIncome) || !IsValidStat(entry.AverageTaxRate) ||
+                 !IsValidStat(entry.AverageTaxPaid))) return false;
 
-            CompanyStatsResource[] resources = entry.Resources;
+            return ValidateResources(entry.Resources) &&
+                   ValidateTradeCosts(entry.TradeCosts) &&
+                   ValidateEmployees(entry.Employees);
+        }
+
+        private static bool ValidateResources(CompanyStatsResource[] resources)
+        {
             if (resources == null) return true;
             if (resources.Length > MaxResourceSlots) return false;
+            var seen = new HashSet<int>();
             for (int i = 0; i < resources.Length; i++)
             {
-                if (resources[i].Index < 0 || resources[i].Index >= MaxResourceSlots) return false;
-                if (!IsValidStat(resources[i].Amount)) return false;
+                if (resources[i].Index < 0 || resources[i].Index >= MaxResourceSlots ||
+                    !IsValidStat(resources[i].Amount) || !seen.Add(resources[i].Index))
+                    return false;
             }
             return true;
         }
 
-        private static byte EncodeFlags(CompanyStatsEntry entry)
+        private static bool ValidateTradeCosts(CompanyStatsTradeCost[] costs)
         {
-            byte flags = 0;
+            if (costs == null) return true;
+            if (costs.Length > MaxTradeCostSlots) return false;
+            var seen = new HashSet<int>();
+            for (int i = 0; i < costs.Length; i++)
+            {
+                if (costs[i].Index < 0 || costs[i].Index >= MaxResourceSlots ||
+                    !IsValidTradeCost(costs[i].BuyCost) ||
+                    !IsValidTradeCost(costs[i].SellCost) || !seen.Add(costs[i].Index))
+                    return false;
+            }
+            return true;
+        }
+
+        private static bool ValidateEmployees(CompanyStatsEmployee[] employees)
+        {
+            if (employees == null) return true;
+            if (employees.Length > MaxEmployeeSlots) return false;
+            var seen = new HashSet<ulong>();
+            for (int i = 0; i < employees.Length; i++)
+            {
+                if (employees[i].CitizenId == 0 || employees[i].Level > 4 ||
+                    employees[i].Shift > 2 || employees[i].LastCommuteTime < 0f ||
+                    !IsValidFiniteScalar(employees[i].LastCommuteTime) ||
+                    !seen.Add(employees[i].CitizenId)) return false;
+            }
+            return true;
+        }
+
+        private static int EncodeFlags(CompanyStatsEntry entry)
+        {
+            int flags = 0;
             if (entry.HasTenant) flags |= FlagHasTenant;
             if (entry.HasProfitability) flags |= FlagHasProfitability;
+            if (entry.HasServiceAvailable) flags |= FlagHasServiceAvailable;
+            if (entry.HasLodgingProvider) flags |= FlagHasLodgingProvider;
+            if (entry.HasWorkProvider) flags |= FlagHasWorkProvider;
+            if (entry.EmployeeRosterComplete) flags |= FlagEmployeeRosterComplete;
+            if (entry.HasTaxPayer) flags |= FlagHasTaxPayer;
             return flags;
         }
 
-        private static void DecodeFlags(byte flags, ref CompanyStatsEntry entry)
+        private static void DecodeFlags(ushort flags, ref CompanyStatsEntry entry)
         {
             if ((flags & ~FlagsMask) != 0)
                 throw new ProtocolException("Unknown company-stats entry flag.");
             entry.HasTenant = (flags & FlagHasTenant) != 0;
             entry.HasProfitability = (flags & FlagHasProfitability) != 0;
+            entry.HasServiceAvailable = (flags & FlagHasServiceAvailable) != 0;
+            entry.HasLodgingProvider = (flags & FlagHasLodgingProvider) != 0;
+            entry.HasWorkProvider = (flags & FlagHasWorkProvider) != 0;
+            entry.EmployeeRosterComplete = (flags & FlagEmployeeRosterComplete) != 0;
+            entry.HasTaxPayer = (flags & FlagHasTaxPayer) != 0;
         }
 
         private static bool IsValidStat(int value) =>
             value >= -MaxStatValue && value <= MaxStatValue;
+
+        private static bool IsValidFiniteScalar(float value) =>
+            !float.IsNaN(value) && !float.IsInfinity(value) &&
+            value >= -MaxStatValue && value <= MaxStatValue;
+
+        // Game.dll uses float.MaxValue as the legitimate "no available transfer route" sentinel
+        // in TradeSystem. Other company floats stay tightly bounded.
+        private static bool IsValidTradeCost(float value) =>
+            value == float.MaxValue || IsValidFiniteScalar(value);
 
         private static bool IsValidName(string value, bool optional)
         {
@@ -317,38 +508,56 @@ namespace CS2MultiplayerMod.Game.Sync.Commands
         private static bool IsValidCoordinate(float value) =>
             !float.IsNaN(value) && !float.IsInfinity(value) &&
             value >= -WireGuard.MaxCoordinate && value <= WireGuard.MaxCoordinate;
+
+        private static int EncodedStringBytes(string value) =>
+            4 + (string.IsNullOrEmpty(value) ? 0 : Encoding.UTF8.GetByteCount(value));
+
+        private static bool IsEmpty<T>(T[] values) => values == null || values.Length == 0;
     }
 
-    /// <summary>One resource slot a company is holding: the game's resource index and the amount.</summary>
     public struct CompanyStatsResource
     {
         public int Index;
         public int Amount;
     }
 
+    public struct CompanyStatsTradeCost
+    {
+        public int Index;
+        public float BuyCost;
+        public float SellCost;
+        public long LastTransferRequestTime;
+    }
+
     /// <summary>
-    /// One workplace building: who rents it, and everything the company panel renders about that
-    /// business. The identity is the same prefab-plus-anchor pair rent resolution and growable
-    /// realization use, so all three channels agree on what "that building" means.
+    /// A host resident assigned to this workplace. CitizenId is resolved through the residential
+    /// occupancy identity map; it is never interpreted as a local entity handle.
     /// </summary>
+    public struct CompanyStatsEmployee
+    {
+        public ulong CitizenId;
+        public byte Level;
+        public float LastCommuteTime;
+        public byte Shift;
+    }
+
     public struct CompanyStatsEntry
     {
         public string PrefabName;
         public float AnchorX;
         public float AnchorY;
         public float AnchorZ;
-
         /// <summary>
-        /// False means the host has nobody in this building. Everything below is then absent, and
-        /// a receiver holding a business there is expected to close it.
+        /// Zero means the host's building is complete. A non-zero value means the host still has
+        /// an UnderConstruction component; zero-speed sites are encoded as one by capture.
         /// </summary>
+        public byte ConstructionSpeed;
         public bool HasTenant;
-
-        /// <summary>
-        /// The tenant's company archetype. Required whenever <see cref="HasTenant"/> is set,
-        /// because a receiver with an empty building builds the business from this prefab.
-        /// </summary>
         public string CompanyPrefabName;
+
+        public string BrandPrefabName;
+        public string CompanyCustomName;
+        public uint CompanyRandomState;
 
         public int MaxNumberOfCustomers;
         public int MonthlyCustomerCount;
@@ -370,19 +579,36 @@ namespace CS2MultiplayerMod.Game.Sync.Commands
         public int LastUpdateProduce;
         public uint LastFrameLowIncome;
 
-        /// <summary>
-        /// Set only when the sender's company carries the rating component. A company without it
-        /// must not be given a fabricated one, so the flag travels rather than a sentinel value.
-        /// </summary>
         public bool HasProfitability;
         public byte Profitability;
         public int LastTotalWorth;
 
-        /// <summary>
-        /// The goods the business is holding. Null and empty both mean "nothing stored"; the
-        /// receiver clears any local resource the host did not report for this company.
-        /// </summary>
+        public bool HasServiceAvailable;
+        public int ServiceAvailable;
+        public float ServiceMeanPriority;
+
+        public bool HasLodgingProvider;
+        public int FreeLodgingRooms;
+        public int LodgingPrice;
+
+        public bool HasWorkProvider;
+        public int MaxWorkers;
+
+        public bool HasTaxPayer;
+        public int UntaxedIncome;
+        public int AverageTaxRate;
+        public int AverageTaxPaid;
+
         public CompanyStatsResource[] Resources;
+        public CompanyStatsTradeCost[] TradeCosts;
+
+        /// <summary>
+        /// Complete means every host employee was a regular resident and is represented here. If
+        /// false, the receiver adds the resolvable residents but preserves unmatched local workers
+        /// rather than deleting a commuter or tourist it cannot identify safely.
+        /// </summary>
+        public bool EmployeeRosterComplete;
+        public CompanyStatsEmployee[] Employees;
 
         public PropertyRentIdentity Identity =>
             new PropertyRentIdentity(PrefabName, AnchorX, AnchorY, AnchorZ);

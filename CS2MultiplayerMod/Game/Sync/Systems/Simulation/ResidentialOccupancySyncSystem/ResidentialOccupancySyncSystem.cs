@@ -64,10 +64,12 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         /// is also roughly the per-client bandwidth this feature costs.
         /// </summary>
         // One occupancy page is emitted per city-state snapshot. Four KiB could not keep up with
-        // normal residential growth once the city reached a few hundred homes, leaving urgent
-        // move-ins queued for minutes. Sixteen KiB remains far below the 240 KiB hard codec cap
-        // while allowing the rolling baseline and the priority queue to make city-scale progress.
-        private const int PageByteBudget = 16 * 1024;
+        // A dense property is atomic: all of its households and citizens have to travel together.
+        // The former 16 KiB target therefore sent only three or four towers per second and the
+        // changed-property queue grew without bound. Use most of the already validated 240 KiB
+        // codec allowance; the remaining headroom is for lifecycle records and size estimation
+        // conservatism, and the client still applies structural changes through separate budgets.
+        private const int PageByteBudget = 224 * 1024;
 
         private const int MaxIncomingPages = 8;
         private const int MaxPumpPages = 2;
@@ -86,7 +88,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         private const long ResolveRetryMs = 5000;
         private const long ResolveTimeoutMs = 300000;
         private const int MaxPriorityProperties = 4096;
-        private const int PriorityPropertiesPerPage = 16;
+        private const int PriorityPropertiesPerPage = 64;
 
         // Properties examined by the rolling change detector in one update, and cached properties
         // reconciled by the rolling client partition in one update. Both walks used to cover a
@@ -101,8 +103,14 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         // Retained lifecycle records rotate across pages rather than consuming the whole soft
         // page budget. Leave enough guaranteed room to drain several just-occupied properties per
         // snapshot while still advancing the baseline by at least one property.
-        private const int HostDeparturesPerPage = 24;
-        private const int HostCitizenDeparturesPerPage = 48;
+        // In the reported dense city more than 27k household and 41k citizen tombstones were
+        // retained. At 24/48 records per second a household record could expire before completing
+        // one rotation. Eight KiB carries both maximum batches and closes every lifecycle edge
+        // several times inside the retention window.
+        private const int HostDeparturesPerPage =
+            ResidentialOccupancySnapshot.MaxDeparturesPerPage;
+        private const int HostCitizenDeparturesPerPage =
+            ResidentialOccupancySnapshot.MaxCitizenDeparturesPerPage;
         private const int PriorityByteBudget = PageByteBudget * 3 / 4;
 
         // Per-update work ceilings. Structural changes are the expensive part, so they are capped
@@ -143,6 +151,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         private readonly List<Entity> _cacheScratch = new List<Entity>();
         private readonly HashSet<Entity> _authorizedMoveAways = new HashSet<Entity>();
         private readonly List<Entity> _authorizedMoveAwayScratch = new List<Entity>();
+        private readonly HashSet<Entity> _lifecyclePropertyScratch = new HashSet<Entity>();
 
         // Host-side change detection. The rolling baseline is always sent; these entries only
         // shorten the time from an occupancy change to the page that carries it.
@@ -236,14 +245,22 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         private int _retiredHouseholds;
         private int _removedCitizens;
         private int _rewrittenCitizens;
+        private int _healthProblemCorrections;
+        private int _hostDeathTransitions;
+        private int _lifecyclePrioritySignals;
+        private int _lifecycleRepairSignals;
+        private int _clientRenterRepairSignals;
         private int _rentActions;
         private int _refusedMoveIns;
         private int _forcedCompletions;
+        private int _forcedPrefabCorrections;
         private int _alignedBuildRates;
         private int _deferredForConstruction;
         private int _renamedEntities;
         private int _economyCorrections;
         private int _economyDeferred;
+        private int _feeInputCorrections;
+        private int _feeInputDeferred;
 
         private sealed class CachedProperty
         {
@@ -251,6 +268,11 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             public Entity Prefab;
             public ulong Revision;
             public byte ConstructionSpeed;
+            public bool HasElectricityConsumer;
+            public int ElectricityFulfilledConsumption;
+            public bool HasWaterConsumer;
+            public int WaterFulfilledFresh;
+            public int WaterFulfilledSewage;
             public OccupancyHousehold[] Households;
             public int Bucket;
             public uint LastSeenSweep;
@@ -448,7 +470,10 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 using (Diagnostics.SyncProfiler.Measure("Occupancy.HostScan", Diagnostics.SyncZone.Residential))
                 {
                     DropIncomingPages();
-                    ScanHostDepartures(service.NowMs);
+                    // Departures are sampled by ResidentialOccupancyDepartureCaptureSystem, which
+                    // sits directly in front of the native executor at that executor's own
+                    // interval. Repeating the walk here only ever re-read a query it had already
+                    // drained on a more recent frame.
                     ScanTrackedHostHouseholds(service.NowMs);
                     ScanTrackedHostCitizens(service.NowMs);
                     ScanHostChanges(bucket);

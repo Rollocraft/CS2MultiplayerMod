@@ -66,11 +66,16 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             if (_retry.Count > 0)
             {
                 int expired = 0;
+                NetReplaceCommand firstExpired = null;
                 if (work == null) work = new List<(NetReplaceCommand, long)>();
                 for (int i = 0; i < _retry.Count; i++)
                 {
                     if (_retry[i].deadline > now) work.Add((_retry[i].command, _retry[i].deadline));
-                    else expired++;
+                    else
+                    {
+                        if (firstExpired == null) firstExpired = _retry[i].command;
+                        expired++;
+                    }
                 }
                 _retry.Clear();
                 if (expired > 0)
@@ -84,7 +89,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     SyncInbox.RequestResync(Diagnostics.ResyncReport
                         .Create("road replacement target did not resolve", "net",
                             Diagnostics.ResyncEvidence.MissingTarget)
-                        .About("road replacement")
+                        .About("'" + firstExpired.PrefabName + "' over the span at (" +
+                               firstExpired.OldAx.ToString("F1") + "," +
+                               firstExpired.OldAz.ToString("F1") + ")")
                         .Tried("rescanned the city's roads for the replaced span every cycle for " +
                                (RetryWindowMs / 1000) + " s")
                         .Fact("replacements that found no road here", expired));

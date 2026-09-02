@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Text;
@@ -18,73 +18,17 @@ using Unity.Entities;
 
 namespace CS2MultiplayerMod.Game.Sync.Systems
 {
-    // Hashing a captured property, so the sweep can tell a roster that changed from one that did
-    // not, and the per-roster trace lines that make a mismatch legible in the log.
+    // The per-roster trace lines that make a mismatch legible in the log, and the small shared
+    // helpers the capture path folds ids and clamps wire values with. Change detection itself
+    // lives in CaptureProbe.cs, which never builds the object it would otherwise hash.
     public partial class ResidentialOccupancySyncSystem
     {
-        /// <summary>
-        /// Content hash of structural identity plus prompt UI changes. Money, savings, health and
-        /// wellbeing drift continuously and belong to the rolling baseline; putting them here can
-        /// fill the priority queue with every household and starve actual move-ins and move-outs.
-        /// </summary>
-        private static int Hash(OccupancyProperty property)
-        {
-            unchecked
-            {
-                int hash = (int)2166136261;
-                // Construction is in the hash because its end is the change a client most needs to
-                // hear about promptly; the rate itself only ever changes once, at creation.
-                hash = (hash ^ property.ConstructionSpeed) * 16777619;
-                hash = (hash ^ property.Households.Length) * 16777619;
-                for (int h = 0; h < property.Households.Length; h++)
-                {
-                    OccupancyHousehold household = property.Households[h];
-                    hash = HashId(hash, household.HouseholdId);
-                    hash = (hash ^ household.PrefabName.GetHashCode()) * 16777619;
-                    hash = (hash ^ household.Flags) * 16777619;
-                    hash = (hash ^ (household.Departing ? 1 : 0)) * 16777619;
-                    hash = (hash ^ household.Rent) * 16777619;
-                    hash = (hash ^ household.SalaryLastDay) * 16777619;
-                    hash = HashIndices(hash, household.NameIndices);
-                    hash = (hash ^ household.Citizens.Length) * 16777619;
-                    for (int c = 0; c < household.Citizens.Length; c++)
-                    {
-                        OccupancyCitizen citizen = household.Citizens[c];
-                        hash = HashId(hash, citizen.CitizenId);
-                        hash = (hash ^ citizen.PrefabName.GetHashCode()) * 16777619;
-                        hash = (hash ^ citizen.State) * 16777619;
-                        hash = (hash ^ citizen.PseudoRandom) * 16777619;
-                        hash = (hash ^ citizen.BirthDay) * 16777619;
-                        hash = (hash ^ citizen.Employment) * 16777619;
-                        hash = HashIndices(hash, citizen.NameIndices);
-                    }
-                    hash = (hash ^ household.Pets.Length) * 16777619;
-                    for (int p = 0; p < household.Pets.Length; p++)
-                        hash = (hash ^ household.Pets[p].GetHashCode()) * 16777619;
-                    hash = (hash ^ household.OwnedVehicles.Length) * 16777619;
-                    for (int v = 0; v < household.OwnedVehicles.Length; v++)
-                        hash = (hash ^ household.OwnedVehicles[v].GetHashCode()) * 16777619;
-                }
-                return hash;
-            }
-        }
-
         private static int HashId(int hash, ulong id)
         {
             unchecked
             {
                 hash = (hash ^ (int)id) * 16777619;
                 return (hash ^ (int)(id >> 32)) * 16777619;
-            }
-        }
-
-        private static int HashIndices(int hash, int[] indices)
-        {
-            unchecked
-            {
-                hash = (hash ^ indices.Length) * 16777619;
-                for (int i = 0; i < indices.Length; i++) hash = (hash ^ indices[i]) * 16777619;
-                return hash;
             }
         }
 

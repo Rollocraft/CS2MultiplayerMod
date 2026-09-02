@@ -1,5 +1,6 @@
 ---
 title: Verify game files
+description: "Check your Cities: Skylines II files for corruption on Steam and on Xbox, Microsoft Store or Game Pass."
 ---
 
 # Verify your game files for corruption

@@ -19,6 +19,18 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             _occupancy = World.GetOrCreateSystemManaged<ResidentialOccupancySyncSystem>();
         }
 
+        /// <summary>
+        /// HouseholdMoveAwaySystem, the executor this boundary sits in front of, updates every 16
+        /// frames. At full rate this walked every departing household 15 more times for a queue
+        /// nothing could act on yet, which is what turned a 10 ms/30 s scope into 3,000 ms once a
+        /// city started shedding thousands of families at once. Matching the interval also makes
+        /// the ordering exact rather than incidental: a system whose interval equals the interval
+        /// of the system it is registered against inherits that system's update offset, so the two
+        /// always tick on the same frame.
+        /// </summary>
+        public override int GetUpdateInterval(SystemUpdatePhase phase) =>
+            phase == SystemUpdatePhase.GameSimulation ? 16 : 1;
+
         protected override void OnUpdate()
         {
             using (Diagnostics.SyncProfiler.Measure("Occupancy.Lifecycle", Diagnostics.SyncZone.Residential))

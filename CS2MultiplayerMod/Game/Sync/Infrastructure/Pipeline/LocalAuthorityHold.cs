@@ -11,11 +11,9 @@ namespace CS2MultiplayerMod.Game.Sync.Infrastructure
     /// Holds a set of native simulation systems off on a client, so the host's messages are the
     /// only thing that decides the part of the world those systems own.
     ///
-    /// Three sync systems need exactly this - growable buildings, company tenancy and residential
-    /// occupancy - and each decision is a per-machine random draw, so a client left running them
-    /// grows a city, opens a business or houses a family the host has never seen. Each of the three
-    /// had its own copy of the hold, differing only in which systems it names and how it says so in
-    /// the log.
+    /// Growables, company tenancy, residential occupancy, tax collection and demand authority use
+    /// this same boundary. Each used to carry its own copy of the hold, differing only in which
+    /// systems it names and how it reports the hand-off.
     ///
     /// The hold is idempotent and meant to be re-applied every update: a system the game re-enables
     /// on a state change would otherwise quietly start deciding again.

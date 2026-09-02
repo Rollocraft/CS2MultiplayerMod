@@ -278,6 +278,11 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             cached.Prefab = EntityManager.GetComponentData<PrefabRef>(property).m_Prefab;
             cached.Revision = wanted.Revision;
             cached.ConstructionSpeed = wanted.ConstructionSpeed;
+            cached.HasElectricityConsumer = wanted.HasElectricityConsumer;
+            cached.ElectricityFulfilledConsumption = wanted.ElectricityFulfilledConsumption;
+            cached.HasWaterConsumer = wanted.HasWaterConsumer;
+            cached.WaterFulfilledFresh = wanted.WaterFulfilledFresh;
+            cached.WaterFulfilledSewage = wanted.WaterFulfilledSewage;
             cached.Households = wanted.Households;
             cached.Bucket = bucket;
             cached.LastSeenSweep = sweepId;

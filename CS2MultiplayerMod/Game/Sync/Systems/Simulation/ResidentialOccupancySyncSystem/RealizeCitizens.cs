@@ -300,6 +300,80 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
             ApplyNameIndices(citizen, wanted.NameIndices);
             ApplyWageLevel(citizen, wanted);
+            ApplyHealthProblem(citizen, wanted);
+        }
+
+        /// <summary>
+        /// HealthProblem is part of citizen lifecycle, not a cosmetic health value. In particular,
+        /// sick/injured death is drawn from RandomSeed.Next and therefore cannot be reproduced by
+        /// merely copying Citizen.m_PseudoRandom. Keep the local event/request handles (they name
+        /// local ambulances and events), but make component presence and flags match the host.
+        /// </summary>
+        private void ApplyHealthProblem(Entity citizen, OccupancyCitizen wanted)
+        {
+            bool hadProblem = EntityManager.HasComponent<HealthProblem>(citizen);
+            HealthProblem current = hadProblem
+                ? EntityManager.GetComponentData<HealthProblem>(citizen)
+                : default(HealthProblem);
+            bool wasDead = hadProblem &&
+                           (current.m_Flags & HealthProblemFlags.Dead) != HealthProblemFlags.None;
+
+            if (!wanted.HasHealthProblem)
+            {
+                if (!hadProblem) return;
+                EntityManager.RemoveComponent<HealthProblem>(citizen);
+                _healthProblemCorrections++;
+                return;
+            }
+
+            HealthProblemFlags wantedFlags = (HealthProblemFlags)wanted.HealthProblemFlags;
+            if (!hadProblem)
+            {
+                current = new HealthProblem
+                {
+                    m_Event = Entity.Null,
+                    m_HealthcareRequest = Entity.Null,
+                    m_Flags = wantedFlags,
+                    m_Timer = 0,
+                };
+                EntityManager.AddComponentData(citizen, current);
+                _healthProblemCorrections++;
+            }
+            else if (current.m_Flags != wantedFlags)
+            {
+                current.m_Flags = wantedFlags;
+                EntityManager.SetComponentData(citizen, current);
+                _healthProblemCorrections++;
+            }
+
+            if (!wasDead && (wantedFlags & HealthProblemFlags.Dead) != HealthProblemFlags.None)
+                ApplyHostDeathTransition(citizen);
+        }
+
+        /// <summary>
+        /// Mirrors the structural cleanup performed by DeathCheckSystem.Die. Native
+        /// HealthProblemSystem remains enabled and owns the local ambulance/hearse trip, while the
+        /// host decides that the person died.
+        /// </summary>
+        private void ApplyHostDeathTransition(Entity citizen)
+        {
+            if (EntityManager.HasComponent<global::Game.Citizens.Student>(citizen))
+            {
+                Entity school = EntityManager
+                    .GetComponentData<global::Game.Citizens.Student>(citizen).m_School;
+                if (school != Entity.Null && EntityManager.Exists(school) &&
+                    EntityManager.HasBuffer<global::Game.Buildings.Student>(school) &&
+                    !EntityManager.HasComponent<StudentsRemoved>(school))
+                    EntityManager.AddComponent<StudentsRemoved>(school);
+                EntityManager.RemoveComponent<global::Game.Citizens.Student>(citizen);
+            }
+            if (EntityManager.HasComponent<Worker>(citizen))
+                EntityManager.RemoveComponent<Worker>(citizen);
+            if (EntityManager.HasComponent<ResourceBuyer>(citizen))
+                EntityManager.RemoveComponent<ResourceBuyer>(citizen);
+            if (EntityManager.HasComponent<Leisure>(citizen))
+                EntityManager.RemoveComponent<Leisure>(citizen);
+            _hostDeathTransitions++;
         }
 
         /// <summary>

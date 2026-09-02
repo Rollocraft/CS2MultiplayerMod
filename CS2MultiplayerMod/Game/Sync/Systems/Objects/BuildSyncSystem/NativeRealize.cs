@@ -256,7 +256,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                             ? "building placement target did not resolve"
                             : "native object operation target did not resolve",
                         "object", CS2MultiplayerMod.Game.Diagnostics.ResyncEvidence.MissingTarget)
-                    .About(compactPlacement ? "building placement target" : "native object target")
+                    .About(compactPlacement
+                        ? "snapped target of '" + placementPrefab + "'"
+                        : "native object target (" + unresolvedDetail + ")")
                     .Tried("re-resolved the target every frame for the whole retry window, not " +
                            "counting time the road pipeline was held back")
                     .Fact("what would not resolve", unresolvedDetail));

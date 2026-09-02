@@ -24,12 +24,12 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         /// * <c>PropertyProcessingSystem</c>, <c>PropertyRenterSystem</c>, and the job/wage systems
         ///   stay running. They maintain native renter links, payments, and local employment; this
         ///   authority boundary is limited to household lifecycle and mirrored household state.
-        /// * <c>DeathCheckSystem</c> stays running. Death of old age is drawn from the citizen's own
-        ///   stored pseudo-random value and their age, both of which the roster keeps identical, so
-        ///   it already agrees between peers. The same job also owns illness recovery and marking a
-        ///   body for collection, so holding it would break healthcare and deathcare to fix a
-        ///   divergence that only affects citizens who are already ill — and that the next roster
-        ///   page repairs anyway.
+        /// * <c>SicknessCheckSystem</c> and <c>DeathCheckSystem</c> are held below. Although old-age
+        ///   death uses the citizen's stored pseudo-random value, sickness and sick/injured death
+        ///   draw from <c>RandomSeed.Next()</c>, which is a different stream in each world. Channel
+        ///   21 therefore carries HealthProblem presence/flags and the host owns those decisions.
+        ///   <c>HealthProblemSystem</c> stays running: it uses the mirrored flags to dispatch real
+        ///   local ambulances/hearses and move the pedestrian through healthcare/deathcare.
         /// * <c>AgingSystem</c> stays running: it contains no randomness and both peers hold the
         ///   same birthdays.
         /// </summary>
@@ -39,7 +39,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             typeof(global::Game.Simulation.HouseholdFindPropertySystem),
             typeof(global::Game.Simulation.HouseholdPetSpawnSystem),
             typeof(global::Game.Simulation.BirthSystem),
-            typeof(global::Game.Simulation.LeaveHouseholdSystem));
+            typeof(global::Game.Simulation.LeaveHouseholdSystem),
+            typeof(global::Game.Simulation.SicknessCheckSystem),
+            typeof(global::Game.Simulation.DeathCheckSystem));
 
         /// <summary>
         /// Hands residential occupancy to the host. Idempotent, and re-checked every update so a

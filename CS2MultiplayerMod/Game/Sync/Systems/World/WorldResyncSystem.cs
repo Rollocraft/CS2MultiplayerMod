@@ -358,10 +358,6 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             // Resume-before-command order on every TCP connection.
             session.ResumeWorldSync(_epoch, _resumeSpeed, targets);
             service.CompleteHostWorldSync(_epoch, _resumeSpeed);
-            // The host saw its own simulation stop and start again with no explanation; the
-            // clients each get their own completion notice as they install the snapshot.
-            session.NotifyChat(null, "World sync complete - " + targets.Count +
-                               (targets.Count == 1 ? " player is" : " players are") + " in sync.");
             SyncLog.Event(LogTopic.Resync, "World sync epoch " + _epoch + " completed for " +
                 targets.Count + " participant(s).");
             ResetEpoch(now);

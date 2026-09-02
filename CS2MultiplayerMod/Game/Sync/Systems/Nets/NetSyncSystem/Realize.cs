@@ -329,6 +329,10 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                             SyncLog.Warn(LogTopic.Nets, "NetSync: native operation " +
                                 command.OperationId +
                                 " contains a degenerate course; dropping the whole operation.");
+                            ReportRefusedNativeOperation(command, i, work.Count,
+                                "a course with no usable length",
+                                "the transmitted curve measures " +
+                                measuredLength.ToString("F3") + " m");
                             return;
                         }
 
@@ -340,6 +344,10 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                             SyncLog.Warn(LogTopic.Nets, "NetSync: native operation " +
                                 command.OperationId +
                                 " has an inconsistent course length; dropping the whole operation.");
+                            ReportRefusedNativeOperation(command, i, work.Count,
+                                "a course length that disagrees with its own curve",
+                                "sent " + command.Length.ToString("F3") + " m, the curve measures " +
+                                measuredLength.ToString("F3") + " m");
                             return;
                         }
 
@@ -972,6 +980,26 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                 SyncLog.Trace(LogTopic.Nets, "net build batch armed n=" + built +
                     (splitUsed ? " +split" : ""));
             }
+        }
+
+        /// <summary>
+        /// A native operation refused before a single course was built. Its commands never come
+        /// again, so this machine keeps a hole the source does not have and only a resync closes
+        /// it. The offending course travels with the request: the bare warning this used to be is
+        /// a silent divergence, noticed days later as roads that never appeared.
+        /// </summary>
+        private static void ReportRefusedNativeOperation(NetPlacementCommand command,
+            int courseIndex, int courseCount, string what, string measurement)
+        {
+            SyncInbox.RequestResync(Diagnostics.ResyncReport
+                .Create("native net operation refused", "net",
+                    Diagnostics.ResyncEvidence.StreamLoss)
+                .About("op " + command.OperationId + " course " + courseIndex + "/" + courseCount)
+                .Tried("nothing - the operation was refused before it could be built")
+                .Fact("what was refused", what)
+                .Fact("net prefab", command.PrefabName)
+                .Fact("measurement", measurement)
+                .Fact("pinned over water", command.PinProfile));
         }
     }
 }

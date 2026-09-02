@@ -34,6 +34,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
         // Realize: pinned spans committed, and pins this machine had to refuse - a refused span
         // rebuilds its deck from local water again, so a standing figure here is worth chasing.
         private int _capPinnedSpans, _capPinnedPieces;
+        private int _capSelfAnchoredSpans;
         private int _rzPinnedSpans, _rzPinRefused;
 
         /// <summary>
@@ -110,21 +111,21 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                 return;
             }
 
-            _capPinnedSpans++;
-            _capPinnedPieces += pieces;
-
             if (pieces == 1)
             {
                 command.PinProfile = true;
                 command.Start.PosY = _profileDeck[0];
                 command.End.PosY = _profileDeck[probes - 1];
                 into.Add(command);
+                _capPinnedSpans++;
+                _capPinnedPieces++;
                 return;
             }
 
             Bezier4x3 source = SourceCurve(command);
             var startFlags = (CoursePosFlags)command.Start.Flags;
             var endFlags = (CoursePosFlags)command.End.Flags;
+            int firstPiece = into.Count;
             for (int p = 0; p < pieces; p++)
             {
                 int from = _profileBreaks[p];
@@ -137,9 +138,26 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                 float3 d = _profilePoint[to]; d.y = _profileDeck[to];
                 curve.a = a;
                 curve.d = d;
+                // A piece IS one straight chord of the measured deck, so its two middle control
+                // points carry that line as well - the heights edge generation interpolates anyway
+                // for a course whose ends are both fixed. Left on the source profile they describe a
+                // span diving to the water surface the pin exists to take out of the picture.
+                curve.b.y = math.lerp(a.y, d.y, 1f / 3f);
+                curve.c.y = math.lerp(a.y, d.y, 2f / 3f);
 
-                float length = MathUtils.Length(source, new Bounds1(cut.x, cut.y));
-                if (!(length > NetPlacementCommand.MinCourseLength)) length = MathUtils.Length(curve);
+                // Measured on the curve that travels, never on the source range it was cut from:
+                // moving the two ends onto the deck changes the length, and the receiver re-measures
+                // the transmitted curve and refuses the WHOLE operation - not the piece - when the
+                // two disagree.
+                float length = MathUtils.Length(curve);
+                if (!math.isfinite(length) || length <= NetPlacementCommand.MinCourseLength)
+                {
+                    // Rather than publish a piece the receiver's preflight would refuse, abandon the
+                    // division: the span travels as captured and rebuilds its deck from local water.
+                    into.RemoveRange(firstPiece, into.Count - firstPiece);
+                    into.Add(command);
+                    return;
+                }
 
                 var piece = new NetPlacementCommand
                 {
@@ -167,6 +185,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                 piece.End.CourseDelta = 1f;
                 into.Add(piece);
             }
+
+            _capPinnedSpans++;
+            _capPinnedPieces += pieces;
         }
 
         /// <summary>
@@ -187,6 +208,18 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
             if (command.FixedIndex >= 0) return false;
             if (command.Start.ParentMesh >= 0 || command.End.ParentMesh >= 0) return false;
             if (command.Start.ElevationLeft < -1f || command.End.ElevationLeft < -1f) return false;
+
+            // A span both of whose ends are fixed height - a bridge raised a full elevation step or
+            // more - already reproduces: the generator holds its whole deck between the two
+            // transmitted endpoint heights, and those travel exactly. Pinning it would swap a deck
+            // the receiver derives correctly for one measured here and predicted for there.
+            bool startFree = ((CoursePosFlags)command.Start.Flags & CoursePosFlags.FreeHeight) != 0;
+            bool endFree = ((CoursePosFlags)command.End.Flags & CoursePosFlags.FreeHeight) != 0;
+            if (!NetWaterProfilePin.NeedsPin(startFree, endFree))
+            {
+                _capSelfAnchoredSpans++;
+                return false;
+            }
 
             Entity prefab;
             if (!_prefabIndex.TryResolve(command.PrefabName, out prefab)) return false;
@@ -233,8 +266,6 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
 
             if (!NetWaterProfilePin.CrossesWater(_profileDepth, probes)) return false;
 
-            bool startFree = ((CoursePosFlags)command.Start.Flags & CoursePosFlags.FreeHeight) != 0;
-            bool endFree = ((CoursePosFlags)command.End.Flags & CoursePosFlags.FreeHeight) != 0;
             float startHeight = startFree
                 ? _profileSurface[0] + command.Start.ElevationLeft
                 : startPosition.y;
@@ -244,7 +275,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
             if (!math.isfinite(startHeight) || !math.isfinite(endHeight)) return false;
 
             NetWaterProfilePin.PredictDeck(_profileSurface, _profileTerrain, _profileDistance, probes,
-                startHeight, endHeight, info.MaxSlopeSteepness, _profileDeck);
+                startHeight, endHeight, command.Start.ElevationLeft, command.End.ElevationLeft,
+                info.ElevationLimit, info.MaxSlopeSteepness, _profileDeck);
 
             pieces = NetWaterProfilePin.Simplify(_profileDeck, _profileDistance, probes,
                 NetWaterProfilePin.ChordTolerance, NetWaterProfilePin.MaxPieces, _profileBreaks);
@@ -256,9 +288,19 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
         /// water, and its own deck is the straight line between its two end nodes - the one shape a
         /// pinned course reproduces. The committed curve IS the deck here, so nothing is predicted.
         /// </summary>
-        private bool ShouldPinCommittedEdge(Entity prefab, Bezier4x3 curve)
+        private bool ShouldPinCommittedEdge(Entity prefab, Bezier4x3 curve,
+            float2 startElevation, float2 endElevation)
         {
             NetPrefabInfo info = NetInfoOf(prefab);
+            // Same exemption as the intent path: an edge whose two end nodes are elevated a full
+            // step or more anchors its own deck on the receiver, and its nodes' elevations travel.
+            if (info.ElevationLimit > 0f &&
+                math.abs(startElevation.x) >= info.ElevationLimit &&
+                math.abs(endElevation.x) >= info.ElevationLimit)
+            {
+                _capSelfAnchoredSpans++;
+                return false;
+            }
             if (!NetWaterProfilePin.IsEligible(true, true, info.HasElevationRange,
                     info.ElevationRangeMin, info.ElevationRangeMax, info.ElevationLimit))
                 return false;

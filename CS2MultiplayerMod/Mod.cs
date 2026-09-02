@@ -146,6 +146,18 @@ namespace CS2MultiplayerMod
             // the same authoritative snapshot when the residents panel calculates its averages.
             updateSystem.UpdateAfter<Game.Sync.Systems.ResidentialHouseholdEconomyCorrectionSystem,
                 global::Game.Simulation.RentAdjustSystem>(SystemUpdatePhase.GameSimulation);
+            // ResourceBuyerSystem runs real shoppers and SaleEvents after the earlier household
+            // boundary. Keep those agents alive, then correct the money and shopped-value result
+            // to the host snapshot at the first safe point after the sale is booked.
+            updateSystem.UpdateAfter<Game.Sync.Systems.ResidentialHouseholdPurchaseCorrectionSystem,
+                global::Game.Simulation.ResourceBuyerSystem>(SystemUpdatePhase.GameSimulation);
+            // ResidentsSection derives average fees directly from fulfilled building utility
+            // quantities. Correct those fields after the exact native systems that rewrite them;
+            // wanted demand, graph connectivity and warning state remain locally simulated.
+            updateSystem.UpdateAfter<Game.Sync.Systems.ResidentialElectricityFeeCorrectionSystem,
+                global::Game.Simulation.DispatchElectricitySystem>(SystemUpdatePhase.GameSimulation);
+            updateSystem.UpdateAfter<Game.Sync.Systems.ResidentialWaterFeeCorrectionSystem,
+                global::Game.Simulation.DispatchWaterSystem>(SystemUpdatePhase.GameSimulation);
             // Strip the client's own company closure/seeking proposals at the last point before
             // anything acts on them. The systems that make those proposals stay running because
             // they also produce the figures and demand the rest of the simulation reads.
@@ -159,6 +171,11 @@ namespace CS2MultiplayerMod
             updateSystem.UpdateAfter<Game.Sync.Systems.CompanyStatsSyncSystem,
                 global::Game.Simulation.CompanyEconomyStatisticSystem>(
                 SystemUpdatePhase.GameSimulation);
+            // Company pages can otherwise sit cached until a business's 2,048-frame accounting
+            // partition returns. Apply deep state on FindJobSystem's 16-frame cadence: this also
+            // repairs the real Employee/Worker graph after local job matching tries to diverge.
+            updateSystem.UpdateAfter<Game.Sync.Systems.CompanyStateBoundarySystem,
+                global::Game.Simulation.FindJobSystem>(SystemUpdatePhase.GameSimulation);
             // Before PropertyProcessingSystem: that system drains the rent-action queue this one
             // fills. The queue is persistent, so an action always survives to the next drain; the
             // ordering is what lets a move-in land in the same tick it was decided in whenever the
@@ -172,6 +189,15 @@ namespace CS2MultiplayerMod
             // the same managed system twice in one simulation phase.
             updateSystem.UpdateAfter<Game.Sync.Systems.ResidentialOccupancyFinalizeSystem,
                 global::Game.Simulation.PropertyProcessingSystem>(SystemUpdatePhase.GameSimulation);
+            // HouseholdCitizen is the authoritative inner roster. Birth, individual death and a
+            // household split mutate that buffer without emitting RentersUpdated because the
+            // family can stay in the same property. Observe it after native citizen initialization
+            // so a newborn is complete before the host prioritizes its building; later writers are
+            // still caught from their changed version on the following frame.
+            updateSystem.UpdateAfter<
+                Game.Sync.Systems.ResidentialHouseholdLifecycleObservationSystem,
+                global::Game.Citizens.CitizenInitializeSystem>(
+                SystemUpdatePhase.GameSimulation);
             // Also UIUpdate: publishing the local camera focus must keep going while a
             // player is paused (so partners still see where they are), and GameSimulation
             // barely ticked it - the live log showed ~1 position sent per 30 s.
@@ -179,11 +205,6 @@ namespace CS2MultiplayerMod
             // Renders the other players' camera positions as ground rings. Rendering phase
             // so the markers draw every frame, in every state (including paused).
             updateSystem.UpdateAt<Game.Sync.Players.RemotePlayerMarkerSystem>(SystemUpdatePhase.Rendering);
-            // Draws incoming map pings, and receives them - the beacon is a command, so the
-            // observer has to be attached even in the frames where nothing is on screen.
-            // Rendering phase for the same reason as the markers above: pings must appear
-            // while the game is paused, which is exactly when players stop to point at things.
-            updateSystem.UpdateAt<Game.Sync.Players.MapPingSystem>(SystemUpdatePhase.Rendering);
             // UIUpdate, not GameSimulation: policies can be toggled while the game is paused
             // (the policies panel works paused - the game routes the change through an event
             // entity consumed by the every-frame modification pipeline), but the GameSimulation
@@ -210,10 +231,6 @@ namespace CS2MultiplayerMod
             updateSystem.UpdateAt<Game.Sync.Systems.NetUpgradeSyncSystem>(SystemUpdatePhase.ModificationEnd);
             updateSystem.UpdateAt<Game.Sync.Systems.AreaSyncSystem>(SystemUpdatePhase.ModificationEnd);
             updateSystem.UpdateAt<Game.Sync.Systems.RouteSyncSystem>(SystemUpdatePhase.ModificationEnd);
-            // UIUpdate, for the same reason as the policy scan: fares are dragged in a panel that
-            // works while the game is paused, and a GameSimulation-phase scan stops ticking at
-            // speed 0 - so it would neither see a change made while paused nor apply one.
-            updateSystem.UpdateAt<Game.Sync.Systems.TransitFareSyncSystem>(SystemUpdatePhase.UIUpdate);
             updateSystem.UpdateAt<Game.Sync.Systems.TilePurchaseSyncSystem>(SystemUpdatePhase.ModificationEnd);
             // ModificationEnd, after the game's event initialization at Modification2: that pass is
             // what turns a bare disaster event into a placed one (position, radius, duration), and

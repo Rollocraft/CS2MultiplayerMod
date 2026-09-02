@@ -13,19 +13,12 @@ namespace CS2MultiplayerMod.Core.Session
     /// </summary>
     internal sealed class BlobReassembler
     {
-        private readonly MemoryStream _buffer;
+        private readonly MemoryStream _buffer = new MemoryStream();
 
         public BlobReassembler(int expectedBytes, long nowMs)
         {
             ExpectedBytes = expectedBytes;
             LastChunkAtMs = nowMs;
-            // Size the buffer to the announced total up front. A savegame arrives in 256 KiB
-            // chunks, so growing from the default capacity means a doubling and a full copy
-            // roughly every chunk - on the large object heap, for a payload measured in tens of
-            // megabytes. The caller has already rejected any total outside the channel's
-            // registered ceiling, so this allocation is bounded by that ceiling and not by
-            // whatever the sender claimed.
-            _buffer = expectedBytes > 0 ? new MemoryStream(expectedBytes) : new MemoryStream();
         }
 
         public int ExpectedBytes { get; }

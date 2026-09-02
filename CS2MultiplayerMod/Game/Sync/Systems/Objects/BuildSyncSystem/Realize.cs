@@ -241,7 +241,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     SyncInbox.RequestResync(CS2MultiplayerMod.Game.Diagnostics.ResyncReport
                         .Create("object attachment target did not resolve", "object",
                             CS2MultiplayerMod.Game.Diagnostics.ResyncEvidence.MissingTarget)
-                        .About("attachment parent road")
+                        .About("parent road for '" + pending.command.PrefabName + "' at (" +
+                               pending.command.PosX.ToString("F1") + "," +
+                               pending.command.PosZ.ToString("F1") + ")")
                         .Tried("waited 10 s of attempts for the parent road, not counting time the road pipeline was held"));
                 }
             }

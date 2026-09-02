@@ -28,45 +28,8 @@ namespace CS2MultiplayerMod.Core.Session
         /// <summary>When the underlying connection appeared - pending peers expire on this.</summary>
         public long ConnectedAtUnixMs;
 
-        /// <summary>
-        /// Smoothed round-trip estimate in milliseconds, or -1 before the first sample.
-        /// This is the number to show a player: a single sample swings with whatever the OS
-        /// was doing when the echo landed, and a readout that flickers between 20 and 90 tells
-        /// nobody anything.
-        /// </summary>
+        /// <summary>Most recent round-trip estimate in milliseconds, or -1 if unknown.</summary>
         public int LatencyMs = -1;
-
-        /// <summary>Round-trip variation in milliseconds - the "is it steady" half of the story.</summary>
-        public int JitterMs;
-
-        // Jacobson/Karels, the same estimator TCP uses for its retransmit timer: a smoothed
-        // round-trip time and a smoothed mean deviation, each pulled a fixed fraction of the
-        // way towards the newest sample. The 1/8 and 1/4 gains are the standard ones.
-        private const double SrttGain = 0.125;
-        private const double RttVarGain = 0.25;
-
-        private double _srttMs = -1.0;
-        private double _rttVarMs;
-
-        /// <summary>Fold one measured round-trip into the estimate.</summary>
-        public void RecordRttSample(long rttMs)
-        {
-            if (_srttMs < 0)
-            {
-                // First sample: seed the estimator with it, and half of it as the deviation.
-                _srttMs = rttMs;
-                _rttVarMs = rttMs / 2.0;
-            }
-            else
-            {
-                double delta = rttMs - _srttMs;
-                _srttMs += SrttGain * delta;
-                _rttVarMs += RttVarGain * (System.Math.Abs(delta) - _rttVarMs);
-            }
-
-            LatencyMs = (int)System.Math.Round(_srttMs);
-            JitterMs = (int)System.Math.Round(_rttVarMs);
-        }
 
         /// <summary>Remote IP for logging/ban bookkeeping. May be null.</summary>
         public string RemoteAddress;

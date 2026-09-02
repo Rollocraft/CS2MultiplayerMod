@@ -1,5 +1,6 @@
 ---
 title: Getting started
+description: "Requirements, installing through Paradox Mods, hosting your first session and joining a friend."
 ---
 
 # Getting started

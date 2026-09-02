@@ -1,5 +1,6 @@
 ---
 title: Set up port forwarding
+description: "How to open a TCP port on your router so friends can join over the internet."
 ---
 
 # Port Forwarding

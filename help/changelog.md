@@ -1,5 +1,6 @@
 ---
 title: Changelog
+description: "What changed in each release of the mod: new features, sync work and fixes."
 ---
 
 # Changelog

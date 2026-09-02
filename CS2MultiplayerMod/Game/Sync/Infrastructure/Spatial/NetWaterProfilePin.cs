@@ -36,6 +36,9 @@ namespace CS2MultiplayerMod.Game.Sync.Infrastructure
         /// <summary>Most pieces one source course may be divided into.</summary>
         public const int MaxPieces = 8;
 
+        /// <summary>The generator's own stand-in for "no bound on this side".</summary>
+        private const float Unbounded = 1000000f;
+
         /// <summary>
         /// The height the generator measures a course elevation from: the terrain, or - where the
         /// water is deep enough to bridge - the water surface plus the prefab's bridge clearance.
@@ -64,12 +67,15 @@ namespace CS2MultiplayerMod.Game.Sync.Infrastructure
 
         /// <summary>
         /// The deck the local generator produces for this span, from per-probe surfaces. Mirrors
-        /// course splitting: slope-limit passes in both directions, the two endpoint heights, the
-        /// slope cone each endpoint casts along the span, and the straightening that replaces every
-        /// run of raised probes with a line between the terrain-following probes bracketing it.
+        /// course splitting, in its order: the elevation band each endpoint's own elevation imposes
+        /// (see <see cref="ElevationBand"/>), slope-limit passes in both directions, the two
+        /// endpoint heights, the slope cone each endpoint casts along the span, and the
+        /// straightening that replaces every run of raised probes with a line between the
+        /// terrain-following probes bracketing it.
         /// </summary>
         public static void PredictDeck(float[] surface, float[] terrain, float[] distance, int count,
-            float startHeight, float endHeight, float maxSlope, float[] deck)
+            float startHeight, float endHeight, float startElevation, float endElevation,
+            float elevationLimit, float maxSlope, float[] deck)
         {
             if (count <= 0) return;
             for (int i = 0; i < count; i++) deck[i] = surface[i];
@@ -77,9 +83,34 @@ namespace CS2MultiplayerMod.Game.Sync.Infrastructure
 
             float slope = maxSlope > 0f ? maxSlope : 0f;
 
+            float spannedTotal = 0f;
+            for (int i = 1; i < count; i++) spannedTotal += distance[i];
+
+            float floorStart, floorEnd, ceilingStart, ceilingEnd;
+            ElevationBand(startHeight, endHeight, startElevation, endElevation, elevationLimit,
+                spannedTotal * slope * 0.5f,
+                out floorStart, out floorEnd, out ceilingStart, out ceilingEnd);
+
+            // The band first, then the slope limit - the generator's order. Doing the slope passes
+            // on the raw surface and the band afterwards leaves a raised span sitting on the water
+            // clearance instead of on the line its own elevation puts it.
             float run = float.NegativeInfinity;
+            float walked = 0f;
             for (int i = 0; i < count; i++)
             {
+                float low, high;
+                if (i == 0) { low = floorStart; high = ceilingStart; }
+                else if (i == count - 1) { low = floorEnd; high = ceilingEnd; }
+                else
+                {
+                    walked += distance[i];
+                    float t = spannedTotal > 0f ? walked / spannedTotal : 0f;
+                    low = floorStart + (floorEnd - floorStart) * t;
+                    high = ceilingStart + (ceilingEnd - ceilingStart) * t;
+                }
+                if (deck[i] < low) deck[i] = low;
+                if (deck[i] > high) deck[i] = high;
+
                 run -= distance[i] * slope;
                 if (deck[i] < run) deck[i] = run;
                 run = deck[i];
@@ -121,6 +152,68 @@ namespace CS2MultiplayerMod.Game.Sync.Infrastructure
 
             Straighten(terrain, distance, count, deck, anchored);
         }
+
+        /// <summary>
+        /// The band the generator clamps a course's probes into, lerped between the two endpoints.
+        /// An endpoint elevation that reaches the prefab's limit fixes the band's floor - or, on the
+        /// negative side, its ceiling - at BOTH endpoint heights; one merely past +/-1 fixes its own
+        /// end and gives the other a bound half a span of slope away. Level ends leave it open, and
+        /// the deck then follows the surface, which over water is the part that is not replicated.
+        /// </summary>
+        public static void ElevationBand(float startHeight, float endHeight,
+            float startElevation, float endElevation, float elevationLimit, float reach,
+            out float floorStart, out float floorEnd, out float ceilingStart, out float ceilingEnd)
+        {
+            floorStart = floorEnd = -Unbounded;
+            ceilingStart = ceilingEnd = Unbounded;
+
+            if (startElevation >= elevationLimit || endElevation >= elevationLimit)
+            {
+                floorStart = startHeight;
+                floorEnd = endHeight;
+            }
+            else
+            {
+                if (startElevation > 1f)
+                {
+                    floorStart = startHeight;
+                    floorEnd = Math.Max(floorEnd, endHeight - reach);
+                }
+                if (endElevation > 1f)
+                {
+                    floorStart = Math.Max(floorStart, startHeight - reach);
+                    floorEnd = endHeight;
+                }
+            }
+
+            if (startElevation <= -elevationLimit || endElevation <= -elevationLimit)
+            {
+                ceilingStart = startHeight;
+                ceilingEnd = endHeight;
+            }
+            else
+            {
+                if (startElevation < -1f)
+                {
+                    ceilingStart = startHeight;
+                    ceilingEnd = Math.Min(ceilingEnd, endHeight + reach);
+                }
+                if (endElevation < -1f)
+                {
+                    ceilingStart = Math.Min(ceilingStart, startHeight + reach);
+                    ceilingEnd = endHeight;
+                }
+            }
+        }
+
+        /// <summary>
+        /// Whether this span's deck depends on the local water at all. A course with BOTH endpoint
+        /// elevations at or past the prefab's limit carries its own band: the generator holds every
+        /// probe between the two transmitted endpoint heights, which are replicated exactly, so the
+        /// span already reproduces and a pin would only substitute a predicted deck for a real one.
+        /// </summary>
+        public static bool NeedsPin(bool startFreeHeight, bool endFreeHeight) =>
+            startFreeHeight || endFreeHeight;
 
         /// <summary>
         /// Divide the probe range into as few straight pieces as reproduce <paramref name="deck"/>

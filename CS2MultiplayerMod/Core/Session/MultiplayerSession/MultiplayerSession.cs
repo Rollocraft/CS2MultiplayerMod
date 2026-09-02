@@ -24,12 +24,7 @@ namespace CS2MultiplayerMod.Core.Session
         /// pre-handshake socket is never held open indefinitely.</summary>
         private const int JoinApprovalTimeoutMs = 120000;
 
-        /// <summary>
-        /// The host always holds player id 1; assigned client ids start above it. Public
-        /// because the game layer has to be able to tell which entry in a roster is the host,
-        /// and guessing 0 - the default of an unset int - silently mislabels everyone.
-        /// </summary>
-        public const int HostPlayerId = 1;
+        private const int HostPlayerId = 1;
 
         /// <summary>Reassembling blobs allowed at once on a client.</summary>
         private const int MaxActiveBlobs = 4;
@@ -132,15 +127,6 @@ namespace CS2MultiplayerMod.Core.Session
         public long OutgoingBlobSent => _outgoingBlobSent;
 
         public IReadOnlyCollection<Peer> Peers => _peers.Values;
-
-        /// <summary>How many peers finished the handshake - the session's real participant count.</summary>
-        public int HandshakedPeerCount()
-        {
-            int count = 0;
-            foreach (Peer peer in _peers.Values)
-                if (peer.Handshaked) count++;
-            return count;
-        }
 
         /// <summary>
         /// Client-only: the host acknowledged the join and it is waiting for the host to
