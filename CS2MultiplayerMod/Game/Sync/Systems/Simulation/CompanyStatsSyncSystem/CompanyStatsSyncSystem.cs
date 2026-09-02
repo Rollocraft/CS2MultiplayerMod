@@ -100,8 +100,36 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         /// company's 2,048-frame statistics rotation. Dirty entries are immediate; the rolling
         /// walk is a defence against a native writer changing state without a new host page.
         /// </summary>
+        /// <summary>
+        /// Immediate re-attempts allowed after an incomplete apply, before the building falls back
+        /// to the rolling walk. See <see cref="RetryStateDirty"/>.
+        /// </summary>
+        private const int MaxStateRetries = 3;
+
+        /// <summary>
+        /// Companies retire and their entity handles are reused, so this table is dropped whole
+        /// rather than pruned. Losing it costs one extra repair pass per company, nothing more.
+        /// </summary>
+        private const int MaxObservedEmployeeBuffers = 16384;
+
+        /// <summary>
+        /// Efficiency is a small per-building buffer. Remembering its last exact hash prevents
+        /// changed-version chunk false positives and our own correction writes from re-arming the
+        /// client forever, while retaining the CPU reduction made for Employee above.
+        /// </summary>
+        private const int MaxObservedEfficiencyBuffers = 131072;
+
+        /// <summary>
+        /// Extractor businesses are a small subset of the economy, and their last-known produce is
+        /// one int each. The table only exists to keep the host from re-queuing a company whose
+        /// figure did not actually move.
+        /// </summary>
+        private const int MaxObservedExtractorCompanies = 16384;
+        private const int MaxExtractorSignalsPerBoundary = 64;
+
         private const int MaxStateDirtyPerBoundary = 128;
         private const int MaxStateWalkedPerBoundary = 64;
+        private const int MaxEfficiencyDirtyPerBoundary = 512;
 
         /// <summary>
         /// Structural ceilings. Creating or closing a business moves entities between chunks and
@@ -138,6 +166,26 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         private readonly HashSet<Entity> _dirtyMembers = new HashSet<Entity>();
         private readonly List<Entity> _stateDirty = new List<Entity>();
         private readonly HashSet<Entity> _stateDirtyMembers = new HashSet<Entity>();
+        private readonly Dictionary<Entity, int> _stateRetries = new Dictionary<Entity, int>();
+
+        /// <summary>
+        /// What this system last left a company's employee buffer at. Reconciling employees writes
+        /// that buffer, which bumps the chunk version the client's own changed-Employee query
+        /// filters on - so without this the mod's own writes marked the building dirty again on the
+        /// next boundary, forever.
+        /// </summary>
+        private readonly Dictionary<Entity, int> _clientEmployeeObserved =
+            new Dictionary<Entity, int>();
+        private readonly Dictionary<Entity, int> _hostEfficiencyObserved =
+            new Dictionary<Entity, int>();
+        private readonly Dictionary<Entity, int> _clientEfficiencyObserved =
+            new Dictionary<Entity, int>();
+        private readonly Dictionary<Entity, int> _hostExtractorProduce =
+            new Dictionary<Entity, int>();
+        private bool _hostEfficiencyObservationInitialized;
+        private bool _clientEfficiencyObservationInitialized;
+        private readonly List<Entity> _efficiencyDirty = new List<Entity>();
+        private readonly HashSet<Entity> _efficiencyDirtyMembers = new HashSet<Entity>();
         private readonly List<Entity> _stateRetryScratch = new List<Entity>();
         private readonly List<Entity> _tenancyOrder = new List<Entity>();
         private int _tenancyCursor;
@@ -163,6 +211,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             new List<CompanyStatsTradeCost>();
         private readonly List<CompanyStatsEmployee> _employeeScratch =
             new List<CompanyStatsEmployee>();
+        private readonly List<CompanyStatsEfficiency> _efficiencyScratch =
+            new List<CompanyStatsEfficiency>();
         private readonly HashSet<ulong> _employeeIdScratch = new HashSet<ulong>();
         private readonly List<ResolvedEmployee> _resolvedEmployeeScratch =
             new List<ResolvedEmployee>();
@@ -209,6 +259,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         private int _receivedPages, _droppedPages, _resolved, _unresolved, _ambiguous, _expired;
         private int _appliedCompanies, _correctedFields, _correctedResources;
         private int _correctedCompanyData, _correctedTradeCosts, _correctedEmployees;
+        private int _correctedEfficiencies, _hostEfficiencySignals, _clientEfficiencyRepairs;
+        private int _correctedExtractorProduce, _hostExtractorSignals;
         private int _correctedPropertyPrefabs, _alignedPropertyBuildRates;
         private int _createdCompanies, _retiredCompanies, _deferredActions, _cancelledDecisions;
         private int _hostLifecycleSignals, _clientLifecycleRepairs;
@@ -396,12 +448,21 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             while (_priorityOrder.TryDequeue(out discardedPriority)) { }
             _hostObserved.Clear();
             _hostEmployeeObserved.Clear();
+            _hostEfficiencyObserved.Clear();
+            _clientEfficiencyObserved.Clear();
+            _hostExtractorProduce.Clear();
+            _hostEfficiencyObservationInitialized = false;
+            _clientEfficiencyObservationInitialized = false;
             Array.Clear(_hostPartitionInitialized, 0, _hostPartitionInitialized.Length);
             Array.Clear(_hostPartitionCursor, 0, _hostPartitionCursor.Length);
             _dirty.Clear();
             _dirtyMembers.Clear();
             _stateDirty.Clear();
             _stateDirtyMembers.Clear();
+            _efficiencyDirty.Clear();
+            _efficiencyDirtyMembers.Clear();
+            _stateRetries.Clear();
+            _clientEmployeeObserved.Clear();
             _stateRetryScratch.Clear();
             _tenancyOrder.Clear();
             _tenancyCursor = 0;
@@ -413,6 +474,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             _resourceScratch.Clear();
             _tradeCostScratch.Clear();
             _employeeScratch.Clear();
+            _efficiencyScratch.Clear();
             _employeeIdScratch.Clear();
             _resolvedEmployeeScratch.Clear();
             _desiredEmployeeEntities.Clear();
@@ -495,6 +557,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             if (session.Role == SessionRole.Host)
                 WriteToWorkplaceTopics("pages=" + _sentPages + ", entries=" + _sentEntries +
                                        ", bytes=" + _sentBytes + ", changed=" + _priorityChanges +
+                                       ", efficiencySignals=" + _hostEfficiencySignals +
+                                       ", extractorSignals=" + _hostExtractorSignals +
                                        ", lifecycleSignals=" + _hostLifecycleSignals +
                                        ", queued=" + _priority.Count + ", dropped=" +
                                        _priorityDrops + ", skipped=" + _captureSkips + ".");
@@ -509,13 +573,17 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                                        _correctedResources + ", correctedCompany=" +
                                        _correctedCompanyData + ", correctedTrade=" +
                                        _correctedTradeCosts + ", correctedEmployees=" +
-                                       _correctedEmployees + ", prefabCorrections=" +
+                                       _correctedEmployees + ", correctedEfficiency=" +
+                                       _correctedEfficiencies + ", efficiencyRepairs=" +
+                                       _clientEfficiencyRepairs + ", correctedExtractorProduce=" +
+                                       _correctedExtractorProduce + ", prefabCorrections=" +
                                        _correctedPropertyPrefabs + ", buildRatesAligned=" +
                                        _alignedPropertyBuildRates + ", deferred=" + _deferredActions +
                                        ", lifecycleRepairs=" + _clientLifecycleRepairs +
                                        ", cancelledLocalDecisions=" + _cancelledDecisions +
                                        ", tenancyDirty=" + _dirty.Count + ", stateDirty=" +
-                                       _stateDirty.Count + ".");
+                                       _stateDirty.Count + ", efficiencyDirty=" +
+                                       _efficiencyDirty.Count + ".");
                 ReportZone(SyncZone.Commercial);
                 ReportZone(SyncZone.Industrial);
                 ReportZone(SyncZone.Office);
@@ -526,6 +594,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             _receivedPages = _droppedPages = _resolved = _unresolved = _ambiguous = _expired = 0;
             _appliedCompanies = _correctedFields = _correctedResources = 0;
             _correctedCompanyData = _correctedTradeCosts = _correctedEmployees = 0;
+            _correctedEfficiencies = _hostEfficiencySignals = _clientEfficiencyRepairs = 0;
+            _correctedExtractorProduce = _hostExtractorSignals = 0;
             _correctedPropertyPrefabs = _alignedPropertyBuildRates = 0;
             _createdCompanies = _retiredCompanies = _deferredActions = _cancelledDecisions = 0;
             _hostLifecycleSignals = _clientLifecycleRepairs = 0;

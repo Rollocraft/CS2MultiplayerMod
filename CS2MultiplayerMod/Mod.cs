@@ -122,6 +122,24 @@ namespace CS2MultiplayerMod
             // state) now stays in sync even while a player is paused. Channel capture is
             // gated to ~1 Hz internally, so the render-rate phase adds no extra traffic.
             updateSystem.UpdateAt<Game.Sync.Systems.CityStateSyncSystem>(SystemUpdatePhase.UIUpdate);
+            // Service fee accounting has producers on both sides of ServiceFeeSystem: transit and
+            // parking arrive before it, utility sales/trade after it. Empty the redundant client
+            // queue at both boundaries; the host's absolute collected records are reinstalled by
+            // channel 24, so no locally timed event can replace them between snapshots.
+            updateSystem.UpdateBefore<Game.Sync.Systems.ServiceFeeIngressBoundarySystem,
+                global::Game.Simulation.ServiceFeeSystem>(SystemUpdatePhase.GameSimulation);
+            updateSystem.UpdateAfter<Game.Sync.Systems.ServiceFeeEgressBoundarySystem,
+                global::Game.Simulation.UtilityFeeSystem>(SystemUpdatePhase.GameSimulation);
+            // CityServiceBudgetSystem first reads last frame's collected fee/upkeep records and
+            // then rebuilds those records from local buildings, networks, upgrades and usage.
+            // Install the host input before that read and restore the host output immediately
+            // after it, while also pinning the fee/upkeep income and expense array slots.
+            updateSystem.UpdateBefore<Game.Sync.Systems.ServiceAccountingInputSystem,
+                global::Game.Simulation.CityServiceBudgetSystem>(
+                SystemUpdatePhase.ModificationEnd);
+            updateSystem.UpdateAfter<Game.Sync.Systems.ServiceAccountingCorrectionSystem,
+                global::Game.Simulation.CityServiceBudgetSystem>(
+                SystemUpdatePhase.ModificationEnd);
             // Capture the host's short-lived MovingAway decision immediately before its native
             // consumer. Register this proxy exactly once: ordering registrations are additive.
             updateSystem.UpdateBefore<
@@ -176,6 +194,17 @@ namespace CS2MultiplayerMod
             // repairs the real Employee/Worker graph after local job matching tries to diverge.
             updateSystem.UpdateAfter<Game.Sync.Systems.CompanyStateBoundarySystem,
                 global::Game.Simulation.FindJobSystem>(SystemUpdatePhase.GameSimulation);
+            // The building panel recalculates Production from the property's efficiency factors on
+            // every UI frame, and these two native passes rewrite those factors from state that is
+            // local by construction - goods on hand plus a rounding draw for processing, area
+            // depletion for extraction. Each correction runs directly after its own writer, at that
+            // writer's interval and therefore its update offset, so the panel never reads the local
+            // result. The two passes are separate registrations with separate offsets, which is why
+            // this is two systems and not one.
+            updateSystem.UpdateAfter<Game.Sync.Systems.CompanyProcessingBoundarySystem,
+                global::Game.Simulation.ProcessingCompanySystem>(SystemUpdatePhase.GameSimulation);
+            updateSystem.UpdateAfter<Game.Sync.Systems.CompanyExtractorBoundarySystem,
+                global::Game.Simulation.ExtractorCompanySystem>(SystemUpdatePhase.GameSimulation);
             // Before PropertyProcessingSystem: that system drains the rent-action queue this one
             // fills. The queue is persistent, so an action always survives to the next drain; the
             // ordering is what lets a move-in land in the same tick it was decided in whenever the

@@ -78,9 +78,14 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             _settling[household] = _simulationSystem.frameIndex + SettleFrames;
         }
 
-        /// <summary>Ask for one more pass over this property on the next update.</summary>
+        /// <summary>
+        /// Ask for one more pass over this property on the next update. The request is recorded
+        /// separately from the list because the list can be at its cap: either way this property
+        /// has outstanding work and must not be recorded as settled by <see cref="NoteReconciled"/>.
+        /// </summary>
         private void ScheduleReapply(Entity property)
         {
+            _reapplyRequested.Add(property);
             if (_reapply.Count >= MaxDirtyProperties) return;
             _reapply.Add(property);
         }

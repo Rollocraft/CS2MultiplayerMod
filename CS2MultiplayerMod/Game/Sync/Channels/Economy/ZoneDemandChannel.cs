@@ -21,10 +21,14 @@ namespace CS2MultiplayerMod.Game.Sync.Channels
     /// frames; matching low-density values were incidental while high-density/resource arrays kept
     /// diverging.
     ///
-    /// Once the first valid host snapshot arrives, the three local demand writers are held and the
-    /// channel installs both their current/lagged headline values and every factor/resource array
-    /// serialized by Game.dll. Native consumers remain alive and read genuine host state; only the
-    /// redundant client-side calculation is stopped.
+    /// Once the first valid host snapshot arrives, the three local demand writers are held for the
+    /// rest of the session and the channel installs both their current/lagged headline values and
+    /// every factor/resource array serialized by Game.dll. Native consumers remain alive and read
+    /// genuine host state; only the redundant client-side calculation is stopped. CityInfoUISystem
+    /// is not held, so it keeps easing the toolbar demand bars toward the host headline values at
+    /// its own rate - a 1 Hz change animates up/down instead of jumping. A later snapshot that
+    /// cannot be decoded leaves the last good values frozen rather than releasing the hold; only a
+    /// world replacement (<see cref="ResetPending"/>) does that.
     ///
     /// The occupancy counts are here for the same reason. Households, citizens and pets are
     /// separate entities driven by each machine's own random stream; they start identical because a
@@ -64,6 +68,7 @@ namespace CS2MultiplayerMod.Game.Sync.Channels
         private bool _hostSpawnerChecked;
         private bool _hasAuthoritativeSnapshot;
         private bool _captureWarned;
+        private bool _applyWarned;
         private World _world;
 
         private readonly LocalAuthorityHold _authority = new LocalAuthorityHold(
@@ -255,13 +260,37 @@ namespace CS2MultiplayerMod.Game.Sync.Channels
             try
             {
                 DemandStateAccess.Apply(residential, commercial, industrial, hostDemand);
-                _hasAuthoritativeSnapshot = true;
             }
-            catch
+            catch (System.Exception ex)
             {
-                _hasAuthoritativeSnapshot = false;
-                _authority.Restore(em.World);
-                throw;
+                // DemandStateAccess writes the headline bar values first and absorbs a factor-array
+                // mismatch itself, so reaching here means a demand field is gone on this build
+                // entirely. Once a good snapshot has landed, keep it frozen and keep the local
+                // demand writers held: handing the HUD bars back to the client's own simulation
+                // for a second, then snapping to the host again, is the fight this channel exists
+                // to remove. Only ResetPending (world no longer loaded) releases the hold.
+                if (!_hasAuthoritativeSnapshot)
+                {
+                    _authority.Restore(em.World);
+                    throw;
+                }
+                if (!_applyWarned)
+                {
+                    _applyWarned = true;
+                    SyncLog.Warn(LogTopic.City, "ZoneDemand: could not install host demand " +
+                        "(logged once); holding the last good values: " + ex.Message);
+                }
+            }
+            if (!_hasAuthoritativeSnapshot)
+            {
+                _hasAuthoritativeSnapshot = true;
+                SyncLog.Detail(LogTopic.City, "ZoneDemand: first host demand installed (res " +
+                    hostDemand.ResidentialLastBuilding.x + "/" +
+                    hostDemand.ResidentialLastBuilding.y + "/" +
+                    hostDemand.ResidentialLastBuilding.z + ", com " +
+                    hostDemand.CommercialLastBuilding + ", ind " + hostDemand.IndustrialLast[1] +
+                    ", off " + hostDemand.IndustrialLast[5] +
+                    "); the local demand writers are held from here.");
             }
 
             if (++_snapshots % ReportEverySnapshots != 0) return;

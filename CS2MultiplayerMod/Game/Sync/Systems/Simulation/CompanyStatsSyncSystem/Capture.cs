@@ -339,9 +339,137 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 }
                 else if (_cache.ContainsKey(property))
                 {
+                    // Reconciling employees writes this very buffer, so the changed-version filter
+                    // that brought us here fires on the mod's own writes as readily as on local
+                    // job matching - and at chunk granularity, so one write re-arms its whole
+                    // chunk. Comparing against what this system last left the buffer at is what
+                    // separates a real local change from the echo of the previous boundary; the
+                    // repair count stood at 103,197 per 30 s against 1,560 cached buildings.
+                    int hash = HashEmployeeBuffer(company);
+                    int previous;
+                    if (_clientEmployeeObserved.TryGetValue(company, out previous) &&
+                        previous == hash) continue;
+                    _clientEmployeeObserved[company] = hash;
                     MarkStateDirty(property);
                     _clientLifecycleRepairs++;
                 }
+            }
+        }
+
+        /// <summary>
+        /// Efficiency is the live input used by CompanySection's production-rate calculation for
+        /// processing industry and offices. A changed-version query supplies only touched chunks;
+        /// exact hashes below suppress both chunk neighbours and the echo of client corrections.
+        /// </summary>
+        internal void CaptureEfficiencyChanges(NativeArray<Entity> properties)
+        {
+            MultiplayerService service = Mod.Service;
+            if (service == null || !service.GameplaySyncReady) return;
+
+            bool host = service.Session.Role == SessionRole.Host;
+            Dictionary<Entity, int> observed = host
+                ? _hostEfficiencyObserved : _clientEfficiencyObserved;
+            if (observed.Count > MaxObservedEfficiencyBuffers) observed.Clear();
+            bool initialized = host
+                ? _hostEfficiencyObservationInitialized
+                : _clientEfficiencyObservationInitialized;
+
+            for (int i = 0; i < properties.Length; i++)
+            {
+                Entity property = properties[i];
+                if (!IsLiveWorkplaceProperty(property) ||
+                    !EntityManager.HasBuffer<Efficiency>(property)) continue;
+                int hash = HashEfficiencyBuffer(property);
+                int previous;
+                if (observed.TryGetValue(property, out previous) && previous == hash) continue;
+                observed[property] = hash;
+
+                // A changed-version query reports every existing chunk on its first observation.
+                // Record that baseline without turning a newly joined city's entire workplace
+                // set into priority traffic; the downloaded world and rolling pages are already
+                // its authoritative baseline. Later missing entries are genuinely new buildings.
+                if (!initialized) continue;
+
+                if (host)
+                {
+                    PropertyRentIdentity identity;
+                    if (!TryGetWorkplaceIdentity(property, out identity)) continue;
+                    Prioritize(property, identity);
+                    _hostEfficiencySignals++;
+                }
+                else if (_cache.ContainsKey(property))
+                {
+                    MarkEfficiencyDirty(property);
+                    _clientEfficiencyRepairs++;
+                }
+            }
+
+            if (host) _hostEfficiencyObservationInitialized = true;
+            else _clientEfficiencyObservationInitialized = true;
+        }
+
+        /// <summary>
+        /// Extraction is the one production figure the panel reads straight off the company
+        /// instead of recalculating it, and the native extractor pass rewrites that field from
+        /// local area depletion and a random rounding draw - neither of which can align. Observed
+        /// immediately after that pass so the host ships its new number and the client puts the
+        /// host's back.
+        /// </summary>
+        internal void CaptureExtractorProduceChanges(NativeArray<Entity> companies)
+        {
+            MultiplayerService service = Mod.Service;
+            if (service == null || !service.GameplaySyncReady) return;
+
+            bool host = service.Session.Role == SessionRole.Host;
+            int signalled = 0;
+            for (int i = 0; i < companies.Length; i++)
+            {
+                Entity company = companies[i];
+                if (company == Entity.Null || !EntityManager.Exists(company) ||
+                    !EntityManager.HasComponent<CompanyStatisticData>(company) ||
+                    !EntityManager.HasComponent<PropertyRenter>(company)) continue;
+                Entity property = EntityManager.GetComponentData<PropertyRenter>(company).m_Property;
+                if (!IsLiveWorkplaceProperty(property)) continue;
+
+                if (host)
+                {
+                    int produce = EntityManager
+                        .GetComponentData<CompanyStatisticData>(company).m_LastUpdateProduce;
+                    int previous;
+                    if (_hostExtractorProduce.TryGetValue(company, out previous) &&
+                        previous == produce) continue;
+                    if (_hostExtractorProduce.Count > MaxObservedExtractorCompanies)
+                        _hostExtractorProduce.Clear();
+                    _hostExtractorProduce[company] = produce;
+                    // The draw behind this figure moves on every extraction pass, so an unbounded
+                    // signal would let a farming region own the whole priority queue. The rolling
+                    // change detector still carries whatever is skipped here.
+                    if (signalled >= MaxExtractorSignalsPerBoundary) continue;
+                    PropertyRentIdentity identity;
+                    if (!TryGetWorkplaceIdentity(property, out identity)) continue;
+                    Prioritize(property, identity);
+                    signalled++;
+                    _hostExtractorSignals++;
+                }
+                else ApplyExtractorProduce(company, property);
+            }
+        }
+
+        private int HashEfficiencyBuffer(Entity property)
+        {
+            unchecked
+            {
+                if (!EntityManager.HasBuffer<Efficiency>(property)) return 0;
+                DynamicBuffer<Efficiency> factors =
+                    EntityManager.GetBuffer<Efficiency>(property, true);
+                int hash = ((int)2166136261 ^ factors.Length) * 16777619;
+                for (int i = 0; i < factors.Length; i++)
+                {
+                    Efficiency factor = factors[i];
+                    hash = (hash ^ (byte)factor.m_Factor) * 16777619;
+                    hash = (hash ^ factor.m_Efficiency.GetHashCode()) * 16777619;
+                }
+                return hash;
             }
         }
 
@@ -437,7 +565,13 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
                 CompanyStatisticData data =
                     EntityManager.GetComponentData<CompanyStatisticData>(company);
+                bool hasEfficiency;
+                CompanyStatsEfficiency[] efficiencies;
+                if (!TryCaptureEfficiencies(property, out hasEfficiency, out efficiencies))
+                    return false;
                 entry.HasTenant = true;
+                entry.HasEfficiency = hasEfficiency;
+                entry.Efficiencies = efficiencies;
                 entry.CompanyPrefabName = companyName;
                 entry.BrandPrefabName = brandName;
                 entry.CompanyCustomName = customName;
@@ -532,6 +666,29 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             }
             if (_resourceScratch.Count == 0) return null;
             return _resourceScratch.ToArray();
+        }
+
+        private bool TryCaptureEfficiencies(Entity property, out bool present,
+            out CompanyStatsEfficiency[] result)
+        {
+            present = EntityManager.HasBuffer<Efficiency>(property);
+            result = null;
+            if (!present) return true;
+
+            DynamicBuffer<Efficiency> factors = EntityManager.GetBuffer<Efficiency>(property, true);
+            if (factors.Length > CompanyStatsSnapshot.MaxEfficiencySlots) return false;
+            _efficiencyScratch.Clear();
+            for (int i = 0; i < factors.Length; i++)
+            {
+                Efficiency factor = factors[i];
+                _efficiencyScratch.Add(new CompanyStatsEfficiency
+                {
+                    Factor = (byte)factor.m_Factor,
+                    Value = factor.m_Efficiency,
+                });
+            }
+            if (_efficiencyScratch.Count > 0) result = _efficiencyScratch.ToArray();
+            return true;
         }
 
         private CompanyStatsTradeCost[] CaptureTradeCosts(Entity company)
@@ -677,6 +834,13 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 hash = (hash ^ (entry.HasTaxPayer ? entry.UntaxedIncome : 0)) * 16777619;
                 hash = (hash ^ (entry.HasTaxPayer ? entry.AverageTaxRate : 0)) * 16777619;
                 hash = (hash ^ (entry.HasTaxPayer ? entry.AverageTaxPaid : 0)) * 16777619;
+                CompanyStatsEfficiency[] efficiencies = entry.Efficiencies;
+                hash = (hash ^ (entry.HasEfficiency ? 1 : 0)) * 16777619;
+                hash = (hash ^ (efficiencies == null ? 0 : efficiencies.Length)) * 16777619;
+                if (efficiencies != null)
+                    for (int i = 0; i < efficiencies.Length; i++)
+                        hash = (hash ^ efficiencies[i].Factor ^
+                                efficiencies[i].Value.GetHashCode()) * 16777619;
                 CompanyStatsResource[] resources = entry.Resources;
                 hash = (hash ^ (resources == null ? 0 : resources.Length)) * 16777619;
                 if (resources != null)

@@ -4,8 +4,41 @@ namespace CS2MultiplayerMod.Core.Protocol
     {
         /// <summary>
         /// Wire-format version. Bump when message layout changes to refuse handshake on mismatch.
-        /// Current v58 raises the bounded rolling-page throughput for property rent, residential
-        /// occupancy and workplace state. Game.dll stores every apartment household in the
+        /// Current v61 decides the water pin on a net course's endpoint ELEVATIONS. The gate read
+        /// CoursePosFlags.FreeHeight, which the net tool sets only on parallel, grid and mid-curve
+        /// positions - never on either end of a plain drag, whatever height it is drawn at. Every
+        /// hand-drawn bridge was therefore exempted and rebuilt its deck from the receiver's own
+        /// water. The generator bands a deck as soon as ONE endpoint elevation reaches the prefab's
+        /// limit, so that is the exemption now - but only while both ends are FIXED height, because
+        /// the band is anchored at heights resolved after free-height resolution, on the realizing
+        /// machine and from its water. Over water the tool raises an endpoint elevation to
+        /// m_MinWaterElevation, so a bridge drawn at level 0 looks raised a full step; exempting it
+        /// on the elevation alone skipped every bridge there is. A pinned course carries the endpoint heights already on
+        /// the wire: an endpoint's elevation over water is measured from the terrain while the
+        /// profile surface is the water plus bridge clearance, so resolving one as
+        /// surface+elevation counts the lake's depth twice - 65 m on a measured span, which is also
+        /// what made a later edit unable to find that road and forced a world resync.
+        /// v61 also stops dividing a span into several pinned pieces - a pin can only
+        /// carry one straight deck, and dividing gave the receiver a node and an edge per boundary
+        /// that the source did not have. A deck with a real bend in it travels unpinned, its shape
+        /// coming from the terrain both machines share.
+        /// v60 carries every native workplace Efficiency factor used by the industrial and
+        /// office production-rate binding. It also observes condition-only growable changes, so
+        /// LevelSection's progress input follows the host even when no abandonment flag or
+        /// construction marker changed. v59 peers cannot decode the expanded company-state entry.
+        /// v60 also retires city-state channel 2 (population): the HUD population count is a
+        /// cosmetic output of each peer's own simulation, and mirroring the host's value once a
+        /// second made the client's number flicker as the local sim and the snapshot fought over
+        /// it. A stale peer that still sends channel 2 is harmless - the id is simply unrouted.
+        /// v59 adds channel 24, the complete host service-accounting view: every collected
+        /// fee count/value, every per-service budget/upkeep aggregate, and the fee/upkeep income
+        /// and expense slots consumed by the budget pass. Client boundaries discard locally timed
+        /// fee events before and after the native collector and reassert the absolute host records
+        /// around the upkeep collector. Channel 8 remains independently editable and now validates
+        /// and applies its complete stable slider table atomically. v58 peers do not carry channel
+        /// 24 and therefore cannot preserve this authority boundary.
+        /// v58 raises the bounded rolling-page throughput for property rent, residential
+        /// occupancy and workplace state. The native city state stores every apartment household in the
         /// building's Renter buffer and every real employee in the company's Employee buffer, so
         /// records grow with density; the former small-page quotas permanently fell behind in
         /// mid/high-density cities even though low-density records kept up. Pages remain below the
@@ -163,7 +196,7 @@ namespace CS2MultiplayerMod.Core.Protocol
         /// islands) reattach on the receiver.
         /// See <see cref="Messages.HandshakeRequest"/> and version notes in doc/internals.
         /// </summary>
-        public const int ProtocolVersion = 58;
+        public const int ProtocolVersion = 61;
 
         /// <summary>
         /// Hard cap on a single payload, guarding against corrupt length prefixes.

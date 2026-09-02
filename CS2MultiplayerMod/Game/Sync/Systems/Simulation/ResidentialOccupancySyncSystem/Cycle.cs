@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using CS2MultiplayerMod.Core.Diagnostics;
@@ -148,6 +148,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             lock (_incoming) SyncInbox.Clear(_incoming);
             RestoreAllStagedTransferLinks();
             _cache.Clear();
+            _appliedState.Clear();
+            _reapplyRequested.Clear();
             _cacheScratch.Clear();
             _authorizedMoveAways.Clear();
             _authorizedMoveAwayScratch.Clear();
@@ -318,7 +320,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     ", citizenDeparturesTracked=" + _hostCitizenDepartures.Count +
                     ", lifecyclePriority=" + _lifecyclePrioritySignals +
                     ", captureSkipped=" + _captureSkips + ", observed=" + _observedProperties +
-                    ".");
+                    ", probeSkipped=" + _probeSkipped + ".");
             }
             else
             {
@@ -327,7 +329,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     ", pending=" + _pending.Count + ", resolved=" + _resolved + ", unresolved=" +
                     _unresolved + ", ambiguous=" + _ambiguous + ", expired=" + _expired + ", stale=" +
                     _stalePages + ", pruned=" + _pruned + ", cacheDropped=" + _cacheDrops +
-                    ", appliedProperties=" + _appliedProperties + ", households +" +
+                    ", appliedProperties=" + _appliedProperties +
+                    ", reconcileSkipped=" + _reconcileSkipped + ", households +" +
                     _createdHouseholds + "/-" + _retiredHouseholds + ", citizens +" +
                     _createdCitizens + "/-" + _removedCitizens + "/~" + _rewrittenCitizens +
                     ", healthCorrections=" + _healthProblemCorrections + ", hostDeaths=" +
@@ -345,7 +348,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     ", dirty=" + _dirty.Count + ".");
             }
             _sentPages = _sentProperties = _priorityChanges = _priorityDrops = _captureSkips = 0;
-            _observedProperties = 0;
+            _observedProperties = _probeSkipped = _reconcileSkipped = 0;
             _sentBytes = 0;
             _receivedPages = _droppedPages = _resolved = _unresolved = _ambiguous = 0;
             _expired = _stalePages = _pruned = _cacheDrops = _appliedProperties = 0;

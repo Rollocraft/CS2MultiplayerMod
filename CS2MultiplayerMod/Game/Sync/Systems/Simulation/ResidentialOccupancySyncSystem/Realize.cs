@@ -93,10 +93,23 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             new HashSet<string>(StringComparer.Ordinal);
         private readonly Dictionary<Entity, Entity> _arrivalSources =
             new Dictionary<Entity, Entity>();
+        /// <summary>
+        /// What the rolling walk last left a property at. See <see cref="IsReconciled"/>; the pair
+        /// is what lets the walk skip a property nothing has said anything new about.
+        /// </summary>
+        private struct AppliedState
+        {
+            public ulong Revision;
+            public int Hash;
+        }
+
+        private readonly Dictionary<Entity, AppliedState> _appliedState =
+            new Dictionary<Entity, AppliedState>();
         private readonly List<Entity> _settlingScratch = new List<Entity>();
         private readonly HashSet<Entity> _appliedThisUpdate = new HashSet<Entity>();
         private readonly HashSet<Entity> _unreachableSeen = new HashSet<Entity>();
         private readonly List<Entity> _reapply = new List<Entity>();
+        private readonly HashSet<Entity> _reapplyRequested = new HashSet<Entity>();
         private readonly List<int> _bootstrapKeyScratch = new List<int>();
         private readonly Budget _budget = new Budget();
         private bool _applyWarned;

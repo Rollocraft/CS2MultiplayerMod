@@ -122,7 +122,10 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             {
                 folded = HashId(folded, householdId);
                 folded = (folded ^ prefabName.GetHashCode()) * 16777619;
-                folded = (folded ^ (byte)data.m_Flags) * 16777619;
+                // Only the bits a receiver actually installs. HouseholdFlags.MovedIn is owned by
+                // arrival on every peer and deliberately never imported, so folding it in reports
+                // a change nobody would act on.
+                folded = (folded ^ ((byte)data.m_Flags & HouseholdFlagMask)) * 16777619;
                 folded = (folded ^ (departing ? 1 : 0)) * 16777619;
                 folded = (folded ^ Clamp(rented.m_Rent, 0,
                     ResidentialOccupancySnapshot.MaxRent)) * 16777619;
@@ -233,7 +236,13 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             {
                 folded = HashId(folded, citizenId);
                 folded = (folded ^ prefabName.GetHashCode()) * 16777619;
-                folded = (folded ^ (short)data.m_State) * 16777619;
+                // The mask is the whole point. A receiver merges only HostOwnedCitizenFlags and
+                // preserves the rest of the word, because the rest is local behaviour:
+                // LookingForPartner, BicycleUser, ValidCitizen, Homeless and MovingAwayReachOC all
+                // flip while a person goes about their day. Folding the unmasked word made every
+                // building with a dozen residents look changed on every single pass, which is what
+                // kept the priority queue holding the entire city and made this probe skip nothing.
+                folded = (folded ^ ((short)data.m_State & HostOwnedCitizenFlags)) * 16777619;
                 folded = (folded ^ data.m_PseudoRandom) * 16777619;
                 folded = (folded ^ data.m_BirthDay) * 16777619;
                 folded = (folded ^ OccupancyCitizen.PackHealthProblem(hasProblem, problemFlags)) *

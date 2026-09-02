@@ -5,70 +5,74 @@ description: "What changed in each release of the mod: new features, sync work a
 
 # Changelog
 
-## Unreleased
+## Version 0.1.6.1
 
-Fewer world reloads, and a log that says why the ones that remain happened.
+This update marks a major step forward for the project.
 
-### Synchronization
+Until now, synchronization was primarily focused on keeping the world itself consistent between players: roads, player-placed buildings, networks, pipelines, electricity infrastructure and other physical changes to the city.
 
-- A road placement waiting for the road it connects to no longer stops every other player's
-  edits behind it, and bulldozing no longer runs ahead of it. A bulldoze applied while a
-  placement waited could delete the very road that placement was anchored to, which then
-  looked like the two cities had diverged and triggered a full world reload.
-- Road endpoints can now be matched when the ground under them sits at a different height on
-  the two machines. Terrain and water routinely drift by more than the three metres the
-  matcher allowed, and past that point an ordinary road drawn near drifted ground could only
-  ever end in a world reload.
-- A large road edit is given time to finish in proportion to its size, and any progress
-  restarts its clock. A 311-piece replacement was being abandoned on the same three-second
-  budget that comfortably finished the 55-piece edits around it.
-- A bulldoze that never found anything to remove is now reported. It leaves a road or building
-  standing here that the other player no longer has, and it used to be visible only with
-  verbose logging switched on.
-- Terraforming now lands in one frame instead of being spread over several. Roads, buildings,
-  zoning, growables and routes all wait for terrain to catch up, so every extra frame spent
-  applying a stroke was a frame in which nothing else in the session could be applied either.
-- Terraforming that goes missing is now reported instead of being dropped in silence. A stroke
-  that could not be sent, or that arrived naming a tool this game does not have, leaves the
-  ground a different shape on the two machines - and the roads drawn near it afterwards then
-  fail to connect. Every one of those paths used to be invisible.
-- A terraforming sample that could not be applied no longer stops the whole session. It kept
-  the terrain queue permanently non-empty, and that queue is what every other kind of edit
-  waits behind, so one bad sample could leave a session unable to apply anything at all.
-- Transport lines and zoned buildings no longer give up on work they were never allowed to
-  attempt. Both wait a fixed time for something they depend on, and both are held back while
-  terrain or the road pipeline catches up - so the wait ran out against the clock rather than
-  against attempts, and asked for a world reload over a command that had never once been tried.
-- A zoned building waiting to join its road network no longer counts down that wait while the
-  road pipeline is the thing being held back.
-- Every remaining reason the mod can reload a world now records what it actually saw, instead
-  of a short phrase. A reason that says commands were lost, or that this city contradicts the
-  other player's, reloads at once; one that only says a deadline passed has to survive a hold
-  first, and a fault that clears during that hold is logged as a reload that did not happen.
-- Buildings, decorations, policies, appearance changes and transport lines no longer count down
-  their waiting time while the thing they are waiting for is being held back by the mod itself.
-  A prop waiting for its road, a policy waiting for its building and a line waiting to be
-  created could all run out of patience against the clock rather than against attempts.
-- A transport line whose commit was lost during a world reload no longer asks for another world
-  reload. The incoming world already replaces it, and asking again is how a session gets stuck
-  in a loop of them.
-- Fixed a client that could sit waiting for a world forever. If the host finished a world
-  handover before this city had installed it, the client asked for a replacement - but its own
-  request was discarded as "a reload is already running", because the state it had just entered
-  looked like one. Nothing was coming, and only a manual sync recovered it.
+With **0.1.6.1, we have expanded the core synchronization system to include some parts of the simulation itself.**
 
-### Bug fixes
+This means the mod is no longer only synchronizing what players build. It now also synchronizes more of what the game simulation changes on its own.
 
-- Automatic world reloads now have to be justified before they happen. A reload costs both
-  players a save, a transfer and a load, and does not fix the edit that triggered it, so the
-  mod now writes down what it found, holds the mutating parts of the road pipeline still,
-  retries, and reloads only if the problem is still there. A problem that clears itself is
-  logged as a reload that did not have to happen.
-- The log now says why a world reload happened: which edit, which endpoint, what stands there
-  instead, how long the mod waited and what it tried first. Previously every cause printed one
-  short phrase and the world reloaded.
-- The host's log now records the reason a client asked to be re-synced, so a player pressing
-  the sync button reads differently from a client whose pipeline gave up on an edit.
+### Simulation Synchronization
+
+* Residential simulation synchronization has received major performance improvements.
+* Naturally spawned Industrial, Commercial and Office buildings are now synchronized between host and clients.
+* Population is now better synchronized between host and clients.
+* City income and economic values are synchronized much more closely.
+* Simulation-driven financial values such as taxes, fees and service costs are now included in synchronization.
+* Improved synchronization of changes caused directly by the game simulation rather than player actions.
+
+This brings multiplayer significantly closer to running the same city simulation on every client, instead of only maintaining the same physical city layout.
+
+### Performance
+
+The synchronization system itself has become significantly more efficient in this update.
+
+However, 0.1.6.1 also massively increases the amount of data the mod has to process. Instead of only reacting to player actions and major world changes, the mod can now deal with thousands of simulation events every second.
+
+Because of this, large and highly populated cities may still begin to experience noticeable slowdown or lag.
+
+In other words: the synchronization code is faster than before, but it is also doing far more work than before. The increased simulation workload can currently outweigh those performance improvements in larger cities.
+
+Improving performance under these new workloads will remain an important focus going forward.
+
+### Synchronization & Stability
+
+* Significantly reduced unnecessary world reloads by improving how synchronization failures are detected and verified before triggering a resync.
+* World reloads now record detailed information about what caused them, making synchronization issues significantly easier to diagnose.
+* Improved road synchronization when connected roads, terrain height differences or large road edits temporarily delay placement.
+* Large road edits are now given more time to finish based on their size and progress instead of relying on a fixed timeout.
+* Improved synchronization queue handling so buildings, policies, transport lines and other dependent changes no longer time out while waiting for another synchronization system to finish.
+* Improved terraforming synchronization and processing speed.
+* Terraforming changes are now applied in a single frame instead of being spread across multiple frames.
+* Invalid or missing terrain updates can no longer silently block the entire synchronization pipeline.
+* Improved handling of bulldoze operations that fail to find the expected object.
+* Fixed several cases where delayed transport, zoning, road and building synchronization could incorrectly trigger world reloads.
+* Fixed a case where transport line synchronization could cause repeated world reloads after an incoming world was already being applied.
+* Fixed a case where clients could become stuck waiting indefinitely for a world resynchronization.
+* Improved handling of special Industries that previously caused resyncs.
+
+### Bug Fixes
+
+* Fixed bridges breaking when placed at height level 0.
+* Fixed several situations that could cause synchronization instability.
+* Fixed special Industries triggering unnecessary resyncs.
+* Automatic world reloads are now verified before being triggered, allowing temporary synchronization issues to recover without forcing a full reload.
+* The host log now records why a client requested a resynchronization, making manual sync requests distinguishable from synchronization failures.
+* Fixed that client could not see demand.
+
+### Quality of Life
+
+* Improved logging throughout the synchronization systems, making issues easier to identify, reproduce and fix.
+* World reload logs now include more context about the affected edit, what was found instead, how long the system waited and what recovery steps were attempted first.
+
+## Contributing
+
+Contributing to the project has previously been difficult, if not nearly impossible.
+
+Going forward, the project will have a dedicated development branch, making it significantly easier for other developers to contribute, test changes and help improve the mod.
 
 ## 0.1.6 - 2026-08-24
 

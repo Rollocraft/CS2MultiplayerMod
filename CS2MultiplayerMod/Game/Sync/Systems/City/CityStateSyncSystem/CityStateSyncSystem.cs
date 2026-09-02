@@ -16,7 +16,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
     /// <summary>
     /// Replicates city state via <see cref="IStateChannel"/> snapshots: host periodically
     /// captures and broadcasts; clients apply snapshots and detect edits via <see cref="StateEditMessage"/>.
-    /// Two channel types: authoritative (money, population, etc., host to clients);
+    /// Two channel types: authoritative (money, XP, etc., host to clients);
     /// editable (taxes, policies, etc., client edit -> host -> broadcast). Host is arbiter.
     /// </summary>
     public partial class CityStateSyncSystem : GameSystemBase
@@ -73,7 +73,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
             // Simulation-owned values: one source of truth, host → clients.
             Register(new MoneyStateChannel());
-            Register(new PopulationStateChannel());
+            // No population channel: the HUD population count is a cosmetic output of each
+            // peer's own simulation. Overwriting it once a second made the client's number
+            // flicker as the local sim and the snapshot fought over it. Channel id 2 is retired.
             Register(new XpStateChannel());
             Register(new MilestoneStateChannel());
             Register(new DevTreePointsStateChannel());
@@ -82,6 +84,11 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             // Taxation's displayed residential/commercial/industrial/office amounts come from
             // parameterized taxable-income statistics, independently of the editable rate table.
             Register(new TaxIncomeStateChannel());
+            // Fee events from every service path and the collected building/net upkeep records
+            // converge into one native accounting view. Keep that terminal view host-owned while
+            // channel 8 remains the separately editable fee-slider table.
+            Register(new ServiceAccountingStateChannel(
+                World.GetOrCreateSystemManaged<ServiceAccountingCorrectionSystem>()));
             Register(new WeatherStateChannel());
             Register(new GameClockStateChannel());
             _treeStateChannel = new TreeStateChannel();

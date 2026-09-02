@@ -6,7 +6,9 @@ using Game.Simulation;
 using Unity.Collections;
 using Unity.Jobs;
 using Unity.Mathematics;
+using CS2MultiplayerMod.Core.Diagnostics;
 using CS2MultiplayerMod.Core.Protocol;
+using CS2MultiplayerMod.Game.Diagnostics;
 
 namespace CS2MultiplayerMod.Game.Sync.Channels
 {
@@ -20,6 +22,17 @@ namespace CS2MultiplayerMod.Game.Sync.Channels
     {
         internal const byte Format = 1;
         private const int MaxArrayLength = 128;
+
+        /// <summary>
+        /// Only the six building/company values the HUD bars read are clamped to 0..100 at runtime.
+        /// The residential household demand is capped at 200 and is a sum of signed factors, so it
+        /// also goes negative; the storage building demand is a fractional-power curve of an
+        /// unbounded accumulator; and the three company demands are never bounded at all. A 0..100
+        /// check therefore refused nearly every real snapshot and the channel silently delivered
+        /// nothing. This bound exists only to catch a framing desync - the array lengths below are
+        /// the structural guard, and a wrong scalar costs one second of a wrong bar.
+        /// </summary>
+        private const int DemandBound = 1000000;
 
         public int ResidentialCurrentHousehold;
         public int3 ResidentialCurrentBuilding;
@@ -96,8 +109,9 @@ namespace CS2MultiplayerMod.Game.Sync.Channels
         private static int ReadDemand(NetworkReader reader)
         {
             int value = reader.ReadInt();
-            if (value < 0 || value > 100)
-                throw new ProtocolException("Zone demand is outside 0..100: " + value + ".");
+            if (value < -DemandBound || value > DemandBound)
+                throw new ProtocolException("Zone demand is outside +/-" + DemandBound + ": " +
+                    value + ".");
             return value;
         }
 
@@ -183,6 +197,8 @@ namespace CS2MultiplayerMod.Game.Sync.Channels
         private static readonly Dictionary<string, FieldInfo> Fields =
             new Dictionary<string, FieldInfo>(StringComparer.Ordinal);
 
+        private static bool _factorsWarned;
+
         public static bool TryCapture(ResidentialDemandSystem residential,
             CommercialDemandSystem commercial, IndustrialDemandSystem industrial,
             out DemandStateSnapshot snapshot)
@@ -235,10 +251,10 @@ namespace CS2MultiplayerMod.Game.Sync.Channels
             CompleteJob(industrial, "m_WriteDependencies");
             CompleteJob(industrial, "m_ReadDependencies");
 
-            ValidateArrayLengths(residential, ResidentialArrayFields, snapshot.ResidentialArrays);
-            ValidateArrayLengths(commercial, CommercialArrayFields, snapshot.CommercialArrays);
-            ValidateArrayLengths(industrial, IndustrialArrayFields, snapshot.IndustrialArrays);
-
+            // Headline values first. These six scalars are what CityInfoUISystem reads to ease the
+            // toolbar demand bars, and the client's demand systems are held on them. They cannot
+            // fail a version check, so they are written unconditionally - a mismatch in the factor
+            // arrays below must never leave the bars without a host value to follow.
             SetNativeValue(residential, "m_HouseholdDemand", snapshot.ResidentialCurrentHousehold);
             SetNativeValue(residential, "m_BuildingDemand", snapshot.ResidentialCurrentBuilding);
             SetField(residential, "m_LastHouseholdDemand", snapshot.ResidentialLastHousehold);
@@ -255,9 +271,29 @@ namespace CS2MultiplayerMod.Game.Sync.Channels
                 SetField(industrial, IndustrialLastFields[i], snapshot.IndustrialLast[i]);
             }
 
-            CopyIntoArrays(residential, ResidentialArrayFields, snapshot.ResidentialArrays);
-            CopyIntoArrays(commercial, CommercialArrayFields, snapshot.CommercialArrays);
-            CopyIntoArrays(industrial, IndustrialArrayFields, snapshot.IndustrialArrays);
+            // Factor/resource arrays feed only the expandable "why" breakdown in the City Info
+            // panel. A length mismatch against this game build leaves that breakdown locally
+            // simulated; it must not abort the headline write or unwind the authority hold.
+            try
+            {
+                ValidateArrayLengths(residential, ResidentialArrayFields, snapshot.ResidentialArrays);
+                ValidateArrayLengths(commercial, CommercialArrayFields, snapshot.CommercialArrays);
+                ValidateArrayLengths(industrial, IndustrialArrayFields, snapshot.IndustrialArrays);
+
+                CopyIntoArrays(residential, ResidentialArrayFields, snapshot.ResidentialArrays);
+                CopyIntoArrays(commercial, CommercialArrayFields, snapshot.CommercialArrays);
+                CopyIntoArrays(industrial, IndustrialArrayFields, snapshot.IndustrialArrays);
+            }
+            catch (Exception ex)
+            {
+                if (!_factorsWarned)
+                {
+                    _factorsWarned = true;
+                    SyncLog.Warn(LogTopic.City, "ZoneDemand: host demand factor arrays did not " +
+                        "match this game build (logged once); the demand bars still follow the " +
+                        "host, the factor breakdown stays locally simulated: " + ex.Message);
+                }
+            }
         }
 
         private static int[][] CopyArrays(object system, string[] names)

@@ -327,6 +327,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             CachedProperty cached;
             if (!_cache.TryGetValue(property, out cached)) return false;
             UnregisterResolvedProperty(cached.Identity, property);
+            _appliedState.Remove(property);
             return _cache.Remove(property);
         }
 
@@ -365,6 +366,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             // since run over those residents, randomising the very fields the roster specifies.
             for (int i = 0; i < _reapply.Count; i++) MarkDirty(_reapply[i]);
             _reapply.Clear();
+            _reapplyRequested.Clear();
 
             int processed = 0;
             while (processed < _dirty.Count && !_budget.Exhausted)

@@ -129,7 +129,11 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     if (!TryHashProperty(property, out hash)) continue;
                     HostObserved observed;
                     bool known = _hostObserved.TryGetValue(property, out observed);
-                    if (known && !observed.Stale && observed.Hash == hash) continue;
+                    if (known && !observed.Stale && observed.Hash == hash)
+                    {
+                        _probeSkipped++;
+                        continue;
+                    }
 
                     // Something moved, or this is a first sighting. Take the real capture now: it
                     // is what validates the roster and what registers the households and residents

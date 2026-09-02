@@ -82,6 +82,11 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 }
                 entities[write++] = property;
                 if (_budget.Exhausted) continue;
+                if (IsReconciled(property, cached))
+                {
+                    _reconcileSkipped++;
+                    continue;
+                }
                 ApplyOne(property);
             }
             // Reconciling can append to this same bucket, so drop exactly the gap the window left
@@ -127,8 +132,52 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 if (HasResidentialRenter(property)) ScheduleReapply(property);
                 else if (RemoveCachedProperty(property)) _pruned++;
             }
+            else if (applied)
+            {
+                // Only a reconcile that finished its work counts as settled. One that asked to be
+                // run again, or that hit a creation budget part way through, has state still
+                // outstanding that neither the revision nor the local hash would show.
+                if (!_reapplyRequested.Contains(property) && !_budget.Exhausted)
+                    NoteReconciled(property, cached);
+                else _appliedState.Remove(property);
+            }
             _budget.Properties++;
             _appliedProperties++;
+        }
+
+        /// <summary>
+        /// The rolling repair walk used to re-apply every cached property on every pass, whether or
+        /// not the host had said anything new and whether or not this peer had drifted. On a
+        /// 1,553-property client that was a full reconcile of 96 properties per update forever -
+        /// 232 ms per pass, and 942,000 citizen rewrites per 30 s, because a reconcile rewrites
+        /// health and wellbeing that the local simulation moves straight back.
+        ///
+        /// A property is left alone while the host's revision has not advanced and the local roster
+        /// still hashes to what this peer last left it at. The dirty queue does not consult this,
+        /// so an arrived page, a renter event or a lifecycle signal still reconciles at once.
+        /// </summary>
+        private bool IsReconciled(Entity property, CachedProperty cached)
+        {
+            AppliedState state;
+            if (!_appliedState.TryGetValue(property, out state) ||
+                state.Revision != cached.Revision) return false;
+            int hash;
+            return TryHashProperty(property, out hash) && hash == state.Hash;
+        }
+
+        private void NoteReconciled(Entity property, CachedProperty cached)
+        {
+            int hash;
+            if (!TryHashProperty(property, out hash))
+            {
+                _appliedState.Remove(property);
+                return;
+            }
+            _appliedState[property] = new AppliedState
+            {
+                Revision = cached.Revision,
+                Hash = hash,
+            };
         }
 
         /// <summary>

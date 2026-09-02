@@ -63,13 +63,13 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
             }
 
             if (_capPinnedSpans > 0 || _rzPinnedSpans > 0 || _rzPinRefused > 0 ||
-                _capSelfAnchoredSpans > 0)
+                _capSelfAnchoredSpans > 0 || _capBentDeckSpans > 0)
             {
-                SyncLog.Detail(LogTopic.Nets, "NetSync water profile/5s: captured " +
-                    _capPinnedSpans + " span(s) over water as " + _capPinnedPieces +
-                    " pinned piece(s); left " + _capSelfAnchoredSpans +
-                    " raised span(s) to the receiver's own generator; realized " + _rzPinnedSpans +
-                    " pinned span(s), " + _rzPinRefused +
+                SyncLog.Detail(LogTopic.Nets, "NetSync water profile/5s: pinned " +
+                    _capPinnedSpans + " span(s) over water; left " + _capSelfAnchoredSpans +
+                    " banded by their own elevation and " + _capBentDeckSpans +
+                    " with a deck that is not one line to the receiver's own generator; realized " +
+                    _rzPinnedSpans + " pinned span(s), " + _rzPinRefused +
                     " refused (those rebuild their deck from local water).");
             }
 
@@ -93,7 +93,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
             _diagTotal = 0;
             _rzSegments = _rzSnapEnds = _rzMergeEnds = _rzMidEnds = _rzFreeEnds = 0;
             _rzLocalSurfaceMatches = 0;
-            _capPinnedSpans = _capPinnedPieces = _capSelfAnchoredSpans = 0;
+            _capPinnedSpans = _capSelfAnchoredSpans = _capBentDeckSpans = 0;
             _rzPinnedSpans = _rzPinRefused = 0;
             _rzSurfaceCorrections = 0;
             _rzSurfaceCorrectionMax = 0f;
@@ -251,7 +251,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                         PinProfile = ShouldPinCommittedEdge(prefab, b, startElevation,
                             endElevation),
                     };
-                    if (command.PinProfile) { _capPinnedSpans++; _capPinnedPieces++; }
+                    if (command.PinProfile) _capPinnedSpans++;
                     if (onKeptSpan)
                     {
                         _deferredSpanPieces.Add(command);

@@ -235,6 +235,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             // company's statistics partition can otherwise take 2,048 frames, during which the
             // local economy repeatedly overwrites the host values.
             MarkStateDirty(property);
+            if (entry.HasEfficiency) MarkEfficiencyDirty(property);
             if (tenancyChanged) MarkDirty(property);
         }
 
@@ -249,13 +250,52 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             _dirty.RemoveAt(0);
         }
 
+        /// <summary>
+        /// New information arrived about this building - an arrived page, a renter event, a
+        /// changed employee buffer. That clears the retry budget: the reason a previous attempt
+        /// came back incomplete may be exactly what just turned up.
+        /// </summary>
         private void MarkStateDirty(Entity property)
+        {
+            _stateRetries.Remove(property);
+            EnqueueStateDirty(property);
+        }
+
+        /// <summary>
+        /// Re-arm after an attempt that could not finish, but only for a few passes.
+        ///
+        /// <see cref="ApplyEmployees"/> reports incomplete whenever one employee's citizen id is
+        /// not in this peer's occupancy map, and that does not become true by asking again on the
+        /// next boundary - only a page that binds the citizen changes it, and that path marks the
+        /// building dirty itself. Re-arming unconditionally pinned the queue at 1,501 of 1,560
+        /// cached buildings, so the 128-per-boundary drain ran full forever on work that could
+        /// never succeed. After the budget the bounded rolling walk still visits the building.
+        /// </summary>
+        private void RetryStateDirty(Entity property)
+        {
+            int attempts;
+            _stateRetries.TryGetValue(property, out attempts);
+            if (attempts >= MaxStateRetries) return;
+            _stateRetries[property] = attempts + 1;
+            EnqueueStateDirty(property);
+        }
+
+        private void EnqueueStateDirty(Entity property)
         {
             if (!_stateDirtyMembers.Add(property)) return;
             _stateDirty.Add(property);
             if (_stateDirty.Count <= MaxDirtyProperties) return;
             _stateDirtyMembers.Remove(_stateDirty[0]);
             _stateDirty.RemoveAt(0);
+        }
+
+        private void MarkEfficiencyDirty(Entity property)
+        {
+            if (!_efficiencyDirtyMembers.Add(property)) return;
+            _efficiencyDirty.Add(property);
+            if (_efficiencyDirty.Count <= MaxDirtyProperties) return;
+            _efficiencyDirtyMembers.Remove(_efficiencyDirty[0]);
+            _efficiencyDirty.RemoveAt(0);
         }
 
         private void PruneCacheAfterCompleteSweep(uint sweepId)
@@ -270,6 +310,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 _cache.Remove(property);
                 _dirtyMembers.Remove(property);
                 _stateDirtyMembers.Remove(property);
+                _stateRetries.Remove(property);
+                _efficiencyDirtyMembers.Remove(property);
+                _clientEfficiencyObserved.Remove(property);
                 _settling.Remove(property);
             }
             if (_cacheScratch.Count > 0) RebuildTenancyOrder();
@@ -298,7 +341,131 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
             PumpIncoming();
             ApplyTenancy();
+            ApplyChangedEfficiencies();
             ApplyChangedState();
+        }
+
+        /// <summary>
+        /// Client only: the host already signals a changed efficiency buffer from the 16-frame
+        /// state boundary, and doing it twice would only cost the host priority slots.
+        /// </summary>
+        internal bool WantsProductionBoundary
+        {
+            get
+            {
+                MultiplayerService service = Mod.Service;
+                return service != null && service.GameplaySyncReady &&
+                       service.Session.Role == SessionRole.Client && _cache.Count != 0;
+            }
+        }
+
+        internal bool WantsExtractorProduceBoundary
+        {
+            get
+            {
+                MultiplayerService service = Mod.Service;
+                return service != null && service.GameplaySyncReady;
+            }
+        }
+
+        /// <summary>
+        /// Runs directly after a native company production pass, over the properties that pass just
+        /// wrote, and repairs them in the same frame: the selected-building panel recalculates
+        /// production from these factors on every UI frame, so a repair one boundary later is a
+        /// repair the panel has already read past.
+        /// </summary>
+        internal void ApplyProductionBoundary(NativeArray<Entity> properties)
+        {
+            if (!WantsProductionBoundary) return;
+            if (properties.IsCreated) CaptureEfficiencyChanges(properties);
+            ApplyChangedEfficiencies();
+        }
+
+        /// <summary>
+        /// Puts the host's extraction figure back on a company the local extractor pass has just
+        /// recalculated. Only that one field: the rest of the statistic block belongs to the
+        /// slower accounting boundary, which owns its own change detection.
+        /// </summary>
+        private void ApplyExtractorProduce(Entity company, Entity property)
+        {
+            CachedEntry cached;
+            if (!_cache.TryGetValue(property, out cached) || !cached.Entry.HasTenant) return;
+            if (!TenantMatches(company, cached.Entry)) return;
+            CompanyStatisticData data =
+                EntityManager.GetComponentData<CompanyStatisticData>(company);
+            if (data.m_LastUpdateProduce == cached.Entry.LastUpdateProduce) return;
+            data.m_LastUpdateProduce = cached.Entry.LastUpdateProduce;
+            EntityManager.SetComponentData(company, data);
+            _correctedExtractorProduce++;
+        }
+
+        /// <summary>
+        /// Efficiency changes are kept on their own cheap queue. Re-applying a complete company
+        /// and resolving hundreds of employee identities merely because one utility factor moved
+        /// would undo the CPU-load reduction in the state retry path.
+        /// </summary>
+        private void ApplyChangedEfficiencies()
+        {
+            int processed = _efficiencyDirty.Count < MaxEfficiencyDirtyPerBoundary
+                ? _efficiencyDirty.Count : MaxEfficiencyDirtyPerBoundary;
+            for (int i = 0; i < processed; i++)
+            {
+                Entity property = _efficiencyDirty[i];
+                _efficiencyDirtyMembers.Remove(property);
+                CachedEntry cached;
+                if (!_cache.TryGetValue(property, out cached) ||
+                    !IsLiveWorkplaceProperty(property) || !cached.Entry.HasEfficiency) continue;
+                ApplyPropertyEfficiency(property, cached.Entry);
+            }
+            if (processed > 0) _efficiencyDirty.RemoveRange(0, processed);
+        }
+
+        /// <summary>
+        /// Rebuilds the property's real native efficiency buffer. CompanySection does not display
+        /// LastUpdateProduce for processing industry or offices: it multiplies these factors and
+        /// feeds the result, together with the real Employee roster, into
+        /// EconomyUtils.GetCompanyProductionPerDay.
+        /// </summary>
+        private bool ApplyPropertyEfficiency(Entity property, CompanyStatsEntry entry)
+        {
+            if (!entry.HasEfficiency) return true;
+            if (!EntityManager.HasBuffer<Efficiency>(property)) return false;
+
+            CompanyStatsEfficiency[] wanted = entry.Efficiencies;
+            int wantedCount = wanted == null ? 0 : wanted.Length;
+            DynamicBuffer<Efficiency> local = EntityManager.GetBuffer<Efficiency>(property);
+            bool changed = local.Length != wantedCount;
+            if (!changed)
+            {
+                for (int i = 0; i < wantedCount; i++)
+                {
+                    if ((byte)local[i].m_Factor == wanted[i].Factor &&
+                        local[i].m_Efficiency == wanted[i].Value) continue;
+                    changed = true;
+                    break;
+                }
+            }
+
+            if (changed)
+            {
+                local.Clear();
+                for (int i = 0; i < wantedCount; i++)
+                {
+                    local.Add(new Efficiency
+                    {
+                        m_Factor = (EfficiencyFactor)wanted[i].Factor,
+                        m_Efficiency = wanted[i].Value,
+                    });
+                }
+                _correctedEfficiencies++;
+            }
+
+            // DynamicBuffer writes advance the chunk version. Remember the exact result so the
+            // next changed-filter boundary recognises our own correction instead of re-queuing it.
+            if (_clientEfficiencyObserved.Count > MaxObservedEfficiencyBuffers)
+                _clientEfficiencyObserved.Clear();
+            _clientEfficiencyObserved[property] = HashEfficiencyBuffer(property);
+            return true;
         }
 
         private void ApplyChangedState()
@@ -313,12 +480,12 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 {
                     Entity property = _stateDirty[i];
                     _stateDirtyMembers.Remove(property);
-                    if (!ApplyCachedCompany(property) && _cache.ContainsKey(property))
-                        _stateRetryScratch.Add(property);
+                    if (ApplyCachedCompany(property)) _stateRetries.Remove(property);
+                    else if (_cache.ContainsKey(property)) _stateRetryScratch.Add(property);
                 }
                 if (processed > 0) _stateDirty.RemoveRange(0, processed);
                 for (int i = 0; i < _stateRetryScratch.Count; i++)
-                    MarkStateDirty(_stateRetryScratch[i]);
+                    RetryStateDirty(_stateRetryScratch[i]);
                 _stateRetryScratch.Clear();
 
                 int walked = 0;
@@ -328,7 +495,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     Entity property = _tenancyOrder[_stateCursor++];
                     walked++;
                     if (!_cache.ContainsKey(property)) continue;
-                    if (!ApplyCachedCompany(property)) MarkStateDirty(property);
+                    if (ApplyCachedCompany(property)) _stateRetries.Remove(property);
+                    else RetryStateDirty(property);
                 }
             }
         }
@@ -484,7 +652,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     // A business the host does not have in this building gets no figures; the
                     // tenancy pass is what resolves that difference.
                     if (!TenantMatches(company, cached.Entry)) continue;
-                    if (!ApplyCompany(company, cached.Entry)) MarkStateDirty(property);
+                    if (ApplyCompany(company, cached.Entry)) _stateRetries.Remove(property);
+                    else RetryStateDirty(property);
                     applied++;
                 }
                 _appliedCompanies += applied;
@@ -805,7 +974,15 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             }
 
             RefreshFreeWorkplaces(company);
-            if (changed) _correctedEmployees++;
+            if (changed)
+            {
+                _correctedEmployees++;
+                // Remember the buffer we just wrote, so the changed-Employee boundary does not
+                // read our own write back as a local change on its next pass.
+                if (_clientEmployeeObserved.Count > MaxObservedEmployeeBuffers)
+                    _clientEmployeeObserved.Clear();
+                _clientEmployeeObserved[company] = HashEmployeeBuffer(company);
+            }
             return allResolved;
         }
 

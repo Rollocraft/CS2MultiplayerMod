@@ -78,7 +78,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                         StateFlags = CaptureStateFlags(entity),
                     };
                     Send(session, command);
-                    _hostStateFlags[entity] = command.StateFlags;
+                    ObserveHostState(entity, command);
                     if ((command.Flags & GrowableLifecycleCommand.FlagUnderConstruction) != 0)
                     {
                         _hostConstruction[entity] = new HostConstructionObservation
@@ -126,7 +126,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                         EntityManager.GetComponentData<global::Game.Objects.Transform>(entity);
                     _announcedLevelChange.Remove(entity);
                     _hostConstruction.Remove(entity);
-                    _hostStateFlags.Remove(entity);
+                    _hostState.Remove(entity);
 
                     var command = new GrowableLifecycleCommand
                     {
@@ -214,7 +214,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                         StateFlags = CaptureStateFlags(entity),
                     };
                     Send(session, command);
-                    _hostStateFlags[entity] = command.StateFlags;
+                    ObserveHostState(entity, command);
                     _hostConstruction[entity] = new HostConstructionObservation
                     {
                         Progress = command.ConstructionProgress,
@@ -281,6 +281,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                         if (TryCreateStateCommand(entity, out command))
                         {
                             Send(session, command);
+                            ObserveHostState(entity, command);
                             _sentState++;
                         }
                         _hostConstruction[entity] = new HostConstructionObservation
@@ -311,6 +312,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 if (!TryCreateStateCommand(entity, out command)) continue;
                 // No UnderConstruction component is the authoritative completion edge.
                 Send(session, command);
+                ObserveHostState(entity, command);
                 _sentState++;
             }
             for (int i = 0; i < _constructionScratch.Count; i++)
@@ -319,8 +321,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         }
 
         /// <summary>
-        /// Announces abandonment/condemnation/destruction transitions. The first observation is a
-        /// baseline shared by the downloaded world; later differences are host decisions.
+        /// Announces condition (the LevelSection progress input) together with
+        /// abandonment/condemnation/destruction transitions. The first observation is a baseline
+        /// shared by the downloaded world; later differences are host decisions.
         /// </summary>
         private void CaptureStateChanges(MultiplayerSession session, long now)
         {
@@ -350,21 +353,26 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                         Entity entity = entities[cursor++];
                         if (!IsAutonomousGrowable(entity, now)) continue;
                         byte flags = CaptureStateFlags(entity);
-                        byte previous;
-                        if (!_hostStateFlags.TryGetValue(entity, out previous))
+                        int condition = CaptureCondition(entity);
+                        HostStateObservation previous;
+                        if (!_hostState.TryGetValue(entity, out previous))
                         {
-                            _hostStateFlags[entity] = flags;
+                            _hostState[entity] = new HostStateObservation
+                            {
+                                Flags = flags,
+                                Condition = condition,
+                            };
                             continue;
                         }
-                        if (flags == previous) continue;
+                        if (flags == previous.Flags && condition == previous.Condition) continue;
 
                         GrowableLifecycleCommand command;
                         if (TryCreateStateCommand(entity, out command))
                         {
                             Send(session, command);
+                            ObserveHostState(entity, command);
                             _sentState++;
                         }
-                        _hostStateFlags[entity] = flags;
                     }
                     if (cursor >= entities.Length)
                     {
@@ -419,6 +427,15 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 StateFlags = CaptureStateFlags(entity),
             };
             return true;
+        }
+
+        private void ObserveHostState(Entity entity, GrowableLifecycleCommand command)
+        {
+            _hostState[entity] = new HostStateObservation
+            {
+                Flags = command.StateFlags,
+                Condition = command.Condition,
+            };
         }
 
         private string PrefabIndexSafeName(Entity prefab) => _prefabIndex.NameOf(prefab);

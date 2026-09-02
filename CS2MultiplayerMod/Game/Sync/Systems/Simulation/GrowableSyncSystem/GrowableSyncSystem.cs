@@ -147,7 +147,15 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             new Dictionary<Entity, HostConstructionObservation>();
         private readonly HashSet<Entity> _constructionSeen = new HashSet<Entity>();
         private readonly List<Entity> _constructionScratch = new List<Entity>();
-        private readonly Dictionary<Entity, byte> _hostStateFlags = new Dictionary<Entity, byte>();
+
+        private struct HostStateObservation
+        {
+            public byte Flags;
+            public int Condition;
+        }
+
+        private readonly Dictionary<Entity, HostStateObservation> _hostState =
+            new Dictionary<Entity, HostStateObservation>();
         private int _stateScanBucket;
         private int _stateScanCursor;
 
@@ -260,7 +268,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             _hostConstruction.Clear();
             _constructionSeen.Clear();
             _constructionScratch.Clear();
-            _hostStateFlags.Clear();
+            _hostState.Clear();
             _stateScanBucket = 0;
             _stateScanCursor = 0;
         }

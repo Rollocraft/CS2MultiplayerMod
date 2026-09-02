@@ -117,6 +117,16 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             for (int i = 0; i < households.Length; i++)
             {
                 Entity household = households[i];
+                // The filter is on Household and Resources, which every local economy writer
+                // touches, so this array arrives holding most of the city's families - while only
+                // the ones a host page actually named can be corrected. Dropping the rest here
+                // rather than at the drain is what keeps the queue bounded: it stood at ~83,000
+                // entries against a 512-per-frame drain, so a correction that was enqueued had
+                // minutes of unrelated traffic in front of it. Two plain dictionary probes, no ECS
+                // access - the drain still does the full liveness-checked binding lookup.
+                ulong householdId;
+                if (!_hostIdsByHousehold.TryGetValue(household, out householdId) ||
+                    !_desiredHouseholdEconomies.ContainsKey(householdId)) continue;
                 if (_economyCorrectionMembers.Add(household))
                     _economyCorrectionQueue.Enqueue(household);
             }

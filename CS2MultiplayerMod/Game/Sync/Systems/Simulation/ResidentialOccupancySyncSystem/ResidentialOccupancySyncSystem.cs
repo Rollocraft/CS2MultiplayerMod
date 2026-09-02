@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using CS2MultiplayerMod.Core.Diagnostics;
@@ -228,6 +228,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         private int _priorityDrops;
         private int _captureSkips;
         private int _observedProperties;
+        private int _probeSkipped;
+        private int _reconcileSkipped;
         private int _receivedPages;
         private int _droppedPages;
         private int _resolved;

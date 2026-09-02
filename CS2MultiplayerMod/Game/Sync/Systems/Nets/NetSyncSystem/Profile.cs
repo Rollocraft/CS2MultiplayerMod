@@ -7,6 +7,8 @@ using Game.Tools;
 using Unity.Entities;
 using Unity.Mathematics;
 
+using CS2MultiplayerMod.Core.Diagnostics;
+using CS2MultiplayerMod.Game.Diagnostics;
 using CS2MultiplayerMod.Game.Sync.Commands;
 using CS2MultiplayerMod.Game.Sync.Infrastructure;
 
@@ -24,209 +26,197 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
         private readonly float[] _profileTerrain = new float[NetWaterProfilePin.ProbeCount];
         private readonly float[] _profileDepth = new float[NetWaterProfilePin.ProbeCount];
         private readonly float[] _profileDistance = new float[NetWaterProfilePin.ProbeCount];
-        private readonly float[] _profileDelta = new float[NetWaterProfilePin.ProbeCount];
         private readonly float[] _profileDeck = new float[NetWaterProfilePin.ProbeCount];
-        private readonly float3[] _profilePoint = new float3[NetWaterProfilePin.ProbeCount];
         private readonly int[] _profileBreaks = new int[NetWaterProfilePin.MaxPieces + 1];
-        private readonly List<NetPlacementCommand> _profileExpanded = new List<NetPlacementCommand>();
 
-        // 5 s counters. Capture: spans measured over water and the pinned pieces they became.
-        // Realize: pinned spans committed, and pins this machine had to refuse - a refused span
-        // rebuilds its deck from local water again, so a standing figure here is worth chasing.
-        private int _capPinnedSpans, _capPinnedPieces;
+        // 5 s counters. Capture: spans over water this machine pinned, spans whose own elevation
+        // already bands them, and spans whose deck is not one line and so travel unpinned. Realize:
+        // pinned spans committed, and pins this machine had to refuse - a refused span rebuilds its
+        // deck from local water again, so a standing figure here is worth chasing.
+        private int _capPinnedSpans;
         private int _capSelfAnchoredSpans;
+        private int _capBentDeckSpans;
         private int _rzPinnedSpans, _rzPinRefused;
 
+        // Per-course trace for the span currently being measured. A deformed bridge is a
+        // disagreement between two machines about numbers neither of them prints, so every course
+        // that touches water reports the ones the deck is built from. Only water crossings, and at
+        // most a handful per operation, so a normal build logs nothing.
+        private const int MaxProfileTraceLines = 6;
+        private int _profileTraceLines;
+        private bool _profileTouchedWater;
+        private bool _profileDeckReady;
+        private bool _profileTraceWorthy;
+        private string _profileVerdict;
+
         /// <summary>
-        /// Replace every course of a captured operation that crosses water with the pinned pieces
-        /// reproducing the deck this machine is committing. Runs once, at publish: the probe reads
-        /// the terrain and water surfaces, and the definition cache is rebuilt on every preview frame.
+        /// Mark every course of a captured operation whose deck this machine measures over water,
+        /// so the receiver commits that deck instead of rebuilding one from its own water. Runs
+        /// once, at publish: the probe reads the terrain and water surfaces, and the definition
+        /// cache is rebuilt on every preview frame.
         /// </summary>
-        private void ExpandWaterProfilePins(List<NetPlacementCommand> courses)
+        private void PinWaterProfiles(List<NetPlacementCommand> courses)
         {
-            if (courses.Count == 0) return;
-
-            var expanded = new List<NetPlacementCommand>(courses.Count);
-            bool changed = false;
-            for (int i = 0; i < courses.Count; i++)
-            {
-                _profileExpanded.Clear();
-                AppendCapturedCourse(courses[i], _profileExpanded);
-                expanded.AddRange(_profileExpanded);
-                changed |= _profileExpanded.Count != 1 || _profileExpanded[0] != courses[i];
-            }
-            if (!changed || expanded.Count > NetPlacementCommand.MaxCoursesPerOperation) return;
-
-            courses.Clear();
-            courses.AddRange(expanded);
+            _profileTraceLines = 0;
+            for (int i = 0; i < courses.Count; i++) PinCapturedCourse(courses[i]);
         }
 
         /// <summary>
         /// The same for a mixed operation, whose placements are interleaved with deletes and
-        /// replaces: each placement expands in place and every other item keeps its position.
+        /// replaces.
         /// </summary>
-        private void ExpandWaterProfilePins(List<LocalNetToolOperationItem> items)
+        private void PinWaterProfiles(List<LocalNetToolOperationItem> items)
         {
-            if (items.Count == 0) return;
-
-            var expanded = new List<LocalNetToolOperationItem>(items.Count);
-            bool changed = false;
+            _profileTraceLines = 0;
             for (int i = 0; i < items.Count; i++)
             {
                 LocalNetToolOperationItem item = items[i];
-                if (item.CommandId != NetPlacementCommand.Id || item.Placement == null)
-                {
-                    expanded.Add(item);
-                    continue;
-                }
-
-                _profileExpanded.Clear();
-                AppendCapturedCourse(item.Placement, _profileExpanded);
-                changed |= _profileExpanded.Count != 1 || _profileExpanded[0] != item.Placement;
-                for (int p = 0; p < _profileExpanded.Count; p++)
-                    expanded.Add(new LocalNetToolOperationItem
-                    {
-                        CommandId = NetPlacementCommand.Id,
-                        Original = p == 0 ? item.Original : Entity.Null,
-                        Placement = _profileExpanded[p],
-                    });
+                if (item.CommandId != NetPlacementCommand.Id || item.Placement == null) continue;
+                PinCapturedCourse(item.Placement);
             }
-            if (!changed || expanded.Count > NetToolOperationCommand.MaxItems) return;
-
-            items.Clear();
-            items.AddRange(expanded);
         }
 
         /// <summary>
-        /// Add the wire form of one captured course to <paramref name="into"/>: the command itself
-        /// when the span never touches water, otherwise the measured deck as one or more pinned
-        /// pieces whose endpoint heights are the ones this machine is committing.
+        /// Pin one captured course to the deck this machine is committing, when that deck is the
+        /// straight line between its two endpoints - the one shape the receiver's generator
+        /// reproduces from the endpoints alone. Both endpoint heights are already on the wire, so a
+        /// pinned course is the captured command plus a flag and nothing else moves.
+        /// <para>
+        /// A deck with a real bend in it is left alone deliberately. Reproducing one would mean
+        /// publishing the span as several pinned pieces, which gives the receiver a node and an edge
+        /// per boundary that the source does not have, and pins stretches whose shape the receiver
+        /// already derives from replicated terrain. What is left unpinned is the span whose deck
+        /// follows the terrain between the water, and terrain travels.
+        /// </para>
         /// </summary>
-        private void AppendCapturedCourse(NetPlacementCommand command, List<NetPlacementCommand> into)
+        private void PinCapturedCourse(NetPlacementCommand command)
         {
             int probes, pieces;
-            if (!MeasurePinnableDeck(command, out probes, out pieces))
-            {
-                into.Add(command);
-                return;
-            }
+            _profileTouchedWater = false;
+            _profileDeckReady = false;
+            _profileTraceWorthy = false;
+            _profileVerdict = null;
 
-            if (pieces == 1)
+            bool pin = false;
+            if (MeasurePinnableDeck(command, out probes, out pieces))
             {
-                command.PinProfile = true;
-                command.Start.PosY = _profileDeck[0];
-                command.End.PosY = _profileDeck[probes - 1];
-                into.Add(command);
-                _capPinnedSpans++;
-                _capPinnedPieces++;
-                return;
-            }
-
-            Bezier4x3 source = SourceCurve(command);
-            var startFlags = (CoursePosFlags)command.Start.Flags;
-            var endFlags = (CoursePosFlags)command.End.Flags;
-            int firstPiece = into.Count;
-            for (int p = 0; p < pieces; p++)
-            {
-                int from = _profileBreaks[p];
-                int to = _profileBreaks[p + 1];
-                float2 cut = new float2(_profileDelta[from], _profileDelta[to]);
-                Bezier4x3 curve = MathUtils.Cut(source, cut);
-                // Two neighbouring pieces share a node only on raw float3 equality of their endpoint
-                // positions, so both sides of a boundary get the SAME value, bit for bit.
-                float3 a = _profilePoint[from]; a.y = _profileDeck[from];
-                float3 d = _profilePoint[to]; d.y = _profileDeck[to];
-                curve.a = a;
-                curve.d = d;
-                // A piece IS one straight chord of the measured deck, so its two middle control
-                // points carry that line as well - the heights edge generation interpolates anyway
-                // for a course whose ends are both fixed. Left on the source profile they describe a
-                // span diving to the water surface the pin exists to take out of the picture.
-                curve.b.y = math.lerp(a.y, d.y, 1f / 3f);
-                curve.c.y = math.lerp(a.y, d.y, 2f / 3f);
-
-                // Measured on the curve that travels, never on the source range it was cut from:
-                // moving the two ends onto the deck changes the length, and the receiver re-measures
-                // the transmitted curve and refuses the WHOLE operation - not the piece - when the
-                // two disagree.
-                float length = MathUtils.Length(curve);
-                if (!math.isfinite(length) || length <= NetPlacementCommand.MinCourseLength)
+                if (pieces == 1)
                 {
-                    // Rather than publish a piece the receiver's preflight would refuse, abandon the
-                    // division: the span travels as captured and rebuilds its deck from local water.
-                    into.RemoveRange(firstPiece, into.Count - firstPiece);
-                    into.Add(command);
-                    return;
+                    pin = true;
+                    _profileVerdict = "pin";
                 }
-
-                var piece = new NetPlacementCommand
+                else
                 {
-                    HasNativeCourse = true,
-                    PrefabName = command.PrefabName,
-                    SubPrefabName = command.SubPrefabName,
-                    Ax = curve.a.x, Ay = curve.a.y, Az = curve.a.z,
-                    Bx = curve.b.x, By = curve.b.y, Bz = curve.b.z,
-                    Cx = curve.c.x, Cy = curve.c.y, Cz = curve.c.z,
-                    Dx = curve.d.x, Dy = curve.d.y, Dz = curve.d.z,
-                    Length = length,
-                    RandomSeed = command.RandomSeed,
-                    CreationFlags = command.CreationFlags,
-                    CourseElevationLeft = command.CourseElevationLeft,
-                    CourseElevationRight = command.CourseElevationRight,
-                    FixedIndex = command.FixedIndex,
-                    PinProfile = true,
-                    Start = p == 0 ? command.Start : InteriorEndpoint(source, a, cut.x, startFlags),
-                    End = p == pieces - 1 ? command.End : InteriorEndpoint(source, d, cut.y, endFlags),
-                };
-                if (p == 0) piece.Start.PosY = a.y;
-                if (p == pieces - 1) piece.End.PosY = d.y;
-                // Each piece carries its own cut curve, so its parameter range is the whole of it.
-                piece.Start.CourseDelta = 0f;
-                piece.End.CourseDelta = 1f;
-                into.Add(piece);
+                    _capBentDeckSpans++;
+                    _profileVerdict = "deck needs " + pieces + " chords";
+                }
             }
+            TraceMeasuredSpan(command, probes);
 
+            if (!pin) return;
+            command.PinProfile = true;
             _capPinnedSpans++;
-            _capPinnedPieces += pieces;
         }
 
         /// <summary>
-        /// Sample the deck this machine is committing for <paramref name="command"/> and, when it
-        /// crosses water, fill <see cref="_profileBreaks"/> with the probe indices dividing it into
-        /// straight pieces. False when the span never touches water or cannot be pinned at all - the
-        /// caller then sends it exactly as captured.
+        /// Report the numbers the deck of one water-crossing span was built from. Both machines run
+        /// this same measurement, so two logs side by side say which input they disagree about - the
+        /// water surface, the endpoint elevation, or the height the endpoint resolves to.
+        /// </summary>
+        private void TraceMeasuredSpan(NetPlacementCommand command, int probes)
+        {
+            if (!_profileTraceWorthy || _profileTraceLines >= MaxProfileTraceLines) return;
+            _profileTraceLines++;
+
+            float deckLow = 0f, deckHigh = 0f;
+            float deckStart = command.Start.PosY, deckEnd = command.End.PosY;
+            if (_profileDeckReady)
+            {
+                deckLow = float.MaxValue;
+                deckHigh = float.MinValue;
+                for (int i = 0; i < probes; i++)
+                {
+                    if (_profileDeck[i] < deckLow) deckLow = _profileDeck[i];
+                    if (_profileDeck[i] > deckHigh) deckHigh = _profileDeck[i];
+                }
+                deckStart = _profileDeck[0];
+                deckEnd = _profileDeck[probes - 1];
+            }
+
+            Entity prefab;
+            NetPrefabInfo info = _prefabIndex.TryResolve(command.PrefabName, out prefab)
+                ? NetInfoOf(prefab) : default(NetPrefabInfo);
+            var startFlags = (CoursePosFlags)command.Start.Flags;
+            var endFlags = (CoursePosFlags)command.End.Flags;
+
+            SyncLog.Detail(LogTopic.Nets, "NetSync water span '" + command.PrefabName +
+                "' limit=" + info.ElevationLimit.ToString("F2") +
+                " slope=" + info.MaxSlopeSteepness.ToString("F2") +
+                " probes=" + probes +
+                " start[" + (((startFlags & CoursePosFlags.FreeHeight) != 0) ? "free" : "fixed") +
+                " elev=" + command.Start.ElevationLeft.ToString("F2") +
+                " wireY=" + command.Start.PosY.ToString("F2") +
+                (_profileTouchedWater ? " surface=" + _profileSurface[0].ToString("F2") : "") +
+                " ->Y=" + deckStart.ToString("F2") + "]" +
+                " end[" + (((endFlags & CoursePosFlags.FreeHeight) != 0) ? "free" : "fixed") +
+                " elev=" + command.End.ElevationLeft.ToString("F2") +
+                " wireY=" + command.End.PosY.ToString("F2") +
+                (_profileTouchedWater
+                    ? " surface=" + _profileSurface[probes - 1].ToString("F2") : "") +
+                " ->Y=" + deckEnd.ToString("F2") + "]" +
+                (_profileDeckReady
+                    ? " deck=" + deckLow.ToString("F2") + ".." + deckHigh.ToString("F2")
+                    : "") +
+                " -> " + (_profileVerdict ?? "not pinnable"));
+        }
+
+        /// <summary>
+        /// Sample the deck this machine is committing for <paramref name="command"/> into the first
+        /// <paramref name="probes"/> entries of <see cref="_profileDeck"/>, and report how many
+        /// straight pieces it takes to hold that deck within tolerance. False when the span never
+        /// touches water or cannot be pinned at all - the caller then sends it exactly as captured.
         /// </summary>
         private bool MeasurePinnableDeck(NetPlacementCommand command, out int probes, out int pieces)
         {
             probes = 0;
             pieces = 0;
             if (!command.HasNativeCourse || command.PinProfile) return false;
+            _profileVerdict = null;
 
             // A fixed-element net (a dam) is divided by its own element table and must not be
             // pre-divided here; an owned sub-net already commits at its absolute height, and a
             // tunnel measures against the terrain alone. None of the three depends on water.
-            if (command.FixedIndex >= 0) return false;
-            if (command.Start.ParentMesh >= 0 || command.End.ParentMesh >= 0) return false;
-            if (command.Start.ElevationLeft < -1f || command.End.ElevationLeft < -1f) return false;
+            if (command.FixedIndex >= 0) { _profileVerdict = "fixed-element net"; return false; }
+            if (command.Start.ParentMesh >= 0 || command.End.ParentMesh >= 0)
+            { _profileVerdict = "owned sub-net"; return false; }
+            if (command.Start.ElevationLeft < -1f || command.End.ElevationLeft < -1f)
+            { _profileVerdict = "tunnel"; return false; }
 
-            // A span both of whose ends are fixed height - a bridge raised a full elevation step or
-            // more - already reproduces: the generator holds its whole deck between the two
-            // transmitted endpoint heights, and those travel exactly. Pinning it would swap a deck
-            // the receiver derives correctly for one measured here and predicted for there.
-            bool startFree = ((CoursePosFlags)command.Start.Flags & CoursePosFlags.FreeHeight) != 0;
-            bool endFree = ((CoursePosFlags)command.End.Flags & CoursePosFlags.FreeHeight) != 0;
-            if (!NetWaterProfilePin.NeedsPin(startFree, endFree))
+            Entity prefab;
+            if (!_prefabIndex.TryResolve(command.PrefabName, out prefab))
+            { _profileVerdict = "unknown prefab"; return false; }
+            NetPrefabInfo info = NetInfoOf(prefab);
+
+            // A span whose own elevation bands its deck - a bridge raised a full elevation step or
+            // more, on two fixed-height ends - already reproduces: the generator holds every probe
+            // between the two transmitted endpoint heights, and those travel exactly. Pinning it
+            // would swap a deck the receiver derives correctly for one measured here. A free-height
+            // end takes that guarantee away: the band is anchored at the height the REALIZING
+            // machine resolves, so the span moves with its water however raised it looks.
+            if (!NetWaterProfilePin.NeedsPin(command.Start.ElevationLeft, command.End.ElevationLeft,
+                    info.ElevationLimit, info.RequireElevated,
+                    ((CoursePosFlags)command.Start.Flags & CoursePosFlags.FreeHeight) != 0,
+                    ((CoursePosFlags)command.End.Flags & CoursePosFlags.FreeHeight) != 0))
             {
                 _capSelfAnchoredSpans++;
+                _profileVerdict = "own elevation bands the deck";
+                _profileTraceWorthy = true;
                 return false;
             }
 
-            Entity prefab;
-            if (!_prefabIndex.TryResolve(command.PrefabName, out prefab)) return false;
-            NetPrefabInfo info = NetInfoOf(prefab);
             if (!NetWaterProfilePin.IsEligible(true, true, info.HasElevationRange,
                     info.ElevationRangeMin, info.ElevationRangeMax, info.ElevationLimit))
-                return false;
+            { _profileVerdict = "prefab elevation range too narrow"; return false; }
 
             float2 range = new float2(command.Start.CourseDelta, command.End.CourseDelta);
             if (!math.isfinite(range.x) || !math.isfinite(range.y) || range.y <= range.x) return false;
@@ -259,25 +249,32 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                 _profileSurface[i] = NetWaterProfilePin.SurfaceHeight(terrain, water, depth,
                     info.ElevationLimit);
                 _profileDistance[i] = i == 0 ? 0f : math.distance(previous.xz, p.xz);
-                _profileDelta[i] = t;
-                _profilePoint[i] = p;
                 previous = p;
             }
 
-            if (!NetWaterProfilePin.CrossesWater(_profileDepth, probes)) return false;
+            if (!NetWaterProfilePin.CrossesWater(_profileDepth, probes))
+            { _profileVerdict = "dry"; return false; }
+            _profileTouchedWater = true;
+            _profileTraceWorthy = true;
 
-            float startHeight = startFree
-                ? _profileSurface[0] + command.Start.ElevationLeft
-                : startPosition.y;
-            float endHeight = endFree
-                ? _profileSurface[probes - 1] + command.End.ElevationLeft
-                : endPosition.y;
-            if (!math.isfinite(startHeight) || !math.isfinite(endHeight)) return false;
+            // Both endpoint heights are the ones on the wire, free height or not. `surface +
+            // elevation` looks like the right formula and is not: over water an endpoint's elevation
+            // is measured from the TERRAIN (that is how the committed Elevation is derived) while
+            // the surface here is the water plus bridge clearance, so adding the two counts the
+            // lake's depth twice. Measured 2026-09-02 on a live span: elevation 67.37 over a
+            // surface of 514.91 predicts 582.29 for a road the tool had put at 516.93 - 65 m out,
+            // exactly the depth of the lake under it. The tool's own control point is already at
+            // the height the span commits at, on land and over water alike.
+            float startHeight = startPosition.y;
+            float endHeight = endPosition.y;
+            if (!math.isfinite(startHeight) || !math.isfinite(endHeight))
+            { _profileVerdict = "endpoint height is not finite"; return false; }
 
             NetWaterProfilePin.PredictDeck(_profileSurface, _profileTerrain, _profileDistance, probes,
                 startHeight, endHeight, command.Start.ElevationLeft, command.End.ElevationLeft,
                 info.ElevationLimit, info.MaxSlopeSteepness, _profileDeck);
 
+            _profileDeckReady = true;
             pieces = NetWaterProfilePin.Simplify(_profileDeck, _profileDistance, probes,
                 NetWaterProfilePin.ChordTolerance, NetWaterProfilePin.MaxPieces, _profileBreaks);
             return pieces >= 1;
@@ -292,11 +289,10 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
             float2 startElevation, float2 endElevation)
         {
             NetPrefabInfo info = NetInfoOf(prefab);
-            // Same exemption as the intent path: an edge whose two end nodes are elevated a full
-            // step or more anchors its own deck on the receiver, and its nodes' elevations travel.
-            if (info.ElevationLimit > 0f &&
-                math.abs(startElevation.x) >= info.ElevationLimit &&
-                math.abs(endElevation.x) >= info.ElevationLimit)
+            // Same exemption as the intent path. A committed edge has no free-height ends: its two
+            // node heights are what they are, and both travel.
+            if (!NetWaterProfilePin.NeedsPin(startElevation.x, endElevation.x, info.ElevationLimit,
+                    info.RequireElevated, false, false))
             {
                 _capSelfAnchoredSpans++;
                 return false;
@@ -350,6 +346,14 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                     info.ElevationRangeMin, info.ElevationRangeMax, info.ElevationLimit))
             {
                 _rzPinRefused++;
+                // A refused pin rebuilds its deck from local water, so say which end refused it and
+                // at what height - that is the difference the deformed span is made of.
+                SyncLog.Detail(LogTopic.Nets, "NetSync water pin refused: start[kind=" + startKind +
+                    " sourceY=" + startY.ToString("F2") + " pinnable=" + startPinnable +
+                    "] end[kind=" + endKind + " sourceY=" + endY.ToString("F2") +
+                    " pinnable=" + endPinnable + "] range=" + info.ElevationRangeMin.ToString("F1") +
+                    ".." + info.ElevationRangeMax.ToString("F1") +
+                    " limit=" + info.ElevationLimit.ToString("F2"));
                 return;
             }
 
@@ -389,28 +393,6 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
             else return false;
 
             return math.abs(localY - sourceY) <= SurfaceAgreementTol;
-        }
-
-        /// <summary>
-        /// A course boundary this capture introduced: a fresh node on the source curve carrying the
-        /// side/mode flags the game's own mid-course cuts propagate, and nothing else.
-        /// </summary>
-        private static NetEndpointIntent InteriorEndpoint(Bezier4x3 source, float3 position,
-            float delta, CoursePosFlags sourceFlags)
-        {
-            const CoursePosFlags carried = CoursePosFlags.IsParallel | CoursePosFlags.IsRight |
-                                           CoursePosFlags.IsLeft | CoursePosFlags.IsGrid;
-            quaternion rotation = NetUtils.GetNodeRotation(MathUtils.Tangent(source, delta));
-            return new NetEndpointIntent
-            {
-                Kind = NetEndpointTargetKind.Free,
-                PosX = position.x, PosY = position.y, PosZ = position.z,
-                RotX = rotation.value.x, RotY = rotation.value.y,
-                RotZ = rotation.value.z, RotW = rotation.value.w,
-                Flags = (uint)(sourceFlags & carried),
-                ParentMesh = -1,
-                AnchorX = position.x, AnchorY = position.y, AnchorZ = position.z,
-            };
         }
 
         private static Bezier4x3 SourceCurve(NetPlacementCommand command) => new Bezier4x3(

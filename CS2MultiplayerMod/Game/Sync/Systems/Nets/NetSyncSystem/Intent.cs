@@ -300,9 +300,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
             long now = service.NowMs;
             RecordPlacementOriginals(now);
 
-            // A span over water divides into the pieces that reproduce the deck committing here;
-            // everything else passes through unchanged. Measured once, at publish.
-            ExpandWaterProfilePins(_cachedLocalCourses);
+            // A span over water carries the deck committing here; everything else passes through
+            // unchanged. Measured once, at publish.
+            PinWaterProfiles(_cachedLocalCourses);
 
             long operationId = _nextLocalNetOperationId++;
             if (_nextLocalNetOperationId <= 0) _nextLocalNetOperationId = 1;
@@ -382,7 +382,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                 }
             }
 
-            ExpandWaterProfilePins(_cachedLocalMixedOperation);
+            PinWaterProfiles(_cachedLocalMixedOperation);
 
             long operationId = _nextLocalNetOperationId++;
             if (_nextLocalNetOperationId <= 0) _nextLocalNetOperationId = 1;

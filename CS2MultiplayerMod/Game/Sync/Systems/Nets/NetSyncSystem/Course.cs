@@ -143,6 +143,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                 info.HalfWidth = geometry.m_DefaultWidth * 0.5f;
                 info.ElevationLimit = geometry.m_ElevationLimit;
                 info.MaxSlopeSteepness = geometry.m_MaxSlopeSteepness;
+                info.RequireElevated =
+                    (geometry.m_Flags & global::Game.Net.GeometryFlags.RequireElevated) != 0;
             }
             _netInfoCache[prefab] = info;
             return info;

@@ -23,6 +23,8 @@ namespace CS2MultiplayerMod.Game.Sync.Commands
         public const int MaxResourceSlots = 64;
         public const int MaxTradeCostSlots = 64;
         public const int MaxEmployeeSlots = 512;
+        // Game.Buildings.EfficiencyFactor.Count in the supported Game.dll.
+        public const int MaxEfficiencySlots = 32;
 
         private const int FlagHasTenant = 1 << 0;
         private const int FlagHasProfitability = 1 << 1;
@@ -31,10 +33,11 @@ namespace CS2MultiplayerMod.Game.Sync.Commands
         private const int FlagHasWorkProvider = 1 << 4;
         private const int FlagEmployeeRosterComplete = 1 << 5;
         private const int FlagHasTaxPayer = 1 << 6;
+        private const int FlagHasEfficiency = 1 << 7;
         private const int FlagsMask = FlagHasTenant | FlagHasProfitability |
                                       FlagHasServiceAvailable | FlagHasLodgingProvider |
                                       FlagHasWorkProvider | FlagEmployeeRosterComplete |
-                                      FlagHasTaxPayer;
+                                      FlagHasTaxPayer | FlagHasEfficiency;
 
         private static readonly CompanyStatsResource[] EmptyResources =
             new CompanyStatsResource[0];
@@ -42,6 +45,8 @@ namespace CS2MultiplayerMod.Game.Sync.Commands
             new CompanyStatsTradeCost[0];
         private static readonly CompanyStatsEmployee[] EmptyEmployees =
             new CompanyStatsEmployee[0];
+        private static readonly CompanyStatsEfficiency[] EmptyEfficiencies =
+            new CompanyStatsEfficiency[0];
 
         public uint SweepId;
         public int PageIndex;
@@ -124,6 +129,17 @@ namespace CS2MultiplayerMod.Game.Sync.Commands
                     writer.WriteInt(entry.UntaxedIncome);
                     writer.WriteInt(entry.AverageTaxRate);
                     writer.WriteInt(entry.AverageTaxPaid);
+                }
+                if (entry.HasEfficiency)
+                {
+                    CompanyStatsEfficiency[] efficiencies =
+                        entry.Efficiencies ?? EmptyEfficiencies;
+                    writer.WriteByte((byte)efficiencies.Length);
+                    for (int f = 0; f < efficiencies.Length; f++)
+                    {
+                        writer.WriteByte(efficiencies[f].Factor);
+                        writer.WriteFloat(efficiencies[f].Value);
+                    }
                 }
 
                 CompanyStatsResource[] resources = entry.Resources ?? EmptyResources;
@@ -271,6 +287,25 @@ namespace CS2MultiplayerMod.Game.Sync.Commands
                 entry.AverageTaxRate = reader.ReadInt();
                 entry.AverageTaxPaid = reader.ReadInt();
             }
+            if (entry.HasEfficiency)
+            {
+                int efficiencyCount = reader.ReadByte();
+                if (efficiencyCount > MaxEfficiencySlots)
+                    throw new ProtocolException("Company efficiency buffer exceeds its slot cap.");
+                if (efficiencyCount > 0)
+                {
+                    var efficiencies = new CompanyStatsEfficiency[efficiencyCount];
+                    for (int f = 0; f < efficiencyCount; f++)
+                    {
+                        efficiencies[f] = new CompanyStatsEfficiency
+                        {
+                            Factor = reader.ReadByte(),
+                            Value = WireGuard.ReadFinite(reader),
+                        };
+                    }
+                    entry.Efficiencies = efficiencies;
+                }
+            }
 
             int resourceCount = WireGuard.ReadCount(reader, 6, MaxResourceSlots);
             if (resourceCount > 0)
@@ -341,6 +376,8 @@ namespace CS2MultiplayerMod.Game.Sync.Commands
             if (entry.HasLodgingProvider) size += 8;
             if (entry.HasWorkProvider) size += 4;
             if (entry.HasTaxPayer) size += 12;
+            if (entry.HasEfficiency)
+                size += 1 + 5 * (entry.Efficiencies == null ? 0 : entry.Efficiencies.Length);
             size += 2 + 6 * (entry.Resources == null ? 0 : entry.Resources.Length);
             size += 2 + 18 * (entry.TradeCosts == null ? 0 : entry.TradeCosts.Length);
             size += 2 + 14 * (entry.Employees == null ? 0 : entry.Employees.Length);
@@ -358,12 +395,13 @@ namespace CS2MultiplayerMod.Game.Sync.Commands
                 return !entry.HasProfitability && !entry.HasServiceAvailable &&
                        !entry.HasLodgingProvider && !entry.HasWorkProvider &&
                        !entry.EmployeeRosterComplete && !entry.HasTaxPayer &&
+                       !entry.HasEfficiency &&
                        string.IsNullOrEmpty(entry.CompanyPrefabName) &&
                        string.IsNullOrEmpty(entry.BrandPrefabName) &&
                        string.IsNullOrEmpty(entry.CompanyCustomName) &&
                        entry.CompanyRandomState == 0 &&
                        IsEmpty(entry.Resources) && IsEmpty(entry.TradeCosts) &&
-                       IsEmpty(entry.Employees);
+                       IsEmpty(entry.Employees) && IsEmpty(entry.Efficiencies);
             }
 
             if (!IsValidName(entry.CompanyPrefabName, false) ||
@@ -398,7 +436,24 @@ namespace CS2MultiplayerMod.Game.Sync.Commands
 
             return ValidateResources(entry.Resources) &&
                    ValidateTradeCosts(entry.TradeCosts) &&
-                   ValidateEmployees(entry.Employees);
+                   ValidateEmployees(entry.Employees) &&
+                   ValidateEfficiencies(entry.Efficiencies, entry.HasEfficiency);
+        }
+
+        private static bool ValidateEfficiencies(CompanyStatsEfficiency[] efficiencies,
+            bool hasEfficiency)
+        {
+            if (!hasEfficiency) return IsEmpty(efficiencies);
+            if (efficiencies == null) return true;
+            if (efficiencies.Length > MaxEfficiencySlots) return false;
+            var seen = new HashSet<byte>();
+            for (int i = 0; i < efficiencies.Length; i++)
+            {
+                if (efficiencies[i].Factor >= MaxEfficiencySlots ||
+                    !IsValidFiniteScalar(efficiencies[i].Value) ||
+                    !seen.Add(efficiencies[i].Factor)) return false;
+            }
+            return true;
         }
 
         private static bool ValidateResources(CompanyStatsResource[] resources)
@@ -455,6 +510,7 @@ namespace CS2MultiplayerMod.Game.Sync.Commands
             if (entry.HasWorkProvider) flags |= FlagHasWorkProvider;
             if (entry.EmployeeRosterComplete) flags |= FlagEmployeeRosterComplete;
             if (entry.HasTaxPayer) flags |= FlagHasTaxPayer;
+            if (entry.HasEfficiency) flags |= FlagHasEfficiency;
             return flags;
         }
 
@@ -469,6 +525,7 @@ namespace CS2MultiplayerMod.Game.Sync.Commands
             entry.HasWorkProvider = (flags & FlagHasWorkProvider) != 0;
             entry.EmployeeRosterComplete = (flags & FlagEmployeeRosterComplete) != 0;
             entry.HasTaxPayer = (flags & FlagHasTaxPayer) != 0;
+            entry.HasEfficiency = (flags & FlagHasEfficiency) != 0;
         }
 
         private static bool IsValidStat(int value) =>
@@ -541,6 +598,16 @@ namespace CS2MultiplayerMod.Game.Sync.Commands
         public byte Shift;
     }
 
+    /// <summary>
+    /// One factor from the workplace building's real Efficiency buffer. CompanySection derives
+    /// non-extractor production directly from the product of these factors.
+    /// </summary>
+    public struct CompanyStatsEfficiency
+    {
+        public byte Factor;
+        public float Value;
+    }
+
     public struct CompanyStatsEntry
     {
         public string PrefabName;
@@ -598,6 +665,9 @@ namespace CS2MultiplayerMod.Game.Sync.Commands
         public int UntaxedIncome;
         public int AverageTaxRate;
         public int AverageTaxPaid;
+
+        public bool HasEfficiency;
+        public CompanyStatsEfficiency[] Efficiencies;
 
         public CompanyStatsResource[] Resources;
         public CompanyStatsTradeCost[] TradeCosts;

@@ -90,6 +90,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
             public bool HasElevationRange;
             public float ElevationRangeMin;
             public float ElevationRangeMax;
+            // An elevated-only net (a highway ramp, an elevated rail): the generator floors its
+            // whole deck at the two endpoint heights whatever the endpoints' own elevations say.
+            public bool RequireElevated;
         }
         private readonly Dictionary<Entity, NetPrefabInfo> _netInfoCache = new Dictionary<Entity, NetPrefabInfo>();
 

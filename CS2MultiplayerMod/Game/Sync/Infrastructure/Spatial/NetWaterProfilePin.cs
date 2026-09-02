@@ -12,8 +12,9 @@ namespace CS2MultiplayerMod.Game.Sync.Infrastructure
     /// height the realizing machine's water happens to be. Removing the local surface from the span
     /// is the fix: endpoint elevations at or beyond the prefab's elevation limit collapse the
     /// generator's clamp band onto the two endpoint heights, which pins the deck to the straight
-    /// line between them. A source deck that is not one straight line travels as several pinned
-    /// pieces instead (see <see cref="Simplify"/>).
+    /// line between them. That is the only shape a pin can carry, so a source deck which is not one
+    /// straight line is left to the receiver's generator (see <see cref="Simplify"/>) - as is a span
+    /// whose own elevation already bands it (see <see cref="NeedsPin"/>).
     /// </para>
     /// </summary>
     internal static class NetWaterProfilePin
@@ -24,7 +25,7 @@ namespace CS2MultiplayerMod.Game.Sync.Infrastructure
         /// <summary>Bridge clearance added above a bridged water surface, in elevation limits.</summary>
         public const float ClearanceLimits = 2f;
 
-        /// <summary>Deck deviation (m) a single straight pin may absorb before the span is divided.</summary>
+        /// <summary>Deck deviation (m) a single straight pin may absorb and still count as one line.</summary>
         public const float ChordTolerance = 1f;
 
         /// <summary>Metres between profile probes; the generator samples at the same spacing.</summary>
@@ -33,7 +34,7 @@ namespace CS2MultiplayerMod.Game.Sync.Infrastructure
         /// <summary>Upper bound on probes per span, so a very long drag stays cheap.</summary>
         public const int ProbeCount = 65;
 
-        /// <summary>Most pieces one source course may be divided into.</summary>
+        /// <summary>Ceiling on the piece count <see cref="Simplify"/> reports for a bent deck.</summary>
         public const int MaxPieces = 8;
 
         /// <summary>The generator's own stand-in for "no bound on this side".</summary>
@@ -207,18 +208,45 @@ namespace CS2MultiplayerMod.Game.Sync.Infrastructure
         }
 
         /// <summary>
-        /// Whether this span's deck depends on the local water at all. A course with BOTH endpoint
-        /// elevations at or past the prefab's limit carries its own band: the generator holds every
-        /// probe between the two transmitted endpoint heights, which are replicated exactly, so the
-        /// span already reproduces and a pin would only substitute a predicted deck for a real one.
+        /// Whether this span's deck depends on the local water at all.
+        /// <para>
+        /// The generator bands every probe between the two endpoint heights as soon as ONE endpoint
+        /// elevation reaches the prefab's limit, or the net is elevated-only (see
+        /// <see cref="ElevationBand"/>). That band only makes a span water-independent while both of
+        /// those heights are on the wire - which is to say while both ends are FIXED height. The
+        /// band is read off <c>m_Position.y</c> AFTER free-height resolution, so a free-height end
+        /// anchors it at <c>max(terrain, water + 2*limit) + elevation</c> measured on the realizing
+        /// machine, and the whole span moves with that machine's water however raised it looks.
+        /// </para>
+        /// <para>
+        /// This matters for the ordinary case, not an exotic one: over water the tool forces an
+        /// endpoint elevation up to <c>PlaceableNetData.m_MinWaterElevation</c>, so a bridge drawn
+        /// at level 0 arrives here looking raised a full step. Exempting it on the elevation alone
+        /// skipped every bridge, which is what the 5 s counter's "banded by their own elevation"
+        /// bucket recorded.
+        /// </para>
+        /// <para>
+        /// The mirrored negative side bands from above and belongs to tunnels; those measure against
+        /// the terrain alone (elevation below -1), and terrain is replicated, so they are exempt
+        /// whether or not their ends resolve locally.
+        /// </para>
         /// </summary>
-        public static bool NeedsPin(bool startFreeHeight, bool endFreeHeight) =>
-            startFreeHeight || endFreeHeight;
+        public static bool NeedsPin(float startElevation, float endElevation, float elevationLimit,
+            bool requireElevated, bool startFreeHeight, bool endFreeHeight)
+        {
+            if (!(elevationLimit > 0f)) return false;
+            if (startElevation <= -elevationLimit || endElevation <= -elevationLimit) return false;
+            if (startFreeHeight || endFreeHeight) return true;
+            if (requireElevated) return false;
+            if (startElevation >= elevationLimit || endElevation >= elevationLimit) return false;
+            return true;
+        }
 
         /// <summary>
-        /// Divide the probe range into as few straight pieces as reproduce <paramref name="deck"/>
-        /// within <paramref name="tolerance"/>. Returns the piece count; <paramref name="breaks"/>
-        /// receives that many + 1 probe indices, always starting at 0 and ending at count - 1.
+        /// The fewest straight pieces that reproduce <paramref name="deck"/> within
+        /// <paramref name="tolerance"/>. Returns the piece count; <paramref name="breaks"/> receives
+        /// that many + 1 probe indices, always starting at 0 and ending at count - 1. One piece
+        /// means the deck IS the line between its two endpoints, which is the shape a pin carries.
         /// </summary>
         public static int Simplify(float[] deck, float[] distance, int count, float tolerance,
             int maxPieces, int[] breaks)
