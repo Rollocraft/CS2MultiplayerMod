@@ -70,19 +70,40 @@ player decides whether their own extra mods are allowed locally.
 Some display-only or UI-only mods may work. This list is not comprehensive - contributions
 and testing are welcome.
 
-Updated `2026-08-06` for version `v0.1.3`.
+Updated `2026-09-07` for version `0.1.6.1h1`.
 [Current mod version](https://github.com/Rollocraft/CS2MultiplayerMod/blob/master/CS2MultiplayerMod/Properties/PublishConfiguration.xml#L31).
 
 ### Possibly compatible
 
-- Anarchy-style mods that do the same thing as the developer options
+Community-maintained table of mods that might work with some caveats. Do not expect support if playing with mods. 
+
+🟩: Compatible (most often client-side mods)
+
+🟨: Issues (some minor problems)
+
+🟧: Serious Issues (like desyncing)
+
+🟪: Untested (needs more testing)
+
+| Mod Name | Compatibility | Details | Notes |
+| ------------- | ------------- | ----- | ----- |
+| 529 Tiles | 🟨 Issues | Host-only actions | Only Host can pick starting tiles |
+| Achievement Fixer | 🟩 Compatible | Client-side |  |
+| Change Company | 🟨 Issues | Host-only actions | Changing building recipe is Host only |
+| Extended Tooltip | 🟩 Compatible | Client-side |  |
+| Industry Boundary | 🟩 Compatible |  |  |
+| Road Name Remover | 🟩 Compatible | Client-side |  |
+| CoPaste | 🟧 Serious Issues | Desync Issues | Needs host resync to work, causes desyncs |
+| All Transit+ Trucks | 🟩 Compatible |  |  |
+| Event Rush [Beta] | 🟩 Compatible | More testing needed | |
+| Articulated Buses | 🟪 Untested | | |
 
 ### Incompatible
 
-Every mod that adds functionality, for example:
+Most mods that add functionality, for example:
 
-- Road Builder
-- Traffic mods
+* Road Builder
+* Traffic
 
 ---
 
