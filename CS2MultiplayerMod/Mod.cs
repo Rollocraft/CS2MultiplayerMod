@@ -385,6 +385,18 @@ namespace CS2MultiplayerMod
             // the Created tag it keys on is gone by the next frame. Capturing here reads the
             // resolved disaster, not an empty shell.
             updateSystem.UpdateAt<Game.Sync.Systems.DisasterSyncSystem>(SystemUpdatePhase.ModificationEnd);
+            // ModificationEnd, next to disasters: an ignite request only becomes a placed
+            // event once the game's own event pass has run, and its Created tag is gone by
+            // the next frame. Fires have no disaster-style local suppression - every
+            // machine rolls its own ignitions and reports them, both cities converging on
+            // the union - so this detector stays on for every role.
+            updateSystem.UpdateAt<Game.Sync.Systems.FireSyncSystem>(SystemUpdatePhase.ModificationEnd);
+            // ModificationEnd, next to fire sync: marker transitions are detected on a
+            // rolling UpdateFrame scan rather than on tool tags, so any phase with live
+            // entities would do - sharing the event-sync slot keeps the ordering obvious.
+            // Only non-spawnables are watched here; growables stay with their lifecycle
+            // system and removals stay with delete sync.
+            updateSystem.UpdateAt<Game.Sync.Systems.ServiceBuildingStateSyncSystem>(SystemUpdatePhase.ModificationEnd);
             // After the game's own auto-name initialization, which runs late in ModificationEnd and
             // is what fills in a new street's or district's name draw. Capturing before it would
             // read the draw one frame stale. ModificationEnd also keeps working while the game is

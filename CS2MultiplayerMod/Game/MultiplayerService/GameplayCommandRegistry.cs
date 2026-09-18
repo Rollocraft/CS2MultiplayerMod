@@ -27,6 +27,8 @@ namespace CS2MultiplayerMod.Game
             GrowableLifecycleCommand.Id,
             ModTypeTableCommand.Id, ModStateCommand.Id,
             ObjectPlacementBatchCommand.Id, ObjectDeleteBatchCommand.Id,
+            FireIgniteCommand.Id,
+            ServiceBuildingStateCommand.Id,
         };
 
         internal static void Register(MultiplayerSession session)
@@ -73,6 +75,8 @@ namespace CS2MultiplayerMod.Game
                 case ModStateCommand.Id: return "mod-state";
                 case ObjectPlacementBatchCommand.Id: return "object-place-batch";
                 case ObjectDeleteBatchCommand.Id: return "object-delete-batch";
+                case FireIgniteCommand.Id: return "fire-ignite";
+                case ServiceBuildingStateCommand.Id: return "service-building-state";
                 default: return "unknown";
             }
         }

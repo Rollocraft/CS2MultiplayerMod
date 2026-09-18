@@ -26,6 +26,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         private RouteSyncSystem _routeSync;
         private TilePurchaseSyncSystem _tileSync;
         private DisasterSyncSystem _disasterSync;
+        private FireSyncSystem _fireSync;
+        private ServiceBuildingStateSyncSystem _serviceBuildingStateSync;
         private GrowableSyncSystem _growableSync;
         private Mods.ModStateSyncSystem _modStateSync;
 
@@ -45,6 +47,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             _routeSync = World.GetOrCreateSystemManaged<RouteSyncSystem>();
             _tileSync = World.GetOrCreateSystemManaged<TilePurchaseSyncSystem>();
             _disasterSync = World.GetOrCreateSystemManaged<DisasterSyncSystem>();
+            _fireSync = World.GetOrCreateSystemManaged<FireSyncSystem>();
+            _serviceBuildingStateSync = World.GetOrCreateSystemManaged<ServiceBuildingStateSyncSystem>();
             _growableSync = World.GetOrCreateSystemManaged<GrowableSyncSystem>();
             _modStateSync = World.GetOrCreateSystemManaged<Mods.ModStateSyncSystem>();
         }
@@ -179,6 +183,11 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 // dependency - but they must still be created here: the game's event initialization
                 // runs later this frame and only ever looks at freshly Created events.
                 Step("DisasterSync", _disasterSync.RealizePending);
+                // A realized ignition only sets OnFire on an existing building or tree -
+                // no definitions, no terrain - so it rides the same slot as disasters.
+                Step("FireSync", _fireSync.RealizePending);
+                // Marker writes next to fire realizes: same plain-component shape, same slot.
+                Step("ServiceBuildingState", _serviceBuildingStateSync.RealizePending);
                 // Last: what another mod stores is stored against a road, a junction or a building,
                 // so everything that could still be creating one this frame has to have run. A
                 // closure whose carrier is genuinely still in the backlog waits in its own hold
