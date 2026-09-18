@@ -385,6 +385,12 @@ namespace CS2MultiplayerMod
             // the Created tag it keys on is gone by the next frame. Capturing here reads the
             // resolved disaster, not an empty shell.
             updateSystem.UpdateAt<Game.Sync.Systems.DisasterSyncSystem>(SystemUpdatePhase.ModificationEnd);
+            // Read-only audit, no commands, no protocol change: tracks each active event
+            // from its Created frame until it is gone and logs start, per-minute Verlauf
+            // heartbeat and end (natural versus early drop). ModificationEnd keeps it on
+            // the same tags DisasterSyncSystem reads. A follow-up Verlauf sync (PR-B2)
+            // is only needed if heartbeats part across peers or early drops appear.
+            updateSystem.UpdateAt<Game.Sync.Systems.DisasterLifecycleAuditSystem>(SystemUpdatePhase.ModificationEnd);
             // After the game's own auto-name initialization, which runs late in ModificationEnd and
             // is what fills in a new street's or district's name draw. Capturing before it would
             // read the draw one frame stale. ModificationEnd also keeps working while the game is
