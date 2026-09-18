@@ -4,6 +4,11 @@
     {
         /// <summary>
         /// Wire-format version. Bump when message layout changes to refuse handshake on mismatch.
+        /// v69 adds command id 33, fire ignition: one command per building or tree
+        /// fire start, carrying the target's prefab and position plus the ignition intensity.
+        /// Only starts travel; the burn, the spread and the extinguish run locally on every
+        /// machine, the same start-only shape as disaster events. A v68 peer does not know
+        /// id 33, so the bump refuses it at the handshake instead of dropping its fires silently.
         /// v65 adds the barrier-only Begin stage: a join streams its world only to whoever joined,
         /// and every other peer crosses the same barrier without being sent or installing one.
         /// v65 also widens the accepted range of a course endpoint's split position. A
@@ -221,7 +226,7 @@
         // v66 adds bounded display-only hover geometry to player presence updates.
         // v68 batches one brush frame so dense tree strokes do not overflow or trickle in.
         // Object-brush display markers are also excluded from terrain synchronization.
-        public const int ProtocolVersion = 68;
+        public const int ProtocolVersion = 69;
 
         /// <summary>
         /// Hard cap on a single payload, guarding against corrupt length prefixes.
