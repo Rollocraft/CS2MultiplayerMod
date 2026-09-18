@@ -371,6 +371,12 @@ namespace CS2MultiplayerMod
             updateSystem.UpdateAt<Game.Sync.Systems.UpgradeSyncSystem>(SystemUpdatePhase.ModificationEnd);
             updateSystem.UpdateAt<Game.Sync.Systems.MoveSyncSystem>(SystemUpdatePhase.ModificationEnd);
             updateSystem.UpdateAt<Game.Sync.Systems.NetUpgradeSyncSystem>(SystemUpdatePhase.ModificationEnd);
+            // Read-only audit, no commands, no protocol change: watches Updated nodes for
+            // traffic-control changes that bypass the Upgraded composition path (vanilla
+            // toggle, mod edit, failed native re-init). ModificationEnd keeps it on the
+            // same tags NetUpgradeSyncSystem reads. Logs only - a follow-up sync system
+            // (PR-A2) is only needed if bypass lines actually appear in the wild.
+            updateSystem.UpdateAt<Game.Sync.Systems.TrafficControlAuditSystem>(SystemUpdatePhase.ModificationEnd);
             updateSystem.UpdateAt<Game.Sync.Systems.AreaSyncSystem>(SystemUpdatePhase.ModificationEnd);
             updateSystem.UpdateAt<Game.Sync.Systems.RouteSyncSystem>(SystemUpdatePhase.ModificationEnd);
             updateSystem.UpdateAt<Game.Sync.Systems.TilePurchaseSyncSystem>(SystemUpdatePhase.ModificationEnd);
