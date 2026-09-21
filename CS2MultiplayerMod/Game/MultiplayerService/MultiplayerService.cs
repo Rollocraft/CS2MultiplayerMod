@@ -465,6 +465,7 @@ namespace CS2MultiplayerMod.Game
         {
             if (peer == null || receipt == null || receipt.Applied) return false;
             SimulationCommandMessage command = null;
+            bool recover = false;
             lock (_chatLock)
             {
                 NetOperationPeerStatus status;
@@ -472,10 +473,25 @@ namespace CS2MultiplayerMod.Game
                     status.Command == null) return false;
                 int retries;
                 status.Retries.TryGetValue(peer.PlayerId, out retries);
-                if (retries >= 1) return false;
-                status.Retries[peer.PlayerId] = retries + 1;
-                status.ByPlayer[peer.PlayerId] = "retrying";
-                command = status.Command;
+                if (retries >= 1)
+                {
+                    status.ByPlayer[peer.PlayerId] = "recovering";
+                    recover = true;
+                }
+                else
+                {
+                    status.Retries[peer.PlayerId] = retries + 1;
+                    status.ByPlayer[peer.PlayerId] = "retrying";
+                    command = status.Command;
+                }
+            }
+            if (recover)
+            {
+                bool started = _session.RequestWorldSyncForPeer(peer.Connection,
+                    "net operation #" + receipt.OperationId + " failed after retry");
+                if (!started) return false;
+                RefreshPlayerListJson();
+                return true;
             }
             if (_session.ResendCommandTo(peer.Connection, command))
             {
@@ -709,7 +725,7 @@ namespace CS2MultiplayerMod.Game
                     (string.IsNullOrEmpty(receipt.Detail) ? "." : ": " + receipt.Detail));
                 if (_service.RetryFailedNetOperation(peer, receipt))
                     _service.AppendChatEntry(null, "Net operation #" + receipt.OperationId +
-                        " is being retried for " + name + " with its original transaction.");
+                        " started a targeted recovery action for " + name + ".");
             }
             public override void OnPlayerStateReceived(PlayerStateMessage state) => _service.RecordRemotePlayer(state);
             public override void OnBlobReceived(string channel, long transferId, byte[] data)

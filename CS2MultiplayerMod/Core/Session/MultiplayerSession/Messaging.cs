@@ -139,6 +139,22 @@ namespace CS2MultiplayerMod.Core.Session
         /// <summary>Recovery initiated by the mod, independently of a player's sync button.</summary>
         public void RequestAutomaticWorldSync(string reason) => RequestWorldSync(reason, true);
 
+        /// <summary>Requests recovery for one peer.</summary>
+        public bool RequestWorldSyncForPeer(ConnectionId target, string reason)
+        {
+            Peer peer;
+            if (Role != SessionRole.Host || Status != SessionStatus.Connected ||
+                _worldSyncSuspended || target.IsNone || !_peers.TryGetValue(target.Value, out peer) ||
+                !peer.Handshaked) return false;
+            reason = WireGuard.SanitizeText(reason, WireGuard.MaxResyncReasonLength);
+            if (reason.Length == 0) reason = "targeted recovery";
+            _log.Event(LogTopic.Session, "Targeted world recovery for " + peer + " (" + reason + ").");
+            SendTo(target, new ChatMessage(null,
+                "The host is refreshing your city after a synchronization recovery."));
+            NotifyResyncRequested(peer.PlayerId, target);
+            return true;
+        }
+
         private void RequestWorldSync(string reason, bool automatic)
         {
             if (Status != SessionStatus.Connected) return;
@@ -245,11 +261,7 @@ namespace CS2MultiplayerMod.Core.Session
             }
         }
 
-        /// <summary>
-        /// Host-only targeted replay of a command that a client explicitly failed to realize.
-        /// This preserves the original transaction bytes and origin instead of asking the game
-        /// layer to regenerate geometry with a new local seed.
-        /// </summary>
+        /// <summary>Replays a command for one peer after a failed realization.</summary>
         public bool ResendCommandTo(ConnectionId target, SimulationCommandMessage command)
         {
             Peer peer;
