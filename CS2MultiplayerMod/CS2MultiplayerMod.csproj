@@ -35,9 +35,32 @@
         </PropertyGroup>
     </Target>
 
+    <!-- Include the source commit when Git is available. -->
+    <Target Name="StampBuildCommit" BeforeTargets="GetAssemblyAttributes;GenerateAssemblyInfo">
+        <Exec Command="git rev-parse --short=12 HEAD"
+              WorkingDirectory="$(MSBuildProjectDirectory)\.."
+              ConsoleToMSBuild="true"
+              IgnoreExitCode="true">
+            <Output TaskParameter="ConsoleOutput" PropertyName="GitCommitOutput" />
+        </Exec>
+        <PropertyGroup>
+            <BuildCommit>unknown</BuildCommit>
+            <!-- Only accept a Git commit; otherwise use "unknown". -->
+            <BuildCommit Condition="$([System.Text.RegularExpressions.Regex]::IsMatch('$(GitCommitOutput)', '^[0-9a-fA-F]{7,40}\s*$'))">$([System.String]::Copy('$(GitCommitOutput)').Trim())</BuildCommit>
+        </PropertyGroup>
+        <ItemGroup>
+            <AssemblyMetadata Include="CS2MP.Commit" Value="$(BuildCommit)" />
+        </ItemGroup>
+    </Target>
+
+    <!-- Prefer the process environment; the installer uses the user variable. -->
+    <PropertyGroup>
+        <CsiiToolPath>$([System.Environment]::GetEnvironmentVariable('CSII_TOOLPATH'))</CsiiToolPath>
+        <CsiiToolPath Condition="'$(CsiiToolPath)' == ''">$([System.Environment]::GetEnvironmentVariable('CSII_TOOLPATH', 'EnvironmentVariableTarget.User'))</CsiiToolPath>
+    </PropertyGroup>
     <!--Imports must be after PropertyGroup block-->
-    <Import Project="$([System.Environment]::GetEnvironmentVariable('CSII_TOOLPATH', 'EnvironmentVariableTarget.User'))\Mod.props"/>
-    <Import Project="$([System.Environment]::GetEnvironmentVariable('CSII_TOOLPATH', 'EnvironmentVariableTarget.User'))\Mod.targets"/>
+    <Import Project="$(CsiiToolPath)/Mod.props"/>
+    <Import Project="$(CsiiToolPath)/Mod.targets"/>
 
     <ItemGroup>
         <Reference Include="Game">
@@ -139,8 +162,9 @@
         <PropertyGroup>
             <SteamBackendDir>$(MSBuildProjectDirectory)\..\CS2MultiplayerMod.Steam</SteamBackendDir>
         </PropertyGroup>
-        <MSBuild Projects="$(SteamBackendDir)\CS2MultiplayerMod.Steam.csproj"
-                 Targets="Build" Properties="Configuration=$(Configuration)"/>
+        <!--Run the relay in a separate dotnet process. Its restore generates the net48 reference
+            imports, and MSBuild's in-process project cache cannot observe those on a first build. -->
+        <Exec Command="dotnet build &quot;$(SteamBackendDir)\CS2MultiplayerMod.Steam.csproj&quot; --configuration $(Configuration)"/>
         <ItemGroup>
             <SteamBackendFiles Include="$(SteamBackendDir)\bin\$(Configuration)\net48\CS2MultiplayerMod.Steam.dll"/>
             <SteamBackendFiles Include="$(SteamBackendDir)\bin\$(Configuration)\net48\CS2MultiplayerMod.Steam.pdb"/>

@@ -51,6 +51,9 @@ namespace CS2MultiplayerMod.Core.Session
         /// <summary>Mod build identifier, normally compared strictly during the handshake.</summary>
         public readonly string ModVersion;
 
+        /// <summary>Exact source artifact identifier, informative but logged by both peers.</summary>
+        public readonly string BuildId;
+
         /// <summary>
         /// Host only. Allows a different multiplayer-mod build through the handshake.
         /// Protocol compatibility remains mandatory and is checked before this flag is
@@ -67,6 +70,9 @@ namespace CS2MultiplayerMod.Core.Session
         /// </summary>
         public readonly bool SimulationSync;
 
+        /// <summary>Host only: reserve destructive or city-wide tools for the host player.</summary>
+        public readonly bool HostOnlySensitiveTools;
+
         /// <summary>Game build identifier, compared strictly during the handshake.</summary>
         public readonly string GameVersion;
 
@@ -77,13 +83,17 @@ namespace CS2MultiplayerMod.Core.Session
         /// </summary>
         public readonly string[] DlcList;
 
+        /// <summary>Canonical names of every other active mod, compared during handshake.</summary>
+        public readonly string[] ModManifest;
+
         public MultiplayerConfig(string playerName, string hostAddress, int port, string password = "",
                                  bool lanOnly = true, bool useEncryption = true, int maxPlayers = 8,
                                  string modVersion = "", string gameVersion = "", string[] dlcList = null,
                                  bool requireJoinApproval = false,
                                  TransportMode transport = TransportMode.Direct, string joinCode = "",
                                  bool ignoreModCompatibilityChecks = false,
-                                 bool simulationSync = true)
+                                 bool simulationSync = true, string buildId = "", string[] modManifest = null,
+                                 bool hostOnlySensitiveTools = false)
         {
             Transport = transport;
             JoinCode = joinCode ?? string.Empty;
@@ -95,11 +105,14 @@ namespace CS2MultiplayerMod.Core.Session
             UseEncryption = useEncryption;
             MaxPlayers = maxPlayers < 2 ? 2 : maxPlayers;
             ModVersion = modVersion ?? string.Empty;
+            BuildId = buildId ?? string.Empty;
             IgnoreModCompatibilityChecks = ignoreModCompatibilityChecks;
             GameVersion = gameVersion ?? string.Empty;
             DlcList = dlcList ?? System.Array.Empty<string>();
+            ModManifest = modManifest ?? System.Array.Empty<string>();
             RequireJoinApproval = requireJoinApproval;
             SimulationSync = simulationSync;
+            HostOnlySensitiveTools = hostOnlySensitiveTools;
         }
     }
 }

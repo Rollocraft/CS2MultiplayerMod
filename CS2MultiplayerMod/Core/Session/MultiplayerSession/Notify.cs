@@ -73,6 +73,12 @@ namespace CS2MultiplayerMod.Core.Session
                 try { _observers[i].OnCommandReceived(command); }
                 catch (Exception ex) { LogObserverError("OnCommandReceived", ex); }
         }
+        private void NotifyNetOperationReceipt(Peer peer, NetOperationReceiptMessage receipt)
+        {
+            for (int i = 0; i < _observers.Count; i++)
+                try { _observers[i].OnNetOperationReceipt(peer, receipt); }
+                catch (Exception ex) { LogObserverError("OnNetOperationReceipt", ex); }
+        }
 
         private void NotifyState(StateSnapshotMessage snapshot)
         {

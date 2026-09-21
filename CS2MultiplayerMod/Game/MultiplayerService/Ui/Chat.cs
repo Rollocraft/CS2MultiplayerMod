@@ -11,12 +11,22 @@ namespace CS2MultiplayerMod.Game
         /// (the host only relays, a client only uploads), so the local copy is added
         /// here - sanitized exactly like the wire copy the other players will see.
         /// "/sync" stays a command and gets its feedback from the host's broadcast notice.
+        /// "/diag" is local and writes a ready-to-attach diagnostic bundle.
         /// </summary>
         public void SendChatFromUi(string text)
         {
             if (text == null || _session.Status != SessionStatus.Connected) return;
             text = text.Trim();
             if (text.Length == 0) return;
+
+            if (text.Equals("/diag", StringComparison.OrdinalIgnoreCase))
+            {
+                string path = ExportDiagnostics("manual /diag request");
+                AppendChatEntry(null, path == null
+                    ? "Could not write diagnostic bundle; see the main log."
+                    : "Diagnostic bundle saved: " + System.IO.Path.GetFileName(path));
+                return;
+            }
 
             if (!text.Equals("/sync", StringComparison.OrdinalIgnoreCase))
             {

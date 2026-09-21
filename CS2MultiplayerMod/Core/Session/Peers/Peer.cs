@@ -44,6 +44,9 @@ namespace CS2MultiplayerMod.Core.Session
         /// </summary>
         public string ModVersion;
 
+        /// <summary>Exact source artifact reported by the peer during its handshake.</summary>
+        public string BuildId;
+
         /// <summary>The peer's game version, for the same reason as <see cref="ModVersion"/>.</summary>
         public string GameVersion;
 

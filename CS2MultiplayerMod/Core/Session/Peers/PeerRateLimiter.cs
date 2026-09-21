@@ -17,7 +17,8 @@ namespace CS2MultiplayerMod.Core.Session
         // real backstop against bandwidth/packet floods.
         public const int MaxMessagesPerSecond = 3000;
         public const int MaxBytesPerSecond = 4 * 1024 * 1024;
-        public const int MaxCommandsPerSecond = 1500;
+        // Allow the initial command burst after a client recovers.
+        public const int MaxCommandsPerSecond = 3000;
         public const int MaxChatPerSecond = 5;
         public const int MaxResyncPerMinute = 2;
 
@@ -29,6 +30,11 @@ namespace CS2MultiplayerMod.Core.Session
 
         private long _minuteStartMs;
         private int _resyncs;
+
+        /// <summary>Read-only limiter state for diagnostics.</summary>
+        public string Snapshot => "messages=" + _messages + " bytes=" + _bytes +
+                                  " commands=" + _commands + " chat=" + _chat +
+                                  " resyncs=" + _resyncs;
 
         /// <summary>Account one received message. Returns null if fine, else the violated budget's name.</summary>
         public string Account(long nowMs, int payloadBytes, bool isCommand, bool isChat, bool isResync)

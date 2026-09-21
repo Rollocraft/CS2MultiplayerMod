@@ -152,7 +152,7 @@ namespace CS2MultiplayerMod.Game
         }
 
         /// <summary>
-        /// Refuses the action when any mod other than this one is live, and records the
+        /// Refuses the action when an unreviewed or blocked mod is live, and records the
         /// reason as a fault so the status screen and the error overlay explain it. Enforced
         /// here rather than only in the UI because the options screen's Host button and the
         /// hub reach these entry points directly. True when the caller must stop.
@@ -172,8 +172,8 @@ namespace CS2MultiplayerMod.Game
 
             _lastFault = detail;
             _log.Warn(LogTopic.Session, "Cannot " + action + ": " + detail +
-                ". Multiplayer runs only with CS2 Multiplayer Mod alone - disable the " +
-                "others in the active playset and restart the game.");
+                ". Disable the unreviewed or blocked mods in the active playset and restart " +
+                "the game, or use the explicit own-risk override.");
             return true;
         }
 
@@ -185,7 +185,8 @@ namespace CS2MultiplayerMod.Game
         {
             return " mod=" + Mod.Version +
                    (string.Equals(Mod.Version, config.ModVersion, StringComparison.Ordinal)
-                       ? "" : " compat=" + config.ModVersion);
+                       ? "" : " compat=" + config.ModVersion) +
+                   " build=" + (string.IsNullOrEmpty(config.BuildId) ? "unknown" : config.BuildId);
         }
 
         /// <summary>
@@ -205,11 +206,20 @@ namespace CS2MultiplayerMod.Game
             if (!ModEnabled) { _log.Warn(LogTopic.Session, "Cannot host: the mod is disabled in settings."); return; }
             if (_session.Role != SessionRole.None) { _log.Warn(LogTopic.Session, "Cannot host: a session is already active."); return; }
             if (RefuseForOtherMods("host")) return;
+            // Direct internet hosts require a password.
+            if (settings != null && settings.HostTransport() == TransportMode.Direct && !settings.LanOnly &&
+                (settings.HostPassword ?? "").Trim().Length < 12)
+            {
+                _lastFault = "Public direct hosting requires a password of at least 12 characters.";
+                _log.Warn(LogTopic.Session, "Cannot host publicly without a strong password. Use Steam Relay, enable LAN-only, or set a password of at least 12 characters.");
+                return;
+            }
             _disconnectConfirmationRequested = false;
             ClearClientExitNotice();
             ResetCommandDiagnostics();
             _lastFault = null;
             var config = BuildConfig(settings, hosting: true);
+            GameplayCommandRegistry.ApplyHostRolePolicy(_session, config.HostOnlySensitiveTools);
             _log.Event(LogTopic.Session, "Host requested: transport=" + config.Transport +
                 (config.Transport == TransportMode.SteamRelay ? " joinCode=" + RelayProvider.LocalJoinCode : " port=" + config.Port) +
                 " lanOnly=" + config.LanOnly + " password=" +
@@ -373,7 +383,10 @@ namespace CS2MultiplayerMod.Game
                 transport: transport,
                 joinCode: relay && !hosting ? joinCode : "",
                 ignoreModCompatibilityChecks: settings.IgnoreModCompatibilityChecks,
-                simulationSync: settings.SimulationSync);
+                simulationSync: settings.SimulationSync,
+                buildId: Mod.BuildId,
+                modManifest: ModsCheck.Manifest,
+                hostOnlySensitiveTools: settings.HostOnlySensitiveTools);
         }
 
     }

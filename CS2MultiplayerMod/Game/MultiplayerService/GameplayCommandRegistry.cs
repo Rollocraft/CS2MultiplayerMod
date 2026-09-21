@@ -33,6 +33,19 @@ namespace CS2MultiplayerMod.Game
             session.AllowCommands(AllowedCommandIds);
         }
 
+        internal static void ApplyHostRolePolicy(MultiplayerSession session, bool hostOnlySensitiveTools)
+        {
+            if (!hostOnlySensitiveTools)
+            {
+                session.SetHostOnlyCommands();
+                return;
+            }
+
+            session.SetHostOnlyCommands(
+                TerrainBrushCommand.Id, EntityPolicyCommand.Id, DevTreePurchaseCommand.Id,
+                TilePurchaseCommand.Id, DisasterEventCommand.Id);
+        }
+
         /// <summary>A copy for callers that iterate the allow-list without being able to edit it.</summary>
         internal static ushort[] CopyAllowedIds() => (ushort[])AllowedCommandIds.Clone();
 

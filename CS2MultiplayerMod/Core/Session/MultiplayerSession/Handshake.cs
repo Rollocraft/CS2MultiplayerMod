@@ -34,8 +34,8 @@ namespace CS2MultiplayerMod.Core.Session
             byte[] binding = _transport.GetChannelBinding(ConnectionId.Server);
             byte[] proof = HandshakeAuth.ComputeProof(_config.Password, challenge.Nonce, binding);
             SendTo(connection, new HandshakeRequest(
-                ProtocolConstants.ProtocolVersion, _config.ModVersion, _config.GameVersion,
-                LocalPlayerName, proof, _config.DlcList));
+                ProtocolConstants.ProtocolVersion, _config.ModVersion, _config.BuildId, _config.GameVersion,
+                LocalPlayerName, proof, _config.DlcList, _config.ModManifest));
         }
 
         private void HandleHandshakeRequest(ConnectionId connection, Peer peer, HandshakeRequest request, long nowUnixMs)
@@ -53,9 +53,11 @@ namespace CS2MultiplayerMod.Core.Session
             _log.Detail(LogTopic.Session, "Handshake request from " + connection + " (" +
                 (peer.RemoteAddress ?? "?") + "): name='" +
                 WireGuard.SanitizePlayerName(request.PlayerName) + "' protocol=" +
-                request.ProtocolVersion + " mod=" + (request.ModVersion ?? "?") + " game=" +
+                request.ProtocolVersion + " mod=" + (request.ModVersion ?? "?") + " build=" +
+                (request.BuildId ?? "?") + " game=" +
                 (request.GameVersion ?? "?") + " dlcs=[" +
                 string.Join(", ", request.DlcList ?? Array.Empty<string>()) + "]" +
+                " mods=[" + string.Join(", ", request.ModManifest ?? Array.Empty<string>()) + "]" +
                 " passwordProof=" +
                 (request.PasswordProof != null && request.PasswordProof.Length > 0 ? "present" : "missing") +
                 ".");
@@ -128,6 +130,13 @@ namespace CS2MultiplayerMod.Core.Session
                 return;
             }
 
+            string modMismatch = DescribeModMismatch(_config.ModManifest, request.ModManifest);
+            if (modMismatch != null)
+            {
+                Reject(connection, "Mod playset mismatch - " + modMismatch);
+                return;
+            }
+
             // Player cap (host counts as one seat).
             int seated = 1;
             foreach (var pair in _peers)
@@ -143,6 +152,7 @@ namespace CS2MultiplayerMod.Core.Session
             // suffixing "(2)" rather than rejecting, keeping the join frictionless.
             peer.Name = WireGuard.SanitizePlayerName(request.PlayerName);
             peer.ModVersion = request.ModVersion;
+            peer.BuildId = request.BuildId;
             peer.GameVersion = request.GameVersion;
 
             // Optional manual gate: hold the join and let the host admit it by hand. The
@@ -180,7 +190,8 @@ namespace CS2MultiplayerMod.Core.Session
 
             SendTo(connection, HandshakeResponse.Accept(peer.PlayerId, _config.SimulationSync));
             _log.Event(LogTopic.Session, "Accepted " + peer + ": mod " +
-                (string.IsNullOrEmpty(peer.ModVersion) ? "?" : peer.ModVersion) + ", game " +
+                (string.IsNullOrEmpty(peer.ModVersion) ? "?" : peer.ModVersion) + " build " +
+                (string.IsNullOrEmpty(peer.BuildId) ? "?" : peer.BuildId) + ", game " +
                 (string.IsNullOrEmpty(peer.GameVersion) ? "?" : peer.GameVersion) + ".");
             NotifyPeerJoined(peer);
 
@@ -288,6 +299,78 @@ namespace CS2MultiplayerMod.Core.Session
             }
             sb.Append(". Both players need the same DLCs enabled.");
             return sb.ToString();
+        }
+
+        internal static string DescribeModMismatch(string[] hostMods, string[] clientMods)
+        {
+            if (hostMods == null) hostMods = Array.Empty<string>();
+            if (clientMods == null) clientMods = Array.Empty<string>();
+            var host = new HashSet<string>(hostMods, StringComparer.OrdinalIgnoreCase);
+            var client = new HashSet<string>(clientMods, StringComparer.OrdinalIgnoreCase);
+            if (host.SetEquals(client)) return null;
+
+            // Compare display names first to report version mismatches clearly.
+            var hostByName = ManifestByName(hostMods);
+            var clientByName = ManifestByName(clientMods);
+            var changed = new List<string>();
+            foreach (KeyValuePair<string, string> item in hostByName)
+            {
+                string other;
+                if (clientByName.TryGetValue(item.Key, out other) &&
+                    !string.Equals(item.Value, other, StringComparison.OrdinalIgnoreCase))
+                    changed.Add(item.Key + " (host " + ManifestBuild(item.Value) +
+                                ", yours " + ManifestBuild(other) + ")");
+            }
+
+            var clientMissing = new List<string>();
+            foreach (string mod in hostMods)
+                if (!client.Contains(mod) && !clientByName.ContainsKey(ManifestName(mod)))
+                    clientMissing.Add(mod);
+            var hostMissing = new List<string>();
+            foreach (string mod in clientMods)
+                if (!host.Contains(mod) && !hostByName.ContainsKey(ManifestName(mod)))
+                    hostMissing.Add(mod);
+            var detail = new System.Text.StringBuilder();
+            if (changed.Count > 0)
+                detail.Append("different build: ").Append(string.Join(", ", changed.ToArray()));
+            if (clientMissing.Count > 0)
+            {
+                if (detail.Length > 0) detail.Append("; ");
+                detail.Append("you are missing: ").Append(string.Join(", ", clientMissing.ToArray()));
+            }
+            if (hostMissing.Count > 0)
+            {
+                if (detail.Length > 0) detail.Append("; ");
+                detail.Append("the host is missing: ").Append(string.Join(", ", hostMissing.ToArray()));
+            }
+            detail.Append(". Both players need the same active mod playset.");
+            return detail.ToString();
+        }
+
+        private static Dictionary<string, string> ManifestByName(string[] entries)
+        {
+            var result = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            for (int i = 0; i < entries.Length; i++)
+            {
+                string entry = entries[i] ?? "";
+                string name = ManifestName(entry);
+                if (!string.IsNullOrEmpty(name)) result[name] = entry;
+            }
+            return result;
+        }
+
+        private static string ManifestName(string entry)
+        {
+            if (string.IsNullOrEmpty(entry)) return "";
+            int version = entry.LastIndexOf('@');
+            return version > 0 ? entry.Substring(0, version) : entry;
+        }
+
+        private static string ManifestBuild(string entry)
+        {
+            int version = entry.LastIndexOf('@');
+            return version >= 0 && version + 1 < entry.Length
+                ? entry.Substring(version + 1) : "unknown";
         }
 
         /// <summary>

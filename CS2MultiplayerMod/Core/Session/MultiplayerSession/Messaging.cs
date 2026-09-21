@@ -139,6 +139,22 @@ namespace CS2MultiplayerMod.Core.Session
         /// <summary>Recovery initiated by the mod, independently of a player's sync button.</summary>
         public void RequestAutomaticWorldSync(string reason) => RequestWorldSync(reason, true);
 
+        /// <summary>Requests recovery for one peer.</summary>
+        public bool RequestWorldSyncForPeer(ConnectionId target, string reason)
+        {
+            Peer peer;
+            if (Role != SessionRole.Host || Status != SessionStatus.Connected ||
+                _worldSyncSuspended || target.IsNone || !_peers.TryGetValue(target.Value, out peer) ||
+                !peer.Handshaked) return false;
+            reason = WireGuard.SanitizeText(reason, WireGuard.MaxResyncReasonLength);
+            if (reason.Length == 0) reason = "targeted recovery";
+            _log.Event(LogTopic.Session, "Targeted world recovery for " + peer + " (" + reason + ").");
+            SendTo(target, new ChatMessage(null,
+                "The host is refreshing your city after a synchronization recovery."));
+            NotifyResyncRequested(peer.PlayerId, target);
+            return true;
+        }
+
         private void RequestWorldSync(string reason, bool automatic)
         {
             if (Status != SessionStatus.Connected) return;
@@ -226,6 +242,13 @@ namespace CS2MultiplayerMod.Core.Session
         {
             if (Status != SessionStatus.Connected || _worldSyncSuspended) return;
 
+            if (Role == SessionRole.Client && _nowUnixMs < _postWorldSyncCommandHoldUntilMs)
+            {
+                _log.Detail(LogTopic.Session, "Discarded stale command " + commandId +
+                    " during post-world-sync settle window.");
+                return;
+            }
+
             var message = new SimulationCommandMessage(LocalPlayerId, tick, commandId, body);
             if (Role == SessionRole.Host)
             {
@@ -236,6 +259,38 @@ namespace CS2MultiplayerMod.Core.Session
             {
                 SendTo(ConnectionId.Server, message);       // host will echo/relay back
             }
+        }
+
+        /// <summary>Replays a command for one peer after a failed realization.</summary>
+        public bool ResendCommandTo(ConnectionId target, SimulationCommandMessage command)
+        {
+            Peer peer;
+            if (Role != SessionRole.Host || Status != SessionStatus.Connected ||
+                _worldSyncSuspended || command == null || target.IsNone ||
+                !_peers.TryGetValue(target.Value, out peer) || !peer.Handshaked)
+                return false;
+            byte[] body = command.Body == null ? Array.Empty<byte>() : (byte[])command.Body.Clone();
+            SendTo(target, new SimulationCommandMessage(command.OriginPlayerId,
+                command.Tick, command.CommandId, body));
+            return true;
+        }
+
+        /// <summary>Report a client-side atomic net-operation result to the host.</summary>
+        public void SendNetOperationReceipt(int originPlayerId, long operationId, bool applied, string detail = null)
+        {
+            if (Status != SessionStatus.Connected || Role != SessionRole.Client || operationId <= 0) return;
+            SendTo(ConnectionId.Server, new NetOperationReceiptMessage(originPlayerId, operationId, applied, detail));
+        }
+
+        private void HandleNetOperationReceipt(ConnectionId from, Peer peer, NetOperationReceiptMessage receipt)
+        {
+            if (Role != SessionRole.Host || peer == null) return;
+            if (receipt.OriginPlayerId < 0) { Punt(from, peer, "invalid net receipt origin", "NetOperationReceipt"); return; }
+            _log.Event(LogTopic.Nets, "Net operation receipt: peer=" + peer.Name + " op=" +
+                receipt.OperationId + " origin=" + receipt.OriginPlayerId + " result=" +
+                (receipt.Applied ? "applied" : "failed") +
+                (string.IsNullOrEmpty(receipt.Detail) ? "" : " detail=" + receipt.Detail));
+            NotifyNetOperationReceipt(peer, receipt);
         }
 
         private void HandleCommand(ConnectionId from, Peer peer, SimulationCommandMessage command)
@@ -250,6 +305,15 @@ namespace CS2MultiplayerMod.Core.Session
             if (_allowedCommandIds.Count > 0 && !_allowedCommandIds.Contains(command.CommandId))
             {
                 Punt(from, peer, "unauthorized command id " + command.CommandId, "SimulationCommand");
+                return;
+            }
+
+            if (Role == SessionRole.Host && peer != null && _hostOnlyCommandIds.Contains(command.CommandId))
+            {
+                string name = "command " + command.CommandId;
+                _log.Warn(LogTopic.Session, "Declined " + name + " from " + peer.Name +
+                    ": this host reserves it for the host player.");
+                SendTo(from, new ChatMessage(null, "The host has reserved this tool for the host player."));
                 return;
             }
 

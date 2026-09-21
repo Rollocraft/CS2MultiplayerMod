@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Reflection;
+using System.Security.Cryptography;
 using Colossal.IO.AssetDatabase;
 using Colossal.PSI.Common;
 using CS2MultiplayerMod.Core.Diagnostics;
@@ -16,10 +17,7 @@ using PlaysetMod = Colossal.PSI.Common.Mod;
 namespace CS2MultiplayerMod.Game
 {
     /// <summary>
-    /// Finds every mod other than this one that is live for the running game. Hosting and
-    /// joining are both refused while any is present: nothing in the sync layer accounts
-    /// for a third party changing prefabs, tools or the simulation, so one such mod on one
-    /// side is enough to desync the session or crash the other player.
+    /// Checks the active playset against <see cref="ModCompatibilityCatalog"/>.
     ///
     /// The active Paradox Mods playset is the source of truth wherever it can be read: it
     /// tracks what the player toggles live, and it is the only source that also lists
@@ -95,13 +93,73 @@ namespace CS2MultiplayerMod.Game
 
         public static bool AnyOtherMods => OtherModNames.Length > 0;
 
+        /// <summary>Builds the active-mod manifest for the handshake.</summary>
+        public static string[] Manifest
+        {
+            get
+            {
+                string[] names = OtherModNames;
+                var manifest = new string[names.Length];
+                for (int i = 0; i < names.Length; i++)
+                    manifest[i] = names[i] + "@" + LoadedVersion(names[i]) + "#" + LoadedHash(names[i]);
+                return manifest;
+            }
+        }
+
+        private static string LoadedVersion(string name)
+        {
+            try
+            {
+                ModManager manager = GameManager.instance != null ? GameManager.instance.modManager : null;
+                if (manager != null) foreach (ModManager.ModInfo info in manager)
+                {
+                    if (info == null || info.asset == null || !info.asset.isMod || !info.isLoaded) continue;
+                    if (!string.Equals(LoadedName(info), name, StringComparison.OrdinalIgnoreCase)) continue;
+                    Version version = info.asset.version;
+                    return version == null ? "unknown" : version.ToString();
+                }
+            }
+            catch (Exception ex) { WarnOnce("loaded mod versions", ex); }
+            return "unknown";
+        }
+
+        private static string LoadedHash(string name)
+        {
+            try
+            {
+                ModManager manager = GameManager.instance != null ? GameManager.instance.modManager : null;
+                if (manager != null) foreach (ModManager.ModInfo info in manager)
+                {
+                    if (info == null || info.asset == null || !info.asset.isMod || !info.isLoaded ||
+                        !string.Equals(LoadedName(info), name, StringComparison.OrdinalIgnoreCase)) continue;
+                    string path = info.asset.path;
+                    if (string.IsNullOrEmpty(path) || !File.Exists(path)) return "unknown";
+                    using (var sha = SHA256.Create())
+                    using (var stream = File.OpenRead(path))
+                        return BitConverter.ToString(sha.ComputeHash(stream)).Replace("-", "").ToLowerInvariant();
+                }
+            }
+            catch (Exception ex) { WarnOnce("loaded mod hashes", ex); }
+            return "unknown";
+        }
+
+        public static bool AnyBlockingMods
+        {
+            get
+            {
+                foreach (string name in OtherModNames)
+                    if (ModCompatibilityCatalog.BlocksStart(name)) return true;
+                return false;
+            }
+        }
+
         /// <summary>
         /// Localized sentence naming the offending mods for the blocking banner, or "" when
         /// nothing else is running (which hides the banner).
         /// </summary>
         public static string BlockText(bool ignored = false)
         {
-            string[] names = OtherModNames;
+            string[] names = BlockingModNames();
             if (names.Length == 0) return "";
 
             // Reading the names is what refreshes _restartRequired, so the order matters.
@@ -118,7 +176,7 @@ namespace CS2MultiplayerMod.Game
         /// </summary>
         public static string FaultDetail()
         {
-            string[] names = OtherModNames;
+            string[] names = BlockingModNames();
             return names.Length == 0 ? "" : FaultMarker + " " + NamesText(names);
         }
 
@@ -130,7 +188,22 @@ namespace CS2MultiplayerMod.Game
         public static string Summary()
         {
             string[] names = OtherModNames;
-            return names.Length == 0 ? "none" : "[" + NamesText(names) + "]";
+            if (names.Length == 0) return "none";
+
+            var labelled = new string[names.Length];
+            for (int i = 0; i < names.Length; i++)
+                labelled[i] = names[i] + "=" + ModCompatibilityCatalog.Label(names[i]) +
+                              "/" + ModCompatibilityCatalog.RiskOf(names[i]);
+            return "[" + NamesText(labelled) + "]";
+        }
+
+        private static string[] BlockingModNames()
+        {
+            string[] names = OtherModNames;
+            var blocking = new List<string>();
+            foreach (string name in names)
+                if (ModCompatibilityCatalog.BlocksStart(name)) blocking.Add(name);
+            return blocking.ToArray();
         }
 
         /// <summary>Comma-separated names, truncated to <see cref="MaxNamesListed"/>.</summary>
@@ -368,8 +441,7 @@ namespace CS2MultiplayerMod.Game
             SyncLog.Event(LogTopic.Startup,
                 current.Length == 0
                     ? "No other mods are active - multiplayer is available."
-                    : "Other mods are active, from the " + source + ": " +
-                      string.Join(", ", current) + ".");
+                    : "Other mods are active, from the " + source + ": " + Summary() + ".");
         }
 
         private static void WarnOnce(string source, Exception ex)

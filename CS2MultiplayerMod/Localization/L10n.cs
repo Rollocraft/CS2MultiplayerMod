@@ -70,6 +70,7 @@ namespace CS2MultiplayerMod.Localization
             public const string UiTryThis = "CS2MP.UI.TryThis";
             public const string UiRequireApproval = "CS2MP.UI.RequireApproval";
             public const string UiSimulationSync = "CS2MP.UI.SimulationSync";
+            public const string UiHostOnlySensitiveTools = "CS2MP.UI.HostOnlySensitiveTools";
             public const string UiJoinRequestTitle = "CS2MP.UI.JoinRequestTitle";
             // {0} = joining player's name.
             public const string UiJoinRequestBody = "CS2MP.UI.JoinRequestBody";

@@ -214,12 +214,18 @@
         /// islands) reattach on the receiver.
         /// See <see cref="Messages.HandshakeRequest"/> and version notes in doc/internals.
         /// </summary>
+        // v70 adds authenticated client receipts for applied atomic net operations.
+        // v69 compares the complete active-mod manifest during the handshake.
+        // v68 adds the source artifact id for locally-built versions.
         // v67 adds the two mod-state commands: the session's third-party type table and a
         // carrier's replicated closure. A v66 peer refuses both as unauthorized command ids and
         // would drop the connection over state it simply predates, so the bump keeps that
         // disagreement at the handshake where it can be explained.
         // v66 adds bounded display-only hover geometry to player presence updates.
-        public const int ProtocolVersion = 67;
+        public const int ProtocolVersion = 70;
+
+        public const int MaxModManifestEntries = 256;
+        public const int MaxModManifestNameLength = 128;
 
         /// <summary>
         /// Hard cap on a single payload, guarding against corrupt length prefixes.

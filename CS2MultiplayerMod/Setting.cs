@@ -89,7 +89,7 @@ namespace CS2MultiplayerMod
         public bool CannotStartHost()
         {
             return IsNotInGame() || !IsNotInSession() ||
-                   (CS2MultiplayerMod.Game.ModsCheck.AnyOtherMods && !IgnoreModCompatibilityChecks);
+                   (CS2MultiplayerMod.Game.ModsCheck.AnyBlockingMods && !IgnoreModCompatibilityChecks);
         }
 
         /// <summary>
@@ -222,6 +222,10 @@ namespace CS2MultiplayerMod
         [SettingsUISection(GeneralTab, StatusGroup)]
         public string StatusWorld => Mod.Service != null ? Mod.Service.StatusWorldText : L10n.T(L10n.Key.WorldNone);
 
+        /// <summary>Build identity shown in the settings UI.</summary>
+        [SettingsUISection(GeneralTab, StatusGroup)]
+        public string BuildIdentity => CS2MultiplayerMod.BuildIdentity.Label;
+
         [SettingsUIButton]
         [SettingsUIHideByCondition(typeof(Setting), nameof(IsNotInSession))]
         [SettingsUISection(GeneralTab, SessionGroup)]
@@ -338,6 +342,11 @@ namespace CS2MultiplayerMod
         /// </summary>
         [SettingsUIHidden]
         public bool SimulationSync { get; set; } = true;
+
+        /// <summary>Let the host reserve terrain, policy, milestone, tile and disaster tools.</summary>
+        [SettingsUISection(HostTab, HostSetupGroup)]
+        [SettingsUIDisableByCondition(typeof(Setting), nameof(IsInSession))]
+        public bool HostOnlySensitiveTools { get; set; } = false;
 
         [SettingsUISection(HostTab, HostActionGroup)]
         public string HostStatus => IsNotInGame()
@@ -493,6 +502,7 @@ namespace CS2MultiplayerMod
             LanOnly = false;
             RequireJoinApproval = true;
             SimulationSync = true;
+            HostOnlySensitiveTools = false;
             MaxPlayers = "8";
         }
     }

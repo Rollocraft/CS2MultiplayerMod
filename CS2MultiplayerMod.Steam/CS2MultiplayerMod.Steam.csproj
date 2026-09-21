@@ -33,6 +33,10 @@
     </PropertyGroup>
 
     <ItemGroup>
+        <!--Provides net48 reference assemblies during the build. -->
+        <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies"
+                          Version="1.0.3"
+                          PrivateAssets="all" />
         <!--A plain file reference rather than a ProjectReference: the mod's build is
         what drives this project (its post-build target), and a project cycle would
         make that impossible.-->

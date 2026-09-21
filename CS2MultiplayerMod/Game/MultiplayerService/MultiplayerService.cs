@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
 using CS2MultiplayerMod.Core.Diagnostics;
+using CS2MultiplayerMod.Core.Protocol;
 using CS2MultiplayerMod.Core.Protocol.Messages;
 using CS2MultiplayerMod.Core.Session;
 using CS2MultiplayerMod.Game.Diagnostics;
@@ -198,6 +199,37 @@ namespace CS2MultiplayerMod.Game
         /// <summary>/sync: ask the host for a fresh world stream (host: refresh everyone).</summary>
         public void RequestWorldSync() => _session.RequestWorldSync();
 
+        /// <summary>Write a shareable local diagnostic attachment and return its filename.</summary>
+        public string ExportDiagnostics(string reason)
+        {
+            string snapshot = "role=" + _session.Role +
+                              " status=" + _session.Status +
+                              " phase=" + _phase +
+                              " build=" + Mod.BuildId +
+                              " protocol=" + ProtocolConstants.ProtocolVersion +
+                              " mods=" + ModsCheck.Summary() +
+                              " peers=" + PeerDiagnostics() +
+                              " process=" + FlightRecorder.ProcessSnapshot();
+            string path = FlightRecorder.ExportDiagnosticBundle(reason, snapshot);
+            if (path != null)
+                _log.Event(LogTopic.Session, "Diagnostic bundle written: " + path);
+            else
+                _log.Warn(LogTopic.Session, "Could not write diagnostic bundle.");
+            return path;
+        }
+
+        private string PeerDiagnostics()
+        {
+            var parts = new List<string>();
+            foreach (Peer peer in _session.Peers)
+            {
+                if (!peer.Handshaked) continue;
+                parts.Add("#" + peer.PlayerId + ":" + peer.Name + " latencyMs=" + peer.LatencyMs +
+                    " " + peer.RateLimiter.Snapshot);
+            }
+            return parts.Count == 0 ? "none" : string.Join(";", parts.ToArray());
+        }
+
         /// <summary>
         /// One unresolved remote edit (a missed native capture, an owned sub-element that would not
         /// resolve) must never loop the whole tens-of-MB world through recovery. A single automatic
@@ -334,6 +366,7 @@ namespace CS2MultiplayerMod.Game
                 return;
             }
             _lastAutoRecoveryMs = now;
+            ExportDiagnostics("automatic-world-recovery: " + report.Summary());
             Diagnostics.SyncLog.Event(LogTopic.Session,
                 "World sync: reloading this city from the host now (" + report.Summary() + ").");
             // Include the subject in the existing bounded reason field: host-only logs must
@@ -351,6 +384,10 @@ namespace CS2MultiplayerMod.Game
         private int _nextChatId = 1;
         private string _chatLogJson = "[]";
         private string _playerListJson = "[]";
+        private readonly Dictionary<long, NetOperationPeerStatus> _netOperationStatuses =
+            new Dictionary<long, NetOperationPeerStatus>();
+        private readonly Queue<long> _netOperationStatusOrder = new Queue<long>();
+        private const int MaxTrackedNetOperations = 32;
 
         /// <summary>
         /// The chat/event feed as a JSON array for the hub panel binding:
@@ -383,6 +420,103 @@ namespace CS2MultiplayerMod.Game
                     playerId + ".");
         }
 
+        private void RecordNetOperationBroadcast(long operationId, SimulationCommandMessage command)
+        {
+            if (_session.Role != SessionRole.Host || operationId <= 0) return;
+            lock (_chatLock)
+            {
+                var status = new NetOperationPeerStatus { Command = new SimulationCommandMessage(
+                    command.OriginPlayerId, command.Tick, command.CommandId,
+                    command.Body == null ? null : (byte[])command.Body.Clone()) };
+                foreach (Peer peer in _session.Peers)
+                    if (peer.Handshaked)
+                        status.ByPlayer[peer.PlayerId] = peer.PlayerId == command.OriginPlayerId
+                            ? "applied (source)" : "waiting";
+                _netOperationStatuses[operationId] = status;
+                _netOperationStatusOrder.Enqueue(operationId);
+                while (_netOperationStatusOrder.Count > MaxTrackedNetOperations)
+                    _netOperationStatuses.Remove(_netOperationStatusOrder.Dequeue());
+            }
+            RefreshPlayerListJson();
+        }
+
+        private void ClearNetOperationStatuses()
+        {
+            lock (_chatLock)
+            {
+                _netOperationStatuses.Clear();
+                _netOperationStatusOrder.Clear();
+            }
+        }
+
+        private void RecordNetOperationReceipt(Peer peer, NetOperationReceiptMessage receipt)
+        {
+            if (peer == null || receipt == null) return;
+            lock (_chatLock)
+            {
+                NetOperationPeerStatus status;
+                if (!_netOperationStatuses.TryGetValue(receipt.OperationId, out status)) return;
+                status.ByPlayer[peer.PlayerId] = receipt.Applied ? "applied" : "failed";
+            }
+            RefreshPlayerListJson();
+        }
+
+        private bool RetryFailedNetOperation(Peer peer, NetOperationReceiptMessage receipt)
+        {
+            if (peer == null || receipt == null || receipt.Applied) return false;
+            SimulationCommandMessage command = null;
+            bool recover = false;
+            lock (_chatLock)
+            {
+                NetOperationPeerStatus status;
+                if (!_netOperationStatuses.TryGetValue(receipt.OperationId, out status) ||
+                    status.Command == null) return false;
+                int retries;
+                status.Retries.TryGetValue(peer.PlayerId, out retries);
+                if (retries >= 1)
+                {
+                    status.ByPlayer[peer.PlayerId] = "recovering";
+                    recover = true;
+                }
+                else
+                {
+                    status.Retries[peer.PlayerId] = retries + 1;
+                    status.ByPlayer[peer.PlayerId] = "retrying";
+                    command = status.Command;
+                }
+            }
+            if (recover)
+            {
+                bool started = _session.RequestWorldSyncForPeer(peer.Connection,
+                    "net operation #" + receipt.OperationId + " failed after retry");
+                if (!started) return false;
+                RefreshPlayerListJson();
+                return true;
+            }
+            if (_session.ResendCommandTo(peer.Connection, command))
+            {
+                RefreshPlayerListJson();
+                return true;
+            }
+            return false;
+        }
+
+        private string LatestNetOperationStatus(int playerId)
+        {
+            long[] keys = _netOperationStatusOrder.ToArray();
+            for (int i = keys.Length - 1; i >= 0; i--)
+            {
+                NetOperationPeerStatus status;
+                if (_netOperationStatuses.TryGetValue(keys[i], out status))
+                {
+                    string value;
+                    if (status.ByPlayer.TryGetValue(playerId, out value))
+                        return "op #" + keys[i] + ": " + value;
+                }
+            }
+            return "";
+        }
+
         private void RefreshPlayerListJson()
         {
             lock (_chatLock)
@@ -413,7 +547,12 @@ namespace CS2MultiplayerMod.Game
                         Peer peer = peers[i];
                         sb.Append(",{\"id\":").Append(peer.PlayerId).Append(",\"name\":");
                         AppendJsonString(sb, peer.Name);
-                        sb.Append(",\"isHost\":false}");
+                sb.Append(",\"isHost\":false,\"latencyMs\":").Append(peer.LatencyMs)
+                    .Append(",\"traffic\":");
+                AppendJsonString(sb, peer.RateLimiter.Snapshot);
+                sb.Append(",\"netStatus\":");
+                AppendJsonString(sb, LatestNetOperationStatus(peer.PlayerId));
+                sb.Append('}');
                     }
                     sb.Append(']');
                 }
@@ -431,6 +570,13 @@ namespace CS2MultiplayerMod.Game
             public string Sender;
             public string Text;
             public string Time;
+        }
+
+        private sealed class NetOperationPeerStatus
+        {
+            public readonly Dictionary<int, string> ByPlayer = new Dictionary<int, string>();
+            public readonly Dictionary<int, int> Retries = new Dictionary<int, int>();
+            public SimulationCommandMessage Command;
         }
 
 
@@ -468,6 +614,8 @@ namespace CS2MultiplayerMod.Game
                     // Authenticated; the host streams its world to every fresh join.
                     _service.SetPhase(ClientWorldPhase.WaitingForMap);
                 }
+                if (status == SessionStatus.Connected && _service._session.Role == SessionRole.Host)
+                    _service.ClearNetOperationStatuses();
                 else if (status == SessionStatus.Offline || status == SessionStatus.Faulted)
                 {
                     // Core teardown deliberately knows nothing about game worlds. If this
@@ -481,7 +629,11 @@ namespace CS2MultiplayerMod.Game
                         _service.QueueClientMainMenu(reason);
                     }
 
-                    if (status == SessionStatus.Faulted) _service._lastFault = detail;
+                    if (status == SessionStatus.Faulted)
+                    {
+                        _service._lastFault = detail;
+                        _service.ExportDiagnostics("session-fault: " + detail);
+                    }
                     _service.ResetWorldSyncState(restoreSpeed: true);
                     _service.SetPhase(ClientWorldPhase.None);
                     _service._remotePlayers.Clear();
@@ -550,6 +702,30 @@ namespace CS2MultiplayerMod.Game
             public override void OnCommandReceived(SimulationCommandMessage command)
             {
                 _service.RecordAppliedCommand(command);
+                if (_service._session.Role == SessionRole.Host &&
+                    command.CommandId == Sync.Commands.NetToolOperationCommand.Id)
+                {
+                    try
+                    {
+                        Sync.Commands.NetToolOperationCommand operation =
+                            Sync.Commands.NetToolOperationCommand.Decode(command.Body);
+                        _service.RecordNetOperationBroadcast(operation.OperationId, command);
+                        _service.AppendChatEntry(null, "Net operation #" + operation.OperationId +
+                            " sent; waiting for each client to apply it.");
+                    }
+                    catch { }
+                }
+            }
+            public override void OnNetOperationReceipt(Peer peer, NetOperationReceiptMessage receipt)
+            {
+                _service.RecordNetOperationReceipt(peer, receipt);
+                string name = peer != null && !string.IsNullOrEmpty(peer.Name) ? peer.Name : "client";
+                _service.AppendChatEntry(null, "Net operation #" + receipt.OperationId + " " +
+                    (receipt.Applied ? "applied by " : "failed on ") + name +
+                    (string.IsNullOrEmpty(receipt.Detail) ? "." : ": " + receipt.Detail));
+                if (_service.RetryFailedNetOperation(peer, receipt))
+                    _service.AppendChatEntry(null, "Net operation #" + receipt.OperationId +
+                        " started a targeted recovery action for " + name + ".");
             }
             public override void OnPlayerStateReceived(PlayerStateMessage state) => _service.RecordRemotePlayer(state);
             public override void OnBlobReceived(string channel, long transferId, byte[] data)

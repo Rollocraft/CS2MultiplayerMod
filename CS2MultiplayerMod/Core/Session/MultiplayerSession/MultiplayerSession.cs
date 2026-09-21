@@ -35,6 +35,9 @@ namespace CS2MultiplayerMod.Core.Session
         /// <summary>Minimum gap between accepted /sync requests - save+stream is expensive, kept short so post-join syncs aren't silently ignored.</summary>
         private const long ResyncRequestCooldownMs = 5000;
 
+        /// <summary>Delay capture briefly after a client resumes from recovery.</summary>
+        private const long PostWorldSyncCommandHoldMs = 300;
+
         private readonly IModLogger _log;
         private readonly MessageCodec _codec;
         private readonly List<ISessionObserver> _observers = new List<ISessionObserver>();
@@ -44,6 +47,7 @@ namespace CS2MultiplayerMod.Core.Session
         private readonly Dictionary<string, long> _blobTransferIds = new Dictionary<string, long>();
         private readonly Dictionary<string, int> _allowedBlobChannels = new Dictionary<string, int>();
         private readonly HashSet<ushort> _allowedCommandIds = new HashSet<ushort>();
+        private readonly HashSet<ushort> _hostOnlyCommandIds = new HashSet<ushort>();
         private readonly HashSet<int> _administrativeRemovals = new HashSet<int>();
         private readonly HashSet<string> _hostBannedAddresses = new HashSet<string>();
         // Connections already told to go. The transport only removes a peer when its
@@ -65,6 +69,8 @@ namespace CS2MultiplayerMod.Core.Session
         private bool _awaitingHostApproval;
         private bool _worldSyncSuspended;
         private long _worldSyncEpoch;
+        private long _nowUnixMs;
+        private long _postWorldSyncCommandHoldUntilMs;
 
         public MultiplayerSession(IModLogger log, MessageCodec codec = null)
         {
@@ -192,6 +198,14 @@ namespace CS2MultiplayerMod.Core.Session
             for (int i = 0; i < commandIds.Length; i++) _allowedCommandIds.Add(commandIds[i]);
         }
 
+        /// <summary>Checks whether a peer may use a host-restricted tool.</summary>
+        public void SetHostOnlyCommands(params ushort[] commandIds)
+        {
+            _hostOnlyCommandIds.Clear();
+            if (commandIds == null) return;
+            for (int i = 0; i < commandIds.Length; i++) _hostOnlyCommandIds.Add(commandIds[i]);
+        }
+
         // ---- Lifecycle --------------------------------------------------------
 
 
@@ -207,6 +221,7 @@ namespace CS2MultiplayerMod.Core.Session
         /// </summary>
         public void Update(long nowUnixMs)
         {
+            _nowUnixMs = nowUnixMs;
             if (_transport == null) return;
 
             _eventBuffer.Clear();

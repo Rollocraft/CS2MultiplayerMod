@@ -1,31 +1,34 @@
 namespace CS2MultiplayerMod.Core.Protocol.Messages
 {
     /// <summary>
-    /// Client's answer to <see cref="HandshakeChallenge"/>. Host validates protocol,
-    /// builds, DLC list, and password proof first. <see cref="PasswordProof"/> is
-    /// HMAC-SHA256(password, nonce | channel-binding). <see cref="DlcList"/> (sorted)
-    /// carries sync-relevant DLC names; differing DLCs cause desync.
+    /// Client response to <see cref="HandshakeChallenge"/>. The host validates the
+    /// protocol, build, DLCs, active mods, and password proof before admitting it.
     /// </summary>
     public sealed class HandshakeRequest : INetMessage
     {
         public int ProtocolVersion;
         public string ModVersion;
+        public string BuildId;
         public string GameVersion;
         public string PlayerName;
         public byte[] PasswordProof;
         public string[] DlcList;
+        public string[] ModManifest;
 
         public HandshakeRequest() { }
 
-        public HandshakeRequest(int protocolVersion, string modVersion, string gameVersion,
-                                string playerName, byte[] passwordProof, string[] dlcList = null)
+        public HandshakeRequest(int protocolVersion, string modVersion, string buildId, string gameVersion,
+                                string playerName, byte[] passwordProof, string[] dlcList = null,
+                                string[] modManifest = null)
         {
             ProtocolVersion = protocolVersion;
             ModVersion = modVersion;
+            BuildId = buildId;
             GameVersion = gameVersion;
             PlayerName = playerName;
             PasswordProof = passwordProof ?? System.Array.Empty<byte>();
             DlcList = dlcList ?? System.Array.Empty<string>();
+            ModManifest = modManifest ?? System.Array.Empty<string>();
         }
 
         public MessageType Type => MessageType.HandshakeRequest;
@@ -34,6 +37,7 @@ namespace CS2MultiplayerMod.Core.Protocol.Messages
         {
             writer.WriteInt(ProtocolVersion);
             writer.WriteString(ModVersion);
+            writer.WriteString(BuildId);
             writer.WriteString(GameVersion);
             writer.WriteString(PlayerName);
             writer.WriteInt(PasswordProof != null ? PasswordProof.Length : 0);
@@ -45,12 +49,19 @@ namespace CS2MultiplayerMod.Core.Protocol.Messages
             writer.WriteInt(dlcCount);
             for (int i = 0; i < dlcCount; i++)
                 writer.WriteString(DlcList[i] ?? string.Empty);
+
+            int modCount = ModManifest != null ? ModManifest.Length : 0;
+            if (modCount > ProtocolConstants.MaxModManifestEntries) modCount = ProtocolConstants.MaxModManifestEntries;
+            writer.WriteInt(modCount);
+            for (int i = 0; i < modCount; i++)
+                writer.WriteString(ModManifest[i] ?? string.Empty);
         }
 
         public void Read(NetworkReader reader)
         {
             ProtocolVersion = reader.ReadInt();
             ModVersion = reader.ReadString();
+            BuildId = WireGuard.SanitizeText(reader.ReadString(), 64);
             GameVersion = reader.ReadString();
             PlayerName = reader.ReadString();
             int length = reader.ReadInt();
@@ -68,6 +79,13 @@ namespace CS2MultiplayerMod.Core.Protocol.Messages
                 // like any other display text instead of trusted off the wire.
                 DlcList[i] = WireGuard.SanitizeText(reader.ReadString(), ProtocolConstants.MaxDlcNameLength);
             }
+
+            int modCount = reader.ReadInt();
+            if (modCount < 0 || modCount > ProtocolConstants.MaxModManifestEntries)
+                throw new ProtocolException("Implausible mod-manifest count: " + modCount + ".");
+            ModManifest = modCount > 0 ? new string[modCount] : System.Array.Empty<string>();
+            for (int i = 0; i < modCount; i++)
+                ModManifest[i] = WireGuard.SanitizeText(reader.ReadString(), ProtocolConstants.MaxModManifestNameLength);
         }
     }
 }

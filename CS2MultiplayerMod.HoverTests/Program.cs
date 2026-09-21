@@ -42,6 +42,26 @@ static class Program
 
     static void CodecChecks()
     {
+        var handshake = new HandshakeRequest(ProtocolConstants.ProtocolVersion, "test", "commit", "game",
+            "Player", new byte[] { 1, 2 }, new[] { "DLC" }, new[] { "Traffic", "Move It" });
+        var decodedHandshake = (HandshakeRequest)Codec.Decode(Codec.Encode(handshake));
+        Assert(decodedHandshake.ModManifest.SequenceEqual(handshake.ModManifest),
+            "handshake preserves the active mod manifest");
+        Assert(MultiplayerSession.DescribeModMismatch(new[] { "Traffic" }, new[] { "traffic" }) == null,
+            "mod manifest comparison is case-insensitive");
+        Assert(MultiplayerSession.DescribeModMismatch(new[] { "Traffic" }, new[] { "Move It" }) != null,
+            "mod manifest comparison names a differing playset");
+        string buildMismatch = MultiplayerSession.DescribeModMismatch(
+            new[] { "Traffic@1.2.0#abc" }, new[] { "Traffic@1.3.0#def" });
+        Assert(buildMismatch != null && buildMismatch.Contains("different build") &&
+               !buildMismatch.Contains("you are missing"),
+            "mod manifest comparison separates build mismatch from missing mod");
+        var receipt = new NetOperationReceiptMessage(3, 91, true, "committed and drained");
+        var decodedReceipt = (NetOperationReceiptMessage)Codec.Decode(Codec.Encode(receipt));
+        Assert(decodedReceipt.OriginPlayerId == 3 && decodedReceipt.OperationId == 91 &&
+               decodedReceipt.Applied && decodedReceipt.Detail == "committed and drained",
+            "net-operation receipt round trips");
+
         foreach (PlayerHoverKind kind in Enum.GetValues<PlayerHoverKind>())
         {
             var shape = Shape(kind);
@@ -127,6 +147,12 @@ static class Program
         {
             host.StartHost(Config("Host")); alice.Join(Config("Alice")); bob.Join(Config("Bob"));
             Pump(() => alice.Status == SessionStatus.Connected && bob.Status == SessionStatus.Connected);
+            ConnectionId bobConnection = host.Peers.Single(peer => peer.PlayerId == bob.LocalPlayerId).Connection;
+            Assert(host.RequestWorldSyncForPeer(bobConnection, "targeted-test"),
+                "host starts targeted peer recovery");
+            Pump(() => observed[0].ResyncTargets.Count == 1);
+            Assert(observed[0].ResyncTargets[0] == bobConnection,
+                "targeted recovery names only the failed peer");
             Send(alice, Shape());
             Pump(() => observed[0].States.Count == 1 && observed[2].States.Count == 1);
             Assert(observed[1].States.Count == 0, "source must not receive its own echo");
@@ -168,8 +194,16 @@ static class Program
             Send(alice, Shape()); Send(host, Shape());
             Settle();
             Assert(observed.Sum(o => o.States.Count) == count, "barrier suppresses hover");
+            long resumeAt = clock.ElapsedMilliseconds;
             Assert(host.ResumeWorldSync(123, 1, targets), "resume barrier");
             Pump(() => !alice.WorldSyncSuspended && !bob.WorldSyncSuspended);
+            alice.SendCommand(1, 7, new byte[] { 1 });
+            Settle();
+            Assert(observed[0].Commands.Count == 0 && observed[2].Commands.Count == 0,
+                "post-sync stale command is discarded");
+            Pump(() => clock.ElapsedMilliseconds >= resumeAt + 350);
+            alice.SendCommand(2, 7, new byte[] { 2 });
+            Pump(() => observed[0].Commands.Count == 1);
             Send(alice);
             Pump(() => observed[2].States.Count == 6);
             Assert(observed[2].States.Last().Hover.Length == 0, "clear after reload");
@@ -180,7 +214,12 @@ static class Program
     sealed class Observer : SessionObserver
     {
         public readonly List<PlayerStateMessage> States = new();
+        public readonly List<SimulationCommandMessage> Commands = new();
+        public readonly List<ConnectionId> ResyncTargets = new();
         public override void OnPlayerStateReceived(PlayerStateMessage state) => States.Add(state);
+        public override void OnCommandReceived(SimulationCommandMessage command) => Commands.Add(command);
+        public override void OnResyncRequested(int playerId, ConnectionId connection) =>
+            ResyncTargets.Add(connection);
     }
 
     sealed class BackpressureTransport(ITransport inner) : ITransport
