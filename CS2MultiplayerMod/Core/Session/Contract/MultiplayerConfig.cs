@@ -70,6 +70,9 @@ namespace CS2MultiplayerMod.Core.Session
         /// </summary>
         public readonly bool SimulationSync;
 
+        /// <summary>Host only: reserve destructive or city-wide tools for the host player.</summary>
+        public readonly bool HostOnlySensitiveTools;
+
         /// <summary>Game build identifier, compared strictly during the handshake.</summary>
         public readonly string GameVersion;
 
@@ -89,7 +92,8 @@ namespace CS2MultiplayerMod.Core.Session
                                  bool requireJoinApproval = false,
                                  TransportMode transport = TransportMode.Direct, string joinCode = "",
                                  bool ignoreModCompatibilityChecks = false,
-                                 bool simulationSync = true, string buildId = "", string[] modManifest = null)
+                                 bool simulationSync = true, string buildId = "", string[] modManifest = null,
+                                 bool hostOnlySensitiveTools = false)
         {
             Transport = transport;
             JoinCode = joinCode ?? string.Empty;
@@ -108,6 +112,7 @@ namespace CS2MultiplayerMod.Core.Session
             ModManifest = modManifest ?? System.Array.Empty<string>();
             RequireJoinApproval = requireJoinApproval;
             SimulationSync = simulationSync;
+            HostOnlySensitiveTools = hostOnlySensitiveTools;
         }
     }
 }

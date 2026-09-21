@@ -271,6 +271,15 @@ namespace CS2MultiplayerMod.Core.Session
                 return;
             }
 
+            if (Role == SessionRole.Host && peer != null && _hostOnlyCommandIds.Contains(command.CommandId))
+            {
+                string name = "command " + command.CommandId;
+                _log.Warn(LogTopic.Session, "Declined " + name + " from " + peer.Name +
+                    ": this host reserves it for the host player.");
+                SendTo(from, new ChatMessage(null, "The host has reserved this tool for the host player."));
+                return;
+            }
+
             // The origin id drives every echo-skip; stamp it from OUR peer table so a
             // client cannot impersonate another player (or the host) on the wire.
             if (Role == SessionRole.Host && peer != null)

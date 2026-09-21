@@ -222,10 +222,7 @@ namespace CS2MultiplayerMod
         [SettingsUISection(GeneralTab, StatusGroup)]
         public string StatusWorld => Mod.Service != null ? Mod.Service.StatusWorldText : L10n.T(L10n.Key.WorldNone);
 
-        /// <summary>
-        /// Read-only exact build identity. It lives beside the session status so a player can
-        /// copy it into a report before joining or hosting.
-        /// </summary>
+        /// <summary>Build identity shown in the settings UI.</summary>
         [SettingsUISection(GeneralTab, StatusGroup)]
         public string BuildIdentity => CS2MultiplayerMod.BuildIdentity.Label;
 
@@ -345,6 +342,11 @@ namespace CS2MultiplayerMod
         /// </summary>
         [SettingsUIHidden]
         public bool SimulationSync { get; set; } = true;
+
+        /// <summary>Let the host reserve terrain, policy, milestone, tile and disaster tools.</summary>
+        [SettingsUISection(HostTab, HostSetupGroup)]
+        [SettingsUIDisableByCondition(typeof(Setting), nameof(IsInSession))]
+        public bool HostOnlySensitiveTools { get; set; } = false;
 
         [SettingsUISection(HostTab, HostActionGroup)]
         public string HostStatus => IsNotInGame()
@@ -500,6 +502,7 @@ namespace CS2MultiplayerMod
             LanOnly = false;
             RequireJoinApproval = true;
             SimulationSync = true;
+            HostOnlySensitiveTools = false;
             MaxPlayers = "8";
         }
     }

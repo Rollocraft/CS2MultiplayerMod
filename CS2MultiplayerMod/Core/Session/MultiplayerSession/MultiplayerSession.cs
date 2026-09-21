@@ -44,6 +44,7 @@ namespace CS2MultiplayerMod.Core.Session
         private readonly Dictionary<string, long> _blobTransferIds = new Dictionary<string, long>();
         private readonly Dictionary<string, int> _allowedBlobChannels = new Dictionary<string, int>();
         private readonly HashSet<ushort> _allowedCommandIds = new HashSet<ushort>();
+        private readonly HashSet<ushort> _hostOnlyCommandIds = new HashSet<ushort>();
         private readonly HashSet<int> _administrativeRemovals = new HashSet<int>();
         private readonly HashSet<string> _hostBannedAddresses = new HashSet<string>();
         // Connections already told to go. The transport only removes a peer when its
@@ -190,6 +191,18 @@ namespace CS2MultiplayerMod.Core.Session
         {
             if (commandIds == null) return;
             for (int i = 0; i < commandIds.Length; i++) _allowedCommandIds.Add(commandIds[i]);
+        }
+
+        /// <summary>
+        /// Host-side role policy for high-impact tools. The game layer supplies only ids it has
+        /// already registered as valid; clients are told why an edit was declined but remain
+        /// connected, so a host can reserve terrain, policy and irreversible city changes.
+        /// </summary>
+        public void SetHostOnlyCommands(params ushort[] commandIds)
+        {
+            _hostOnlyCommandIds.Clear();
+            if (commandIds == null) return;
+            for (int i = 0; i < commandIds.Length; i++) _hostOnlyCommandIds.Add(commandIds[i]);
         }
 
         // ---- Lifecycle --------------------------------------------------------

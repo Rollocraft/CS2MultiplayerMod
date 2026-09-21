@@ -72,6 +72,7 @@ const LOC = {
     tryThis: "CS2MP.UI.TryThis",
     requireApproval: "CS2MP.UI.RequireApproval",
     simulationSync: "CS2MP.UI.SimulationSync",
+    hostOnlySensitiveTools: "CS2MP.UI.HostOnlySensitiveTools",
     joinRequestTitle: "CS2MP.UI.JoinRequestTitle",
     joinRequestBody: "CS2MP.UI.JoinRequestBody",
     accept: "CS2MP.UI.Accept",
@@ -121,6 +122,7 @@ const maxPlayers$ = bindValue<string>(GROUP, "maxPlayers", "8");
 const lanOnly$ = bindValue<boolean>(GROUP, "lanOnly", false);
 const requireApproval$ = bindValue<boolean>(GROUP, "requireApproval", true);
 const simulationSync$ = bindValue<boolean>(GROUP, "simulationSync", true);
+const hostOnlySensitiveTools$ = bindValue<boolean>(GROUP, "hostOnlySensitiveTools", false);
 const playerList$ = bindValue<string>(GROUP, "playerList", "[]");
 const pendingJoins$ = bindValue<string>(GROUP, "pendingJoins", "[]");
 const canSaveClientWorld$ = bindValue<boolean>(GROUP, "canSaveClientWorld", false);
@@ -912,6 +914,7 @@ const SettingsFields = () => {
     const lanOnly = useValue(lanOnly$);
     const requireApproval = useValue(requireApproval$);
     const simulationSync = useValue(simulationSync$);
+    const hostOnlySensitiveTools = useValue(hostOnlySensitiveTools$);
     const hostConnection = useValue(hostConnection$);
     const sessionUsesRelay = useValue(sessionUsesRelay$);
     const relaySupported = useValue(relaySupported$);
@@ -990,6 +993,12 @@ const SettingsFields = () => {
                 value={simulationSync}
                 disabled={inSession}
                 onChange={(v) => trigger(GROUP, "setSimulationSync", v)}
+            />
+            <HubToggle
+                label={t(LOC.hostOnlySensitiveTools, "Reserve sensitive tools for host")}
+                value={hostOnlySensitiveTools}
+                disabled={inSession}
+                onChange={(v) => trigger(GROUP, "setHostOnlySensitiveTools", v)}
             />
         </>
     );

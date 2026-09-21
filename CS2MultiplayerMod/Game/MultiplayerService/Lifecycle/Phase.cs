@@ -206,9 +206,7 @@ namespace CS2MultiplayerMod.Game
             if (!ModEnabled) { _log.Warn(LogTopic.Session, "Cannot host: the mod is disabled in settings."); return; }
             if (_session.Role != SessionRole.None) { _log.Warn(LogTopic.Session, "Cannot host: a session is already active."); return; }
             if (RefuseForOtherMods("host")) return;
-            // Relay is the default and has no exposed listener.  A direct host that deliberately
-            // turns LAN-only off is internet-facing, so require a real secret before opening it.
-            // Enforce here as well as in the UI: settings can be edited by an older UI build.
+            // Direct internet hosts require a password.
             if (settings != null && settings.HostTransport() == TransportMode.Direct && !settings.LanOnly &&
                 (settings.HostPassword ?? "").Trim().Length < 12)
             {
@@ -221,6 +219,7 @@ namespace CS2MultiplayerMod.Game
             ResetCommandDiagnostics();
             _lastFault = null;
             var config = BuildConfig(settings, hosting: true);
+            GameplayCommandRegistry.ApplyHostRolePolicy(_session, config.HostOnlySensitiveTools);
             _log.Event(LogTopic.Session, "Host requested: transport=" + config.Transport +
                 (config.Transport == TransportMode.SteamRelay ? " joinCode=" + RelayProvider.LocalJoinCode : " port=" + config.Port) +
                 " lanOnly=" + config.LanOnly + " password=" +
@@ -386,7 +385,8 @@ namespace CS2MultiplayerMod.Game
                 ignoreModCompatibilityChecks: settings.IgnoreModCompatibilityChecks,
                 simulationSync: settings.SimulationSync,
                 buildId: Mod.BuildId,
-                modManifest: ModsCheck.Manifest);
+                modManifest: ModsCheck.Manifest,
+                hostOnlySensitiveTools: settings.HostOnlySensitiveTools);
         }
 
     }

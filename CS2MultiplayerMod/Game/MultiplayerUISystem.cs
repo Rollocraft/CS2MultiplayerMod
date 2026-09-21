@@ -227,6 +227,8 @@ namespace CS2MultiplayerMod.Game
                 () => Mod.Service != null && Mod.Service.Session.Role != SessionRole.None
                     ? Mod.Service.SimulationSyncEnabled
                     : Mod.Setting == null || Mod.Setting.SimulationSync));
+            AddUpdateBinding(new GetterValueBinding<bool>(Group, "hostOnlySensitiveTools",
+                () => Mod.Setting != null && Mod.Setting.HostOnlySensitiveTools));
 
             // Host setup edits. HostPort/HostPassword setters already refuse changes
             // mid-session inside Setting, so no extra guarding here.
@@ -251,6 +253,8 @@ namespace CS2MultiplayerMod.Game
                 value => { if (Mod.Setting != null) Mod.Setting.RequireJoinApproval = value; }));
             AddBinding(new TriggerBinding<bool>(Group, "setSimulationSync",
                 value => { if (Mod.Setting != null) Mod.Setting.SimulationSync = value; }));
+            AddBinding(new TriggerBinding<bool>(Group, "setHostOnlySensitiveTools",
+                value => { if (Mod.Setting != null) Mod.Setting.HostOnlySensitiveTools = value; }));
 
             AddBinding(new TriggerBinding<string>(Group, "sendChat",
                 value => { if (Mod.Service != null) Mod.Service.SendChatFromUi(value); }));
