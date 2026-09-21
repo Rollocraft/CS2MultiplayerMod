@@ -107,9 +107,27 @@ namespace CS2MultiplayerMod.Game
             {
                 string[] names = OtherModNames;
                 var manifest = new string[names.Length];
-                Array.Copy(names, manifest, names.Length);
+                for (int i = 0; i < names.Length; i++)
+                    manifest[i] = names[i] + "@" + LoadedVersion(names[i]);
                 return manifest;
             }
+        }
+
+        private static string LoadedVersion(string name)
+        {
+            try
+            {
+                ModManager manager = GameManager.instance != null ? GameManager.instance.modManager : null;
+                if (manager != null) foreach (ModManager.ModInfo info in manager)
+                {
+                    if (info == null || info.asset == null || !info.asset.isMod || !info.isLoaded) continue;
+                    if (!string.Equals(LoadedName(info), name, StringComparison.OrdinalIgnoreCase)) continue;
+                    Version version = info.asset.version;
+                    return version == null ? "unknown" : version.ToString();
+                }
+            }
+            catch (Exception ex) { WarnOnce("loaded mod versions", ex); }
+            return "unknown";
         }
 
         public static bool AnyBlockingMods
