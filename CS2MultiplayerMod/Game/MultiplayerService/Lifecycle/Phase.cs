@@ -206,6 +206,16 @@ namespace CS2MultiplayerMod.Game
             if (!ModEnabled) { _log.Warn(LogTopic.Session, "Cannot host: the mod is disabled in settings."); return; }
             if (_session.Role != SessionRole.None) { _log.Warn(LogTopic.Session, "Cannot host: a session is already active."); return; }
             if (RefuseForOtherMods("host")) return;
+            // Relay is the default and has no exposed listener.  A direct host that deliberately
+            // turns LAN-only off is internet-facing, so require a real secret before opening it.
+            // Enforce here as well as in the UI: settings can be edited by an older UI build.
+            if (settings != null && settings.HostTransport() == TransportMode.Direct && !settings.LanOnly &&
+                (settings.HostPassword ?? "").Trim().Length < 12)
+            {
+                _lastFault = "Public direct hosting requires a password of at least 12 characters.";
+                _log.Warn(LogTopic.Session, "Cannot host publicly without a strong password. Use Steam Relay, enable LAN-only, or set a password of at least 12 characters.");
+                return;
+            }
             _disconnectConfirmationRequested = false;
             ClearClientExitNotice();
             ResetCommandDiagnostics();
