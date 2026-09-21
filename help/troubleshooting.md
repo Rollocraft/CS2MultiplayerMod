@@ -156,3 +156,10 @@ in-game screens.
 ## Troubleshooting by Error message
 
 Every in-game multiplayer error now includes an Open Help action that targets the relevant guide. For a searchable list of every player-facing error, warning banner, save/exit failure, and multiplayer log-warning family, see the [Error and Warning Reference](errors-and-warnings.md).
+
+## Send a diagnostic bundle
+
+Type `/diag` in the multiplayer chat after a failed join, disconnect, or desync. It writes one
+`CS2MP-diagnostic-*.txt` attachment in the game's `Logs` folder. The file includes the session
+snapshot, active content recorded by the mod, and the durable flight log. Automatic world recovery
+and session faults write the same attachment before the next recovery step.

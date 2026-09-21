@@ -147,6 +147,49 @@ namespace CS2MultiplayerMod.Game.Diagnostics
             }
         }
 
+        /// <summary>Writes the session snapshot and flight log to one text file.</summary>
+        public static string ExportDiagnosticBundle(string reason, string sessionSnapshot)
+        {
+            if (!Enabled) return null;
+            try
+            {
+                Note("diagnostic-export reason=" + Quote(reason) +
+                     " session=" + Quote(sessionSnapshot));
+
+                string dir = LogsDirectory();
+                if (string.IsNullOrEmpty(dir)) return null;
+                Directory.CreateDirectory(dir);
+
+                string stamp = DateTime.UtcNow.ToString("yyyyMMdd-HHmmss-fff", CultureInfo.InvariantCulture) +
+                               "-" + Guid.NewGuid().ToString("N").Substring(0, 6);
+                string destination = Path.Combine(dir, "CS2MP-diagnostic-" + stamp + ".txt");
+                string flightLog = Path.Combine(dir, "CS2MP-flight.log");
+                using (var output = new StreamWriter(destination, false, new UTF8Encoding(false)))
+                {
+                    output.WriteLine("CS2 Multiplayer diagnostic bundle");
+                    output.WriteLine("createdUtc=" + DateTime.UtcNow.ToString("O", CultureInfo.InvariantCulture));
+                    output.WriteLine("reason=" + Compact(reason, MaxExceptionChars));
+                    output.WriteLine("session=" + Compact(sessionSnapshot, MaxExceptionChars));
+                    output.WriteLine("flightLog=CS2MP-flight.log (embedded below)");
+                    output.WriteLine();
+                    output.WriteLine("--- flight log ---");
+                    if (File.Exists(flightLog))
+                    {
+                        using (var input = new FileStream(flightLog, FileMode.Open, FileAccess.Read,
+                                   FileShare.ReadWrite | FileShare.Delete))
+                        using (var reader = new StreamReader(input, Encoding.UTF8, true))
+                            output.Write(reader.ReadToEnd());
+                    }
+                    else output.WriteLine("flight log unavailable");
+                }
+                return destination;
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
         /// <summary>
         /// Append one structured line and flush it. Safe from any thread and never throws.
         /// </summary>

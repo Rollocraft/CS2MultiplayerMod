@@ -1428,7 +1428,7 @@ const SessionView = ({ entries, players }: { entries: ChatEntry[]; players: Play
                         type="text"
                         style={styles.chatInput}
                         value={draft}
-                        placeholder={t(LOC.chatPlaceholder, "Type a message - /sync requests a world sync")}
+                        placeholder={t(LOC.chatPlaceholder, "Type a message - /sync syncs, /diag saves diagnostics")}
                         spellCheck={false}
                         autoComplete="off"
                         onFocus={() => setTyping(true)}

@@ -198,6 +198,24 @@ namespace CS2MultiplayerMod.Game
         /// <summary>/sync: ask the host for a fresh world stream (host: refresh everyone).</summary>
         public void RequestWorldSync() => _session.RequestWorldSync();
 
+        /// <summary>Write a shareable local diagnostic attachment and return its filename.</summary>
+        public string ExportDiagnostics(string reason)
+        {
+            string snapshot = "role=" + _session.Role +
+                              " status=" + _session.Status +
+                              " phase=" + _phase +
+                              " build=" + Mod.BuildId +
+                              " protocol=" + ProtocolConstants.ProtocolVersion +
+                              " mods=" + ModsCheck.Summary() +
+                              " process=" + FlightRecorder.ProcessSnapshot();
+            string path = FlightRecorder.ExportDiagnosticBundle(reason, snapshot);
+            if (path != null)
+                _log.Event(LogTopic.Session, "Diagnostic bundle written: " + path);
+            else
+                _log.Warn(LogTopic.Session, "Could not write diagnostic bundle.");
+            return path;
+        }
+
         /// <summary>
         /// One unresolved remote edit (a missed native capture, an owned sub-element that would not
         /// resolve) must never loop the whole tens-of-MB world through recovery. A single automatic
@@ -334,6 +352,7 @@ namespace CS2MultiplayerMod.Game
                 return;
             }
             _lastAutoRecoveryMs = now;
+            ExportDiagnostics("automatic-world-recovery: " + report.Summary());
             Diagnostics.SyncLog.Event(LogTopic.Session,
                 "World sync: reloading this city from the host now (" + report.Summary() + ").");
             // Include the subject in the existing bounded reason field: host-only logs must
@@ -481,7 +500,11 @@ namespace CS2MultiplayerMod.Game
                         _service.QueueClientMainMenu(reason);
                     }
 
-                    if (status == SessionStatus.Faulted) _service._lastFault = detail;
+                    if (status == SessionStatus.Faulted)
+                    {
+                        _service._lastFault = detail;
+                        _service.ExportDiagnostics("session-fault: " + detail);
+                    }
                     _service.ResetWorldSyncState(restoreSpeed: true);
                     _service.SetPhase(ClientWorldPhase.None);
                     _service._remotePlayers.Clear();
