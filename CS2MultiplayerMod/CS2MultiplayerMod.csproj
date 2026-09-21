@@ -35,9 +35,7 @@
         </PropertyGroup>
     </Target>
 
-    <!-- A release version answers which public build a player installed; the commit answers
-    which exact source tree produced it. Keep the latter optional so source archives that do
-    not contain .git still build and identify themselves honestly as "unknown". -->
+    <!-- Include the source commit when Git is available. -->
     <Target Name="StampBuildCommit" BeforeTargets="GetAssemblyAttributes;GenerateAssemblyInfo">
         <Exec Command="git rev-parse --short=12 HEAD"
               WorkingDirectory="$(MSBuildProjectDirectory)\.."
@@ -47,15 +45,15 @@
         </Exec>
         <PropertyGroup>
             <BuildCommit>unknown</BuildCommit>
-            <BuildCommit Condition="'$(GitCommitOutput)' != ''">$([System.String]::Copy('$(GitCommitOutput)').Trim())</BuildCommit>
+            <!-- Only accept a Git commit; otherwise use "unknown". -->
+            <BuildCommit Condition="$([System.Text.RegularExpressions.Regex]::IsMatch('$(GitCommitOutput)', '^[0-9a-fA-F]{7,40}\s*$'))">$([System.String]::Copy('$(GitCommitOutput)').Trim())</BuildCommit>
         </PropertyGroup>
         <ItemGroup>
             <AssemblyMetadata Include="CS2MP.Commit" Value="$(BuildCommit)" />
         </ItemGroup>
     </Target>
 
-    <!-- Use the process environment first so CI/Linux builds can supply the official
-    toolchain; retain the Windows user-variable lookup used by the game installer. -->
+    <!-- Prefer the process environment; the installer uses the user variable. -->
     <PropertyGroup>
         <CsiiToolPath>$([System.Environment]::GetEnvironmentVariable('CSII_TOOLPATH'))</CsiiToolPath>
         <CsiiToolPath Condition="'$(CsiiToolPath)' == ''">$([System.Environment]::GetEnvironmentVariable('CSII_TOOLPATH', 'EnvironmentVariableTarget.User'))</CsiiToolPath>
@@ -164,7 +162,7 @@
         <PropertyGroup>
             <SteamBackendDir>$(MSBuildProjectDirectory)\..\CS2MultiplayerMod.Steam</SteamBackendDir>
         </PropertyGroup>
-        <!--Run the relay in a fresh dotnet process. Its restore generates the net48 reference
+        <!--Run the relay in a separate dotnet process. Its restore generates the net48 reference
             imports, and MSBuild's in-process project cache cannot observe those on a first build. -->
         <Exec Command="dotnet build &quot;$(SteamBackendDir)\CS2MultiplayerMod.Steam.csproj&quot; --configuration $(Configuration)"/>
         <ItemGroup>
