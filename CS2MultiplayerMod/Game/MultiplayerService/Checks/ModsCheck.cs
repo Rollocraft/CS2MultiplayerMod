@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Reflection;
+using System.Security.Cryptography;
 using Colossal.IO.AssetDatabase;
 using Colossal.PSI.Common;
 using CS2MultiplayerMod.Core.Diagnostics;
@@ -16,10 +17,7 @@ using PlaysetMod = Colossal.PSI.Common.Mod;
 namespace CS2MultiplayerMod.Game
 {
     /// <summary>
-    /// Finds every mod other than this one that is live for the running game and applies
-    /// <see cref="ModCompatibilityCatalog"/> to it. Reviewed, supported mods may start a
-    /// session; restricted ones are recorded for diagnosis; blocked and unreviewed ones
-    /// require the explicit own-risk override.
+    /// Checks the active playset against <see cref="ModCompatibilityCatalog"/>.
     ///
     /// The active Paradox Mods playset is the source of truth wherever it can be read: it
     /// tracks what the player toggles live, and it is the only source that also lists
@@ -95,12 +93,7 @@ namespace CS2MultiplayerMod.Game
 
         public static bool AnyOtherMods => OtherModNames.Length > 0;
 
-        /// <summary>
-        /// Canonical active-playset name manifest used by the handshake.  The game currently exposes
-        /// display names consistently across its supported platform backends; names are therefore
-        /// the strongest common identity available here.  It is deliberately a complete set,
-        /// including restricted entries, so a host never admits a client with a different playset.
-        /// </summary>
+        /// <summary>Builds the active-mod manifest for the handshake.</summary>
         public static string[] Manifest
         {
             get
@@ -108,7 +101,7 @@ namespace CS2MultiplayerMod.Game
                 string[] names = OtherModNames;
                 var manifest = new string[names.Length];
                 for (int i = 0; i < names.Length; i++)
-                    manifest[i] = names[i] + "@" + LoadedVersion(names[i]);
+                    manifest[i] = names[i] + "@" + LoadedVersion(names[i]) + "#" + LoadedHash(names[i]);
                 return manifest;
             }
         }
@@ -127,6 +120,26 @@ namespace CS2MultiplayerMod.Game
                 }
             }
             catch (Exception ex) { WarnOnce("loaded mod versions", ex); }
+            return "unknown";
+        }
+
+        private static string LoadedHash(string name)
+        {
+            try
+            {
+                ModManager manager = GameManager.instance != null ? GameManager.instance.modManager : null;
+                if (manager != null) foreach (ModManager.ModInfo info in manager)
+                {
+                    if (info == null || info.asset == null || !info.asset.isMod || !info.isLoaded ||
+                        !string.Equals(LoadedName(info), name, StringComparison.OrdinalIgnoreCase)) continue;
+                    string path = info.asset.path;
+                    if (string.IsNullOrEmpty(path) || !File.Exists(path)) return "unknown";
+                    using (var sha = SHA256.Create())
+                    using (var stream = File.OpenRead(path))
+                        return BitConverter.ToString(sha.ComputeHash(stream)).Replace("-", "").ToLowerInvariant();
+                }
+            }
+            catch (Exception ex) { WarnOnce("loaded mod hashes", ex); }
             return "unknown";
         }
 
