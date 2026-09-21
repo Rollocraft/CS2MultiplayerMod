@@ -301,6 +301,8 @@ namespace CS2MultiplayerMod.Core.Session
             EncryptionActive = false;
             _worldSyncSuspended = false;
             _worldSyncEpoch = 0;
+            _nowUnixMs = 0;
+            _postWorldSyncCommandHoldUntilMs = 0;
             SetStatus(SessionStatus.Offline,
                 string.IsNullOrWhiteSpace(detail) ? "The connection to the host closed." : detail);
         }

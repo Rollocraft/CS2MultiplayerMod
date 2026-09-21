@@ -226,6 +226,13 @@ namespace CS2MultiplayerMod.Core.Session
         {
             if (Status != SessionStatus.Connected || _worldSyncSuspended) return;
 
+            if (Role == SessionRole.Client && _nowUnixMs < _postWorldSyncCommandHoldUntilMs)
+            {
+                _log.Detail(LogTopic.Session, "Discarded stale command " + commandId +
+                    " during post-world-sync settle window.");
+                return;
+            }
+
             var message = new SimulationCommandMessage(LocalPlayerId, tick, commandId, body);
             if (Role == SessionRole.Host)
             {

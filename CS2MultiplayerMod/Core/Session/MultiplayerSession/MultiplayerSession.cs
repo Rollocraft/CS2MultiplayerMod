@@ -35,6 +35,9 @@ namespace CS2MultiplayerMod.Core.Session
         /// <summary>Minimum gap between accepted /sync requests - save+stream is expensive, kept short so post-join syncs aren't silently ignored.</summary>
         private const long ResyncRequestCooldownMs = 5000;
 
+        /// <summary>Delay capture briefly after a client resumes from recovery.</summary>
+        private const long PostWorldSyncCommandHoldMs = 300;
+
         private readonly IModLogger _log;
         private readonly MessageCodec _codec;
         private readonly List<ISessionObserver> _observers = new List<ISessionObserver>();
@@ -66,6 +69,8 @@ namespace CS2MultiplayerMod.Core.Session
         private bool _awaitingHostApproval;
         private bool _worldSyncSuspended;
         private long _worldSyncEpoch;
+        private long _nowUnixMs;
+        private long _postWorldSyncCommandHoldUntilMs;
 
         public MultiplayerSession(IModLogger log, MessageCodec codec = null)
         {
@@ -193,11 +198,7 @@ namespace CS2MultiplayerMod.Core.Session
             for (int i = 0; i < commandIds.Length; i++) _allowedCommandIds.Add(commandIds[i]);
         }
 
-        /// <summary>
-        /// Host-side role policy for high-impact tools. The game layer supplies only ids it has
-        /// already registered as valid; clients are told why an edit was declined but remain
-        /// connected, so a host can reserve terrain, policy and irreversible city changes.
-        /// </summary>
+        /// <summary>Checks whether a peer may use a host-restricted tool.</summary>
         public void SetHostOnlyCommands(params ushort[] commandIds)
         {
             _hostOnlyCommandIds.Clear();
@@ -220,6 +221,7 @@ namespace CS2MultiplayerMod.Core.Session
         /// </summary>
         public void Update(long nowUnixMs)
         {
+            _nowUnixMs = nowUnixMs;
             if (_transport == null) return;
 
             _eventBuffer.Clear();

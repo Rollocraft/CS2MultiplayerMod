@@ -183,8 +183,16 @@ static class Program
             Send(alice, Shape()); Send(host, Shape());
             Settle();
             Assert(observed.Sum(o => o.States.Count) == count, "barrier suppresses hover");
+            long resumeAt = clock.ElapsedMilliseconds;
             Assert(host.ResumeWorldSync(123, 1, targets), "resume barrier");
             Pump(() => !alice.WorldSyncSuspended && !bob.WorldSyncSuspended);
+            alice.SendCommand(1, 7, new byte[] { 1 });
+            Settle();
+            Assert(observed[0].Commands.Count == 0 && observed[2].Commands.Count == 0,
+                "post-sync stale command is discarded");
+            Pump(() => clock.ElapsedMilliseconds >= resumeAt + 350);
+            alice.SendCommand(2, 7, new byte[] { 2 });
+            Pump(() => observed[0].Commands.Count == 1);
             Send(alice);
             Pump(() => observed[2].States.Count == 6);
             Assert(observed[2].States.Last().Hover.Length == 0, "clear after reload");
@@ -195,7 +203,9 @@ static class Program
     sealed class Observer : SessionObserver
     {
         public readonly List<PlayerStateMessage> States = new();
+        public readonly List<SimulationCommandMessage> Commands = new();
         public override void OnPlayerStateReceived(PlayerStateMessage state) => States.Add(state);
+        public override void OnCommandReceived(SimulationCommandMessage command) => Commands.Add(command);
     }
 
     sealed class BackpressureTransport(ITransport inner) : ITransport

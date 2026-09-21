@@ -172,6 +172,12 @@ namespace CS2MultiplayerMod.Core.Session
             NotifyWorldSync(control.Stage, control.Epoch, control.ResumeSpeed, from);
             _worldSyncSuspended = false;
             _worldSyncEpoch = 0;
+            if (control.Stage == WorldSyncStage.Resume)
+            {
+                _postWorldSyncCommandHoldUntilMs = _nowUnixMs + PostWorldSyncCommandHoldMs;
+                _log.Detail(LogTopic.WorldTransfer, "Holding client commands for " +
+                    PostWorldSyncCommandHoldMs + " ms after world sync resume.");
+            }
             if (control.Stage == WorldSyncStage.Abort)
             {
                 _blobs.Clear();
