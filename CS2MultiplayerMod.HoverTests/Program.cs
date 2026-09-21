@@ -51,6 +51,11 @@ static class Program
             "mod manifest comparison is case-insensitive");
         Assert(MultiplayerSession.DescribeModMismatch(new[] { "Traffic" }, new[] { "Move It" }) != null,
             "mod manifest comparison names a differing playset");
+        string buildMismatch = MultiplayerSession.DescribeModMismatch(
+            new[] { "Traffic@1.2.0#abc" }, new[] { "Traffic@1.3.0#def" });
+        Assert(buildMismatch != null && buildMismatch.Contains("different build") &&
+               !buildMismatch.Contains("you are missing"),
+            "mod manifest comparison separates build mismatch from missing mod");
         var receipt = new NetOperationReceiptMessage(3, 91, true, "committed and drained");
         var decodedReceipt = (NetOperationReceiptMessage)Codec.Decode(Codec.Encode(receipt));
         Assert(decodedReceipt.OriginPlayerId == 3 && decodedReceipt.OperationId == 91 &&
