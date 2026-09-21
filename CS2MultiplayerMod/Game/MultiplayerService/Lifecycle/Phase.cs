@@ -152,7 +152,7 @@ namespace CS2MultiplayerMod.Game
         }
 
         /// <summary>
-        /// Refuses the action when any mod other than this one is live, and records the
+        /// Refuses the action when an unreviewed or blocked mod is live, and records the
         /// reason as a fault so the status screen and the error overlay explain it. Enforced
         /// here rather than only in the UI because the options screen's Host button and the
         /// hub reach these entry points directly. True when the caller must stop.
@@ -172,8 +172,8 @@ namespace CS2MultiplayerMod.Game
 
             _lastFault = detail;
             _log.Warn(LogTopic.Session, "Cannot " + action + ": " + detail +
-                ". Multiplayer runs only with CS2 Multiplayer Mod alone - disable the " +
-                "others in the active playset and restart the game.");
+                ". Disable the unreviewed or blocked mods in the active playset and restart " +
+                "the game, or use the explicit own-risk override.");
             return true;
         }
 

@@ -16,10 +16,10 @@ using PlaysetMod = Colossal.PSI.Common.Mod;
 namespace CS2MultiplayerMod.Game
 {
     /// <summary>
-    /// Finds every mod other than this one that is live for the running game. Hosting and
-    /// joining are both refused while any is present: nothing in the sync layer accounts
-    /// for a third party changing prefabs, tools or the simulation, so one such mod on one
-    /// side is enough to desync the session or crash the other player.
+    /// Finds every mod other than this one that is live for the running game and applies
+    /// <see cref="ModCompatibilityCatalog"/> to it. Reviewed, supported mods may start a
+    /// session; restricted ones are recorded for diagnosis; blocked and unreviewed ones
+    /// require the explicit own-risk override.
     ///
     /// The active Paradox Mods playset is the source of truth wherever it can be read: it
     /// tracks what the player toggles live, and it is the only source that also lists
@@ -95,13 +95,23 @@ namespace CS2MultiplayerMod.Game
 
         public static bool AnyOtherMods => OtherModNames.Length > 0;
 
+        public static bool AnyBlockingMods
+        {
+            get
+            {
+                foreach (string name in OtherModNames)
+                    if (ModCompatibilityCatalog.BlocksStart(name)) return true;
+                return false;
+            }
+        }
+
         /// <summary>
         /// Localized sentence naming the offending mods for the blocking banner, or "" when
         /// nothing else is running (which hides the banner).
         /// </summary>
         public static string BlockText(bool ignored = false)
         {
-            string[] names = OtherModNames;
+            string[] names = BlockingModNames();
             if (names.Length == 0) return "";
 
             // Reading the names is what refreshes _restartRequired, so the order matters.
@@ -118,7 +128,7 @@ namespace CS2MultiplayerMod.Game
         /// </summary>
         public static string FaultDetail()
         {
-            string[] names = OtherModNames;
+            string[] names = BlockingModNames();
             return names.Length == 0 ? "" : FaultMarker + " " + NamesText(names);
         }
 
@@ -130,7 +140,21 @@ namespace CS2MultiplayerMod.Game
         public static string Summary()
         {
             string[] names = OtherModNames;
-            return names.Length == 0 ? "none" : "[" + NamesText(names) + "]";
+            if (names.Length == 0) return "none";
+
+            var labelled = new string[names.Length];
+            for (int i = 0; i < names.Length; i++)
+                labelled[i] = names[i] + "=" + ModCompatibilityCatalog.Label(names[i]);
+            return "[" + NamesText(labelled) + "]";
+        }
+
+        private static string[] BlockingModNames()
+        {
+            string[] names = OtherModNames;
+            var blocking = new List<string>();
+            foreach (string name in names)
+                if (ModCompatibilityCatalog.BlocksStart(name)) blocking.Add(name);
+            return blocking.ToArray();
         }
 
         /// <summary>Comma-separated names, truncated to <see cref="MaxNamesListed"/>.</summary>
@@ -368,8 +392,7 @@ namespace CS2MultiplayerMod.Game
             SyncLog.Event(LogTopic.Startup,
                 current.Length == 0
                     ? "No other mods are active - multiplayer is available."
-                    : "Other mods are active, from the " + source + ": " +
-                      string.Join(", ", current) + ".");
+                    : "Other mods are active, from the " + source + ": " + Summary() + ".");
         }
 
         private static void WarnOnce(string source, Exception ex)

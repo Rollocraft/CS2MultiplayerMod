@@ -89,7 +89,7 @@ namespace CS2MultiplayerMod
         public bool CannotStartHost()
         {
             return IsNotInGame() || !IsNotInSession() ||
-                   (CS2MultiplayerMod.Game.ModsCheck.AnyOtherMods && !IgnoreModCompatibilityChecks);
+                   (CS2MultiplayerMod.Game.ModsCheck.AnyBlockingMods && !IgnoreModCompatibilityChecks);
         }
 
         /// <summary>
