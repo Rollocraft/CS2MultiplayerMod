@@ -377,6 +377,8 @@ namespace CS2MultiplayerMod.Game
                 return L10n.T(L10n.Key.ErrorGameVersion);
             if (FaultContains(fault, "DLC mismatch"))
                 return L10n.T(L10n.Key.ErrorDlc);
+            if (FaultContains(fault, "Mod playset mismatch"))
+                return L10n.T(L10n.Key.ErrorMods);
             if (FaultContains(fault, ModsCheck.FaultMarker))
                 return L10n.T(L10n.Key.ErrorMods);
             if (FaultContains(fault, "Server is full"))
@@ -419,6 +421,8 @@ namespace CS2MultiplayerMod.Game
                     ? detail + " " + L10n.T(L10n.Key.ErrorDlcHelp)
                     : L10n.T(L10n.Key.ErrorDlcHelp);
             }
+            if (FaultContains(fault, "Mod playset mismatch"))
+                return fault + " Enable the same active mods as the host, then join again.";
             if (FaultContains(fault, ModsCheck.FaultMarker))
             {
                 string detail = MarkedDetail(fault, ModsCheck.FaultMarker);
