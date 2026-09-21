@@ -30,6 +30,11 @@ namespace CS2MultiplayerMod.Core.Session
         private long _minuteStartMs;
         private int _resyncs;
 
+        /// <summary>Compact read-only diagnostic state; callers never use it for enforcement.</summary>
+        public string Snapshot => "messages=" + _messages + " bytes=" + _bytes +
+                                  " commands=" + _commands + " chat=" + _chat +
+                                  " resyncs=" + _resyncs;
+
         /// <summary>Account one received message. Returns null if fine, else the violated budget's name.</summary>
         public string Account(long nowMs, int payloadBytes, bool isCommand, bool isChat, bool isResync)
         {

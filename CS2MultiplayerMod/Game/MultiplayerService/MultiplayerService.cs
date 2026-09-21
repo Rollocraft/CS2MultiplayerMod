@@ -207,6 +207,7 @@ namespace CS2MultiplayerMod.Game
                               " build=" + Mod.BuildId +
                               " protocol=" + ProtocolConstants.ProtocolVersion +
                               " mods=" + ModsCheck.Summary() +
+                              " peers=" + PeerDiagnostics() +
                               " process=" + FlightRecorder.ProcessSnapshot();
             string path = FlightRecorder.ExportDiagnosticBundle(reason, snapshot);
             if (path != null)
@@ -214,6 +215,18 @@ namespace CS2MultiplayerMod.Game
             else
                 _log.Warn(LogTopic.Session, "Could not write diagnostic bundle.");
             return path;
+        }
+
+        private string PeerDiagnostics()
+        {
+            var parts = new List<string>();
+            foreach (Peer peer in _session.Peers)
+            {
+                if (!peer.Handshaked) continue;
+                parts.Add("#" + peer.PlayerId + ":" + peer.Name + " latencyMs=" + peer.LatencyMs +
+                    " " + peer.RateLimiter.Snapshot);
+            }
+            return parts.Count == 0 ? "none" : string.Join(";", parts.ToArray());
         }
 
         /// <summary>
@@ -432,7 +445,10 @@ namespace CS2MultiplayerMod.Game
                         Peer peer = peers[i];
                         sb.Append(",{\"id\":").Append(peer.PlayerId).Append(",\"name\":");
                         AppendJsonString(sb, peer.Name);
-                        sb.Append(",\"isHost\":false}");
+                sb.Append(",\"isHost\":false,\"latencyMs\":").Append(peer.LatencyMs)
+                    .Append(",\"traffic\":");
+                AppendJsonString(sb, peer.RateLimiter.Snapshot);
+                sb.Append('}');
                     }
                     sb.Append(']');
                 }
