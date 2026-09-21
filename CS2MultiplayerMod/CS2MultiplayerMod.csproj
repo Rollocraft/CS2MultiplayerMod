@@ -54,9 +54,15 @@
         </ItemGroup>
     </Target>
 
+    <!-- Use the process environment first so CI/Linux builds can supply the official
+    toolchain; retain the Windows user-variable lookup used by the game installer. -->
+    <PropertyGroup>
+        <CsiiToolPath>$([System.Environment]::GetEnvironmentVariable('CSII_TOOLPATH'))</CsiiToolPath>
+        <CsiiToolPath Condition="'$(CsiiToolPath)' == ''">$([System.Environment]::GetEnvironmentVariable('CSII_TOOLPATH', 'EnvironmentVariableTarget.User'))</CsiiToolPath>
+    </PropertyGroup>
     <!--Imports must be after PropertyGroup block-->
-    <Import Project="$([System.Environment]::GetEnvironmentVariable('CSII_TOOLPATH', 'EnvironmentVariableTarget.User'))\Mod.props"/>
-    <Import Project="$([System.Environment]::GetEnvironmentVariable('CSII_TOOLPATH', 'EnvironmentVariableTarget.User'))\Mod.targets"/>
+    <Import Project="$(CsiiToolPath)/Mod.props"/>
+    <Import Project="$(CsiiToolPath)/Mod.targets"/>
 
     <ItemGroup>
         <Reference Include="Game">
