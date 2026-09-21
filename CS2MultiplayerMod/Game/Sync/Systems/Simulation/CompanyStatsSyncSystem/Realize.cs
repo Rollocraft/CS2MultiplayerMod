@@ -1149,7 +1149,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             // for it there would be a company entity with nowhere to live, so check first.
             if (_propertyProcessing == null || !_propertyProcessing.Enabled) return false;
 
-            Entity company = EntityManager.CreateEntity(archetype);
+            Entity company = ArchetypeEntityFactory.Create(EntityManager, archetype);
             EntityManager.SetComponentData(company, new PrefabRef { m_Prefab = prefab });
 
             Unity.Jobs.JobHandle dependencies;

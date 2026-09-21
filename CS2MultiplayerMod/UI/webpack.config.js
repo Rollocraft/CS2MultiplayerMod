@@ -1,7 +1,6 @@
 const path = require("path");
 const MOD = require("./mod.json");
 const MiniCssExtractPlugin = require("mini-css-extract-plugin");
-const { CSSPresencePlugin } = require("./tools/css-presence");
 const TerserPlugin = require("terser-webpack-plugin");
 const gray = (text) => `\x1b[90m${text}\x1b[0m`;
 
@@ -106,7 +105,6 @@ module.exports = {
   },
   plugins: [
     new MiniCssExtractPlugin(),
-    new CSSPresencePlugin(),
     {
       apply(compiler) {
         let runCount = 0;

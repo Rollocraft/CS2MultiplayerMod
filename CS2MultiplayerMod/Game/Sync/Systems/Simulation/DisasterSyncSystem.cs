@@ -332,7 +332,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             uint endFrame = startFrame + (uint)command.DurationFrames;
 
             EventData eventData = EntityManager.GetComponentData<EventData>(prefab);
-            Entity entity = EntityManager.CreateEntity(eventData.m_Archetype);
+            Entity entity = ArchetypeEntityFactory.Create(EntityManager, eventData.m_Archetype);
             if (!EntityManager.HasComponent<PrefabRef>(entity) ||
                 !EntityManager.HasComponent<global::Game.Events.Duration>(entity) ||
                 !HasKindComponent(entity, command.Kind))

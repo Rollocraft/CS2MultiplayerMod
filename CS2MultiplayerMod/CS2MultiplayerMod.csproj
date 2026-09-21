@@ -164,8 +164,9 @@
         <PropertyGroup>
             <SteamBackendDir>$(MSBuildProjectDirectory)\..\CS2MultiplayerMod.Steam</SteamBackendDir>
         </PropertyGroup>
-        <MSBuild Projects="$(SteamBackendDir)\CS2MultiplayerMod.Steam.csproj"
-                 Targets="Build" Properties="Configuration=$(Configuration)"/>
+        <!--Run the relay in a fresh dotnet process. Its restore generates the net48 reference
+            imports, and MSBuild's in-process project cache cannot observe those on a first build. -->
+        <Exec Command="dotnet build &quot;$(SteamBackendDir)\CS2MultiplayerMod.Steam.csproj&quot; --configuration $(Configuration)"/>
         <ItemGroup>
             <SteamBackendFiles Include="$(SteamBackendDir)\bin\$(Configuration)\net48\CS2MultiplayerMod.Steam.dll"/>
             <SteamBackendFiles Include="$(SteamBackendDir)\bin\$(Configuration)\net48\CS2MultiplayerMod.Steam.pdb"/>
