@@ -3,17 +3,7 @@ using System.Collections.Generic;
 
 namespace CS2MultiplayerMod.Game
 {
-    /// <summary>
-    /// The compatibility policy used at the multiplayer boundary.  Keep the names here in
-    /// lock-step with help/mods.md: the game must not advertise a mod as supported while
-    /// silently rejecting it at Host/Join.
-    ///
-    /// Playset metadata available across supported game builds exposes a display name but
-    /// not a stable publisher/version identifier.  Exact-name matching is therefore
-    /// deliberately conservative: a renamed or unknown mod remains blocked until it has
-    /// been reviewed.  The handshake manifest introduced later will add identity/version
-    /// comparison; this catalog answers the policy question in the meantime.
-    /// </summary>
+    /// <summary>Compatibility policy for other active mods.</summary>
     internal static class ModCompatibilityCatalog
     {
         internal enum Support
@@ -36,7 +26,7 @@ namespace CS2MultiplayerMod.Game
         private static readonly Dictionary<string, Support> Entries =
             new Dictionary<string, Support>(StringComparer.OrdinalIgnoreCase)
             {
-                // Officially supported and tested client-safe mods.
+                // Supported mods.
                 { "Traffic", Support.Allowed },
                 { "Road Speed Adjuster", Support.Allowed },
                 { "Anarchy", Support.Allowed },
@@ -55,6 +45,8 @@ namespace CS2MultiplayerMod.Game
                 { "Stop Jaywalking", Support.Allowed },
                 { "Road Name Remover", Support.Allowed },
                 { "Achievement Fixer", Support.Allowed },
+                // Runtime assembly name used by Achievement Fixer.
+                { "AchievementFixer", Support.Allowed },
                 { "Specialized Industry Freedom", Support.Allowed },
                 { "Articulated Buses", Support.Allowed },
                 { "No Vehicle Despawn", Support.Allowed },
@@ -64,8 +56,7 @@ namespace CS2MultiplayerMod.Game
                 { "Traffic Tool Essentials", Support.Allowed },
                 { "Official Region Packs", Support.Allowed },
 
-                // These have documented host-only or manual-resync limitations.  They do
-                // not block a session, but their presence is explicit in the session log.
+                // Supported with limitations; record them in the session log.
                 { "Move It", Support.Restricted },
                 { "Node Controller", Support.Restricted },
                 { "Traffic Lights Enhancement", Support.Restricted },
@@ -75,7 +66,7 @@ namespace CS2MultiplayerMod.Game
                 { "Event Rush", Support.Restricted },
                 { "Decals / Props", Support.Restricted },
 
-                // Known crash/desync risk.  This cannot be overridden accidentally.
+                // Known crash or desync risk.
                 { "Better Bulldozer", Support.Blocked }
             };
 
@@ -102,7 +93,7 @@ namespace CS2MultiplayerMod.Game
             }
         }
 
-        /// <summary>Conservative risk class for diagnostics and future tool permissions.</summary>
+        /// <summary>Risk class used for compatibility checks.</summary>
         public static Risk RiskOf(string name)
         {
             switch (Classify(name))
@@ -112,7 +103,9 @@ namespace CS2MultiplayerMod.Game
             }
             if (string.Equals(name, "Lumina", StringComparison.OrdinalIgnoreCase) ||
                 string.Equals(name, "Extended Tooltip", StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(name, "Road Name Remover", StringComparison.OrdinalIgnoreCase))
+                string.Equals(name, "Road Name Remover", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(name, "Achievement Fixer", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(name, "AchievementFixer", StringComparison.OrdinalIgnoreCase))
                 return Risk.Cosmetic;
             if (string.Equals(name, "Traffic", StringComparison.OrdinalIgnoreCase) ||
                 string.Equals(name, "Traffic Lights Enhancement", StringComparison.OrdinalIgnoreCase) ||
