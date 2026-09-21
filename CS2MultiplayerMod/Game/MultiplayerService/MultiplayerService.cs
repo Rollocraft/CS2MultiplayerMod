@@ -384,6 +384,10 @@ namespace CS2MultiplayerMod.Game
         private int _nextChatId = 1;
         private string _chatLogJson = "[]";
         private string _playerListJson = "[]";
+        private readonly Dictionary<long, NetOperationPeerStatus> _netOperationStatuses =
+            new Dictionary<long, NetOperationPeerStatus>();
+        private readonly Queue<long> _netOperationStatusOrder = new Queue<long>();
+        private const int MaxTrackedNetOperations = 32;
 
         /// <summary>
         /// The chat/event feed as a JSON array for the hub panel binding:
@@ -414,6 +418,61 @@ namespace CS2MultiplayerMod.Game
             if (!_session.BanPlayer(playerId))
                 _log.Warn(LogTopic.Session, "Ignored ban request for unavailable player #" +
                     playerId + ".");
+        }
+
+        private void RecordNetOperationBroadcast(long operationId, int originPlayerId)
+        {
+            if (_session.Role != SessionRole.Host || operationId <= 0) return;
+            lock (_chatLock)
+            {
+                var status = new NetOperationPeerStatus();
+                foreach (Peer peer in _session.Peers)
+                    if (peer.Handshaked)
+                        status.ByPlayer[peer.PlayerId] = peer.PlayerId == originPlayerId
+                            ? "applied (source)" : "waiting";
+                _netOperationStatuses[operationId] = status;
+                _netOperationStatusOrder.Enqueue(operationId);
+                while (_netOperationStatusOrder.Count > MaxTrackedNetOperations)
+                    _netOperationStatuses.Remove(_netOperationStatusOrder.Dequeue());
+            }
+            RefreshPlayerListJson();
+        }
+
+        private void ClearNetOperationStatuses()
+        {
+            lock (_chatLock)
+            {
+                _netOperationStatuses.Clear();
+                _netOperationStatusOrder.Clear();
+            }
+        }
+
+        private void RecordNetOperationReceipt(Peer peer, NetOperationReceiptMessage receipt)
+        {
+            if (peer == null || receipt == null) return;
+            lock (_chatLock)
+            {
+                NetOperationPeerStatus status;
+                if (!_netOperationStatuses.TryGetValue(receipt.OperationId, out status)) return;
+                status.ByPlayer[peer.PlayerId] = receipt.Applied ? "applied" : "failed";
+            }
+            RefreshPlayerListJson();
+        }
+
+        private string LatestNetOperationStatus(int playerId)
+        {
+            long[] keys = _netOperationStatusOrder.ToArray();
+            for (int i = keys.Length - 1; i >= 0; i--)
+            {
+                NetOperationPeerStatus status;
+                if (_netOperationStatuses.TryGetValue(keys[i], out status))
+                {
+                    string value;
+                    if (status.ByPlayer.TryGetValue(playerId, out value))
+                        return "op #" + keys[i] + ": " + value;
+                }
+            }
+            return "";
         }
 
         private void RefreshPlayerListJson()
@@ -449,6 +508,8 @@ namespace CS2MultiplayerMod.Game
                 sb.Append(",\"isHost\":false,\"latencyMs\":").Append(peer.LatencyMs)
                     .Append(",\"traffic\":");
                 AppendJsonString(sb, peer.RateLimiter.Snapshot);
+                sb.Append(",\"netStatus\":");
+                AppendJsonString(sb, LatestNetOperationStatus(peer.PlayerId));
                 sb.Append('}');
                     }
                     sb.Append(']');
@@ -467,6 +528,11 @@ namespace CS2MultiplayerMod.Game
             public string Sender;
             public string Text;
             public string Time;
+        }
+
+        private sealed class NetOperationPeerStatus
+        {
+            public readonly Dictionary<int, string> ByPlayer = new Dictionary<int, string>();
         }
 
 
@@ -504,6 +570,8 @@ namespace CS2MultiplayerMod.Game
                     // Authenticated; the host streams its world to every fresh join.
                     _service.SetPhase(ClientWorldPhase.WaitingForMap);
                 }
+                if (status == SessionStatus.Connected && _service._session.Role == SessionRole.Host)
+                    _service.ClearNetOperationStatuses();
                 else if (status == SessionStatus.Offline || status == SessionStatus.Faulted)
                 {
                     // Core teardown deliberately knows nothing about game worlds. If this
@@ -597,6 +665,7 @@ namespace CS2MultiplayerMod.Game
                     {
                         Sync.Commands.NetToolOperationCommand operation =
                             Sync.Commands.NetToolOperationCommand.Decode(command.Body);
+                        _service.RecordNetOperationBroadcast(operation.OperationId, command.OriginPlayerId);
                         _service.AppendChatEntry(null, "Net operation #" + operation.OperationId +
                             " sent; waiting for each client to apply it.");
                     }
@@ -605,6 +674,7 @@ namespace CS2MultiplayerMod.Game
             }
             public override void OnNetOperationReceipt(Peer peer, NetOperationReceiptMessage receipt)
             {
+                _service.RecordNetOperationReceipt(peer, receipt);
                 string name = peer != null && !string.IsNullOrEmpty(peer.Name) ? peer.Name : "client";
                 _service.AppendChatEntry(null, "Net operation #" + receipt.OperationId + " " +
                     (receipt.Applied ? "applied by " : "failed on ") + name +

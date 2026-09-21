@@ -141,6 +141,7 @@ interface PlayerEntry {
     id: number;
     name: string;
     isHost: boolean;
+    netStatus?: string;
 }
 
 interface PendingJoin {
@@ -1165,6 +1166,9 @@ const HostPlayerList = ({ players }: { players: PlayerEntry[] }) => {
                                         </Button>
                                     </Tooltip>
                                 </>
+                            )}
+                            {!player.isHost && player.netStatus && (
+                                <span style={styles.playerBadge}>{player.netStatus}</span>
                             )}
                         </div>
                     );
