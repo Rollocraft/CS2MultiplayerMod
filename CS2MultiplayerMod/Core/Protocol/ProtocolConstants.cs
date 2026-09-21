@@ -214,12 +214,15 @@
         /// islands) reattach on the receiver.
         /// See <see cref="Messages.HandshakeRequest"/> and version notes in doc/internals.
         /// </summary>
+        // v68 adds the source artifact id to the handshake. The release version alone is
+        // insufficient for local/WIP builds: two artifacts can advertise the same release while
+        // carrying different code, and a desync report needs to distinguish them.
         // v67 adds the two mod-state commands: the session's third-party type table and a
         // carrier's replicated closure. A v66 peer refuses both as unauthorized command ids and
         // would drop the connection over state it simply predates, so the bump keeps that
         // disagreement at the handshake where it can be explained.
         // v66 adds bounded display-only hover geometry to player presence updates.
-        public const int ProtocolVersion = 67;
+        public const int ProtocolVersion = 68;
 
         /// <summary>
         /// Hard cap on a single payload, guarding against corrupt length prefixes.

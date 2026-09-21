@@ -185,7 +185,8 @@ namespace CS2MultiplayerMod.Game
         {
             return " mod=" + Mod.Version +
                    (string.Equals(Mod.Version, config.ModVersion, StringComparison.Ordinal)
-                       ? "" : " compat=" + config.ModVersion);
+                       ? "" : " compat=" + config.ModVersion) +
+                   " build=" + (string.IsNullOrEmpty(config.BuildId) ? "unknown" : config.BuildId);
         }
 
         /// <summary>
@@ -373,7 +374,8 @@ namespace CS2MultiplayerMod.Game
                 transport: transport,
                 joinCode: relay && !hosting ? joinCode : "",
                 ignoreModCompatibilityChecks: settings.IgnoreModCompatibilityChecks,
-                simulationSync: settings.SimulationSync);
+                simulationSync: settings.SimulationSync,
+                buildId: Mod.BuildId);
         }
 
     }

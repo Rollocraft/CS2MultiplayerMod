@@ -34,7 +34,7 @@ namespace CS2MultiplayerMod.Core.Session
             byte[] binding = _transport.GetChannelBinding(ConnectionId.Server);
             byte[] proof = HandshakeAuth.ComputeProof(_config.Password, challenge.Nonce, binding);
             SendTo(connection, new HandshakeRequest(
-                ProtocolConstants.ProtocolVersion, _config.ModVersion, _config.GameVersion,
+                ProtocolConstants.ProtocolVersion, _config.ModVersion, _config.BuildId, _config.GameVersion,
                 LocalPlayerName, proof, _config.DlcList));
         }
 
@@ -53,7 +53,8 @@ namespace CS2MultiplayerMod.Core.Session
             _log.Detail(LogTopic.Session, "Handshake request from " + connection + " (" +
                 (peer.RemoteAddress ?? "?") + "): name='" +
                 WireGuard.SanitizePlayerName(request.PlayerName) + "' protocol=" +
-                request.ProtocolVersion + " mod=" + (request.ModVersion ?? "?") + " game=" +
+                request.ProtocolVersion + " mod=" + (request.ModVersion ?? "?") + " build=" +
+                (request.BuildId ?? "?") + " game=" +
                 (request.GameVersion ?? "?") + " dlcs=[" +
                 string.Join(", ", request.DlcList ?? Array.Empty<string>()) + "]" +
                 " passwordProof=" +
@@ -143,6 +144,7 @@ namespace CS2MultiplayerMod.Core.Session
             // suffixing "(2)" rather than rejecting, keeping the join frictionless.
             peer.Name = WireGuard.SanitizePlayerName(request.PlayerName);
             peer.ModVersion = request.ModVersion;
+            peer.BuildId = request.BuildId;
             peer.GameVersion = request.GameVersion;
 
             // Optional manual gate: hold the join and let the host admit it by hand. The
@@ -180,7 +182,8 @@ namespace CS2MultiplayerMod.Core.Session
 
             SendTo(connection, HandshakeResponse.Accept(peer.PlayerId, _config.SimulationSync));
             _log.Event(LogTopic.Session, "Accepted " + peer + ": mod " +
-                (string.IsNullOrEmpty(peer.ModVersion) ? "?" : peer.ModVersion) + ", game " +
+                (string.IsNullOrEmpty(peer.ModVersion) ? "?" : peer.ModVersion) + " build " +
+                (string.IsNullOrEmpty(peer.BuildId) ? "?" : peer.BuildId) + ", game " +
                 (string.IsNullOrEmpty(peer.GameVersion) ? "?" : peer.GameVersion) + ".");
             NotifyPeerJoined(peer);
 

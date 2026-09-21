@@ -35,6 +35,25 @@
         </PropertyGroup>
     </Target>
 
+    <!-- A release version answers which public build a player installed; the commit answers
+    which exact source tree produced it. Keep the latter optional so source archives that do
+    not contain .git still build and identify themselves honestly as "unknown". -->
+    <Target Name="StampBuildCommit" BeforeTargets="GetAssemblyAttributes;GenerateAssemblyInfo">
+        <Exec Command="git rev-parse --short=12 HEAD"
+              WorkingDirectory="$(MSBuildProjectDirectory)\.."
+              ConsoleToMSBuild="true"
+              IgnoreExitCode="true">
+            <Output TaskParameter="ConsoleOutput" PropertyName="GitCommitOutput" />
+        </Exec>
+        <PropertyGroup>
+            <BuildCommit>unknown</BuildCommit>
+            <BuildCommit Condition="'$(GitCommitOutput)' != ''">$([System.String]::Copy('$(GitCommitOutput)').Trim())</BuildCommit>
+        </PropertyGroup>
+        <ItemGroup>
+            <AssemblyMetadata Include="CS2MP.Commit" Value="$(BuildCommit)" />
+        </ItemGroup>
+    </Target>
+
     <!--Imports must be after PropertyGroup block-->
     <Import Project="$([System.Environment]::GetEnvironmentVariable('CSII_TOOLPATH', 'EnvironmentVariableTarget.User'))\Mod.props"/>
     <Import Project="$([System.Environment]::GetEnvironmentVariable('CSII_TOOLPATH', 'EnvironmentVariableTarget.User'))\Mod.targets"/>

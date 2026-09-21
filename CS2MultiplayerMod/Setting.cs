@@ -222,6 +222,13 @@ namespace CS2MultiplayerMod
         [SettingsUISection(GeneralTab, StatusGroup)]
         public string StatusWorld => Mod.Service != null ? Mod.Service.StatusWorldText : L10n.T(L10n.Key.WorldNone);
 
+        /// <summary>
+        /// Read-only exact build identity. It lives beside the session status so a player can
+        /// copy it into a report before joining or hosting.
+        /// </summary>
+        [SettingsUISection(GeneralTab, StatusGroup)]
+        public string BuildIdentity => CS2MultiplayerMod.BuildIdentity.Label;
+
         [SettingsUIButton]
         [SettingsUIHideByCondition(typeof(Setting), nameof(IsNotInSession))]
         [SettingsUISection(GeneralTab, SessionGroup)]

@@ -73,6 +73,9 @@ namespace CS2MultiplayerMod
         internal static string CompatibilityVersion =>
             _compatibilityVersion ?? (_compatibilityVersion = ReleasePart(Version));
 
+        /// <summary>Exact artifact identity for UI, session logs and peer diagnostics.</summary>
+        internal static string BuildId => BuildIdentity.Commit;
+
         private static string _version;
         private static string _compatibilityVersion;
 

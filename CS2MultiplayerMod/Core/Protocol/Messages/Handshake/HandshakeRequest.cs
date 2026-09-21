@@ -10,6 +10,7 @@ namespace CS2MultiplayerMod.Core.Protocol.Messages
     {
         public int ProtocolVersion;
         public string ModVersion;
+        public string BuildId;
         public string GameVersion;
         public string PlayerName;
         public byte[] PasswordProof;
@@ -17,11 +18,12 @@ namespace CS2MultiplayerMod.Core.Protocol.Messages
 
         public HandshakeRequest() { }
 
-        public HandshakeRequest(int protocolVersion, string modVersion, string gameVersion,
+        public HandshakeRequest(int protocolVersion, string modVersion, string buildId, string gameVersion,
                                 string playerName, byte[] passwordProof, string[] dlcList = null)
         {
             ProtocolVersion = protocolVersion;
             ModVersion = modVersion;
+            BuildId = buildId;
             GameVersion = gameVersion;
             PlayerName = playerName;
             PasswordProof = passwordProof ?? System.Array.Empty<byte>();
@@ -34,6 +36,7 @@ namespace CS2MultiplayerMod.Core.Protocol.Messages
         {
             writer.WriteInt(ProtocolVersion);
             writer.WriteString(ModVersion);
+            writer.WriteString(BuildId);
             writer.WriteString(GameVersion);
             writer.WriteString(PlayerName);
             writer.WriteInt(PasswordProof != null ? PasswordProof.Length : 0);
@@ -51,6 +54,7 @@ namespace CS2MultiplayerMod.Core.Protocol.Messages
         {
             ProtocolVersion = reader.ReadInt();
             ModVersion = reader.ReadString();
+            BuildId = WireGuard.SanitizeText(reader.ReadString(), 64);
             GameVersion = reader.ReadString();
             PlayerName = reader.ReadString();
             int length = reader.ReadInt();

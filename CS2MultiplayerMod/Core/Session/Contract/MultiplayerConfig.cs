@@ -51,6 +51,9 @@ namespace CS2MultiplayerMod.Core.Session
         /// <summary>Mod build identifier, normally compared strictly during the handshake.</summary>
         public readonly string ModVersion;
 
+        /// <summary>Exact source artifact identifier, informative but logged by both peers.</summary>
+        public readonly string BuildId;
+
         /// <summary>
         /// Host only. Allows a different multiplayer-mod build through the handshake.
         /// Protocol compatibility remains mandatory and is checked before this flag is
@@ -83,7 +86,7 @@ namespace CS2MultiplayerMod.Core.Session
                                  bool requireJoinApproval = false,
                                  TransportMode transport = TransportMode.Direct, string joinCode = "",
                                  bool ignoreModCompatibilityChecks = false,
-                                 bool simulationSync = true)
+                                 bool simulationSync = true, string buildId = "")
         {
             Transport = transport;
             JoinCode = joinCode ?? string.Empty;
@@ -95,6 +98,7 @@ namespace CS2MultiplayerMod.Core.Session
             UseEncryption = useEncryption;
             MaxPlayers = maxPlayers < 2 ? 2 : maxPlayers;
             ModVersion = modVersion ?? string.Empty;
+            BuildId = buildId ?? string.Empty;
             IgnoreModCompatibilityChecks = ignoreModCompatibilityChecks;
             GameVersion = gameVersion ?? string.Empty;
             DlcList = dlcList ?? System.Array.Empty<string>();
