@@ -24,6 +24,15 @@ namespace CS2MultiplayerMod.Game
             Unknown
         }
 
+        internal enum Risk
+        {
+            Cosmetic,
+            PersistentWorld,
+            NetworkOrTerrain,
+            Simulation,
+            Unknown
+        }
+
         private static readonly Dictionary<string, Support> Entries =
             new Dictionary<string, Support>(StringComparer.OrdinalIgnoreCase)
             {
@@ -91,6 +100,30 @@ namespace CS2MultiplayerMod.Game
                 case Support.Blocked: return "blocked";
                 default: return "unreviewed";
             }
+        }
+
+        /// <summary>Conservative risk class for diagnostics and future tool permissions.</summary>
+        public static Risk RiskOf(string name)
+        {
+            switch (Classify(name))
+            {
+                case Support.Unknown: return Risk.Unknown;
+                case Support.Blocked: return Risk.NetworkOrTerrain;
+            }
+            if (string.Equals(name, "Lumina", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(name, "Extended Tooltip", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(name, "Road Name Remover", StringComparison.OrdinalIgnoreCase))
+                return Risk.Cosmetic;
+            if (string.Equals(name, "Traffic", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(name, "Traffic Lights Enhancement", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(name, "Realistic Trips", StringComparison.OrdinalIgnoreCase))
+                return Risk.Simulation;
+            if (string.Equals(name, "Move It", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(name, "Node Controller", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(name, "CoPaste", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(name, "Decals / Props", StringComparison.OrdinalIgnoreCase))
+                return Risk.NetworkOrTerrain;
+            return Risk.PersistentWorld;
         }
     }
 }

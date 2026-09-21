@@ -161,7 +161,8 @@ namespace CS2MultiplayerMod.Game
 
             var labelled = new string[names.Length];
             for (int i = 0; i < names.Length; i++)
-                labelled[i] = names[i] + "=" + ModCompatibilityCatalog.Label(names[i]);
+                labelled[i] = names[i] + "=" + ModCompatibilityCatalog.Label(names[i]) +
+                              "/" + ModCompatibilityCatalog.RiskOf(names[i]);
             return "[" + NamesText(labelled) + "]";
         }
 
