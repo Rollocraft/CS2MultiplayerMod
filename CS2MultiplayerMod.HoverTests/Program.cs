@@ -147,6 +147,12 @@ static class Program
         {
             host.StartHost(Config("Host")); alice.Join(Config("Alice")); bob.Join(Config("Bob"));
             Pump(() => alice.Status == SessionStatus.Connected && bob.Status == SessionStatus.Connected);
+            ConnectionId bobConnection = host.Peers.Single(peer => peer.PlayerId == bob.LocalPlayerId).Connection;
+            Assert(host.RequestWorldSyncForPeer(bobConnection, "targeted-test"),
+                "host starts targeted peer recovery");
+            Pump(() => observed[0].ResyncTargets.Count == 1);
+            Assert(observed[0].ResyncTargets[0] == bobConnection,
+                "targeted recovery names only the failed peer");
             Send(alice, Shape());
             Pump(() => observed[0].States.Count == 1 && observed[2].States.Count == 1);
             Assert(observed[1].States.Count == 0, "source must not receive its own echo");
@@ -209,8 +215,11 @@ static class Program
     {
         public readonly List<PlayerStateMessage> States = new();
         public readonly List<SimulationCommandMessage> Commands = new();
+        public readonly List<ConnectionId> ResyncTargets = new();
         public override void OnPlayerStateReceived(PlayerStateMessage state) => States.Add(state);
         public override void OnCommandReceived(SimulationCommandMessage command) => Commands.Add(command);
+        public override void OnResyncRequested(int playerId, ConnectionId connection) =>
+            ResyncTargets.Add(connection);
     }
 
     sealed class BackpressureTransport(ITransport inner) : ITransport
