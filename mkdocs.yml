@@ -40,6 +40,7 @@ extra_javascript:
 nav:
   - Home: index.md
   - Getting started: getting-started.md
+  - Regression playset: repro-playset.md
   - Connection:
       - Steam Relay: steam-relay.md
       - Direct connection: direct-connection.md

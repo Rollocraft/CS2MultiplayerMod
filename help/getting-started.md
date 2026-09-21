@@ -16,6 +16,9 @@ description: "Requirements, installing through Paradox Mods, hosting your first 
 - A connection type both sides agree on: [Steam Relay](steam-relay.md) or a
   [direct connection](direct-connection.md).
 
+When diagnosing a synchronization defect, use the clean
+[multiplayer regression playset](repro-playset.md) before testing a production city.
+
 ## Install { #install }
 
 1. Find CS2 Multiplayer Mod on [Paradox Mods](https://mods.paradoxplaza.com/mods/150432/Windows).
