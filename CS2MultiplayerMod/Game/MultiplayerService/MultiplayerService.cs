@@ -420,15 +420,17 @@ namespace CS2MultiplayerMod.Game
                     playerId + ".");
         }
 
-        private void RecordNetOperationBroadcast(long operationId, int originPlayerId)
+        private void RecordNetOperationBroadcast(long operationId, SimulationCommandMessage command)
         {
             if (_session.Role != SessionRole.Host || operationId <= 0) return;
             lock (_chatLock)
             {
-                var status = new NetOperationPeerStatus();
+                var status = new NetOperationPeerStatus { Command = new SimulationCommandMessage(
+                    command.OriginPlayerId, command.Tick, command.CommandId,
+                    command.Body == null ? null : (byte[])command.Body.Clone()) };
                 foreach (Peer peer in _session.Peers)
                     if (peer.Handshaked)
-                        status.ByPlayer[peer.PlayerId] = peer.PlayerId == originPlayerId
+                        status.ByPlayer[peer.PlayerId] = peer.PlayerId == command.OriginPlayerId
                             ? "applied (source)" : "waiting";
                 _netOperationStatuses[operationId] = status;
                 _netOperationStatusOrder.Enqueue(operationId);
@@ -457,6 +459,30 @@ namespace CS2MultiplayerMod.Game
                 status.ByPlayer[peer.PlayerId] = receipt.Applied ? "applied" : "failed";
             }
             RefreshPlayerListJson();
+        }
+
+        private bool RetryFailedNetOperation(Peer peer, NetOperationReceiptMessage receipt)
+        {
+            if (peer == null || receipt == null || receipt.Applied) return false;
+            SimulationCommandMessage command = null;
+            lock (_chatLock)
+            {
+                NetOperationPeerStatus status;
+                if (!_netOperationStatuses.TryGetValue(receipt.OperationId, out status) ||
+                    status.Command == null) return false;
+                int retries;
+                status.Retries.TryGetValue(peer.PlayerId, out retries);
+                if (retries >= 1) return false;
+                status.Retries[peer.PlayerId] = retries + 1;
+                status.ByPlayer[peer.PlayerId] = "retrying";
+                command = status.Command;
+            }
+            if (_session.ResendCommandTo(peer.Connection, command))
+            {
+                RefreshPlayerListJson();
+                return true;
+            }
+            return false;
         }
 
         private string LatestNetOperationStatus(int playerId)
@@ -533,6 +559,8 @@ namespace CS2MultiplayerMod.Game
         private sealed class NetOperationPeerStatus
         {
             public readonly Dictionary<int, string> ByPlayer = new Dictionary<int, string>();
+            public readonly Dictionary<int, int> Retries = new Dictionary<int, int>();
+            public SimulationCommandMessage Command;
         }
 
 
@@ -665,7 +693,7 @@ namespace CS2MultiplayerMod.Game
                     {
                         Sync.Commands.NetToolOperationCommand operation =
                             Sync.Commands.NetToolOperationCommand.Decode(command.Body);
-                        _service.RecordNetOperationBroadcast(operation.OperationId, command.OriginPlayerId);
+                        _service.RecordNetOperationBroadcast(operation.OperationId, command);
                         _service.AppendChatEntry(null, "Net operation #" + operation.OperationId +
                             " sent; waiting for each client to apply it.");
                     }
@@ -679,6 +707,9 @@ namespace CS2MultiplayerMod.Game
                 _service.AppendChatEntry(null, "Net operation #" + receipt.OperationId + " " +
                     (receipt.Applied ? "applied by " : "failed on ") + name +
                     (string.IsNullOrEmpty(receipt.Detail) ? "." : ": " + receipt.Detail));
+                if (_service.RetryFailedNetOperation(peer, receipt))
+                    _service.AppendChatEntry(null, "Net operation #" + receipt.OperationId +
+                        " is being retried for " + name + " with its original transaction.");
             }
             public override void OnPlayerStateReceived(PlayerStateMessage state) => _service.RecordRemotePlayer(state);
             public override void OnBlobReceived(string channel, long transferId, byte[] data)

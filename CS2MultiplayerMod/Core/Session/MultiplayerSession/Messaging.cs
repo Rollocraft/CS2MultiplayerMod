@@ -245,6 +245,24 @@ namespace CS2MultiplayerMod.Core.Session
             }
         }
 
+        /// <summary>
+        /// Host-only targeted replay of a command that a client explicitly failed to realize.
+        /// This preserves the original transaction bytes and origin instead of asking the game
+        /// layer to regenerate geometry with a new local seed.
+        /// </summary>
+        public bool ResendCommandTo(ConnectionId target, SimulationCommandMessage command)
+        {
+            Peer peer;
+            if (Role != SessionRole.Host || Status != SessionStatus.Connected ||
+                _worldSyncSuspended || command == null || target.IsNone ||
+                !_peers.TryGetValue(target.Value, out peer) || !peer.Handshaked)
+                return false;
+            byte[] body = command.Body == null ? Array.Empty<byte>() : (byte[])command.Body.Clone();
+            SendTo(target, new SimulationCommandMessage(command.OriginPlayerId,
+                command.Tick, command.CommandId, body));
+            return true;
+        }
+
         /// <summary>Report a client-side atomic net-operation result to the host.</summary>
         public void SendNetOperationReceipt(int originPlayerId, long operationId, bool applied, string detail = null)
         {
