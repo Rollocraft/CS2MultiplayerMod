@@ -28,11 +28,12 @@ namespace CS2MultiplayerMod.Core.Protocol
         public static MessageCodec CreateDefault()
         {
             var codec = new MessageCodec();
-            // Sized for DLC plus a capped active-mod manifest on top of the fixed fields.
+            // Leaves room for DLC and the active-mod manifest.
             codec.Register(MessageType.HandshakeRequest, () => new HandshakeRequest(), 64 * 1024);
             codec.Register(MessageType.HandshakeResponse, () => new HandshakeResponse(), 1024);
             codec.Register(MessageType.HandshakeChallenge, () => new HandshakeChallenge(), 256);
             codec.Register(MessageType.HandshakePending, () => new HandshakePendingMessage(), 64);
+            codec.Register(MessageType.NetOperationReceipt, () => new NetOperationReceiptMessage(), 512);
             codec.Register(MessageType.Heartbeat, () => new Heartbeat(), 64);
             codec.Register(MessageType.Chat, () => new ChatMessage(), 4 * 1024);
             codec.Register(MessageType.SimulationCommand, () => new SimulationCommandMessage(),

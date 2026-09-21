@@ -238,6 +238,24 @@ namespace CS2MultiplayerMod.Core.Session
             }
         }
 
+        /// <summary>Report a client-side atomic net-operation result to the host.</summary>
+        public void SendNetOperationReceipt(int originPlayerId, long operationId, bool applied, string detail = null)
+        {
+            if (Status != SessionStatus.Connected || Role != SessionRole.Client || operationId <= 0) return;
+            SendTo(ConnectionId.Server, new NetOperationReceiptMessage(originPlayerId, operationId, applied, detail));
+        }
+
+        private void HandleNetOperationReceipt(ConnectionId from, Peer peer, NetOperationReceiptMessage receipt)
+        {
+            if (Role != SessionRole.Host || peer == null) return;
+            if (receipt.OriginPlayerId < 0) { Punt(from, peer, "invalid net receipt origin", "NetOperationReceipt"); return; }
+            _log.Event(LogTopic.Nets, "Net operation receipt: peer=" + peer.Name + " op=" +
+                receipt.OperationId + " origin=" + receipt.OriginPlayerId + " result=" +
+                (receipt.Applied ? "applied" : "failed") +
+                (string.IsNullOrEmpty(receipt.Detail) ? "" : " detail=" + receipt.Detail));
+            NotifyNetOperationReceipt(peer, receipt);
+        }
+
         private void HandleCommand(ConnectionId from, Peer peer, SimulationCommandMessage command)
         {
             // Commands crossing the snapshot cut are deliberately rejected. Every participant

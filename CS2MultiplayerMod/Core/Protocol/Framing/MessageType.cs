@@ -69,5 +69,8 @@ namespace CS2MultiplayerMod.Core.Protocol
         /// screen) until a <see cref="HandshakeResponse"/> accepts or rejects it.
         /// </summary>
         HandshakePending = 14,
+
+        /// <summary>Client -> host: outcome of locally applying an atomic net operation.</summary>
+        NetOperationReceipt = 15,
     }
 }

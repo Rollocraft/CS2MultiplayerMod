@@ -16,6 +16,7 @@ namespace CS2MultiplayerMod.Core.Session
         void OnPeerLeft(Peer peer, string reason);
         void OnChatReceived(string senderName, string text);
         void OnCommandReceived(SimulationCommandMessage command);
+        void OnNetOperationReceipt(Peer peer, NetOperationReceiptMessage receipt);
 
         /// <summary>A replicated state snapshot arrived (clients only). Apply it to the world.</summary>
         void OnStateReceived(StateSnapshotMessage snapshot);
@@ -60,6 +61,7 @@ namespace CS2MultiplayerMod.Core.Session
         public virtual void OnPeerLeft(Peer peer, string reason) { }
         public virtual void OnChatReceived(string senderName, string text) { }
         public virtual void OnCommandReceived(SimulationCommandMessage command) { }
+        public virtual void OnNetOperationReceipt(Peer peer, NetOperationReceiptMessage receipt) { }
         public virtual void OnStateReceived(StateSnapshotMessage snapshot) { }
         public virtual void OnStateEditReceived(StateEditMessage edit) { }
         public virtual void OnPlayerStateReceived(PlayerStateMessage state) { }

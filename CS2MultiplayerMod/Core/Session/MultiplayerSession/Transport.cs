@@ -248,6 +248,9 @@ namespace CS2MultiplayerMod.Core.Session
                         ((ResyncRequestMessage)message).Reason,
                         ((ResyncRequestMessage)message).IsAutomatic);
                     break;
+                case MessageType.NetOperationReceipt:
+                    HandleNetOperationReceipt(connection, peer, (NetOperationReceiptMessage)message);
+                    break;
                 case MessageType.WorldSyncControl:
                     HandleWorldSyncControl(connection, peer, (WorldSyncControlMessage)message);
                     break;

@@ -51,6 +51,11 @@ static class Program
             "mod manifest comparison is case-insensitive");
         Assert(MultiplayerSession.DescribeModMismatch(new[] { "Traffic" }, new[] { "Move It" }) != null,
             "mod manifest comparison names a differing playset");
+        var receipt = new NetOperationReceiptMessage(3, 91, true, "committed and drained");
+        var decodedReceipt = (NetOperationReceiptMessage)Codec.Decode(Codec.Encode(receipt));
+        Assert(decodedReceipt.OriginPlayerId == 3 && decodedReceipt.OperationId == 91 &&
+               decodedReceipt.Applied && decodedReceipt.Detail == "committed and drained",
+            "net-operation receipt round trips");
 
         foreach (PlayerHoverKind kind in Enum.GetValues<PlayerHoverKind>())
         {

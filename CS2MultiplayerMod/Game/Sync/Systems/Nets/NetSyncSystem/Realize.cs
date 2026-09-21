@@ -976,6 +976,10 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                         _completedNetOperations.Remember(completionKey, completedNow, 60000);
                         SyncLog.Trace(LogTopic.Nets, "net operation committed/drained op=" +
                             completionKey.Operation);
+                        // Send the receipt after the native batch creates the road or quay.
+                        if (session.Role == SessionRole.Client)
+                            session.SendNetOperationReceipt(completionKey.Origin,
+                                completionKey.Operation, true, "committed and drained");
                     };
                 }
                 SyncLog.Trace(LogTopic.Nets, "net build batch armed n=" + built +

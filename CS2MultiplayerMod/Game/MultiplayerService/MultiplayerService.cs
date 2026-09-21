@@ -573,6 +573,25 @@ namespace CS2MultiplayerMod.Game
             public override void OnCommandReceived(SimulationCommandMessage command)
             {
                 _service.RecordAppliedCommand(command);
+                if (_service._session.Role == SessionRole.Host &&
+                    command.CommandId == Sync.Commands.NetToolOperationCommand.Id)
+                {
+                    try
+                    {
+                        Sync.Commands.NetToolOperationCommand operation =
+                            Sync.Commands.NetToolOperationCommand.Decode(command.Body);
+                        _service.AppendChatEntry(null, "Net operation #" + operation.OperationId +
+                            " sent; waiting for each client to apply it.");
+                    }
+                    catch { }
+                }
+            }
+            public override void OnNetOperationReceipt(Peer peer, NetOperationReceiptMessage receipt)
+            {
+                string name = peer != null && !string.IsNullOrEmpty(peer.Name) ? peer.Name : "client";
+                _service.AppendChatEntry(null, "Net operation #" + receipt.OperationId + " " +
+                    (receipt.Applied ? "applied by " : "failed on ") + name +
+                    (string.IsNullOrEmpty(receipt.Detail) ? "." : ": " + receipt.Detail));
             }
             public override void OnPlayerStateReceived(PlayerStateMessage state) => _service.RecordRemotePlayer(state);
             public override void OnBlobReceived(string channel, long transferId, byte[] data)

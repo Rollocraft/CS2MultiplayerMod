@@ -214,18 +214,15 @@
         /// islands) reattach on the receiver.
         /// See <see cref="Messages.HandshakeRequest"/> and version notes in doc/internals.
         /// </summary>
-        // v69 adds the complete active-mod manifest to the handshake. A supported mod cannot
-        // safely be admitted when only one peer loaded it; reject the differing playset before
-        // world transfer rather than relying on an own-risk local bypass.
-        // v68 adds the source artifact id to the handshake. The release version alone is
-        // insufficient for local/WIP builds: two artifacts can advertise the same release while
-        // carrying different code, and a desync report needs to distinguish them.
+        // v70 adds authenticated client receipts for applied atomic net operations.
+        // v69 compares the complete active-mod manifest during the handshake.
+        // v68 adds the source artifact id for locally-built versions.
         // v67 adds the two mod-state commands: the session's third-party type table and a
         // carrier's replicated closure. A v66 peer refuses both as unauthorized command ids and
         // would drop the connection over state it simply predates, so the bump keeps that
         // disagreement at the handshake where it can be explained.
         // v66 adds bounded display-only hover geometry to player presence updates.
-        public const int ProtocolVersion = 69;
+        public const int ProtocolVersion = 70;
 
         public const int MaxModManifestEntries = 256;
         public const int MaxModManifestNameLength = 128;
