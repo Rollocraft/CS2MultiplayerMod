@@ -142,6 +142,8 @@ interface PlayerEntry {
     name: string;
     isHost: boolean;
     netStatus?: string;
+    latencyMs?: number;
+    traffic?: string;
 }
 
 interface PendingJoin {
@@ -1169,6 +1171,12 @@ const HostPlayerList = ({ players }: { players: PlayerEntry[] }) => {
                             )}
                             {!player.isHost && player.netStatus && (
                                 <span style={styles.playerBadge}>{player.netStatus}</span>
+                            )}
+                            {!player.isHost && player.latencyMs !== undefined && (
+                                <span style={styles.playerBadge}>{player.latencyMs} ms</span>
+                            )}
+                            {!player.isHost && player.traffic && (
+                                <span style={styles.playerBadge}>{player.traffic}</span>
                             )}
                         </div>
                     );
