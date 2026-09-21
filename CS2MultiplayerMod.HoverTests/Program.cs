@@ -42,6 +42,16 @@ static class Program
 
     static void CodecChecks()
     {
+        var handshake = new HandshakeRequest(ProtocolConstants.ProtocolVersion, "test", "commit", "game",
+            "Player", new byte[] { 1, 2 }, new[] { "DLC" }, new[] { "Traffic", "Move It" });
+        var decodedHandshake = (HandshakeRequest)Codec.Decode(Codec.Encode(handshake));
+        Assert(decodedHandshake.ModManifest.SequenceEqual(handshake.ModManifest),
+            "handshake preserves the active mod manifest");
+        Assert(MultiplayerSession.DescribeModMismatch(new[] { "Traffic" }, new[] { "traffic" }) == null,
+            "mod manifest comparison is case-insensitive");
+        Assert(MultiplayerSession.DescribeModMismatch(new[] { "Traffic" }, new[] { "Move It" }) != null,
+            "mod manifest comparison names a differing playset");
+
         foreach (PlayerHoverKind kind in Enum.GetValues<PlayerHoverKind>())
         {
             var shape = Shape(kind);

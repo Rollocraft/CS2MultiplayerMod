@@ -35,7 +35,7 @@ namespace CS2MultiplayerMod.Core.Session
             byte[] proof = HandshakeAuth.ComputeProof(_config.Password, challenge.Nonce, binding);
             SendTo(connection, new HandshakeRequest(
                 ProtocolConstants.ProtocolVersion, _config.ModVersion, _config.BuildId, _config.GameVersion,
-                LocalPlayerName, proof, _config.DlcList));
+                LocalPlayerName, proof, _config.DlcList, _config.ModManifest));
         }
 
         private void HandleHandshakeRequest(ConnectionId connection, Peer peer, HandshakeRequest request, long nowUnixMs)
@@ -57,6 +57,7 @@ namespace CS2MultiplayerMod.Core.Session
                 (request.BuildId ?? "?") + " game=" +
                 (request.GameVersion ?? "?") + " dlcs=[" +
                 string.Join(", ", request.DlcList ?? Array.Empty<string>()) + "]" +
+                " mods=[" + string.Join(", ", request.ModManifest ?? Array.Empty<string>()) + "]" +
                 " passwordProof=" +
                 (request.PasswordProof != null && request.PasswordProof.Length > 0 ? "present" : "missing") +
                 ".");
@@ -126,6 +127,13 @@ namespace CS2MultiplayerMod.Core.Session
             if (dlcMismatch != null)
             {
                 Reject(connection, "DLC mismatch - " + dlcMismatch);
+                return;
+            }
+
+            string modMismatch = DescribeModMismatch(_config.ModManifest, request.ModManifest);
+            if (modMismatch != null)
+            {
+                Reject(connection, "Mod playset mismatch - " + modMismatch);
                 return;
             }
 
@@ -291,6 +299,29 @@ namespace CS2MultiplayerMod.Core.Session
             }
             sb.Append(". Both players need the same DLCs enabled.");
             return sb.ToString();
+        }
+
+        internal static string DescribeModMismatch(string[] hostMods, string[] clientMods)
+        {
+            if (hostMods == null) hostMods = Array.Empty<string>();
+            if (clientMods == null) clientMods = Array.Empty<string>();
+            var host = new HashSet<string>(hostMods, StringComparer.OrdinalIgnoreCase);
+            var client = new HashSet<string>(clientMods, StringComparer.OrdinalIgnoreCase);
+            if (host.SetEquals(client)) return null;
+
+            var clientMissing = new List<string>();
+            foreach (string mod in hostMods) if (!client.Contains(mod)) clientMissing.Add(mod);
+            var hostMissing = new List<string>();
+            foreach (string mod in clientMods) if (!host.Contains(mod)) hostMissing.Add(mod);
+            var detail = new System.Text.StringBuilder();
+            if (clientMissing.Count > 0) detail.Append("you are missing: ").Append(string.Join(", ", clientMissing.ToArray()));
+            if (hostMissing.Count > 0)
+            {
+                if (detail.Length > 0) detail.Append("; ");
+                detail.Append("the host is missing: ").Append(string.Join(", ", hostMissing.ToArray()));
+            }
+            detail.Append(". Both players need the same active mod playset.");
+            return detail.ToString();
         }
 
         /// <summary>

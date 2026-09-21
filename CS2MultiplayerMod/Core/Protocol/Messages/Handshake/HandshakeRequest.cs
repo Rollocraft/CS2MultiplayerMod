@@ -1,10 +1,8 @@
 namespace CS2MultiplayerMod.Core.Protocol.Messages
 {
     /// <summary>
-    /// Client's answer to <see cref="HandshakeChallenge"/>. Host validates protocol,
-    /// builds, DLC list, and password proof first. <see cref="PasswordProof"/> is
-    /// HMAC-SHA256(password, nonce | channel-binding). <see cref="DlcList"/> (sorted)
-    /// carries sync-relevant DLC names; differing DLCs cause desync.
+    /// Client response to <see cref="HandshakeChallenge"/>. The host validates the
+    /// protocol, build, DLCs, active mods, and password proof before admitting it.
     /// </summary>
     public sealed class HandshakeRequest : INetMessage
     {
@@ -15,11 +13,13 @@ namespace CS2MultiplayerMod.Core.Protocol.Messages
         public string PlayerName;
         public byte[] PasswordProof;
         public string[] DlcList;
+        public string[] ModManifest;
 
         public HandshakeRequest() { }
 
         public HandshakeRequest(int protocolVersion, string modVersion, string buildId, string gameVersion,
-                                string playerName, byte[] passwordProof, string[] dlcList = null)
+                                string playerName, byte[] passwordProof, string[] dlcList = null,
+                                string[] modManifest = null)
         {
             ProtocolVersion = protocolVersion;
             ModVersion = modVersion;
@@ -28,6 +28,7 @@ namespace CS2MultiplayerMod.Core.Protocol.Messages
             PlayerName = playerName;
             PasswordProof = passwordProof ?? System.Array.Empty<byte>();
             DlcList = dlcList ?? System.Array.Empty<string>();
+            ModManifest = modManifest ?? System.Array.Empty<string>();
         }
 
         public MessageType Type => MessageType.HandshakeRequest;
@@ -48,6 +49,12 @@ namespace CS2MultiplayerMod.Core.Protocol.Messages
             writer.WriteInt(dlcCount);
             for (int i = 0; i < dlcCount; i++)
                 writer.WriteString(DlcList[i] ?? string.Empty);
+
+            int modCount = ModManifest != null ? ModManifest.Length : 0;
+            if (modCount > ProtocolConstants.MaxModManifestEntries) modCount = ProtocolConstants.MaxModManifestEntries;
+            writer.WriteInt(modCount);
+            for (int i = 0; i < modCount; i++)
+                writer.WriteString(ModManifest[i] ?? string.Empty);
         }
 
         public void Read(NetworkReader reader)
@@ -72,6 +79,13 @@ namespace CS2MultiplayerMod.Core.Protocol.Messages
                 // like any other display text instead of trusted off the wire.
                 DlcList[i] = WireGuard.SanitizeText(reader.ReadString(), ProtocolConstants.MaxDlcNameLength);
             }
+
+            int modCount = reader.ReadInt();
+            if (modCount < 0 || modCount > ProtocolConstants.MaxModManifestEntries)
+                throw new ProtocolException("Implausible mod-manifest count: " + modCount + ".");
+            ModManifest = modCount > 0 ? new string[modCount] : System.Array.Empty<string>();
+            for (int i = 0; i < modCount; i++)
+                ModManifest[i] = WireGuard.SanitizeText(reader.ReadString(), ProtocolConstants.MaxModManifestNameLength);
         }
     }
 }

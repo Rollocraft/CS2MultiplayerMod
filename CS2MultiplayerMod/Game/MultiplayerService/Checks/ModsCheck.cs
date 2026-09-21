@@ -95,6 +95,23 @@ namespace CS2MultiplayerMod.Game
 
         public static bool AnyOtherMods => OtherModNames.Length > 0;
 
+        /// <summary>
+        /// Canonical active-playset name manifest used by the handshake.  The game currently exposes
+        /// display names consistently across its supported platform backends; names are therefore
+        /// the strongest common identity available here.  It is deliberately a complete set,
+        /// including restricted entries, so a host never admits a client with a different playset.
+        /// </summary>
+        public static string[] Manifest
+        {
+            get
+            {
+                string[] names = OtherModNames;
+                var manifest = new string[names.Length];
+                Array.Copy(names, manifest, names.Length);
+                return manifest;
+            }
+        }
+
         public static bool AnyBlockingMods
         {
             get

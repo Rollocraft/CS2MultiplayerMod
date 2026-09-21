@@ -80,13 +80,16 @@ namespace CS2MultiplayerMod.Core.Session
         /// </summary>
         public readonly string[] DlcList;
 
+        /// <summary>Canonical names of every other active mod, compared during handshake.</summary>
+        public readonly string[] ModManifest;
+
         public MultiplayerConfig(string playerName, string hostAddress, int port, string password = "",
                                  bool lanOnly = true, bool useEncryption = true, int maxPlayers = 8,
                                  string modVersion = "", string gameVersion = "", string[] dlcList = null,
                                  bool requireJoinApproval = false,
                                  TransportMode transport = TransportMode.Direct, string joinCode = "",
                                  bool ignoreModCompatibilityChecks = false,
-                                 bool simulationSync = true, string buildId = "")
+                                 bool simulationSync = true, string buildId = "", string[] modManifest = null)
         {
             Transport = transport;
             JoinCode = joinCode ?? string.Empty;
@@ -102,6 +105,7 @@ namespace CS2MultiplayerMod.Core.Session
             IgnoreModCompatibilityChecks = ignoreModCompatibilityChecks;
             GameVersion = gameVersion ?? string.Empty;
             DlcList = dlcList ?? System.Array.Empty<string>();
+            ModManifest = modManifest ?? System.Array.Empty<string>();
             RequireJoinApproval = requireJoinApproval;
             SimulationSync = simulationSync;
         }

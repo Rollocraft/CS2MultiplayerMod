@@ -375,7 +375,8 @@ namespace CS2MultiplayerMod.Game
                 joinCode: relay && !hosting ? joinCode : "",
                 ignoreModCompatibilityChecks: settings.IgnoreModCompatibilityChecks,
                 simulationSync: settings.SimulationSync,
-                buildId: Mod.BuildId);
+                buildId: Mod.BuildId,
+                modManifest: ModsCheck.Manifest);
         }
 
     }

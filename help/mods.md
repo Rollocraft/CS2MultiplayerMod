@@ -6,6 +6,10 @@ can start a session, partially working entries are logged as restricted, and kno
 unsafe entries are blocked. A renamed or unlisted mod remains unreviewed and needs
 the explicit own-risk override until it has been tested.
 
+Before joining, the host also compares the complete active-mod-name list from both players.
+Both players must enable the same listed mods; this prevents an otherwise supported mod
+from changing prefabs or simulation on only one machine.
+
 **Last updated:** September 17, 2026
 
 ## Officially Supported
