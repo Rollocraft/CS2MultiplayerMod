@@ -3,12 +3,7 @@ using System.Reflection;
 
 namespace CS2MultiplayerMod
 {
-    /// <summary>
-    /// Human-readable identity of one compiled mod artifact. The release version is supplied
-    /// by Paradox Mods while the commit is stamped by the project file when a Git checkout is
-    /// available. Keeping both in every diagnostic prevents two locally-built artifacts from
-    /// being mistaken for the same build merely because they share a release number.
-    /// </summary>
+    /// <summary>Release version and source commit of this build.</summary>
     internal static class BuildIdentity
     {
         private const string CommitKey = "CS2MP.Commit";
@@ -22,11 +17,11 @@ namespace CS2MultiplayerMod
         {
             try
             {
-                object[] attributes = typeof(Mod).Assembly.GetCustomAttributes(
+                var attributes = typeof(Mod).Assembly.GetCustomAttributes(
                     typeof(AssemblyMetadataAttribute));
-                for (int i = 0; i < attributes.Length; i++)
+                foreach (object item in attributes)
                 {
-                    AssemblyMetadataAttribute attribute = attributes[i] as AssemblyMetadataAttribute;
+                    AssemblyMetadataAttribute attribute = item as AssemblyMetadataAttribute;
                     if (attribute != null && string.Equals(attribute.Key, CommitKey,
                         StringComparison.Ordinal) &&
                         !string.IsNullOrEmpty(attribute.Value))
