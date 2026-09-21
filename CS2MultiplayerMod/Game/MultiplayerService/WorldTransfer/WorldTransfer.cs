@@ -102,6 +102,7 @@ namespace CS2MultiplayerMod.Game
                 if (!snapshotDatabase.Exists<PackageAsset>(packagePath, out package) || package == null)
                     throw new InvalidOperationException("The game did not create the world snapshot package.");
 
+                PersistRecoveryBackup(package, epoch);
                 BlobSource data = ReadWorldSnapshotPackage(package, cancellation);
                 _log.Detail(LogTopic.WorldTransfer, "Prepared isolated recovery snapshot '" +
                     WorldSnapshotFileName + "' (" + (data.Length / 1024) + " KB).");
@@ -129,6 +130,28 @@ namespace CS2MultiplayerMod.Game
                     snapshotDatabase.MarkForDeletion();
                     snapshotDatabase.Dispose();
                 }
+            }
+        }
+
+        /// <summary>Keeps a local copy of a recovery snapshot before sending it.</summary>
+        private void PersistRecoveryBackup(PackageAsset package, long epoch)
+        {
+            try
+            {
+                string root = Colossal.PSI.Environment.EnvPath.kUserDataPath;
+                if (string.IsNullOrEmpty(root)) throw new InvalidOperationException("user-data path unavailable");
+                string dir = Path.Combine(root, "CS2MP-backups");
+                Directory.CreateDirectory(dir);
+                string path = Path.Combine(dir, "host-recovery-" + epoch + "-" +
+                    DateTime.UtcNow.ToString("yyyyMMdd-HHmmss") + ".cok");
+                using (Stream input = package.GetReadStream())
+                using (var output = new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.Read))
+                    input.CopyTo(output);
+                _log.Event(LogTopic.WorldTransfer, "Recovery backup created: " + path);
+            }
+            catch (Exception ex)
+            {
+                _log.Warn(LogTopic.WorldTransfer, "Recovery backup could not be created: " + ex.Message);
             }
         }
 
