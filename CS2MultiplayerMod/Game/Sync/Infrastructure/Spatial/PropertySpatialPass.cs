@@ -4,8 +4,7 @@ using Unity.Entities;
 
 namespace CS2MultiplayerMod.Game.Sync.Infrastructure
 {
-    /// <summary>Shared property metadata only within a synchronous read-only channel run.
-    /// No cached native handles or entity metadata survive a mutating channel or the pass.</summary>
+    /// <summary>Property metadata shared within one read-only channel run only.</summary>
     internal sealed class PropertySpatialPass : IDisposable
     {
         internal static PropertySpatialPass Current { get; private set; }

@@ -1,5 +1,4 @@
 using System;
-using CS2MultiplayerMod.Core.Networking;
 using CS2MultiplayerMod.Core.Session;
 using CS2MultiplayerMod.Localization;
 
@@ -20,9 +19,7 @@ namespace CS2MultiplayerMod.Game
             }
         }
 
-        /// <summary>
-        /// Host-side world-send progress (0-100), or -1 when no world is streaming out.
-        /// </summary>
+        /// <summary>Host world-send progress (0-100), or -1 when nothing is streaming.</summary>
         public int WorldSendPercent
         {
             get
@@ -36,10 +33,7 @@ namespace CS2MultiplayerMod.Game
             }
         }
 
-        /// <summary>
-        /// Coarse status bucket for UI accents:
-        /// disabled, offline, connecting, syncing, connected, or error.
-        /// </summary>
+        /// <summary>disabled, offline, connecting, syncing, connected, or error.</summary>
         public string UiStatusKind
         {
             get
@@ -143,11 +137,7 @@ namespace CS2MultiplayerMod.Game
                 ? FriendlyFaultHelpPage(_lastFault)
                 : "";
 
-        /// <summary>
-        /// Progress presentation shared by the full-screen loader and in-game panel.
-        /// Determinate is used only while bytes move. Saving and map loading use an
-        /// activity sweep, so a completed transfer never looks frozen at 100%.
-        /// </summary>
+        /// <summary>Determinate only while bytes move; saving and loading sweep, so 100% never looks frozen.</summary>
         public string UiProgressMode
         {
             get
@@ -226,18 +216,7 @@ namespace CS2MultiplayerMod.Game
             }
         }
 
-        private static bool FaultContains(string fault, string value) =>
-            !string.IsNullOrEmpty(fault) &&
-            fault.IndexOf(value, StringComparison.OrdinalIgnoreCase) >= 0;
-
         private const string DlcMismatchMarker = "DLC mismatch - ";
-
-        /// <summary>
-        /// The host names the differing DLCs in its reject reason. That naming is the only
-        /// part that says what to change, so it is shown verbatim (English, like every
-        /// other fault text) beside the translated advice.
-        /// </summary>
-        private static string DlcMismatchDetail(string fault) => MarkedDetail(fault, DlcMismatchMarker);
 
         /// <summary>Whatever a fault lists after its marker, or "" when it carries none.</summary>
         private static string MarkedDetail(string fault, string marker)
@@ -247,135 +226,81 @@ namespace CS2MultiplayerMod.Game
             return at < 0 ? "" : fault.Substring(at + marker.Length).Trim();
         }
 
-        private static string FriendlyFaultSummary(string fault)
+        /// <summary>A fault category: the phrases that identify it, its texts and its help page.</summary>
+        private sealed class FaultKind
         {
-            if (FaultContains(fault, "removed you") || FaultContains(fault, "kicked"))
-                return L10n.T(L10n.Key.ErrorRemoved);
-            if (FaultContains(fault, "declined") || FaultContains(fault, "did not respond to your join"))
-                return L10n.T(L10n.Key.ErrorDeclined);
-            if (FaultContains(fault, "Incorrect password") ||
-                FaultContains(fault, "requires a password"))
-                return L10n.T(L10n.Key.ErrorPassword);
-            if (FaultContains(fault, "Protocol mismatch") ||
-                FaultContains(fault, "Mod version mismatch"))
-                return L10n.T(L10n.Key.ErrorModVersion);
-            if (FaultContains(fault, "Game version mismatch"))
-                return L10n.T(L10n.Key.ErrorGameVersion);
-            if (FaultContains(fault, "DLC mismatch"))
-                return L10n.T(L10n.Key.ErrorDlc);
-            if (FaultContains(fault, ModsCheck.FaultMarker))
-                return L10n.T(L10n.Key.ErrorMods);
-            if (FaultContains(fault, "Server is full"))
-                return L10n.T(L10n.Key.ErrorFull);
-            if (FaultContains(fault, "HostNotFound") ||
-                FaultContains(fault, "NoData") ||
-                FaultContains(fault, "could not be resolved"))
-                return L10n.T(L10n.Key.ErrorAddress);
-            if (FaultContains(fault, "ConnectionRefused"))
-                return L10n.T(L10n.Key.ErrorRefused);
-            if (FaultContains(fault, "TimedOut") ||
-                FaultContains(fault, "timed out"))
-                return L10n.T(L10n.Key.ErrorTimeout);
-            if (FaultContains(fault, "NetworkUnreachable") ||
-                FaultContains(fault, "HostUnreachable"))
-                return L10n.T(L10n.Key.ErrorNetwork);
-            if (FaultContains(fault, "AddressAlreadyInUse"))
-                return L10n.T(L10n.Key.ErrorPortInUse);
-            return L10n.T(L10n.Key.ErrorGeneric);
+            public string Summary, Help, Page, Marker, Separator;
+            public string[] Phrases;
         }
+
+        private static FaultKind Fault(string summary, string help, string page, params string[] phrases) =>
+            new FaultKind { Summary = summary, Help = help, Page = page, Phrases = phrases };
+
+        // First match wins. The relay entry only picks the help page; its texts come from a later entry.
+        private static readonly FaultKind[] FaultKinds =
+        {
+            Fault(L10n.Key.ErrorRemoved, L10n.Key.ErrorRemovedHelp, HelpLinks.Removed, "removed you", "kicked"),
+            Fault(L10n.Key.ErrorDeclined, L10n.Key.ErrorDeclinedHelp, HelpLinks.Declined,
+                "declined", "did not respond to your join"),
+            Fault(L10n.Key.ErrorPassword, L10n.Key.ErrorPasswordHelp, HelpLinks.Password,
+                "Incorrect password", "requires a password"),
+            Fault(L10n.Key.ErrorModVersion, L10n.Key.ErrorModVersionHelp, HelpLinks.ModVersion,
+                "Protocol mismatch", "Mod version mismatch"),
+            Fault(L10n.Key.ErrorGameVersion, L10n.Key.ErrorGameVersionHelp, HelpLinks.GameVersion,
+                "Game version mismatch"),
+            new FaultKind
+            {
+                Summary = L10n.Key.ErrorDlc, Help = L10n.Key.ErrorDlcHelp, Page = HelpLinks.Dlc,
+                Phrases = new[] { "DLC mismatch" }, Marker = DlcMismatchMarker, Separator = " ",
+            },
+            new FaultKind
+            {
+                Summary = L10n.Key.ErrorMods, Help = L10n.Key.ErrorModsHelp, Page = HelpLinks.Mods,
+                Phrases = new[] { ModsCheck.FaultMarker }, Marker = ModsCheck.FaultMarker, Separator = " - ",
+            },
+            Fault(L10n.Key.ErrorFull, L10n.Key.ErrorFullHelp, HelpLinks.SessionFull, "Server is full"),
+            Fault(null, null, HelpLinks.Relay, "Steam relay", "join code"),
+            Fault(L10n.Key.ErrorAddress, L10n.Key.ErrorAddressHelp, HelpLinks.Address,
+                "HostNotFound", "NoData", "could not be resolved"),
+            Fault(L10n.Key.ErrorRefused, L10n.Key.ErrorRefusedHelp, HelpLinks.DirectConnection, "ConnectionRefused"),
+            Fault(L10n.Key.ErrorTimeout, L10n.Key.ErrorTimeoutHelp, HelpLinks.DirectConnection,
+                "TimedOut", "timed out"),
+            Fault(L10n.Key.ErrorNetwork, L10n.Key.ErrorNetworkHelp, HelpLinks.DirectConnection,
+                "NetworkUnreachable", "HostUnreachable"),
+            Fault(L10n.Key.ErrorPortInUse, L10n.Key.ErrorPortInUseHelp, HelpLinks.DirectConnection,
+                "AddressAlreadyInUse"),
+        };
+
+        private static readonly FaultKind GenericFault =
+            Fault(L10n.Key.ErrorGeneric, L10n.Key.ErrorGenericHelp, HelpLinks.Generic);
+
+        /// <summary>The first matching kind; <paramref name="forPage"/> also considers page-only kinds.</summary>
+        private static FaultKind ClassifyFault(string fault, bool forPage = false)
+        {
+            if (string.IsNullOrEmpty(fault)) return GenericFault;
+            foreach (FaultKind kind in FaultKinds)
+            {
+                if (kind.Summary == null && !forPage) continue;
+                foreach (string phrase in kind.Phrases)
+                    if (fault.IndexOf(phrase, StringComparison.OrdinalIgnoreCase) >= 0) return kind;
+            }
+            return GenericFault;
+        }
+
+        private static string FriendlyFaultSummary(string fault) => L10n.T(ClassifyFault(fault).Summary);
 
         private static string FriendlyFaultHelp(string fault)
         {
-            if (FaultContains(fault, "removed you") || FaultContains(fault, "kicked"))
-                return L10n.T(L10n.Key.ErrorRemovedHelp);
-            if (FaultContains(fault, "declined") || FaultContains(fault, "did not respond to your join"))
-                return L10n.T(L10n.Key.ErrorDeclinedHelp);
-            if (FaultContains(fault, "Incorrect password") ||
-                FaultContains(fault, "requires a password"))
-                return L10n.T(L10n.Key.ErrorPasswordHelp);
-            if (FaultContains(fault, "Protocol mismatch") ||
-                FaultContains(fault, "Mod version mismatch"))
-                return L10n.T(L10n.Key.ErrorModVersionHelp);
-            if (FaultContains(fault, "Game version mismatch"))
-                return L10n.T(L10n.Key.ErrorGameVersionHelp);
-            if (FaultContains(fault, "DLC mismatch"))
-            {
-                string detail = DlcMismatchDetail(fault);
-                return detail.Length > 0
-                    ? detail + " " + L10n.T(L10n.Key.ErrorDlcHelp)
-                    : L10n.T(L10n.Key.ErrorDlcHelp);
-            }
-            if (FaultContains(fault, ModsCheck.FaultMarker))
-            {
-                string detail = MarkedDetail(fault, ModsCheck.FaultMarker);
-                return detail.Length > 0
-                    ? detail + " - " + L10n.T(L10n.Key.ErrorModsHelp)
-                    : L10n.T(L10n.Key.ErrorModsHelp);
-            }
-            if (FaultContains(fault, "Server is full"))
-                return L10n.T(L10n.Key.ErrorFullHelp);
-            if (FaultContains(fault, "HostNotFound") ||
-                FaultContains(fault, "NoData") ||
-                FaultContains(fault, "could not be resolved"))
-                return L10n.T(L10n.Key.ErrorAddressHelp);
-            if (FaultContains(fault, "ConnectionRefused"))
-                return L10n.T(L10n.Key.ErrorRefusedHelp);
-            if (FaultContains(fault, "TimedOut") ||
-                FaultContains(fault, "timed out"))
-                return L10n.T(L10n.Key.ErrorTimeoutHelp);
-            if (FaultContains(fault, "NetworkUnreachable") ||
-                FaultContains(fault, "HostUnreachable"))
-                return L10n.T(L10n.Key.ErrorNetworkHelp);
-            if (FaultContains(fault, "AddressAlreadyInUse"))
-                return L10n.T(L10n.Key.ErrorPortInUseHelp);
-            return L10n.T(L10n.Key.ErrorGenericHelp);
+            FaultKind kind = ClassifyFault(fault);
+            string help = L10n.T(kind.Help);
+            string detail = kind.Marker != null ? MarkedDetail(fault, kind.Marker) : "";
+            return detail.Length > 0 ? detail + kind.Separator + help : help;
         }
 
-        /// <summary>
-        /// Keep the link classification beside the friendly text classification above so
-        /// every error surfaced by the UI always has a concrete troubleshooting target.
-        /// </summary>
-        private static string FriendlyFaultHelpPage(string fault)
-        {
-            if (FaultContains(fault, "removed you") || FaultContains(fault, "kicked"))
-                return HelpLinks.Removed;
-            if (FaultContains(fault, "declined") || FaultContains(fault, "did not respond to your join"))
-                return HelpLinks.Declined;
-            if (FaultContains(fault, "Incorrect password") ||
-                FaultContains(fault, "requires a password"))
-                return HelpLinks.Password;
-            if (FaultContains(fault, "Protocol mismatch") ||
-                FaultContains(fault, "Mod version mismatch"))
-                return HelpLinks.ModVersion;
-            if (FaultContains(fault, "Game version mismatch"))
-                return HelpLinks.GameVersion;
-            if (FaultContains(fault, "DLC mismatch"))
-                return HelpLinks.Dlc;
-            if (FaultContains(fault, ModsCheck.FaultMarker))
-                return HelpLinks.Mods;
-            if (FaultContains(fault, "Server is full"))
-                return HelpLinks.SessionFull;
-            if (FaultContains(fault, "Steam relay") ||
-                FaultContains(fault, "join code"))
-                return HelpLinks.Relay;
-            if (FaultContains(fault, "HostNotFound") ||
-                FaultContains(fault, "NoData") ||
-                FaultContains(fault, "could not be resolved"))
-                return HelpLinks.Address;
-            if (FaultContains(fault, "ConnectionRefused") ||
-                FaultContains(fault, "TimedOut") ||
-                FaultContains(fault, "timed out") ||
-                FaultContains(fault, "NetworkUnreachable") ||
-                FaultContains(fault, "HostUnreachable") ||
-                FaultContains(fault, "AddressAlreadyInUse"))
-                return HelpLinks.DirectConnection;
-            return HelpLinks.Generic;
-        }
+        /// <summary>Every surfaced error maps to a troubleshooting page.</summary>
+        private static string FriendlyFaultHelpPage(string fault) => ClassifyFault(fault, forPage: true).Page;
 
-        /// <summary>
-        /// Players in the session including this machine. The host counts its
-        /// authenticated peers; a client counts recently relayed cursors.
-        /// </summary>
+        /// <summary>Including this machine: the host counts authenticated peers, a client recent cursors.</summary>
         public int PlayerCount
         {
             get

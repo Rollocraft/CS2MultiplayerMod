@@ -1,10 +1,8 @@
 namespace CS2MultiplayerMod.Core.Protocol.Messages
 {
     /// <summary>
-    /// Client's answer to <see cref="HandshakeChallenge"/>. Host validates protocol,
-    /// builds, DLC list, and password proof first. <see cref="PasswordProof"/> is
-    /// HMAC-SHA256(password, nonce | channel-binding). <see cref="DlcList"/> (sorted)
-    /// carries sync-relevant DLC names; differing DLCs cause desync.
+    /// Answer to <see cref="HandshakeChallenge"/>: protocol, builds, sorted sync-relevant
+    /// <see cref="DlcList"/> and <see cref="PasswordProof"/> = HMAC-SHA256(password, nonce | channel binding).
     /// </summary>
     public sealed class HandshakeRequest : INetMessage
     {
@@ -64,8 +62,7 @@ namespace CS2MultiplayerMod.Core.Protocol.Messages
             DlcList = dlcCount > 0 ? new string[dlcCount] : System.Array.Empty<string>();
             for (int i = 0; i < dlcCount; i++)
             {
-                // DLC names end up in reject messages and logs, so they are sanitized
-                // like any other display text instead of trusted off the wire.
+                // DLC names reach reject messages and logs.
                 DlcList[i] = WireGuard.SanitizeText(reader.ReadString(), ProtocolConstants.MaxDlcNameLength);
             }
         }

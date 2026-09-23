@@ -4,7 +4,6 @@ using Game.Common;
 using Game.Net;
 using Game.Prefabs;
 using Game.Tools;
-using Unity.Collections;
 using Unity.Entities;
 using Unity.Mathematics;
 using CS2MultiplayerMod.Game.Sync.Commands;
@@ -12,20 +11,12 @@ using CS2MultiplayerMod.Game.Sync.Infrastructure;
 
 namespace CS2MultiplayerMod.Game.Sync.Systems
 {
-    // The other half of a portable reference: walking the owner path a peer described down
-    // through this machine's own graph, and finding the object, node, edge or area it names.
     public partial class BuildSyncSystem
     {
-        /// <summary>
-        /// Name a reference that would not resolve. An unresolved reference costs everyone a full
-        /// world stream, so the log line has to say which one it was: whether its prefab is even
-        /// known here separates "this machine is missing the thing" from "this machine is missing
-        /// the mod/DLC content".
-        /// </summary>
+        /// <summary>Names an unresolved reference, including whether its prefab (content) exists here.</summary>
         private string Describe(PortableEntityRef source)
         {
-            Entity prefab;
-            string prefabState = _prefabIndex.TryResolve(source.PrefabName, out prefab)
+            string prefabState = _prefabIndex.TryResolve(source.PrefabName, out Entity prefab)
                 ? ""
                 : ", prefab unknown here";
             string owner = string.IsNullOrEmpty(source.OwnerPrefabName)
@@ -41,12 +32,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         {
             result = Entity.Null;
             if (source.Kind == PortableEntityKind.None) return true;
-            Entity prefab;
-            if (!_prefabIndex.TryResolve(source.PrefabName, out prefab)) return false;
+            if (!_prefabIndex.TryResolve(source.PrefabName, out Entity prefab)) return false;
 
-            // Owned lifecycle references first use the same owner buffers that the simulation
-            // maintains. Geometry remains a compatibility fallback for references captured before
-            // a structural path was available or for a benign buffer-layout difference.
+            // Owner buffers first; geometry is the fallback.
             if (source.OwnerPath != null && source.OwnerPath.Length != 0 &&
                 TryResolveOwnerPath(source, prefab, out result))
                 return true;
@@ -80,8 +68,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 source.OwnerPath.Length > ObjectToolOperationCommand.MaxOwnerPathDepth)
                 return false;
 
-            Entity ownerPrefab;
-            if (!_prefabIndex.TryResolve(source.OwnerPrefabName, out ownerPrefab))
+            if (!_prefabIndex.TryResolve(source.OwnerPrefabName, out Entity ownerPrefab))
                 return false;
             Entity cursor = FindPortableObject(ownerPrefab,
                 new float3(source.OwnerX, source.OwnerY, source.OwnerZ),
@@ -90,19 +77,17 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
             for (int i = 0; i < source.OwnerPath.Length; i++)
             {
-                Entity child;
-                if (!TryResolveOwnerPathStep(cursor, source.OwnerPath[i], out child))
+                if (!TryResolveOwnerPathStep(cursor, source.OwnerPath[i], out Entity child))
                     return false;
                 cursor = child;
             }
 
-            PortableEntityKind resolvedKind;
             if (!EntityManager.Exists(cursor) ||
                 EntityManager.HasComponent<Temp>(cursor) ||
                 EntityManager.HasComponent<Deleted>(cursor) ||
                 !EntityManager.HasComponent<PrefabRef>(cursor) ||
                 EntityManager.GetComponentData<PrefabRef>(cursor).m_Prefab != targetPrefab ||
-                !TryGetPortableEntityKind(cursor, out resolvedKind) ||
+                !TryGetPortableEntityKind(cursor, out PortableEntityKind resolvedKind) ||
                 resolvedKind != source.Kind)
                 return false;
             if ((source.Kind == PortableEntityKind.NetNode ||
@@ -118,8 +103,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             out Entity result)
         {
             result = Entity.Null;
-            Entity prefab;
-            if (!_prefabIndex.TryResolve(step.PrefabName, out prefab)) return false;
+            if (!_prefabIndex.TryResolve(step.PrefabName, out Entity prefab)) return false;
 
             switch (step.BufferKind)
             {
@@ -200,22 +184,6 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             }
         }
 
-        private bool MatchesOwnerPathCandidate(Entity owner, Entity candidate, Entity prefab,
-            PortableEntityKind kind)
-        {
-            if (candidate == Entity.Null || !EntityManager.Exists(candidate) ||
-                EntityManager.HasComponent<Temp>(candidate) ||
-                EntityManager.HasComponent<Deleted>(candidate) ||
-                !EntityManager.HasComponent<PrefabRef>(candidate) ||
-                EntityManager.GetComponentData<PrefabRef>(candidate).m_Prefab != prefab ||
-                !EntityManager.HasComponent<Owner>(candidate) ||
-                EntityManager.GetComponentData<Owner>(candidate).m_Owner != owner)
-                return false;
-            PortableEntityKind candidateKind;
-            return TryGetPortableEntityKind(candidate, out candidateKind) &&
-                   candidateKind == kind;
-        }
-
         private Entity FindPortableObject(Entity prefab, float3 position, PortableEntityRef identity)
         {
             List<Entity> candidates = Candidates(_objectCandidates, _portableObjects, prefab);
@@ -275,8 +243,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 Bezier4x3 curve = EntityManager.GetComponentData<global::Game.Net.Curve>(candidate).m_Bezier;
                 if (!SplitMatch.IsSubCurve3D(curve, sourceCurve) &&
                     !SplitMatch.IsSubCurve3D(sourceCurve, curve)) continue;
-                float t;
-                float distance = MathUtils.Distance(curve, anchor, out t);
+                float distance = MathUtils.Distance(curve, anchor, out float t);
                 if (distance >= bestDistance) continue;
                 best = candidate;
                 bestDistance = distance;
@@ -310,8 +277,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         private bool MatchesPortableOwner(Entity candidate, PortableEntityRef identity)
         {
             bool wantsOwner = !string.IsNullOrEmpty(identity.OwnerPrefabName);
-            Entity topOwner;
-            if (!TryFindTopOwner(candidate, out topOwner)) return false;
+            if (!TryFindTopOwner(candidate, out Entity topOwner)) return false;
             if (!wantsOwner) return topOwner == Entity.Null;
             if (topOwner == Entity.Null || !EntityManager.HasComponent<PrefabRef>(topOwner) ||
                 !EntityManager.HasComponent<global::Game.Objects.Transform>(topOwner)) return false;

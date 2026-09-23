@@ -4,6 +4,7 @@ using Game;
 
 using CS2MultiplayerMod.Core.Diagnostics;
 using CS2MultiplayerMod.Game.Diagnostics;
+using CS2MultiplayerMod.Game.Sync.Infrastructure;
 using CS2MultiplayerMod.Game.Sync.Systems.Net;
 namespace CS2MultiplayerMod.Game.Sync.Systems
 {
@@ -15,39 +16,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
     {
         private BuildSyncSystem _buildSync;
         private NetSyncSystem _netSync;
-        private DeleteSyncSystem _deleteSync;
-        private NetReplaceSyncSystem _netReplaceSync;
-        private ZoneSyncSystem _zoneSync;
         private TerrainSyncSystem _terrainSync;
-        private UpgradeSyncSystem _upgradeSync;
-        private MoveSyncSystem _moveSync;
-        private NetUpgradeSyncSystem _netUpgradeSync;
-        private AreaSyncSystem _areaSync;
-        private RouteSyncSystem _routeSync;
-        private TilePurchaseSyncSystem _tileSync;
-        private DisasterSyncSystem _disasterSync;
-        private GrowableSyncSystem _growableSync;
-        private Mods.ModStateSyncSystem _modStateSync;
-
-        protected override void OnCreate()
-        {
-            base.OnCreate();
-            _buildSync = World.GetOrCreateSystemManaged<BuildSyncSystem>();
-            _netSync = World.GetOrCreateSystemManaged<NetSyncSystem>();
-            _deleteSync = World.GetOrCreateSystemManaged<DeleteSyncSystem>();
-            _netReplaceSync = World.GetOrCreateSystemManaged<NetReplaceSyncSystem>();
-            _zoneSync = World.GetOrCreateSystemManaged<ZoneSyncSystem>();
-            _terrainSync = World.GetOrCreateSystemManaged<TerrainSyncSystem>();
-            _upgradeSync = World.GetOrCreateSystemManaged<UpgradeSyncSystem>();
-            _moveSync = World.GetOrCreateSystemManaged<MoveSyncSystem>();
-            _netUpgradeSync = World.GetOrCreateSystemManaged<NetUpgradeSyncSystem>();
-            _areaSync = World.GetOrCreateSystemManaged<AreaSyncSystem>();
-            _routeSync = World.GetOrCreateSystemManaged<RouteSyncSystem>();
-            _tileSync = World.GetOrCreateSystemManaged<TilePurchaseSyncSystem>();
-            _disasterSync = World.GetOrCreateSystemManaged<DisasterSyncSystem>();
-            _growableSync = World.GetOrCreateSystemManaged<GrowableSyncSystem>();
-            _modStateSync = World.GetOrCreateSystemManaged<Mods.ModStateSyncSystem>();
-        }
+        private IRealizeStage[] _netStages;
+        private IRealizeStage[] _dependentStages;
 
         private bool _wasDeferringTerrain;
         private bool _wasHoldingNetMutations;
@@ -55,136 +26,108 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         private const int FaultReportThrottleMs = 10000;
         private readonly Dictionary<string, int> _lastFaultTick = new Dictionary<string, int>();
 
-        /// <summary>
-        /// Run one stage in isolation. The stages are ordered but not dependent: letting a
-        /// throw escape costs every stage behind it that frame, and a fault that repeats
-        /// (a bad remote command, a torn-down prefab) silently strands whole features for
-        /// as long as it lasts.
-        /// </summary>
-        private void Step(string stage, Action work)
+        protected override void OnCreate()
         {
-            try
-            {
-                work();
-            }
-            catch (Exception ex)
-            {
-                int now = Environment.TickCount;
-                int last;
-                if (_lastFaultTick.TryGetValue(stage, out last) &&
-                    unchecked(now - last) < FaultReportThrottleMs) return;
-                _lastFaultTick[stage] = now;
+            base.OnCreate();
+            _buildSync = World.GetOrCreateSystemManaged<BuildSyncSystem>();
+            _netSync = World.GetOrCreateSystemManaged<NetSyncSystem>();
+            _terrainSync = World.GetOrCreateSystemManaged<TerrainSyncSystem>();
 
-                SyncLog.Error(LogTopic.Pipeline, "Realize stage '" + stage +
-                    "' failed this frame and was skipped.", ex);
-            }
+            // One net batch per ApplyTool pass. Deletes first: NetSync's split-target query skips
+            // Deleted edges, so it never splits an edge removed this frame (stale-edge crash in
+            // ApplyNetSystem). Replace next: an armed delete defers it, an armed replace defers the build.
+            _netStages = new IRealizeStage[]
+            {
+                World.GetOrCreateSystemManaged<DeleteSyncSystem>(),
+                World.GetOrCreateSystemManaged<NetReplaceSyncSystem>(),
+                _netSync,
+            };
+
+            _dependentStages = new IRealizeStage[]
+            {
+                World.GetOrCreateSystemManaged<ZoneSyncSystem>(),
+                _terrainSync,
+                World.GetOrCreateSystemManaged<GrowableSyncSystem>(), // grows on lots zoning produced
+                World.GetOrCreateSystemManaged<UpgradeSyncSystem>(),
+                World.GetOrCreateSystemManaged<MoveSyncSystem>(),
+                World.GetOrCreateSystemManaged<NetUpgradeSyncSystem>(),
+                World.GetOrCreateSystemManaged<AreaSyncSystem>(),
+                World.GetOrCreateSystemManaged<RouteSyncSystem>(),
+                World.GetOrCreateSystemManaged<TilePurchaseSyncSystem>(),
+                // Event initialization later this frame only looks at freshly Created events.
+                World.GetOrCreateSystemManaged<DisasterSyncSystem>(),
+                // Last: mod state is stored against roads and buildings created by the stages above.
+                World.GetOrCreateSystemManaged<Mods.ModStateSyncSystem>(),
+            };
         }
 
         protected override void OnUpdate()
         {
             using (Diagnostics.SyncProfiler.Measure("Realize"))
             {
-                // Reset the net pipeline's per-frame state (the one-preview-wipe-per-frame guard) before
-                // any feeder runs — DeleteSync/NetReplaceSync may hijack the frame before NetSync does.
+                // Before any feeder: DeleteSync/NetReplaceSync may hijack the frame before NetSync does.
                 _netSync.BeginRealizeFrame();
                 Step("BuildSync.ObserveLocalToolOutput", _buildSync.ObserveLocalToolOutput);
                 Step("BuildSync.CaptureLocalObjectApply", _buildSync.CaptureLocalObjectApply);
-
-                // The active net tool has already selected Apply, while ToolOutputSystem has not yet
-                // consumed its standing preview. Publish its cached native courses and remember exact
-                // split originals now. Object graphs are captured later at the dedicated pre-output
-                // hook, directly from their standing definitions and only on the Apply frame.
+                // The net tool has selected Apply but ToolOutputSystem has not consumed its preview yet.
                 Step("NetSync.CaptureLocalNetApply", _netSync.CaptureLocalNetApply);
-
-                // Hold NEW net/object realizes while remote terrain edits are backlogged: a course or
-                // object drawn right after a terraform stroke assumes the sender's post-edit surface, and
-                // realizing it against this machine's not-yet-graded terrain buries/floats it and misses
-                // every height-gated snap. Terrain drains within frames (its capture rate is far below
-                // the apply budget), so the hold is frames long. In-flight net commits still finish;
-                // local click-replays are exempt (their Y was measured here).
                 Step("TerrainSync.CompletePendingHeightReadback", _terrainSync.CompletePendingHeightReadback);
-                bool deferTerrain = _terrainSync.HasBacklog();
-                _netSync.DeferForTerrain = deferTerrain;
-                _buildSync.DeferForTerrain = deferTerrain;
-                _buildSync.NetworkDependenciesHeld = deferTerrain || _netSync.HasPlacementBacklog;
-                _moveSync.DeferForTerrain = deferTerrain;
-                _deleteSync.DeferNetForTerrain = deferTerrain;
-                if (deferTerrain != _wasDeferringTerrain)
-                {
-                    _wasDeferringTerrain = deferTerrain;
-                    SyncLog.Trace(LogTopic.Pipeline,
-                        deferTerrain ? "net/build realize deferred (terrain backlog)" : "terrain drained; net/build realize resumed");
-                }
 
-                Step("BuildSync", _buildSync.RealizePending);
-                // A remote placement that is still waiting for the road it anchors to must not be
-                // overtaken by work that can only take that road away. Delete and replace live in
-                // their own feeders, so wire order between them and a deferred placement was never
-                // enforced: in the sessions this came from, two bulldozes were applied during the
-                // ten seconds a placement spent waiting, and the placement then asked for a full
-                // world reload because its target was "missing". Bounded by the placement's own
-                // retry window, and a delete can never be what a placement is waiting for, so
-                // holding it cannot deadlock.
+                bool terrain = _terrainSync.HasBacklog();
+                RealizeGate.TerrainBacklog = terrain;
+                TraceChange(ref _wasDeferringTerrain, terrain,
+                    "net/build realize deferred (terrain backlog)", "terrain drained; net/build realize resumed");
+
+                // BuildSync attaches to roads NetSync has not realized yet, so it needs this frame's value.
+                RealizeGate.WorldBuildingHeld = terrain || _netSync.HasPlacementBacklog;
+                Realize(_buildSync);
+
+                // A placement still waiting on its road must not be overtaken by a bulldoze or
+                // replace that removes it. Bounded by the placement's retry window, so no deadlock.
                 long nowMs = Mod.Service != null ? Mod.Service.NowMs : 0L;
-                bool netMutationHeld = _netSync.HasStalledNativeOperation(nowMs) ||
-                    CS2MultiplayerMod.Game.Diagnostics.ResyncArbiter.NetMutationFrozen(nowMs);
-                if (netMutationHeld != _wasHoldingNetMutations)
-                {
-                    _wasHoldingNetMutations = netMutationHeld;
-                    SyncLog.Trace(LogTopic.Pipeline,
-                        netMutationHeld ? "net delete/replace held behind a stalled placement" : "net delete/replace resumed");
-                }
-                // DeleteSync BEFORE NetSync: a remote bulldoze applied this frame tags its edge Deleted,
-                // and NetSync's split-target query excludes Deleted edges — so NetSync never resolves a
-                // split onto an edge that is being removed this same frame (a stale-reference crash in
-                // ApplyNetSystem). NetSync's own commit (flipping applyMode) is independent of delete order.
-                _deleteSync.DeferNetForPendingPlacement = netMutationHeld;
-                Step("DeleteSync", _deleteSync.RealizePending);
-                // Road-type replacements also drive NetSync's single ApplyTool commit slot, so run after
-                // DeleteSync and before NetSync's build: a delete armed this frame makes replace defer
-                // (IsCommitBusy), and an armed replace makes NetSync's build defer — only one net batch
-                // enters any one ApplyTool pass, never a build+replace of the same edge together.
-                _netReplaceSync.DeferForPendingPlacement = netMutationHeld;
-                if (!deferTerrain) Step("NetReplaceSync", _netReplaceSync.RealizePending);
-                Step("NetSync", _netSync.RealizePending);
-                bool deferNetworkDependents = deferTerrain || _netSync.HasPlacementBacklog;
-                _buildSync.NetworkDependenciesHeld = deferNetworkDependents;
-                // Published for the systems that only WAIT on roads, zoning and zone-grown
-                // buildings. They are not gated themselves, so without this they keep counting down
-                // retry windows for targets this pipeline is deliberately holding back.
-                CS2MultiplayerMod.Game.Sync.Infrastructure.RealizeGate.WorldBuildingHeld =
-                    deferNetworkDependents;
-                if (!deferNetworkDependents) Step("ZoneSync", _zoneSync.RealizePending);
-                else _zoneSync.NotifyRealizeHeld(nowMs);
-                Step("TerrainSync", _terrainSync.RealizePending);
-                // After ZoneSync and behind the same network gate: a zoned building is grown on a lot
-                // that a road and its zoning produced, so realizing one before those arrive would put
-                // it on ground the receiver does not yet consider buildable.
-                _growableSync.DeferForTerrain = deferTerrain;
-                _growableSync.NetworkDependenciesHeld = deferNetworkDependents;
-                if (!deferNetworkDependents) Step("GrowableSync", _growableSync.RealizePending);
-                else _growableSync.NotifyRealizeHeld(nowMs);
-                Step("UpgradeSync", _upgradeSync.RealizePending);
-                Step("MoveSync", _moveSync.RealizePending);
-                if (!deferNetworkDependents) Step("NetUpgradeSync", _netUpgradeSync.RealizePending);
-                Step("AreaSync", _areaSync.RealizePending);
-                Step("RouteSync.FinalizePending", _routeSync.FinalizePending);
-                // Held rather than skipped: a route's retry window is for waiting on its own stop
-                // or road, not for waiting on permission to look, and expiring one unattempted
-                // asks for a world reload over a command that was never tried.
-                if (!deferNetworkDependents) Step("RouteSync", _routeSync.RealizePending);
-                else _routeSync.NotifyRealizeHeld(nowMs);
-                Step("TilePurchaseSync", _tileSync.RealizePending);
-                // Disaster events are plain simulation entities - no definitions, no terrain
-                // dependency - but they must still be created here: the game's event initialization
-                // runs later this frame and only ever looks at freshly Created events.
-                Step("DisasterSync", _disasterSync.RealizePending);
-                // Last: what another mod stores is stored against a road, a junction or a building,
-                // so everything that could still be creating one this frame has to have run. A
-                // closure whose carrier is genuinely still in the backlog waits in its own hold
-                // window rather than being gated here.
-                Step("ModStateSync", _modStateSync.RealizePending);
+                bool netHeld = _netSync.HasStalledNativeOperation(nowMs) || ResyncArbiter.NetMutationFrozen(nowMs);
+                RealizeGate.NetMutationHeld = netHeld;
+                TraceChange(ref _wasHoldingNetMutations, netHeld,
+                    "net delete/replace held behind a stalled placement", "net delete/replace resumed");
+                Realize(_netStages);
+
+                RealizeGate.WorldBuildingHeld = terrain || _netSync.HasPlacementBacklog;
+                Realize(_dependentStages);
             }
+        }
+
+        private static void TraceChange(ref bool was, bool now, string on, string off)
+        {
+            if (now == was) return;
+            was = now;
+            SyncLog.Trace(LogTopic.Pipeline, now ? on : off);
+        }
+
+        private void Realize(IRealizeStage[] stages)
+        {
+            for (int i = 0; i < stages.Length; i++) Realize(stages[i]);
+        }
+
+        // Isolated: a repeating fault in one stage must not strand every stage behind it.
+        private void Realize(IRealizeStage stage)
+        {
+            try { stage.RealizePending(); }
+            catch (Exception ex) { Fault(stage.GetType().Name, ex); }
+        }
+
+        private void Step(string stage, Action work)
+        {
+            try { work(); }
+            catch (Exception ex) { Fault(stage, ex); }
+        }
+
+        private void Fault(string stage, Exception ex)
+        {
+            int now = Environment.TickCount;
+            if (_lastFaultTick.TryGetValue(stage, out int last) &&
+                unchecked(now - last) < FaultReportThrottleMs) return;
+            _lastFaultTick[stage] = now;
+            SyncLog.Error(LogTopic.Pipeline, "Realize stage '" + stage + "' failed this frame and was skipped.", ex);
         }
     }
 }

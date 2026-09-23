@@ -6,11 +6,8 @@ using CS2MultiplayerMod.Game.Sync.Infrastructure;
 namespace CS2MultiplayerMod.Game.Sync.Channels
 {
     /// <summary>
-    /// Replicates the simulation speed (<see cref="SimulationSystem.selectedSpeed"/>,
-    /// where 0 = paused). Without this the two simulations free-run independently: one
-    /// player pausing to plan leaves the other's city racing ahead until the next world
-    /// resync. Player-editable - any player may pause or change speed and everyone
-    /// follows; the host arbitrates concurrent changes.
+    /// Simulation speed (0 = paused), so one player pausing pauses everyone. Editable; the host
+    /// arbitrates.
     /// </summary>
     public sealed class SimulationSpeedStateChannel : IStateChannel
     {

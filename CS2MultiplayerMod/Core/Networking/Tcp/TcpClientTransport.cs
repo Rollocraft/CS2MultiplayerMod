@@ -1,5 +1,4 @@
 using System;
-using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Net;
@@ -10,25 +9,20 @@ using CS2MultiplayerMod.Core.Diagnostics;
 namespace CS2MultiplayerMod.Core.Networking.Tcp
 {
     /// <summary>
-    /// Client-side transport. Connects to a host on a background thread (so the game
-    /// thread never blocks on DNS/TCP/TLS) and exposes the single host connection under
-    /// <see cref="ConnectionId.Server"/>. Mirrors <see cref="TcpServerTransport"/>'s event
-    /// model so the session layer is role-agnostic.
+    /// Connects on a background thread (no DNS/TCP/TLS on the game thread) and exposes the host as
+    /// <see cref="ConnectionId.Server"/>, with <see cref="TcpServerTransport"/>'s event model.
     /// </summary>
-    public sealed class TcpClientTransport : ITransport
+    public sealed class TcpClientTransport : ITransport, IInboundActivity
     {
-        /// <summary>Queued transport events before the host connection is dropped (mirrors the
-        /// server-side cap): if the game thread stops draining, memory must not grow unbounded.</summary>
-        public const int MaxQueuedEvents = 10000;
+        /// <summary>Queued events before the host connection is dropped, if the game thread stops draining.</summary>
+        public const int MaxQueuedEvents = TransportEventQueue.Capacity;
 
         private readonly IModLogger _log;
-        private readonly InboundByteBudget _inboundBudget = new InboundByteBudget();
-        private readonly ConcurrentQueue<TransportEvent> _events = new ConcurrentQueue<TransportEvent>();
+        private readonly TransportEventQueue _events = new TransportEventQueue();
 
         private FramedConnection _connection;
         private volatile TcpClient _dialing; // non-null only while ConnectLoop is dialing
         private Thread _connectThread;
-        private int _queuedEvents;
         private volatile bool _active;
 
         public TcpClientTransport(IModLogger log)
@@ -63,12 +57,9 @@ namespace CS2MultiplayerMod.Core.Networking.Tcp
             _log.Detail(LogTopic.Transport, "Connecting to " + host + ":" + port +
                 (useTls ? " (TLS)..." : " (plaintext)..."));
 
-            IPAddress literal;
-            if (!IPAddress.TryParse(host, out literal))
+            if (!IPAddress.TryParse(host, out IPAddress literal))
             {
-                // Name the DNS step explicitly: when it fails, Connect would report the
-                // same root cause less readably; when it succeeds, the log shows which
-                // address is actually being dialed.
+                // DNS as its own step, for a readable failure and the dialed address in the log.
                 try
                 {
                     IPAddress[] resolved = Dns.GetHostAddresses(host);
@@ -100,8 +91,7 @@ namespace CS2MultiplayerMod.Core.Networking.Tcp
                         ":" + port + ".");
                     return;
                 }
-                var socketEx = ex as SocketException;
-                string errorCode = socketEx != null ? " [" + socketEx.SocketErrorCode + "]" : "";
+                string errorCode = ex is SocketException socketEx ? " [" + socketEx.SocketErrorCode + "]" : "";
                 Enqueue(TransportEvent.Disconnected(ConnectionId.Server,
                     "connect failed" + errorCode + ": " + ex.Message));
                 _log.Warn(LogTopic.Transport, "Connect to " + host + ":" + port + " failed after " +
@@ -111,9 +101,7 @@ namespace CS2MultiplayerMod.Core.Networking.Tcp
             }
             _dialing = null;
 
-            // Shutdown() may have run while the dial was in flight (the user canceled the
-            // join). The socket must not outlive the transport — a leaked read thread
-            // would keep a half-alive connection to the host that nothing can ever close.
+            // Shutdown() may have run mid-dial; a leaked socket would keep a connection nothing can close.
             if (!_active)
             {
                 try { client.Close(); } catch { /* ignore */ }
@@ -130,9 +118,8 @@ namespace CS2MultiplayerMod.Core.Networking.Tcp
 
             var connection = new FramedConnection(ConnectionId.Server, client, null, useTls)
             {
-                InboundBudget = _inboundBudget,
-                // Connected is announced only after the TLS handshake succeeds, so the
-                // session never sends the handshake into a half-established stream.
+                InboundBudget = _events.Budget,
+                // Connected only after TLS, so the handshake never enters a half-open stream.
                 OnReady = cid =>
                 {
                     Enqueue(TransportEvent.Connected(cid));
@@ -143,17 +130,13 @@ namespace CS2MultiplayerMod.Core.Networking.Tcp
                 OnClosed = (cid, reason) =>
                 {
                     _active = false;
-                    // A disconnect is always delivered, even past the cap — it is the one
-                    // event the session must never miss.
-                    Interlocked.Increment(ref _queuedEvents);
-                    _events.Enqueue(TransportEvent.Disconnected(cid, reason));
+                    _events.EnqueueAlways(TransportEvent.Disconnected(cid, reason));
                 },
             };
 
             _connection = connection;
-            // Re-check after publishing: a Shutdown() racing this assignment either sees
-            // _connection and closes it, or is caught here. Close is idempotent, so both
-            // sides closing is safe.
+            // Re-check after publishing: a racing Shutdown() either sees _connection or is caught here;
+            // Close is idempotent.
             if (!_active)
             {
                 connection.Close("client shutting down");
@@ -163,35 +146,19 @@ namespace CS2MultiplayerMod.Core.Networking.Tcp
             connection.Start();
         }
 
-        /// <summary>
-        /// Queue an event for the game thread, dropping the connection if the queue is
-        /// not being drained - bounded memory beats a silent balloon when the game
-        /// thread stalls or a hostile host floods.
-        /// </summary>
+        /// <summary>Drops the connection when the queue is not drained, so memory stays bounded.</summary>
         private void Enqueue(TransportEvent evt)
         {
-            if (Interlocked.Increment(ref _queuedEvents) > MaxQueuedEvents)
-            {
-                Interlocked.Decrement(ref _queuedEvents);
-                if (evt.Type == TransportEventType.Data) _inboundBudget.Release(evt.Connection, evt.Payload.Length);
-                _log.Warn(LogTopic.Transport,
-                    "Transport event queue full; disconnecting from host.");
-                var c = _connection;
-                if (c != null) c.Close("event queue overflow");
-                return;
-            }
-            _events.Enqueue(evt);
+            if (_events.TryEnqueue(evt)) return;
+            _log.Warn(LogTopic.Transport, "Transport event queue full; disconnecting from host.");
+            var c = _connection;
+            if (c != null) c.Close("event queue overflow");
         }
 
-        /// <summary>
-        /// Translate the few socket errors that cover practically every failed join
-        /// into what they actually mean for a player, so the log answers "why" instead
-        /// of just "no".
-        /// </summary>
+        /// <summary>The common join-failure socket errors, in player terms.</summary>
         private static string DescribeConnectFailure(Exception ex)
         {
-            var socketEx = ex as SocketException;
-            if (socketEx == null) return "";
+            if (ex is not SocketException socketEx) return "";
             switch (socketEx.SocketErrorCode)
             {
                 case SocketError.ConnectionRefused:
@@ -236,34 +203,26 @@ namespace CS2MultiplayerMod.Core.Networking.Tcp
             return c != null ? c.RemoteAddress : null;
         }
 
+        public long LastInboundActivityMs(ConnectionId connection)
+        {
+            var c = _connection;
+            return c != null ? c.LastInboundMs : long.MinValue;
+        }
+
         public byte[] GetChannelBinding(ConnectionId connection)
         {
             var c = _connection;
             return c != null ? c.ChannelBinding : Array.Empty<byte>();
         }
 
-        public int Poll(IList<TransportEvent> sink)
-        {
-            int count = 0;
-            TransportEvent evt;
-            while (_events.TryDequeue(out evt))
-            {
-                Interlocked.Decrement(ref _queuedEvents);
-                sink.Add(evt);
-                if (evt.Type == TransportEventType.Data) _inboundBudget.Release(evt.Connection, evt.Payload.Length);
-                count++;
-            }
-            return count;
-        }
+        public int Poll(IList<TransportEvent> sink) => _events.Drain(sink);
 
         public void Shutdown()
         {
             if (!_active && _connection == null) return;
             _active = false;
 
-            // Abort a dial that is still in flight: closing the socket makes the blocking
-            // Connect throw promptly, and ConnectLoop's !_active checks stop it from
-            // standing up a connection nobody owns.
+            // Closing the socket aborts a blocking Connect; ConnectLoop's !_active checks do the rest.
             var dialing = _dialing;
             if (dialing != null) { try { dialing.Close(); } catch { /* ignore */ } }
 

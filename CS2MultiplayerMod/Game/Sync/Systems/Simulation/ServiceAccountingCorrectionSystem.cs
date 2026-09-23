@@ -5,7 +5,6 @@ using CS2MultiplayerMod.Game.Diagnostics;
 using CS2MultiplayerMod.Game.Sync.Commands;
 using CS2MultiplayerMod.Game.Sync.Infrastructure;
 using Game;
-using Game.City;
 using Game.Economy;
 using Game.Prefabs;
 using Game.Simulation;
@@ -17,9 +16,8 @@ using Unity.Mathematics;
 namespace CS2MultiplayerMod.Game.Sync.Systems
 {
     /// <summary>
-    /// Reasserts host service-accounting records around the native collectors. The collectors stay
-    /// enabled because they also maintain unrelated service and budget state; only their redundant
-    /// client-side accounting output is replaced.
+    /// Reasserts host service-accounting records around the native collectors, which stay enabled for
+    /// their other work.
     /// </summary>
     public sealed partial class ServiceAccountingCorrectionSystem : GameSystemBase
     {
@@ -56,22 +54,15 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             if (_snapshot != null && !IsAuthoritativeClient()) ClearSnapshot();
         }
 
-        internal void ApplyBeforeBudgetCollection()
-        {
-            CorrectAll();
-        }
+        internal void ApplyBeforeBudgetCollection() => CorrectAll();
 
-        /// <summary>
-        /// Discard locally produced fee events at both sides of the native fee collector and put
-        /// the host's terminal fee records back. Every native fee producer shares this queue.
-        /// </summary>
+        /// <summary>Discards local fee events around the collector and restores the host's records.</summary>
         internal void ApplyFeeBoundary(ServiceFeeSystem feeSystem)
         {
             if (!IsAuthoritativeClient() || feeSystem == null) return;
             try
             {
-                JobHandle deps;
-                NativeQueue<ServiceFeeSystem.FeeEvent> queue = feeSystem.GetFeeQueue(out deps);
+                NativeQueue<ServiceFeeSystem.FeeEvent> queue = feeSystem.GetFeeQueue(out JobHandle deps);
                 deps.Complete();
                 queue.Clear();
                 ApplyFeeRecords();
@@ -82,10 +73,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             }
         }
 
-        protected override void OnUpdate()
-        {
-            CorrectAll();
-        }
+        protected override void OnUpdate() => CorrectAll();
 
         protected override void OnDestroy()
         {
@@ -120,8 +108,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             for (int i = 0; i < _snapshot.Services.Count; i++)
             {
                 ServiceAccountingService wanted = _snapshot.Services[i];
-                Entity service;
-                if (!_prefabIndex.TryResolve(wanted.PrefabName, IsServicePrefab, out service))
+                if (!_prefabIndex.TryResolve(wanted.PrefabName, IsServicePrefab, out Entity service))
                 {
                     WarnShapeOnce("could not resolve service prefab '" + wanted.PrefabName + "'");
                     continue;
@@ -138,8 +125,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             for (int i = 0; i < _snapshot.Services.Count; i++)
             {
                 ServiceAccountingService wanted = _snapshot.Services[i];
-                Entity service;
-                if (_prefabIndex.TryResolve(wanted.PrefabName, IsServicePrefab, out service))
+                if (_prefabIndex.TryResolve(wanted.PrefabName, IsServicePrefab, out Entity service))
                     ApplyFeeRecords(service, wanted);
             }
         }
@@ -221,8 +207,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 return;
             }
 
-            // Verify the whole key table before writing any value. The layout is prefab-owned,
-            // so a mismatch means this record must be left untouched rather than half-corrected.
+            // Verify the whole prefab-owned key table first; never half-correct a record.
             for (int i = 0; i < wanted.Fees.Length; i++)
             {
                 ServiceAccountingFee target = wanted.Fees[i];
@@ -252,10 +237,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
         private void ApplyAccountingArrays()
         {
-            JobHandle incomeDeps;
-            JobHandle expenseDeps;
-            NativeArray<int> incomes = _budgetSystem.GetIncomeArray(out incomeDeps);
-            NativeArray<int> expenses = _budgetSystem.GetExpenseArray(out expenseDeps);
+            NativeArray<int> incomes = _budgetSystem.GetIncomeArray(out JobHandle incomeDeps);
+            NativeArray<int> expenses = _budgetSystem.GetExpenseArray(out JobHandle expenseDeps);
             JobHandle.CombineDependencies(incomeDeps, expenseDeps).Complete();
 
             for (int i = 0; i < ServiceAccountingSnapshot.FeeIncomeSources.Length; i++)

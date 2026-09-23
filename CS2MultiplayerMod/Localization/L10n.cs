@@ -5,115 +5,32 @@ using Game.SceneFlow;
 namespace CS2MultiplayerMod.Localization
 {
     /// <summary>
-    /// Runtime translation lookup for strings the mod computes in code (status lines,
-    /// host-state messages, the join dialog's headline/detail). Static option labels
-    /// are resolved by the game itself from the registered locale sources
-    /// (<see cref="PropertiesLocaleSource"/>, one per language); this helper covers
-    /// values that are produced per frame and therefore must be translated at read time.
-    /// The mod always follows the game language and switches live.
-    /// Lookup order: active game dictionary -> built-in English table -> the key itself.
+    /// Runtime translation for strings computed in code; option labels are resolved by the game from the
+    /// locale sources. Follows the game language live. Lookup: game dictionary -> English -> the key.
     /// </summary>
     public static class L10n
     {
-        /// <summary>
-        /// Locale keys for everything the mod resolves at runtime. Settings labels and
-        /// descriptions use the game-generated option IDs instead and have no constants.
-        /// </summary>
+        /// <summary>Runtime locale keys; option labels use game-generated ids instead.</summary>
         public static class Key
         {
-            // -- Main-menu multiplayer screen (read by the UI module via useLocalization) --
-            public const string UiJoinGame = "CS2MP.UI.JoinGame";
-            public const string UiHostGame = "CS2MP.UI.HostGame";
-            public const string UiHostWorldTitle = "CS2MP.UI.HostWorldTitle";
-            public const string UiLoadWorld = "CS2MP.UI.LoadWorld";
-            public const string UiCreateWorld = "CS2MP.UI.CreateWorld";
-            public const string UiDialogTitle = "CS2MP.UI.DialogTitle";
-            public const string UiPlayerName = "CS2MP.UI.PlayerName";
-            public const string UiHostAddress = "CS2MP.UI.HostAddress";
-            public const string UiPort = "CS2MP.UI.Port";
-            public const string UiPassword = "CS2MP.UI.Password";
-            public const string UiWorldTransfer = "CS2MP.UI.WorldTransfer";
-            public const string UiJoin = "CS2MP.UI.Join";
-            public const string UiDisconnect = "CS2MP.UI.Disconnect";
-            public const string UiCloseSession = "CS2MP.UI.CloseSession";
-            public const string UiClose = "CS2MP.UI.Close";
-            public const string UiOpenHelp = "CS2MP.UI.OpenHelp";
-
-            // -- Native confirmation shown before an explicit host/client disconnect --
-            public const string UiCloseSessionTitle = "CS2MP.UI.CloseSessionTitle";
-            public const string UiCloseSessionBody = "CS2MP.UI.CloseSessionBody";
-            public const string UiLeaveSessionTitle = "CS2MP.UI.LeaveSessionTitle";
-            public const string UiLeaveSessionBody = "CS2MP.UI.LeaveSessionBody";
-
             // -- In-game multiplayer hub (right-menu button + panel) --
-            public const string UiMultiplayer = "CS2MP.UI.Multiplayer";
-            public const string UiSessionSettings = "CS2MP.UI.SessionSettings";
-            public const string UiBack = "CS2MP.UI.Back";
-            public const string UiChatPlaceholder = "CS2MP.UI.ChatPlaceholder";
-            public const string UiSend = "CS2MP.UI.Send";
-            public const string UiNoMessages = "CS2MP.UI.NoMessages";
-            public const string UiHostSession = "CS2MP.UI.HostSession";
-            public const string UiLanOnly = "CS2MP.UI.LanOnly";
-            public const string UiMaxPlayers = "CS2MP.UI.MaxPlayers";
-            public const string UiSyncWorld = "CS2MP.UI.SyncWorld";
-            public const string UiLockedInSession = "CS2MP.UI.LockedInSession";
-            public const string UiPlayers = "CS2MP.UI.Players";
-            public const string UiHost = "CS2MP.UI.Host";
-            public const string UiYou = "CS2MP.UI.You";
-            public const string UiKick = "CS2MP.UI.Kick";
-            public const string UiConfirmKick = "CS2MP.UI.ConfirmKick";
-            public const string UiBan = "CS2MP.UI.Ban";
-            public const string UiConfirmBan = "CS2MP.UI.ConfirmBan";
-            public const string UiBanHint = "CS2MP.UI.BanHint";
-            public const string UiCancelKick = "CS2MP.UI.CancelKick";
-            public const string UiSendingWorld = "CS2MP.UI.SendingWorld";
-            public const string UiTryThis = "CS2MP.UI.TryThis";
-            public const string UiRequireApproval = "CS2MP.UI.RequireApproval";
-            public const string UiAutoApproveSteamFriends = "CS2MP.UI.AutoApproveSteamFriends";
-            public const string UiResyncPolicy = "CS2MP.UI.ResyncPolicy";
             public const string UiResyncAllow = "CS2MP.UI.ResyncAllow";
             public const string UiResyncApproval = "CS2MP.UI.ResyncApproval";
             public const string UiResyncHostOnly = "CS2MP.UI.ResyncHostOnly";
-            public const string UiSimulationSync = "CS2MP.UI.SimulationSync";
-            public const string UiJoinRequestTitle = "CS2MP.UI.JoinRequestTitle";
-            // {0} = joining player's name.
-            public const string UiJoinRequestBody = "CS2MP.UI.JoinRequestBody";
-            public const string UiAccept = "CS2MP.UI.Accept";
-            public const string UiDecline = "CS2MP.UI.Decline";
-            public const string UiResyncRequestTitle = "CS2MP.UI.ResyncRequestTitle";
-            public const string UiResyncRequestBody = "CS2MP.UI.ResyncRequestBody";
-            public const string UiAutoContinueMilestone = "CS2MP.UI.AutoContinueMilestone";
-
-            // -- One-time disclaimer gate (shown before first host/join) --
-            public const string UiDisclaimerTitle = "CS2MP.UI.DisclaimerTitle";
-            public const string UiDisclaimerBody = "CS2MP.UI.DisclaimerBody";
-            public const string UiDisclaimerAccept = "CS2MP.UI.DisclaimerAccept";
-            public const string UiDisclaimerDecline = "CS2MP.UI.DisclaimerDecline";
 
             // -- Untested game-version warning banner --
-            public const string UiVersionWarningTitle = "CS2MP.UI.VersionWarningTitle";
             // {0} = running build, {1} = comma-separated tested builds.
             public const string UiVersionWarning = "CS2MP.UI.VersionWarning";
 
-            // -- Version row on the options screen, locally built copies only: a released
-            // build shows the plain version, which needs no format.
-            // {0} = mod version, {1} = build stamp, {2} = protocol version.
+            // Options version row for local builds. {0} = mod version, {1} = build stamp, {2} = protocol.
             public const string VersionLineDev = "CS2MP.UI.VersionLineDev";
 
             // -- Other-mods block (host and join are both refused while any is live) --
-            public const string UiModsBlockedTitle = "CS2MP.UI.ModsBlockedTitle";
             // {0} = comma-separated names of the other live mods.
             public const string UiModsBlocked = "CS2MP.UI.ModsBlocked";
-            // Same, for a block that came from the loaded-assembly fallback: that one only
-            // clears on restart, so it must not tell the player to just toggle the mod off.
+            // A block from the loaded-assembly fallback clears only on restart.
             public const string UiModsBlockedRestart = "CS2MP.UI.ModsBlockedRestart";
-            public const string UiModsIgnoredTitle = "CS2MP.UI.ModsIgnoredTitle";
             public const string UiModsIgnored = "CS2MP.UI.ModsIgnored";
-
-            // -- Full-screen join loading overlay --
-            public const string UiCancel = "CS2MP.UI.Cancel";
-            public const string UiJoiningTitle = "CS2MP.UI.JoiningTitle";
-            public const string UiLoadingHint = "CS2MP.UI.LoadingHint";
 
             // -- Session status (join dialog indicator, hub panel, loading overlay) --
             public const string StatusOffline = "CS2MP.Status.Offline";
@@ -181,7 +98,6 @@ namespace CS2MultiplayerMod.Localization
             // -- Connection mode --
             public const string ConnectionRelay = "CS2MP.Connection.Relay";
             public const string ConnectionDirect = "CS2MP.Connection.Direct";
-            public const string ConnectionMode = "CS2MP.Connection.Mode";
             public const string JoinCode = "CS2MP.Connection.JoinCode";
             public const string JoinCodeUnavailable = "CS2MP.Connection.JoinCodeUnavailable";
             public const string JoinCodeHint = "CS2MP.Connection.JoinCodeHint";
@@ -198,10 +114,7 @@ namespace CS2MultiplayerMod.Localization
             public const string HostSessionActive = "CS2MP.Host.SessionActive";
         }
 
-        // English fallback for runtime keys, parsed once from the embedded en.properties
-        // (the same file the en-US locale source loads). Used when the active dictionary
-        // has no entry — e.g. an unsupported game language — so the English text still
-        // lives in exactly one place: the .properties file.
+        // English fallback parsed once from the embedded en.properties, for keys the active dictionary lacks.
         private static Dictionary<string, string> _englishFallback;
 
         private static Dictionary<string, string> EnglishFallback
@@ -219,8 +132,7 @@ namespace CS2MultiplayerMod.Localization
                     }
                     catch (Exception)
                     {
-                        // A missing/corrupt resource must not throw out of a status getter
-                        // polled by the UI; T() then returns the key itself as last resort.
+                        // A missing resource must not throw out of a polled status getter; T() returns the key.
                     }
                     _englishFallback = dict;
                 }
@@ -235,19 +147,15 @@ namespace CS2MultiplayerMod.Localization
             if (manager != null && manager.localizationManager != null)
             {
                 var dictionary = manager.localizationManager.activeDictionary;
-                string value;
-                if (dictionary != null && dictionary.TryGetValue(key, out value) && !string.IsNullOrEmpty(value))
+                if (dictionary != null && dictionary.TryGetValue(key, out string value) && !string.IsNullOrEmpty(value))
                     return value;
             }
 
-            string english;
-            return EnglishFallback.TryGetValue(key, out english) ? english : key;
+            return EnglishFallback.TryGetValue(key, out string english) ? english : key;
         }
 
         /// <summary>
-        /// Translate and <see cref="string.Format(string,object[])"/> a runtime key.
-        /// A malformed placeholder in a translation falls back to the English format - a bad
-        /// locale entry must never throw out of a status getter polled by the UI.
+        /// Translates and formats; a malformed translated placeholder falls back to the English format.
         /// </summary>
         public static string F(string key, params object[] args)
         {
@@ -258,8 +166,7 @@ namespace CS2MultiplayerMod.Localization
             }
             catch (FormatException)
             {
-                string english;
-                return EnglishFallback.TryGetValue(key, out english) ? string.Format(english, args) : key;
+                return EnglishFallback.TryGetValue(key, out string english) ? string.Format(english, args) : key;
             }
         }
     }

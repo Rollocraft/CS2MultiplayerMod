@@ -1,31 +1,12 @@
-using System;
 using System.Collections.Generic;
-using System.Diagnostics;
-using System.Text;
 using CS2MultiplayerMod.Core.Protocol;
-using CS2MultiplayerMod.Game.Diagnostics;
 using CS2MultiplayerMod.Game.Sync.Commands;
-using CS2MultiplayerMod.Game.Sync.Infrastructure;
-using Game.Buildings;
-using Game.Citizens;
-using Game.Common;
-using Game.Economy;
-using Game.Prefabs;
-using Game.Simulation;
-using Game.Tools;
-using Game.Vehicles;
 using Unity.Collections;
 using Unity.Entities;
 
 namespace CS2MultiplayerMod.Game.Sync.Systems
 {
-    // Building the host's occupancy page: what goes into one message, in what order, and within
-    // what budget. Priority properties go first, then departures, then whatever the rotating
-    // bucket sweep turns up.
-    //
-    // Departures and the host-side scans are in CaptureDeparture.cs, the bucket rotation and
-    // change detection in CaptureScan.cs, reading one property/household/citizen in
-    // CaptureEntity.cs, and the hashing and trace lines in CaptureHash.cs.
+    // The host's page: priority properties, then departures, then the rotating sweep.
     public partial class ResidentialOccupancySyncSystem
     {
         private static readonly int[] EmptyNameIndices = new int[0];
@@ -42,8 +23,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
         private sealed class PageBudget
         {
-            public readonly HashSet<PropertyRentIdentity> Identities =
-                new HashSet<PropertyRentIdentity>();
+            public readonly HashSet<PropertyIdentity> Identities =
+                new HashSet<PropertyIdentity>();
             public readonly HashSet<ulong> HouseholdIds = new HashSet<ulong>();
             public readonly HashSet<ulong> CitizenIds = new HashSet<ulong>();
             public readonly HashSet<ulong> DepartureIds = new HashSet<ulong>();
@@ -83,9 +64,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             _captureBaselineNeedsEmptyPage = false;
             if (!baselineNeedsEmptyPage)
             {
-                // Lifecycle proof comes first. A very dense property is allowed to exceed the soft
-                // page target, so appending tombstones afterward could otherwise starve the only
-                // authoritative evidence that an entity left.
+                // Departure records first: a dense property may overrun the soft page target.
                 AddDepartureRecords(snapshot, budget, service.NowMs);
                 AddPriorityProperties(snapshot, budget);
             }
@@ -96,23 +75,18 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                    snapshot.Properties.Count < ResidentialOccupancySnapshot.MaxProperties &&
                    (budget.Bytes < PageByteBudget || !baselineAdvanced))
             {
-                OccupancyProperty property;
-                if (TryCaptureProperty(_hostSweepEntities[index], out property))
+                if (TryCaptureProperty(_hostSweepEntities[index], out OccupancyProperty property))
                 {
                     PageAddResult result = TryAddPageEntry(snapshot, budget, property);
                     if (result == PageAddResult.Added)
                         TraceSentRoster(_hostSweepEntities[index], property);
                     if (result == PageAddResult.Full)
                     {
-                        // Priority entries may already have used most of the hard page cap. Close
-                        // that page without consuming this baseline entity; the following page
-                        // starts empty and can always carry a valid single property.
+                        // Close this page without consuming the baseline entity; the next page starts empty.
                         if (snapshot.Properties.Count > 0 || snapshot.Departures.Count > 0 ||
                             snapshot.CitizenDepartures.Count > 0)
                         {
-                            // The following capture intentionally omits priority/lifecycle extras
-                            // once, guaranteeing that any individually valid baseline property can
-                            // make progress even when it nearly fills the hard transport cap.
+                            // Next capture skips priority extras once, so any valid baseline property can progress.
                             _captureBaselineNeedsEmptyPage = true;
                             break;
                         }
@@ -142,8 +116,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             if (snapshot.Properties.Count == 0 && snapshot.Departures.Count == 0 &&
                 snapshot.CitizenDepartures.Count == 0 && !snapshot.EndOfSweep) return false;
 
-            // Encode before committing traversal state. Future schema changes can then fail this
-            // one channel safely without consuming a baseline suffix that was never sent.
+            // Encode before committing traversal state, so a failure does not skip unsent properties.
             byte[] encoded = snapshot.Encode();
             if (snapshot.EndOfSweep)
             {
@@ -178,10 +151,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             finally { properties.Dispose(); }
         }
 
-        /// <summary>
-        /// A city with no residential property still has to close its sweep, otherwise a client
-        /// that bulldozed its last house would keep the previous roster cached forever.
-        /// </summary>
+        /// <summary>A city with no residential property still closes its sweep, so clients prune.</summary>
         private bool WriteEmptySweep(NetworkWriter writer)
         {
             var empty = new ResidentialOccupancySnapshot
@@ -210,15 +180,10 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                    snapshot.Properties.Count < ResidentialOccupancySnapshot.MaxProperties &&
                    budget.Bytes < PriorityByteBudget)
             {
-                PropertyRentIdentity identity;
-                if (!_priorityOrder.TryDequeue(out identity)) break;
-                Entity entity;
-                if (!_priority.TryGetValue(identity, out entity)) continue;
-                OccupancyProperty property;
-                // Recapture at send time. The queued signal says only "this property changed";
-                // retaining the old payload could let a later baseline lose to a stale priority
-                // copy of the same identity in this page.
-                if (!TryCaptureProperty(entity, out property))
+                if (!_priorityOrder.TryDequeue(out PropertyIdentity identity)) break;
+                if (!_priority.TryGetValue(identity, out Entity entity)) continue;
+                // Recapture at send time so a stale priority copy cannot beat a later baseline.
+                if (!TryCaptureProperty(entity, out OccupancyProperty property))
                 {
                     _priority.Remove(identity);
                     continue;

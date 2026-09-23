@@ -3,17 +3,14 @@ using Game.Tools;
 using Game.Zones;
 using Unity.Collections;
 using Unity.Entities;
-using CS2MultiplayerMod.Core.Diagnostics;
 using CS2MultiplayerMod.Core.Session;
-using CS2MultiplayerMod.Game.Diagnostics;
 using CS2MultiplayerMod.Game.Sync.Commands;
 
 namespace CS2MultiplayerMod.Game.Sync.Systems
 {
     public partial class ZoneSyncSystem
     {
-        // Capture the standing preview on its commit frame. Updated real blocks also include
-        // native road/grid regeneration and remote writes; neither is a new player zoning edit.
+        // On the commit frame only: Updated blocks also include road regeneration and remote writes.
         internal void CaptureLocalToolApply()
         {
             MultiplayerService service = Mod.Service;
@@ -44,8 +41,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                         Cell before = original[c];
                         Cell preview = cells[c];
                         states[c] = PortableCellState(before.m_State);
-                        // An overridden cell is retained by the native commit. Its preview is not
-                        // a requested replacement, and must not erase another peer's zoning.
+                        // An overridden cell is kept by the commit; its preview must not erase another peer's zoning.
                         if ((preview.m_State & CellFlags.Selected) == 0 ||
                             (before.m_State & CellFlags.Overridden) != 0 ||
                             (before.m_State & CellFlags.Visible) == 0 ||
@@ -71,8 +67,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                         ZoneNames = names.ToArray(), Cells = values, CellStates = states,
                     };
                     ZoneBlockKey key = StateKey(block);
-                    ZonePaintCommand earlier;
-                    bool coalesced = _outgoing.TryGetValue(key, out earlier);
+                    bool coalesced = _outgoing.TryGetValue(key, out ZonePaintCommand earlier);
                     if (coalesced) command.MergeEarlier(earlier);
                     if (!_outgoing.TrySetLatest(key, command, MaxBufferedOutgoingZones))
                     {
@@ -89,9 +84,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         private void FlushOutgoing(MultiplayerSession session)
         {
             int sent = 0;
-            ZoneBlockKey key;
-            ZonePaintCommand command;
-            while (sent < MaxSendPerFrame && _outgoing.TryTake(out key, out command))
+            while (sent < MaxSendPerFrame && _outgoing.TryTake(out ZoneBlockKey key, out ZonePaintCommand command))
             {
                 session.SendCommand(0, ZonePaintCommand.Id, command.Encode());
                 sent++;

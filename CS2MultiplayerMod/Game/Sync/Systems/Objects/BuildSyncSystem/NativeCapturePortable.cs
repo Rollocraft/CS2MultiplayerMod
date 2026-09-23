@@ -1,19 +1,15 @@
 using System.Collections.Generic;
 using Colossal.Mathematics;
 using Game.Common;
-using Game.Net;
 using Game.Prefabs;
 using Game.Tools;
-using Unity.Collections;
 using Unity.Entities;
 using Unity.Mathematics;
 using CS2MultiplayerMod.Game.Sync.Commands;
 
 namespace CS2MultiplayerMod.Game.Sync.Systems
 {
-    // Naming an entity to a peer that shares none of our entity ids: a portable reference is the
-    // prefab, the kind, and the path of owners down from a top-level object, each step described
-    // well enough that the other side can walk the same path through its own graph.
+    // A portable reference: prefab, kind and the owner path down from a top-level object.
     public partial class BuildSyncSystem
     {
         private bool TryCapturePortableRef(Entity entity, out PortableEntityRef value)
@@ -76,8 +72,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 value.ConnectLayers = (uint)netData.m_ConnectLayers;
             }
 
-            Entity topOwner;
-            if (!TryFindTopOwner(entity, out topOwner) || topOwner == Entity.Null) return true;
+            if (!TryFindTopOwner(entity, out Entity topOwner) || topOwner == Entity.Null) return true;
             if (!EntityManager.HasComponent<PrefabRef>(topOwner) ||
                 !EntityManager.HasComponent<global::Game.Objects.Transform>(topOwner)) return false;
             Entity ownerPrefab = EntityManager.GetComponentData<PrefabRef>(topOwner).m_Prefab;
@@ -91,8 +86,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             value.OwnerRotY = ownerTransform.m_Rotation.value.y;
             value.OwnerRotZ = ownerTransform.m_Rotation.value.z;
             value.OwnerRotW = ownerTransform.m_Rotation.value.w;
-            PortableOwnerPathStep[] ownerPath;
-            if (TryCaptureOwnerPath(entity, topOwner, out ownerPath))
+            if (TryCaptureOwnerPath(entity, topOwner, out PortableOwnerPathStep[] ownerPath))
                 value.OwnerPath = ownerPath;
             return true;
         }
@@ -113,8 +107,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 Entity owner = EntityManager.GetComponentData<Owner>(cursor).m_Owner;
                 if (owner == Entity.Null || owner == cursor || !EntityManager.Exists(owner))
                     return false;
-                PortableOwnerPathStep step;
-                if (!TryCaptureOwnerPathStep(owner, cursor, out step)) return false;
+                if (!TryCaptureOwnerPathStep(owner, cursor, out PortableOwnerPathStep step)) return false;
                 reversed.Add(step);
                 cursor = owner;
             }
@@ -130,10 +123,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             step = default(PortableOwnerPathStep);
             if (!EntityManager.HasComponent<PrefabRef>(child)) return false;
             Entity childPrefab = EntityManager.GetComponentData<PrefabRef>(child).m_Prefab;
-            string childPrefabName;
-            PortableEntityKind childKind;
-            if (!TryPrefabName(childPrefab, out childPrefabName) ||
-                !TryGetPortableEntityKind(child, out childKind)) return false;
+            if (!TryPrefabName(childPrefab, out string childPrefabName) ||
+                !TryGetPortableEntityKind(child, out PortableEntityKind childKind)) return false;
 
             if (EntityManager.HasBuffer<global::Game.Buildings.InstalledUpgrade>(owner))
             {
@@ -144,7 +135,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 for (int i = 0; i < buffer.Length; i++)
                 {
                     Entity candidate = buffer[i].m_Upgrade;
-                    bool same = MatchesOwnerPathSibling(owner, candidate, childPrefab, childKind);
+                    bool same = MatchesOwnerPathCandidate(owner, candidate, childPrefab, childKind);
                     if (candidate == child)
                     {
                         step = CreateOwnerPathStep(PortableOwnerPathKind.InstalledUpgrade,
@@ -163,7 +154,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 for (int i = 0; i < buffer.Length; i++)
                 {
                     Entity candidate = buffer[i].m_SubObject;
-                    bool same = MatchesOwnerPathSibling(owner, candidate, childPrefab, childKind);
+                    bool same = MatchesOwnerPathCandidate(owner, candidate, childPrefab, childKind);
                     if (candidate == child)
                     {
                         step = CreateOwnerPathStep(PortableOwnerPathKind.SubObject,
@@ -182,7 +173,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 for (int i = 0; i < buffer.Length; i++)
                 {
                     Entity candidate = buffer[i].m_SubNet;
-                    bool same = MatchesOwnerPathSibling(owner, candidate, childPrefab, childKind);
+                    bool same = MatchesOwnerPathCandidate(owner, candidate, childPrefab, childKind);
                     if (candidate == child)
                     {
                         step = CreateOwnerPathStep(PortableOwnerPathKind.SubNet,
@@ -201,7 +192,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 for (int i = 0; i < buffer.Length; i++)
                 {
                     Entity candidate = buffer[i].m_Area;
-                    bool same = MatchesOwnerPathSibling(owner, candidate, childPrefab, childKind);
+                    bool same = MatchesOwnerPathCandidate(owner, candidate, childPrefab, childKind);
                     if (candidate == child)
                     {
                         step = CreateOwnerPathStep(PortableOwnerPathKind.SubArea,
@@ -228,7 +219,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             };
         }
 
-        private bool MatchesOwnerPathSibling(Entity owner, Entity candidate, Entity prefab,
+        private bool MatchesOwnerPathCandidate(Entity owner, Entity candidate, Entity prefab,
             PortableEntityKind kind)
         {
             if (candidate == Entity.Null || !EntityManager.Exists(candidate) ||
@@ -239,8 +230,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 !EntityManager.HasComponent<Owner>(candidate) ||
                 EntityManager.GetComponentData<Owner>(candidate).m_Owner != owner)
                 return false;
-            PortableEntityKind candidateKind;
-            return TryGetPortableEntityKind(candidate, out candidateKind) &&
+            return TryGetPortableEntityKind(candidate, out PortableEntityKind candidateKind) &&
                    candidateKind == kind;
         }
 

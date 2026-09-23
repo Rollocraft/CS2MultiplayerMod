@@ -6,11 +6,7 @@ using CS2MultiplayerMod.Core.Protocol;
 using CS2MultiplayerMod.Game.Sync.Infrastructure;
 namespace CS2MultiplayerMod.Game.Sync.Channels
 {
-    /// <summary>
-    /// Replicates the tourism aggregates (<see cref="Tourism"/> singleton on the city
-    /// entity) host -> clients, so the tourism dashboard matches. Like population, this is
-    /// a sim *output* - the host's numbers are authoritative, clients display them.
-    /// </summary>
+    /// <summary>Tourism aggregates: simulation output, so the host's numbers are shown.</summary>
     public sealed class TourismStateChannel : IStateChannel
     {
         public const byte Id = 9;

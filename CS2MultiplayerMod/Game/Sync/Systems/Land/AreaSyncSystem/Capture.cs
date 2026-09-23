@@ -38,9 +38,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         }
 
         /// <summary>
-        /// 1 Hz ring comparison - redraws don't reliably surface as Created/Deleted, so
-        /// they are detected by content, not lifecycle tags. First sighting of an entity
-        /// only records (creation travels via <see cref="AreaCreateCommand"/>).
+        /// 1 Hz ring comparison: redraws do not reliably surface as Created/Deleted. A first sighting
+        /// only records.
         /// </summary>
         private void ScanForEdits(MultiplayerSession session, long now)
         {
@@ -75,11 +74,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                             out ownerPrefab, out ownerTransform)) continue;
 
                     float3[] ring = ReadRing(entity);
-                    float3[] old;
-                    bool had = _knownRings.TryGetValue(entity, out old);
-                    // Record even a lot that is not a polygon yet: a building placed without
-                    // drawing its area keeps the prefab's seed nodes, and without that baseline
-                    // the player's first real draw reads as a first sighting and is never sent.
+                    bool had = _knownRings.TryGetValue(entity, out float3[] old);
+                    // Record seed-node lots too, or the player's first real draw reads as a first sighting.
                     _nextRings[entity] = ring;
                     if (ring.Length < 3 || !had || RingsEqual(old, ring)) continue;
 
@@ -89,16 +85,10 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
                     if (ownedSpecialized)
                     {
-                        // A specialized placement holds its building until the polygon closes, so
-                        // that it and the finished lot publish as one operation. This scan runs
-                        // once a second and would otherwise ship the lot first - the receiver then
-                        // holds a polygon for an owner it has never been told about, and gives up
-                        // ten seconds later. Leave this lot to the atomic publish.
+                        // A specialized placement publishes its building and closed lot as one operation.
                         if (_buildSync != null && _buildSync.IsSpecializedAreaHeld(entity))
                         {
-                            // Keep the old baseline rather than accepting this ring. If the
-                            // handoff is abandoned the building publishes without its polygon,
-                            // and the next scan after the hold releases still owes that redraw.
+                            // Keep the old baseline so an abandoned handoff still owes this redraw.
                             _nextRings[entity] = old;
                             continue;
                         }
@@ -249,6 +239,5 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 entities.Dispose();
             }
         }
-
     }
 }

@@ -5,17 +5,12 @@ using System.Security.Cryptography.X509Certificates;
 namespace CS2MultiplayerMod.Core.Networking.Tcp
 {
     /// <summary>
-    /// Creates ephemeral self-signed certificate for TLS. Lifetime-scoped, never
-    /// persisted. Clients skip CA validation - hash folded into password proof as
-    /// channel binding, which defeats active man-in-the-middle when password is set.
+    /// Ephemeral self-signed TLS certificate, never persisted. Clients skip CA validation; its hash is
+    /// the password proof's channel binding.
     /// </summary>
     public static class TlsCertificate
     {
-        /// <summary>
-        /// Try to create a self-signed certificate. Returns null with error in
-        /// <paramref name="error"/> if runtime cannot create it - caller decides
-        /// if plaintext fallback (LAN) is acceptable or fatal (public).
-        /// </summary>
+        /// <summary>Null with <paramref name="error"/> when the runtime cannot create one; the caller decides.</summary>
         public static X509Certificate2 TryCreateEphemeral(out string error)
         {
             try
@@ -33,8 +28,7 @@ namespace CS2MultiplayerMod.Core.Networking.Tcp
                     using (X509Certificate2 ephemeral = request.CreateSelfSigned(
                                DateTimeOffset.UtcNow.AddDays(-1), DateTimeOffset.UtcNow.AddYears(1)))
                     {
-                        // Round-trip through PFX so the private key is usable by SslStream
-                        // (a directly created ephemeral key is often rejected on Windows).
+                        // Round-trip through PFX: Windows often rejects a directly created ephemeral key in SslStream.
                         byte[] pfx = ephemeral.Export(X509ContentType.Pfx);
                         error = null;
                         // The ctor is the only PFX loader that exists on net48 too.

@@ -3,10 +3,8 @@ using System.Text;
 namespace CS2MultiplayerMod.Core.Protocol
 {
     /// <summary>
-    /// Validation helpers for wire values. Everything a remote peer controls - counts,
-    /// lengths, floats, names - must pass through here. All failures throw
-    /// <see cref="ProtocolException"/>, which every receive path treats as drop message
-    /// / disconnect sender, never crash.
+    /// Validation for everything a peer controls. Failures throw <see cref="ProtocolException"/>, which
+    /// every receive path turns into a dropped message or disconnect.
     /// </summary>
     public static class WireGuard
     {
@@ -26,16 +24,21 @@ namespace CS2MultiplayerMod.Core.Protocol
         public const int MaxItemCount = 4096;
 
         /// <summary>
-        /// Sanity bound for a course endpoint's split position. Not a semantic range: the value is
-        /// an extended curve parameter that runs past 1 by however far a snap sat beyond the
-        /// curve's end, and every consumer clamps it to 0..1 before use.
+        /// A sanity bound, not a range: an extended curve parameter, clamped to 0..1 by every consumer.
         /// </summary>
         public const float MaxSplitPosition = 1000f;
 
+        /// <summary>A bool byte that must be 0 or 1; anything else is "Invalid <paramref name="what"/>."</summary>
+        public static bool ReadStrictBool(NetworkReader reader, string what)
+        {
+            byte value = reader.ReadByte();
+            if (value > 1) throw new ProtocolException("Invalid " + what + ".");
+            return value != 0;
+        }
+
         /// <summary>
-        /// Read repeat count as 16-bit value, prove it's plausible: non-negative,
-        /// under <paramref name="maxItems"/>, and bytesPerItem x count fits remaining
-        /// bytes - so forged count can never cause huge allocation.
+        /// A 16-bit count that is non-negative, under <paramref name="maxItems"/>, and fits the remaining bytes
+        /// at <paramref name="bytesPerItem"/>, so a forged count cannot force a huge allocation.
         /// </summary>
         public static int ReadCount(NetworkReader reader, int bytesPerItem, int maxItems = MaxItemCount)
         {
@@ -83,10 +86,8 @@ namespace CS2MultiplayerMod.Core.Protocol
         }
 
         /// <summary>
-        /// Sanitize free text for display/logging: strip control characters (kills log
-        /// injection via embedded newlines/ANSI), collapse to the length cap, and never
-        /// return null. Used for player names and chat lines rather than rejecting, so a
-        /// sloppy-but-honest client still works.
+        /// Strips control characters (log injection), truncates, never returns null. Sanitizes rather than
+        /// rejects names and chat.
         /// </summary>
         public static string SanitizeText(string value, int maxLength)
         {

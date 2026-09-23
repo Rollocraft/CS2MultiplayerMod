@@ -14,9 +14,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 {
     public partial class BuildSyncSystem
     {
-        // A native object brush already commits this load shape in one frame. Preserve that on the
-        // receiver, but keep a hard ceiling so a hostile peer cannot turn batching into an
-        // unbounded main-thread spike.
+        // One frame like the native brush, with a hard ceiling against a hostile peer.
         private const int MaxBrushPlacementsPerFrame =
             ObjectPlacementBatchCommand.MaxPlacements;
         private int _rzFrameBatchedObjects;
@@ -34,9 +32,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 Entity entity = created[i];
                 Entity prefab = EntityManager.GetComponentData<PrefabRef>(entity).m_Prefab;
 
-                // A brush placement is expected to be a simple tree/prop. If a future game build
-                // permits brushing a prefab with an owned graph, retain the existing complete-
-                // lifecycle recovery path instead of flattening that graph into this batch.
+                // A brushed prefab with an owned graph keeps the complete lifecycle path.
                 if (RequiresCompleteObjectLifecycle(prefab)) return false;
 
                 string name = _prefabSystem.GetPrefabName(prefab);
@@ -49,8 +45,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     ? TreeAge(EntityManager.GetComponentData<Tree>(entity))
                     : 0f;
 
-                List<ObjectPlacementBatchCommand.Placement> placements;
-                if (!batches.TryGetValue(name, out placements))
+                if (!batches.TryGetValue(name, out List<ObjectPlacementBatchCommand.Placement> placements))
                 {
                     placements = new List<ObjectPlacementBatchCommand.Placement>();
                     batches[name] = placements;
@@ -94,28 +89,19 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             return true;
         }
 
-        /// <summary>
-        /// Returns false only when a valid batch must wait for the next frame's brush allowance.
-        /// Malformed/unsupported batches are consumed and logged so they cannot wedge the queue.
-        /// </summary>
+        /// <summary>False only when a valid batch must wait for next frame's allowance.</summary>
         private bool TryRealizeObjectPlacementBatch(SimulationCommandMessage message, long now)
         {
-            ObjectPlacementBatchCommand batch;
-            try { batch = ObjectPlacementBatchCommand.Decode(message.Body); }
-            catch (System.Exception ex)
-            {
-                SyncLog.Warn(LogTopic.Buildings,
-                    "BuildSync: dropping malformed object-placement batch: " + ex.Message);
+            if (!Infrastructure.CommandDecode.TryDecode(message, ObjectPlacementBatchCommand.Decode, LogTopic.Buildings,
+                    "BuildSync", out ObjectPlacementBatchCommand batch, "object-placement batch"))
                 return true;
-            }
 
             if (_rzFrameBatchedObjects > 0 &&
                 _rzFrameBatchedObjects + batch.Placements.Length > MaxBrushPlacementsPerFrame)
                 return false;
 
-            Entity prefab;
             if (!_prefabIndex.TryResolve(batch.PrefabName,
-                    candidate => EntityManager.HasComponent<ObjectData>(candidate), out prefab))
+                    candidate => EntityManager.HasComponent<ObjectData>(candidate), out Entity prefab))
             {
                 SyncLog.Warn(LogTopic.Buildings, "BuildSync realize: unknown batched prefab '" +
                     batch.PrefabName + "' from player " + message.OriginPlayerId + "; skipping.");

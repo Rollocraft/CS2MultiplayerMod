@@ -5,15 +5,8 @@ using CS2MultiplayerMod.Game.Diagnostics;
 namespace CS2MultiplayerMod.Game
 {
     /// <summary>
-    /// Lets the portable core write through the mod's one logger.
-    ///
-    /// Nothing under <c>Core/</c> may reference a game assembly, so the networking and session code
-    /// logs against <see cref="IModLogger"/>. This is the single seam where that interface meets
-    /// <see cref="SyncLog"/> - the core names the same <see cref="LogTopic"/> values as the game
-    /// layer, so a transport line and a road line land in one log, tagged the same way, gated the
-    /// same way, and mirrored to the flight log by the same rules.
-    ///
-    /// It holds no state: the destinations are the mod's static log and flight recorder.
+    /// The seam where Core's <see cref="IModLogger"/> meets <see cref="SyncLog"/>, so transport and sync
+    /// lines share one log, tags, gating and flight-log rules. Stateless.
     /// </summary>
     public sealed class ColossalModLogger : IModLogger
     {

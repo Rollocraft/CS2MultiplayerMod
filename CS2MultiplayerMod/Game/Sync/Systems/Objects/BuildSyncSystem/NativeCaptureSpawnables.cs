@@ -1,10 +1,5 @@
-using System.Collections.Generic;
-using Colossal.Mathematics;
 using Game.Common;
-using Game.Net;
 using Game.Prefabs;
-using Game.Tools;
-using Unity.Collections;
 using Unity.Entities;
 using Unity.Mathematics;
 using CS2MultiplayerMod.Core.Diagnostics;
@@ -13,16 +8,11 @@ using CS2MultiplayerMod.Game.Sync.Commands;
 
 namespace CS2MultiplayerMod.Game.Sync.Systems
 {
-    // Remembering the spawnable objects a local placement created, so the lifecycle capture can
-    // tell one the player placed from one the simulation grew.
     public partial class BuildSyncSystem
     {
         /// <summary>
-        /// Consume the one-shot identity of a spawnable building produced by an explicitly applied
-        /// object-tool graph. A fixed root requires the same prefab and, when present, 16-bit seed,
-        /// position within 10 cm, and the captured orientation; attached visible buildings use a
-        /// bounded snap envelope because attachment resolution changes their definition transform.
-        /// The live specialized owner/attachment graph is also accepted as a durable fallback.
+        /// Consumes the identity of a spawnable the player's tool placed: exact prefab, seed, 10 cm and
+        /// orientation for fixed roots, a bounded envelope for attached ones, or the live specialized graph.
         /// </summary>
         internal bool ConsumePlayerPlacedSpawnable(Entity entity, long now)
         {
@@ -51,12 +41,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 if (candidate.Prefab != prefab ||
                     (hasSeed && candidate.RandomSeed != seed)) continue;
 
-                // Attachment resolution can snap and rotate the committed visible building away
-                // from its prefab-local definition. Prefab and any live seed remain exact; use the
-                // bounded transform envelope as committed-root correlation for an attached live
-                // instance, while ordinary roots retain the strict 10 cm/orientation match. The
-                // definition already proves attachment intent even if the live Attached component
-                // has not been linked yet at ModificationEnd.
+                // Attachment can move the visible building; the definition already proves attachment intent.
                 bool attached = candidate.AllowAttachmentEnvelope ||
                                 EntityManager.HasComponent<global::Game.Objects.Attached>(entity);
                 bool transformMatches = attached
@@ -88,17 +73,15 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             for (int i = 0; i < operation.Definitions.Length; i++)
             {
                 ObjectToolDefinitionIntent definition = operation.Definitions[i];
-                Entity prefab;
                 if (definition == null || definition.Kind != ObjectToolDefinitionKind.Object ||
                     definition.PrefabIsNull ||
-                    !_prefabIndex.TryResolve(definition.PrefabName, out prefab) ||
+                    !_prefabIndex.TryResolve(definition.PrefabName, out Entity prefab) ||
                     !IsAllowedSpecializedSpawnable(operation, i, prefab)) continue;
 
-                Entity attachmentPrefab;
                 bool attached = i != operation.RootIndex &&
                                 TryGetSpecializedPlaceholderAttachment(operation, i,
                                     operation.Definitions[operation.RootIndex],
-                                    rootPrefab, out attachmentPrefab);
+                                    rootPrefab, out Entity attachmentPrefab);
                 RememberPlayerPlacedSpawnable(prefab,
                     new float3(definition.Object.PosX, definition.Object.PosY,
                         definition.Object.PosZ),
@@ -115,13 +98,12 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
         private Entity ResolveSpecializedRootPrefab(ObjectToolOperationCommand operation)
         {
-            Entity rootPrefab;
             ObjectToolDefinitionIntent root = operation != null && operation.Definitions != null &&
                                               operation.RootIndex >= 0 &&
                                               operation.RootIndex < operation.Definitions.Length
                 ? operation.Definitions[operation.RootIndex]
                 : null;
-            return root != null && _prefabIndex.TryResolve(root.PrefabName, out rootPrefab)
+            return root != null && _prefabIndex.TryResolve(root.PrefabName, out Entity rootPrefab)
                 ? rootPrefab : Entity.Null;
         }
 
@@ -165,9 +147,6 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     _playerPlacedSpawnableCreations.RemoveAt(i);
         }
 
-        private void ClearPlayerPlacedSpawnables()
-        {
-            _playerPlacedSpawnableCreations.Clear();
-        }
+        private void ClearPlayerPlacedSpawnables() => _playerPlacedSpawnableCreations.Clear();
     }
 }

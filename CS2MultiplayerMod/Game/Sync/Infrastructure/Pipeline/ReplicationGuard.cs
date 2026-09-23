@@ -4,14 +4,8 @@ using Unity.Mathematics;
 namespace CS2MultiplayerMod.Game.Sync.Infrastructure
 {
     /// <summary>
-    /// Breaks the placement echo loop. When a machine realizes a placement it received,
-    /// it <see cref="Mark"/>s a spatial key; when its own detector later sees that
-    /// freshly-created object, <see cref="Consume"/> recognises it as a replica and
-    /// suppresses re-broadcasting it. Without this, every received placement would be
-    /// re-detected and re-sent forever.
-    ///
-    /// Keys quantise position into coarse buckets so a realized object that snapped a
-    /// little still matches the request.
+    /// Breaks the echo loop: realizing a received placement marks a spatial key, and the detector
+    /// consumes it instead of re-broadcasting. Keys use coarse buckets to tolerate snapping.
     /// </summary>
     public sealed class ReplicationGuard
     {
@@ -23,8 +17,7 @@ namespace CS2MultiplayerMod.Game.Sync.Infrastructure
         /// <summary>Returns true (and forgets the key) if it was a still-valid replica marker.</summary>
         public bool Consume(string key, long nowMs)
         {
-            long expiresAt;
-            if (!_expiry.TryGetValue(key, out expiresAt)) return false;
+            if (!_expiry.TryGetValue(key, out long expiresAt)) return false;
             _expiry.Remove(key);
             return expiresAt >= nowMs;
         }

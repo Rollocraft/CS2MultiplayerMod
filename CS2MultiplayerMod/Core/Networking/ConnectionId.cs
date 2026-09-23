@@ -3,10 +3,8 @@ using System;
 namespace CS2MultiplayerMod.Core.Networking
 {
     /// <summary>
-    /// Opaque, value-type handle for a transport-level connection.
-    ///
-    /// On a host, every connected client has a unique id. On a client there is a
-    /// single connection to the host, addressed by <see cref="Server"/>.
+    /// Opaque connection handle: unique per client on a host; a client's one connection is
+    /// <see cref="Server"/>.
     /// </summary>
     public readonly struct ConnectionId : IEquatable<ConnectionId>
     {

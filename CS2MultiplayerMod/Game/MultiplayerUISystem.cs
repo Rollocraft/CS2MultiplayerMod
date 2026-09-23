@@ -14,30 +14,18 @@ using System.IO;
 namespace CS2MultiplayerMod.Game
 {
     /// <summary>
-    /// C# side of the main-menu multiplayer screen (UI module in <c>UI/</c>).
-    /// Exposes the start-screen fields under binding group "cs2mp", backed directly
-    /// by the mod's <see cref="Setting"/>. Player name is shared with Options; join
-    /// fields stay as Setting-backed dialog state. Host-world actions hand off to the
-    /// game's own New Game / Load Game screens and start the server once that world is
-    /// fully ready.
-    ///
-    /// Declared <c>partial</c> because Unity's Entities source generators extend
-    /// system types.
+    /// The main-menu multiplayer screen's bindings (group "cs2mp"), backed by <see cref="Setting"/>.
+    /// Host-world actions go through the game's New/Load Game screens and start the server once the
+    /// world is ready.
     /// </summary>
     public partial class MultiplayerUISystem : UISystemBase
     {
         private const string Group = "cs2mp";
 
-        /// <summary>
-        /// How long after system creation we wait for the UI module's "uiReady"
-        /// trigger before warning. Generous because on slow machines the game UI
-        /// loads mod modules well over a minute after the C# mods are up.
-        /// </summary>
+        /// <summary>Wait for "uiReady" before warning; slow machines load mod UI modules minutes late.</summary>
         private const float UiReadyGraceSeconds = 120f;
 
-        // Latched for the process, not the world: the UI module registers once per game
-        // run, so a menu -> city -> menu round trip creates a system that would otherwise
-        // wait for a trigger that can no longer arrive.
+        // Per process: the UI module registers once per run, not per world.
         private static bool s_UiModuleReady;
         private static float s_UiModuleReadyAt = float.NaN;
         private static bool s_MenuButtonSeen;
@@ -70,14 +58,11 @@ namespace CS2MultiplayerMod.Game
 
             _createdAt = UnityEngine.Time.realtimeSinceStartup;
 
-            // Second chance at the platform name: the mod can load before the platform
-            // backend is signed in, and this runs once per world, well after that.
+            // Second chance: the platform may sign in after the mod loads.
             if (Mod.Setting != null) Mod.Setting.ApplyPlatformNamePreset();
 
-            // Fired once from the UI module's register() — proves the .mjs made it
-            // through the game's sequential UI-module load chain. A broken module
-            // from another mod (e.g. Gooee) can abort that chain, in which case
-            // this trigger never arrives and OnUpdate logs a diagnosis.
+            // Fired by the module's register(): proves the .mjs survived the sequential UI-module chain, which
+            // another mod's broken module can abort.
             AddBinding(new TriggerBinding(Group, "uiReady", () =>
             {
                 if (s_UiModuleReady) return;
@@ -86,10 +71,8 @@ namespace CS2MultiplayerMod.Game
                 SyncLog.Detail(LogTopic.Ui, "UI module loaded and registered.");
             }));
 
-            // Sent when the button actually mounts in the menu column. Registering the
-            // append is not the same as being on screen: the column only picks the
-            // extension up the next time it renders, which never happens on its own once
-            // the menu is already up (see MenuUiRecovery).
+            // Sent when the button mounts; registering the append does not mean it is on screen (see
+            // MenuUiRecovery).
             AddBinding(new TriggerBinding(Group, "menuButtonMounted", () =>
             {
                 if (s_MenuButtonSeen) return;
@@ -125,9 +108,7 @@ namespace CS2MultiplayerMod.Game
                 () => Mod.Service != null ? Mod.Service.WorldSendPercent : -1));
             AddUpdateBinding(new GetterValueBinding<bool>(Group, "inSession",
                 () => Mod.Service != null && Mod.Service.Session.Role != SessionRole.None));
-            // UI append hooks for Menu and Game can briefly coexist while the game swaps
-            // worlds. Give the connection overlay one authoritative surface so only one
-            // blocking screen owns focus during that hand-off.
+            // Menu and Game hooks can coexist during a world swap; one surface owns the blocking overlay.
             AddUpdateBinding(new GetterValueBinding<bool>(Group, "inGameWorld",
                 () => GameManager.instance != null && GameManager.instance.gameMode.IsGame()));
             AddUpdateBinding(new GetterValueBinding<bool>(Group, "canSaveClientWorld",
@@ -149,23 +130,18 @@ namespace CS2MultiplayerMod.Game
             AddUpdateBinding(new GetterValueBinding<bool>(Group, "disconnectConfirmationIsHost",
                 () => Mod.Service != null && Mod.Service.DisconnectConfirmationIsHost));
 
-            // Untested game-version warning: localized sentence when the running build
-            // is not in GameVersionCheck.TestedVersions, otherwise "" (banner hidden).
+            // Untested game version: localized sentence, or "" (hidden).
             AddUpdateBinding(new GetterValueBinding<string>(Group, "versionWarning",
                 () => GameVersionCheck.WarningText()));
 
-            // Other mods live in the active playset: localized sentence naming them,
-            // otherwise "" (banner hidden). The adjacent ignored flag decides whether
-            // the notice blocks Join/Host or warns about the own-risk override.
+            // Other live mods: localized sentence, or "" (hidden); the ignored flag decides block vs warning.
             AddUpdateBinding(new GetterValueBinding<string>(Group, "modsBlocked",
                 () => ModsCheck.BlockText(Mod.Setting != null &&
                                            Mod.Setting.IgnoreModCompatibilityChecks)));
             AddUpdateBinding(new GetterValueBinding<bool>(Group, "modsCheckIgnored",
                 () => Mod.Setting != null && Mod.Setting.IgnoreModCompatibilityChecks));
 
-            // One-time disclaimer gate: the UI shows it before the first host/join and
-            // only flips this once the player accepts. Persisted in Setting so it never
-            // reappears for that user.
+            // One-time disclaimer, persisted once accepted.
             AddUpdateBinding(new GetterValueBinding<bool>(Group, "disclaimerAccepted",
                 () => Mod.Setting != null && Mod.Setting.DisclaimerAccepted));
             AddBinding(_multiplayerMenuActiveBinding =
@@ -182,8 +158,7 @@ namespace CS2MultiplayerMod.Game
 
             // -- In-game hub panel (right-menu button above the Chirper) ----------
 
-            // Serialized once per append on the C# side; the binding only pushes
-            // when the cached string instance changes.
+            // Serialized once per append; the binding pushes only on a new instance.
             AddUpdateBinding(new GetterValueBinding<string>(Group, "chatLog",
                 () => Mod.Service != null ? Mod.Service.ChatLogJson : "[]"));
             AddUpdateBinding(new GetterValueBinding<bool>(Group, "isHost",
@@ -197,26 +172,21 @@ namespace CS2MultiplayerMod.Game
                 () => Mod.Service != null ? Mod.Service.PendingJoinsJson : "[]"));
             AddUpdateBinding(new GetterValueBinding<string>(Group, "pendingResyncs",
                 () => Mod.Service != null ? Mod.Service.PendingResyncsJson : "[]"));
-            // Hosting shares the loaded city, so it needs one and no running session.
-            // CannotStartHost also owns the other-mod gate and its expert override.
+            // Hosting needs a loaded city and no session; CannotStartHost also owns the other-mod gate.
             AddUpdateBinding(new GetterValueBinding<bool>(Group, "canHost",
                 () => Mod.Setting != null && !Mod.Setting.CannotStartHost() && MultiplayerService.ModEnabled));
 
-            // Connection mode: "relay" (default) or "direct". The join code is what a
-            // relay host hands out instead of an address and port.
+            // "relay" (default) or "direct"; a relay host hands out a join code instead of an address.
             AddUpdateBinding(new GetterValueBinding<string>(Group, "hostConnection",
                 () => Mod.Setting != null ? Mod.Setting.HostConnection : Setting.ConnectionRelay));
             AddUpdateBinding(new GetterValueBinding<string>(Group, "joinCode",
                 () => RelayProvider.LocalJoinCode));
             AddUpdateBinding(new GetterValueBinding<bool>(Group, "relayAvailable",
                 () => RelayProvider.IsAvailable));
-            // Whether the relay exists as a choice at all. False on copies of the game
-            // without Steam (Microsoft Store / Game Pass), where the screens drop the
-            // connection picker entirely instead of offering a mode that cannot run.
+            // False without Steam (Microsoft Store / Game Pass): the connection picker is hidden.
             AddUpdateBinding(new GetterValueBinding<bool>(Group, "relaySupported",
                 () => RelayProvider.IsSupported));
-            // What the running session actually uses, as opposed to what is configured
-            // for the next one.
+            // The running session's transport, not the configured one.
             AddUpdateBinding(new GetterValueBinding<bool>(Group, "sessionUsesRelay",
                 () => Mod.Service != null && Mod.Service.Session.UsesRelay));
             // Empty while the relay is usable, otherwise why it is not.
@@ -242,22 +212,19 @@ namespace CS2MultiplayerMod.Game
                 () => Mod.Setting != null && Mod.Setting.AutoApproveSteamFriends));
             AddUpdateBinding(new GetterValueBinding<string>(Group, "resyncPolicy",
                 () => Mod.Setting != null ? Mod.Setting.ResyncPolicy : Setting.ResyncAllow));
-            // Reads the SESSION's answer once one is running: a client's own setting has no say,
-            // and a host that changed the box mid-session has not changed the session.
+            // The session's answer once running; neither a client's setting nor a mid-session edit changes it.
             AddUpdateBinding(new GetterValueBinding<bool>(Group, "simulationSync",
                 () => Mod.Service != null && Mod.Service.Session.Role != SessionRole.None
                     ? Mod.Service.SimulationSyncEnabled
                     : Mod.Setting == null || Mod.Setting.SimulationSync));
 
-            // Host setup edits. HostPort/HostPassword setters already refuse changes
-            // mid-session inside Setting, so no extra guarding here.
+            // Setting already refuses port/password changes mid-session.
             AddBinding(new TriggerBinding<string>(Group, "setHostConnection",
                 value =>
                 {
                     if (Mod.Setting == null) return;
                     Mod.Setting.HostConnection = value;
-                    // Persist immediately: the host flow leaves this screen for the game's
-                    // world picker and only reads the setting back once that world is up.
+                    // Persist now: the host flow reads it back only after the chosen world loads.
                     Mod.Setting.ApplyAndSave();
                 }));
             AddBinding(new TriggerBinding<string>(Group, "setHostPort",
@@ -380,9 +347,8 @@ namespace CS2MultiplayerMod.Game
         }
 
         /// <summary>
-        /// Use the native Credits screen slot while the multiplayer flow is active.
-        /// Its UI component is extended by the mod, so it participates in the same
-        /// focus, Back action and transition coordinator as every built-in menu screen.
+        /// Uses the native Credits screen slot, so the flow shares focus, Back and transitions with built-in
+        /// screens.
         /// </summary>
         private void OpenMultiplayerMenuScreen()
         {
@@ -398,9 +364,8 @@ namespace CS2MultiplayerMod.Game
         }
 
         /// <summary>
-        /// Remember that the next world selected through the native menu is meant to
-        /// become a multiplayer host, then open that menu screen. The intent is cleared
-        /// if the player backs out to the main menu.
+        /// The next world picked in the native menu becomes a multiplayer host; backing out to the menu
+        /// clears the intent.
         /// </summary>
         private void OpenHostWorldScreen(MenuUISystem.MenuScreen screen)
         {
@@ -463,16 +428,13 @@ namespace CS2MultiplayerMod.Game
         {
             base.OnUpdate();
 
-            // The native screens return to Menu when Back is pressed. Watching the
-            // screen state here cancels the intent without wrapping or replacing any
-            // of the game's UI components.
+            // Native screens return to Menu on Back; watching that cancels the intent without wrapping them.
             if (_hostAfterWorldLoad && !_hostWorldLoadStarted)
             {
                 GameManager manager = GameManager.instance;
                 if (manager != null && manager.isGameLoading && manager.gameMode.IsGame())
                 {
-                    // Backstop for the preload callback: UIUpdate normally observes at
-                    // least one loading frame as the selected city enters the game.
+                    // Backstop for the preload callback.
                     _hostWorldLoadStarted = true;
                     SyncLog.Detail(LogTopic.Ui,
                         "Selected host world entered the game load pipeline.");
@@ -502,16 +464,13 @@ namespace CS2MultiplayerMod.Game
                     }
                     else
                     {
-                        // A failed/cancelled load can return to a ready main menu after
-                        // preload already fired. Do not let that intent affect a later game.
+                        // A failed load can return to the menu after preload fired; drop the intent.
                         CancelPendingHost();
                     }
                 }
             }
 
-            // The mod can finish loading long after the main menu is already up - the
-            // launch that installs a mod update is the usual case - and the menu column
-            // does not re-read our append on its own once it has rendered.
+            // The mod can load after the menu is drawn, and the menu column never re-reads our append itself.
             Recovery.Update(World, s_UiModuleReady, s_UiModuleReadyAt, s_MenuButtonSeen);
 
             if (s_UiModuleReady || _uiModuleWarned) return;

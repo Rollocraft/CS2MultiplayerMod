@@ -1,4 +1,3 @@
-using System.Collections.Concurrent;
 using System.Collections.Generic;
 using Game;
 using Game.City;
@@ -12,20 +11,14 @@ using CS2MultiplayerMod.Core.Session;
 using CS2MultiplayerMod.Game.Diagnostics;
 using CS2MultiplayerMod.Game.Sync.Infrastructure;
 using CS2MultiplayerMod.Game.Sync.Commands;
-using CS2MultiplayerMod.Game.Sync.Channels;
 namespace CS2MultiplayerMod.Game.Sync.Systems
 {
     /// <summary>
-    /// Replicates dev-tree node purchases by detecting <see cref="DevTreeNodeData"/> unlocks
-    /// and broadcasting <see cref="DevTreePurchaseCommand"/>. Applies remotely via
-    /// <see cref="EndFrameBarrier"/> (load-bearing: must reach MainLoop, not UIUpdate),
-    /// charges the host's <see cref="DevTreePoints"/> to stop refill-on-snapshot. Echo guard
-    /// suppresses re-detecting applied unlocks.
+    /// Replicates dev-tree purchases. Remote unlocks go through <see cref="EndFrameBarrier"/> so they
+    /// reach MainLoop; the host charges <see cref="DevTreePoints"/> so the snapshot does not refill the buyer.
     /// </summary>
-    public partial class DevTreeSyncSystem : GameSystemBase
+    public partial class DevTreeSyncSystem : CommandSyncSystem
     {
-        private readonly ConcurrentQueue<SimulationCommandMessage> _incoming =
-            new ConcurrentQueue<SimulationCommandMessage>();
         private readonly ReplicationGuard _guard = new ReplicationGuard();
         private readonly HashSet<string> _knownUnlocked = new HashSet<string>();
         private readonly Dictionary<string, Entity> _nodeByName = new Dictionary<string, Entity>();
@@ -34,7 +27,6 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         private DeferredPrefabUnlocker _unlocks;
         private EntityQuery _nodes;
         private EntityQuery _pointsQuery;
-        private CommandObserver _observer;
         private bool _initialized;
 
         protected override void OnCreate()
@@ -51,14 +43,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 Options = EntityQueryOptions.IncludePrefab,
             });
             _pointsQuery = GetEntityQuery(ComponentType.ReadWrite<DevTreePoints>());
-            _observer = SyncObserverBinding.Bind(
-                () => new CommandObserver(_incoming, DevTreePurchaseCommand.Id));
-        }
-
-        protected override void OnDestroy()
-        {
-            SyncObserverBinding.Unbind(_observer);
-            base.OnDestroy();
+            ListenFor(new[] { DevTreePurchaseCommand.Id }, drainOnReload: false);
         }
 
         protected override void OnUpdate()
@@ -80,12 +65,10 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 _guard.Prune(now);
                 _unlocks.PruneCompleted();
 
-                // Apply remote purchases first so their unlocks are accounted for before we
-                // diff for local ones.
+                // Remote purchases first, so their unlocks are not diffed as local ones.
                 ApplyIncoming(session, now);
 
-                // First ready tick: adopt the current unlocked set as the baseline so the
-                // already-unlocked nodes from the loaded save are never re-broadcast.
+                // The loaded save's unlocks are the baseline, never re-broadcast.
                 if (!_initialized)
                 {
                     SeedKnown();
@@ -141,8 +124,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     }
                     else if (!unlocked && known)
                     {
-                        // Re-locked (a world resync reloaded the host's state) — let a
-                        // future unlock be detected again.
+                        // Re-locked by a world resync: detect a future unlock again.
                         _knownUnlocked.Remove(name);
                     }
                 }
@@ -152,14 +134,13 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
         private void ApplyIncoming(MultiplayerSession session, long now)
         {
-            SimulationCommandMessage message;
-            while (_incoming.TryDequeue(out message))
+            while (_incoming.TryDequeue(out SimulationCommandMessage message))
             {
                 if (message.OriginPlayerId == session.LocalPlayerId) continue;
 
-                DevTreePurchaseCommand command;
-                try { command = DevTreePurchaseCommand.Decode(message.Body); }
-                catch (System.Exception ex) { SyncLog.Warn(LogTopic.City, "DevTreeSync: dropping malformed command: " + ex.Message); continue; }
+                if (!CommandDecode.TryDecode(message, DevTreePurchaseCommand.Decode, LogTopic.City,
+                        "DevTreeSync", out DevTreePurchaseCommand command))
+                    continue;
 
                 Entity node = ResolveNode(command.NodePrefabName);
                 if (node == Entity.Null)
@@ -171,16 +152,12 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 }
                 if (!IsLocked(node)) continue; // already unlocked here — nothing to do
 
-                // Unlock the node everywhere so the partner's tree updates. Defer the event
-                // to the EndFrameBarrier — creating it directly from UIUpdate would have it
-                // reaped by CleanUpSystem this same frame, before UnlockSystem (MainLoop)
-                // could process it. The barrier replays it at the next MainLoop where the
-                // game's own unlock pipeline (node + dependent-content cascade) runs.
+                // Created from UIUpdate the event would be cleaned up before UnlockSystem (MainLoop) sees it;
+                // the barrier replays it there.
                 if (!_unlocks.TryQueue(node)) continue;
                 _guard.Mark(NodeKey(command.NodePrefabName), now);
 
-                // Only the host owns the points: charge the node's cost so the authoritative
-                // snapshot reflects the spend instead of refilling the buyer.
+                // The host owns the points.
                 if (session.Role == SessionRole.Host &&
                     EntityManager.HasComponent<DevTreeNodeData>(node) &&
                     !_pointsQuery.IsEmptyIgnoreFilter)
@@ -200,8 +177,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         {
             if (string.IsNullOrEmpty(name)) return Entity.Null;
 
-            Entity cached;
-            if (_nodeByName.TryGetValue(name, out cached) && EntityManager.Exists(cached)) return cached;
+            if (_nodeByName.TryGetValue(name, out Entity cached) && EntityManager.Exists(cached)) return cached;
 
             NativeArray<Entity> nodes = _nodes.ToEntityArray(Allocator.Temp);
             try
@@ -218,6 +194,5 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         }
 
         private static string NodeKey(string name) => "devtree|" + name;
-
     }
 }

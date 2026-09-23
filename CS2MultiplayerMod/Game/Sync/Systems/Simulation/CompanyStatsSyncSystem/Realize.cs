@@ -23,34 +23,27 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
     {
         // ---- Resolve arrived pages (read-only, runs from the city-state pump) -----------------
 
-        /// <summary>
-        /// Turn arrived pages into resolved cache entries. Read-only against ECS, so it is safe
-        /// and cheap to run every frame; every write stays in <see cref="OnUpdate"/>.
-        /// </summary>
+        /// <summary>Resolves arrived pages. Read-only against ECS; writes stay in OnUpdate.</summary>
         internal void PumpIncoming()
         {
             MultiplayerService service = Mod.Service;
             if (service == null || !service.SimulationSyncReady) return;
             if (service.Session.Role == SessionRole.Host)
             {
-                DropIncomingPages();
+                _droppedPages += _propertyState.DropIncoming();
                 return;
             }
 
             long now = service.NowMs;
-            bool retryDue = _pending.Count > 0 && now >= _nextPendingPumpMs;
+            bool retryDue = _propertyState.RetryDue(now);
             if (_incoming.IsEmpty && !retryDue) return;
 
             using (var scope = new PropertySearchScope(_objectSearch))
             {
-                ObjectSearch.Batch search = scope.Batch;
-                NativeList<Entity> candidates = scope.Candidates;
-                DrainIncoming(now, search, candidates, MaxPumpPages);
-                if (retryDue)
-                {
-                    RetryPending(now, search, candidates);
-                    _nextPendingPumpMs = now + ResolveRetryMs;
-                }
+                DrainIncoming(now, scope.Batch, scope.Candidates, MaxPumpPages);
+                if (!retryDue) return;
+                RetryPending(now, scope.Batch, scope.Candidates);
+                _propertyState.NextPendingPumpMs = now + ResolveRetryMs;
             }
         }
 
@@ -60,25 +53,14 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             _propertyState.PumpPages(maxPages, snapshot =>
             {
                 _receivedPages++;
-                if (_clientSweepId != snapshot.SweepId)
-                {
-                    _clientSweepId = snapshot.SweepId;
-                    _clientNextPage = 0;
-                    _clientSweepIntact = true;
-                }
-                if (snapshot.PageIndex != _clientNextPage) _clientSweepIntact = false;
-                if (snapshot.PageIndex >= _clientNextPage)
-                    _clientNextPage = snapshot.PageIndex + 1;
+                _propertyState.NotePage(snapshot.SweepId, snapshot.PageIndex);
                 for (int i = 0; i < snapshot.Entries.Count; i++)
                     ResolveOrPend(snapshot.Entries[i], snapshot.SweepId, now, search, candidates);
                 if (snapshot.EndOfSweep)
                 {
-                    // Pruning is only safe after every page in the absolute sweep arrived. A
-                    // coalesced/dropped middle page says nothing about the buildings it carried.
-                    if (_clientSweepIntact) PruneCacheAfterCompleteSweep(snapshot.SweepId);
-                    _clientSweepId = 0;
-                    _clientNextPage = 0;
-                    _clientSweepIntact = false;
+                    if (_propertyState.CompletesSweep(snapshot.SweepId, snapshot.PageIndex))
+                        PruneCacheAfterCompleteSweep(snapshot.SweepId);
+                    _propertyState.ResetSweep();
                 }
             });
         }
@@ -86,8 +68,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         private void ResolveOrPend(CompanyStatsEntry entry, uint sweepId, long now,
             ObjectSearch.Batch search, NativeList<Entity> candidates)
         {
-            bool ambiguous;
-            Entity property = ResolveProperty(entry, search, candidates, out ambiguous);
+            Entity property = ResolveProperty(entry, search, candidates, out bool ambiguous);
             if (property != Entity.Null)
             {
                 Cache(property, entry, sweepId);
@@ -98,38 +79,21 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             if (ambiguous) _ambiguous++;
             else _unresolved++;
 
-            PropertyRentIdentity identity = entry.Identity;
-            PendingEntry pending;
-            if (_pending.TryGetValue(identity, out pending))
+            if (_pending.TryGetValue(entry.Identity, out PendingEntry pending))
             {
                 pending.Entry = entry;
                 pending.SweepId = sweepId;
-                return;
             }
-            if (_pending.Count >= MaxPendingIdentities) return;
-            _pending[identity] = new PendingEntry
-            {
-                Entry = entry,
-                SweepId = sweepId,
-                ExpiresMs = now + ResolveTimeoutMs,
-                NextAttemptMs = now + ResolveRetryMs,
-            };
-            _pendingOrder.Enqueue(identity);
-            long firstRetry = now + ResolveRetryMs;
-            if (_nextPendingPumpMs == 0 || firstRetry < _nextPendingPumpMs)
-                _nextPendingPumpMs = firstRetry;
+            else _propertyState.Hold(entry.Identity, new PendingEntry { Entry = entry }, sweepId, now,
+                ResolveTimeoutMs);
         }
 
         private void RetryPending(long now, ObjectSearch.Batch search, NativeList<Entity> candidates)
         {
-            PropertyRetryPump.Pump(_pending, _pendingOrder, now,
-                MaxPendingRetriesPerUpdate,
-                value => value.ExpiresMs, value => value.NextAttemptMs,
-                (value, retry) => value.NextAttemptMs = retry,
+            _propertyState.RetryPending(now, MaxPendingRetriesPerUpdate,
                 value =>
                 {
-                    bool ambiguous;
-                    Entity property = ResolveProperty(value.Entry, search, candidates, out ambiguous);
+                    Entity property = ResolveProperty(value.Entry, search, candidates, out bool ambiguous);
                     if (property == Entity.Null) return false;
                     Cache(property, value.Entry, value.SweepId);
                     _resolved++;
@@ -138,20 +102,16 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         }
 
         /// <summary>
-        /// Find the local building an entry describes, with the same rule the rent channel uses:
-        /// position is the identity, and the prefab only breaks a same-distance tie, because a
-        /// workplace that levels up keeps its spot and swaps its prefab and the two peers do not
-        /// level at the same moment. Two equally good candidates stay unresolved rather than
-        /// risking one business landing permanently in its neighbour's building.
+        /// Position is identity; the prefab only breaks a tie, because a building that levels swaps its
+        /// prefab at a different moment on each peer. A tie stays unresolved.
         /// </summary>
         private Entity ResolveProperty(CompanyStatsEntry entry, ObjectSearch.Batch search,
             NativeList<Entity> candidates, out bool ambiguous)
         {
             ambiguous = false;
-            Entity prefab;
             _prefabIndex.TryResolve(entry.PrefabName,
                 candidate => EntityManager.Exists(candidate) &&
-                    EntityManager.HasComponent<BuildingPropertyData>(candidate), out prefab);
+                    EntityManager.HasComponent<BuildingPropertyData>(candidate), out Entity prefab);
             PropertyResolution result = PropertyEntityResolver.Resolve(EntityManager, search,
                 candidates, new float3(entry.AnchorX, entry.AnchorY, entry.AnchorZ),
                 AnchorSearchRadius, AnchorMatchDistance, AmbiguousDistanceEpsilon, prefab,
@@ -162,8 +122,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
         private void Cache(Entity property, CompanyStatsEntry entry, uint sweepId)
         {
-            CachedEntry cached;
-            if (!_cache.TryGetValue(property, out cached))
+            if (!_cache.TryGetValue(property, out CachedEntry cached))
             {
                 if (_cache.Count >= MaxCachedProperties) return;
                 cached = new CachedEntry();
@@ -175,30 +134,17 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                                       entry.CompanyPrefabName, StringComparison.Ordinal);
             cached.Entry = entry;
             cached.LastSeenSweep = sweepId;
-            // Every arrived value is applied at the 16-frame state boundary. Waiting for this
-            // company's statistics partition can otherwise take 2,048 frames, during which the
-            // local economy repeatedly overwrites the host values.
+            // Applied at the 16-frame boundary; the statistics rotation is 2,048 frames.
             MarkStateDirty(property);
             if (entry.HasEfficiency) MarkEfficiencyDirty(property);
             if (tenancyChanged) MarkDirty(property);
         }
 
-        private void MarkDirty(Entity property)
-        {
-            if (!_dirtyMembers.Add(property)) return;
-            _dirty.Add(property);
-            // Shedding the oldest is safe: the entry is still cached, so the rolling walk repairs
-            // it rather than losing it.
-            if (_dirty.Count <= MaxDirtyProperties) return;
-            _dirtyMembers.Remove(_dirty[0]);
-            _dirty.RemoveAt(0);
-        }
+        private void MarkDirty(Entity property) =>
+            // Shedding the oldest is safe: the entry is still cached for the rolling walk.
+            BoundedUniquePropertyList.Enqueue(_dirty, _dirtyMembers, property, MaxDirtyProperties);
 
-        /// <summary>
-        /// New information arrived about this building - an arrived page, a renter event, a
-        /// changed employee buffer. That clears the retry budget: the reason a previous attempt
-        /// came back incomplete may be exactly what just turned up.
-        /// </summary>
+        /// <summary>New information clears the retry budget.</summary>
         private void MarkStateDirty(Entity property)
         {
             _stateRetries.Remove(property);
@@ -206,19 +152,12 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         }
 
         /// <summary>
-        /// Re-arm after an attempt that could not finish, but only for a few passes.
-        ///
-        /// <see cref="ApplyEmployees"/> reports incomplete whenever one employee's citizen id is
-        /// not in this peer's occupancy map, and that does not become true by asking again on the
-        /// next boundary - only a page that binds the citizen changes it, and that path marks the
-        /// building dirty itself. Re-arming unconditionally pinned the queue at 1,501 of 1,560
-        /// cached buildings, so the 128-per-boundary drain ran full forever on work that could
-        /// never succeed. After the budget the bounded rolling walk still visits the building.
+        /// Re-arms an incomplete apply for a few passes only: an unbound employee does not bind by asking
+        /// again, and the page that binds it marks the building dirty itself.
         /// </summary>
         private void RetryStateDirty(Entity property)
         {
-            int attempts;
-            _stateRetries.TryGetValue(property, out attempts);
+            _stateRetries.TryGetValue(property, out int attempts);
             if (attempts >= MaxStateRetries) return;
             _stateRetries[property] = attempts + 1;
             EnqueueStateDirty(property);
@@ -226,20 +165,14 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
         private void EnqueueStateDirty(Entity property)
         {
-            if (!_stateDirtyMembers.Add(property)) return;
-            _stateDirty.Add(property);
-            if (_stateDirty.Count <= MaxDirtyProperties) return;
-            _stateDirtyMembers.Remove(_stateDirty[0]);
-            _stateDirty.RemoveAt(0);
+            BoundedUniquePropertyList.Enqueue(
+                _stateDirty, _stateDirtyMembers, property, MaxDirtyProperties);
         }
 
         private void MarkEfficiencyDirty(Entity property)
         {
-            if (!_efficiencyDirtyMembers.Add(property)) return;
-            _efficiencyDirty.Add(property);
-            if (_efficiencyDirty.Count <= MaxDirtyProperties) return;
-            _efficiencyDirtyMembers.Remove(_efficiencyDirty[0]);
-            _efficiencyDirty.RemoveAt(0);
+            BoundedUniquePropertyList.Enqueue(
+                _efficiencyDirty, _efficiencyDirtyMembers, property, MaxDirtyProperties);
         }
 
         private void PruneCacheAfterCompleteSweep(uint sweepId)
@@ -273,10 +206,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
         // ---- Fast state boundary --------------------------------------------------------------
 
-        /// <summary>
-        /// Called after the native job-matching cadence. Tenancy and newly arrived state are
-        /// applied here so names, panel figures and real worker links settle within 16 frames.
-        /// </summary>
+        /// <summary>After native job matching, so names, figures and workers settle within 16 frames.</summary>
         internal void ApplyClientStateBoundary()
         {
             MultiplayerService service = Mod.Service;
@@ -289,10 +219,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             ApplyChangedState();
         }
 
-        /// <summary>
-        /// Client only: the host already signals a changed efficiency buffer from the 16-frame
-        /// state boundary, and doing it twice would only cost the host priority slots.
-        /// </summary>
+        /// <summary>Client only; the host already signals efficiency changes from the state boundary.</summary>
         internal bool WantsProductionBoundary
         {
             get
@@ -313,10 +240,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         }
 
         /// <summary>
-        /// Runs directly after a native company production pass, over the properties that pass just
-        /// wrote, and repairs them in the same frame: the selected-building panel recalculates
-        /// production from these factors on every UI frame, so a repair one boundary later is a
-        /// repair the panel has already read past.
+        /// Right after a native production pass: the panel recalculates production from these factors
+        /// every UI frame, so the repair must land in the same frame.
         /// </summary>
         internal void ApplyProductionBoundary(NativeArray<Entity> properties)
         {
@@ -325,15 +250,10 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             ApplyChangedEfficiencies();
         }
 
-        /// <summary>
-        /// Puts the host's extraction figure back on a company the local extractor pass has just
-        /// recalculated. Only that one field: the rest of the statistic block belongs to the
-        /// slower accounting boundary, which owns its own change detection.
-        /// </summary>
+        /// <summary>Puts the host's extraction figure back; only that field.</summary>
         private void ApplyExtractorProduce(Entity company, Entity property)
         {
-            CachedEntry cached;
-            if (!_cache.TryGetValue(property, out cached) || !cached.Entry.HasTenant) return;
+            if (!_cache.TryGetValue(property, out CachedEntry cached) || !cached.Entry.HasTenant) return;
             if (!TenantMatches(company, cached.Entry)) return;
             CompanyStatisticData data =
                 EntityManager.GetComponentData<CompanyStatisticData>(company);
@@ -343,11 +263,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             _correctedExtractorProduce++;
         }
 
-        /// <summary>
-        /// Efficiency changes are kept on their own cheap queue. Re-applying a complete company
-        /// and resolving hundreds of employee identities merely because one utility factor moved
-        /// would undo the CPU-load reduction in the state retry path.
-        /// </summary>
+        /// <summary>Efficiency has its own cheap queue, so one factor moving does not re-apply a company.</summary>
         private void ApplyChangedEfficiencies()
         {
             int processed = _efficiencyDirty.Count < MaxEfficiencyDirtyPerBoundary
@@ -356,8 +272,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             {
                 Entity property = _efficiencyDirty[i];
                 _efficiencyDirtyMembers.Remove(property);
-                CachedEntry cached;
-                if (!_cache.TryGetValue(property, out cached) ||
+                if (!_cache.TryGetValue(property, out CachedEntry cached) ||
                     !IsLiveWorkplaceProperty(property) || !cached.Entry.HasEfficiency) continue;
                 ApplyPropertyEfficiency(property, cached.Entry);
             }
@@ -365,10 +280,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         }
 
         /// <summary>
-        /// Rebuilds the property's real native efficiency buffer. CompanySection does not display
-        /// LastUpdateProduce for processing industry or offices: it multiplies these factors and
-        /// feeds the result, together with the real Employee roster, into
-        /// EconomyUtils.GetCompanyProductionPerDay.
+        /// Rebuilds the native efficiency buffer, which the panel multiplies into
+        /// EconomyUtils.GetCompanyProductionPerDay for processing industry and offices.
         /// </summary>
         private bool ApplyPropertyEfficiency(Entity property, CompanyStatsEntry entry)
         {
@@ -404,8 +317,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 _correctedEfficiencies++;
             }
 
-            // DynamicBuffer writes advance the chunk version. Remember the exact result so the
-            // next changed-filter boundary recognises our own correction instead of re-queuing it.
+            // Remember our write so the next changed-filter boundary does not re-queue it.
             if (_clientEfficiencyObserved.Count > MaxObservedEfficiencyBuffers)
                 _clientEfficiencyObserved.Clear();
             _clientEfficiencyObserved[property] = HashEfficiencyBuffer(property);
@@ -434,8 +346,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     RetryStateDirty(_stateRetryScratch[i]);
                 _stateRetryScratch.Clear();
 
-                // Only the fallback walk is speed-normalized; new pages and retries above
-                // retain their native boundary and drain capacity.
+                // Only the fallback walk is speed-normalized.
                 if (!_stateScanCadence.TryRun(_simulationSystem.selectedSpeed)) return;
 
                 // A small cache must not wrap and apply the same company dozens of times.
@@ -456,13 +367,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
         private bool ApplyCachedCompany(Entity property)
         {
-            CachedEntry cached;
-            if (!_cache.TryGetValue(property, out cached) || !IsLiveWorkplaceProperty(property))
+            if (!_cache.TryGetValue(property, out CachedEntry cached) || !IsLiveWorkplaceProperty(property))
                 return true;
-            // The tenant and worker roster are meaningful only against the same property capacity
-            // as the host. A dropped level command used to leave dense buildings on their old
-            // prefab forever; the next absolute page now completes that level through the game's
-            // own BuildingConstructionSystem before tenancy is touched.
+            // Tenancy only means something against the host's property capacity: converge the prefab first.
             if (!EnsurePropertyPrefabConverged(property, cached.Entry)) return false;
             if (!cached.Entry.HasTenant) return true;
 
@@ -477,18 +384,15 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         }
 
         /// <summary>
-        /// Converges a workplace's construction clock and, once the host is complete, its actual
-        /// prefab. We deliberately install an already-complete UnderConstruction target rather
-        /// than assigning PrefabRef: BuildingConstructionSystem then performs the native
-        /// sub-object, area, net and renter-facing side effects of UpdatePrefab.
+        /// Converges construction and, once complete, the prefab through an already-complete
+        /// UnderConstruction target, so BuildingConstructionSystem runs UpdatePrefab's side effects.
         /// </summary>
         private bool EnsurePropertyPrefabConverged(Entity property, CompanyStatsEntry entry)
         {
             bool localConstructing = EntityManager.HasComponent<UnderConstruction>(property);
             if (entry.ConstructionSpeed != 0)
             {
-                // While the host is building, PrefabName is still the old prefab. The level
-                // command owns the target; this absolute channel can safely align only its clock.
+                // While the host builds, only the clock is aligned; the level command owns the target.
                 if (localConstructing)
                 {
                     UnderConstruction active =
@@ -508,15 +412,13 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             if (!localConstructing &&
                 string.Equals(currentName, entry.PrefabName, StringComparison.Ordinal)) return true;
 
-            Entity hostPrefab;
             if (!_prefabIndex.TryResolve(entry.PrefabName,
                     candidate => EntityManager.HasComponent<BuildingPropertyData>(candidate) &&
                                  EntityManager.HasComponent<SpawnableBuildingData>(candidate) &&
                                  !EntityManager.HasComponent<SignatureBuildingData>(candidate),
-                    out hostPrefab) || hostPrefab == Entity.Null)
+                    out Entity hostPrefab) || hostPrefab == Entity.Null)
             {
-                // Non-growable workplaces share this channel but must never be rewritten by a
-                // growable-level fallback. Their ordinary build/object channels remain authority.
+                // Non-growable workplaces are owned by the build/object channels.
                 return true;
             }
 
@@ -540,10 +442,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         // ---- Figures: correct the partition the game just recomputed --------------------------
 
         /// <summary>
-        /// Deliberately uncapped over its partition. A ceiling here would leave part of the
-        /// partition holding the values the game wrote microseconds ago, which is exactly the
-        /// flicker this design exists to remove; the per-company cost is a dictionary lookup and a
-        /// field comparison, and the partition is already a sixteenth of the city.
+        /// Uncapped over its partition: a ceiling would leave part of it showing the local values.
         /// </summary>
         private void ApplyFigures(uint updateFrame)
         {
@@ -554,12 +453,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             {
                 companies = _companies.ToEntityArray(Allocator.Temp);
 
-                // Sort the partition into its three zones first, then correct each zone under its
-                // own timer. One channel serves all three, so a single scope could only ever say
-                // "companies cost this much"; splitting it is what makes "commercial is the
-                // expensive one" a measurement instead of a hunch. The classification is one
-                // component test per business, and it replaces the per-business property lookup
-                // the correction loop would have done anyway.
+                // Split by zone so each is timed separately.
                 _commercialBucket.Clear();
                 _industrialBucket.Clear();
                 _officeBucket.Clear();
@@ -599,11 +493,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     Entity company = companies[i];
                     Entity property =
                         EntityManager.GetComponentData<PropertyRenter>(company).m_Property;
-                    CachedEntry cached;
-                    if (!_cache.TryGetValue(property, out cached)) continue;
+                    if (!_cache.TryGetValue(property, out CachedEntry cached)) continue;
                     if (!cached.Entry.HasTenant) continue;
-                    // A business the host does not have in this building gets no figures; the
-                    // tenancy pass is what resolves that difference.
+                    // Tenancy resolves a mismatched business; it gets no figures.
                     if (!TenantMatches(company, cached.Entry)) continue;
                     if (ApplyCompany(company, cached.Entry)) _stateRetries.Remove(property);
                     else RetryStateDirty(property);
@@ -669,8 +561,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 _correctedFields++;
             }
 
-            // Only when the sender actually had the component. A company without a rating must not
-            // be given a fabricated one.
+            // Never fabricate a rating the sender did not have.
             if (entry.HasProfitability && EntityManager.HasComponent<Profitability>(company))
             {
                 Profitability profitability = EntityManager.GetComponentData<Profitability>(company);
@@ -746,9 +637,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
         private bool ApplyCompanyIdentity(Entity company, CompanyStatsEntry entry)
         {
-            Entity brand;
             bool resolved = _prefabIndex.TryResolve(entry.BrandPrefabName,
-                candidate => EntityManager.HasComponent<BrandData>(candidate), out brand) &&
+                candidate => EntityManager.HasComponent<BrandData>(candidate), out Entity brand) &&
                 brand != Entity.Null;
             if (resolved)
             {
@@ -765,8 +655,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             }
 
             string wantedName = entry.CompanyCustomName ?? string.Empty;
-            string currentName;
-            bool hasCurrent = _nameSystem.TryGetCustomName(company, out currentName) &&
+            bool hasCurrent = _nameSystem.TryGetCustomName(company, out string currentName) &&
                               !string.IsNullOrEmpty(currentName);
             if ((wantedName.Length == 0 && hasCurrent) ||
                 (wantedName.Length > 0 && (!hasCurrent || currentName != wantedName)))
@@ -816,10 +705,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         }
 
         /// <summary>
-        /// Rebuild the game's real two-sided employment graph. Each host id has already been
-        /// associated with a local resident by occupancy; setting Worker on that citizen lets the
-        /// native travel simulation send that same pedestrian to work. An incomplete host roster
-        /// is additive only, protecting commuters and tourists for which no shared identity exists.
+        /// Sets Worker on the local residents occupancy mapped to host ids, so native commuting follows.
+        /// An incomplete roster is additive only.
         /// </summary>
         private bool ApplyEmployees(Entity company, CompanyStatsEntry entry)
         {
@@ -832,9 +719,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             bool allResolved = true;
             for (int i = 0; i < wantedCount; i++)
             {
-                Entity citizen;
                 if (_occupancy == null ||
-                    !_occupancy.TryResolveCompanyCitizen(wanted[i].CitizenId, out citizen) ||
+                    !_occupancy.TryResolveCompanyCitizen(wanted[i].CitizenId, out Entity citizen) ||
                     citizen == Entity.Null || !EntityManager.Exists(citizen) ||
                     !EntityManager.HasComponent<Citizen>(citizen) ||
                     EntityManager.HasComponent<Deleted>(citizen))
@@ -854,9 +740,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 });
             }
 
-            // Move a desired resident out of whichever local workplace had claimed them first.
-            // Buffer mutations finish before Worker is added/set, so no live DynamicBuffer handle
-            // crosses a structural component change.
+            // Buffer edits finish before Worker changes, so no buffer handle crosses a structural change.
             for (int i = 0; i < _resolvedEmployeeScratch.Count; i++)
             {
                 Entity citizen = _resolvedEmployeeScratch[i].Citizen;
@@ -876,8 +760,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 CancelJobSearch(employee.Citizen);
             }
 
-            // Only a complete, fully resolved roster authorizes removals. These citizens stay real
-            // residents; removing Worker merely makes the native job finder consider them again.
+            // Only a complete roster removes; removing Worker lets the job finder consider them again.
             if (absolute)
             {
                 for (int i = 0; i < _employeeRemovalScratch.Count; i++)
@@ -896,8 +779,6 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             if (changed)
             {
                 _correctedEmployees++;
-                // Remember the buffer we just wrote, so the changed-Employee boundary does not
-                // read our own write back as a local change on its next pass.
                 if (_clientEmployeeObserved.Count > MaxObservedEmployeeBuffers)
                     _clientEmployeeObserved.Clear();
                 _clientEmployeeObserved[company] = HashEmployeeBuffer(company);
@@ -1010,12 +891,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
         // ---- Tenancy: make the right business occupy the right building -----------------------
 
-        /// <summary>
-        /// Buildings whose tenancy a page just changed are handled first; whatever budget is left
-        /// goes to a small rolling window, which repairs drift the host never reported. In a
-        /// settled city both are empty or cheap: a building whose tenant already matches costs one
-        /// buffer read and a string comparison, and nothing structural happens at all.
-        /// </summary>
+        /// <summary>Dirty buildings first, then a small rolling repair window.</summary>
         private void ApplyTenancy()
         {
             if (_cache.Count == 0) return;
@@ -1030,8 +906,6 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             PruneSettling();
 
             int created = 0, retired = 0;
-            // A district can dirty thousands of settled properties without creating a single
-            // company. Structural ceilings alone do not bound that comparison workload.
             int dirtyLimit = Math.Min(MaxTenancyDirtyPerBoundary, _dirty.Count);
             int processed = 0;
             while (processed < dirtyLimit &&
@@ -1068,16 +942,13 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
         private void ReconcileTenancy(Entity property, ref int created, ref int retired)
         {
-            CachedEntry cached;
-            if (!_cache.TryGetValue(property, out cached)) return;
+            if (!_cache.TryGetValue(property, out CachedEntry cached)) return;
             if (!IsLiveWorkplaceProperty(property)) return;
             if (!EnsurePropertyPrefabConverged(property, cached.Entry))
             {
                 _deferredActions++;
                 return;
             }
-            // The move-in this building asked for is still in the native queue. Acting again
-            // before it drains opens a second business or undoes the first.
             if (IsSettling(property)) { _deferredActions++; return; }
 
             Entity local = FindTenant(property);
@@ -1094,9 +965,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             if (local != Entity.Null)
             {
                 if (TenantMatches(local, entry)) return;
-                // A different business than the host has. Close this one now; the next pass sees
-                // an empty building and opens the right one, which keeps the two structural
-                // changes in separate frames.
+                // Close now; the next pass opens the right one, keeping the two structural changes apart.
                 if (retired >= MaxCompaniesRetiredPerUpdate) { _deferredActions++; return; }
                 if (RetireCompany(local, property)) retired++;
                 return;
@@ -1106,19 +975,14 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             if (CreateCompany(property, entry)) created++;
         }
 
-        /// <summary>
-        /// Closes a business through the game's own emigration path rather than deleting it, so
-        /// the native systems unwind its renter link, put the building back on the market and
-        /// raise the renter event the rest of the simulation is waiting for.
-        /// </summary>
+        /// <summary>Closes through the game's emigration path so native systems unwind the renter link.</summary>
         private bool RetireCompany(Entity company, Entity property)
         {
             if (!EntityManager.Exists(company) ||
                 EntityManager.HasComponent<Deleted>(company)) return false;
             if (!EntityManager.HasComponent<global::Game.Agents.MovingAway>(company))
                 EntityManager.AddComponentData(company, default(global::Game.Agents.MovingAway));
-            // Whitelisted so the every-update boundary does not immediately cancel our own
-            // request along with the local proposals it is there to strip.
+            // Whitelisted so the lifecycle boundary does not cancel our own request.
             AuthorizeMoveAway(company);
             BeginSettling(property);
             _retiredCompanies++;
@@ -1126,18 +990,12 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             return true;
         }
 
-        /// <summary>
-        /// Opens the business the host reports, the same way the game's own spawner does: create
-        /// the entity from the company prefab's archetype, point it at that prefab, and hand the
-        /// move-in to the native rent-action queue so the whole transaction runs as the game
-        /// intends rather than being hand-written.
-        /// </summary>
+        /// <summary>Opens a business as the game's spawner does, moving in through the rent-action queue.</summary>
         private bool CreateCompany(Entity property, CompanyStatsEntry entry)
         {
-            Entity prefab;
             if (!_prefabIndex.TryResolve(entry.CompanyPrefabName,
                     candidate => EntityManager.HasComponent<ArchetypeData>(candidate),
-                    out prefab) || prefab == Entity.Null)
+                    out Entity prefab) || prefab == Entity.Null)
                 return false;
             if (!EntityManager.HasComponent<ArchetypeData>(prefab)) return false;
 
@@ -1145,16 +1003,14 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 EntityManager.GetComponentData<ArchetypeData>(prefab).m_Archetype;
             if (archetype == default(EntityArchetype)) return false;
 
-            // The native transaction is what actually moves the business in. Without a consumer
-            // for it there would be a company entity with nowhere to live, so check first.
+            // The native transaction does the move-in; without it the company would have nowhere to live.
             if (_propertyProcessing == null || !_propertyProcessing.Enabled) return false;
 
             Entity company = EntityManager.CreateEntity(archetype);
             EntityManager.SetComponentData(company, new PrefabRef { m_Prefab = prefab });
 
-            Unity.Jobs.JobHandle dependencies;
             NativeQueue<RentAction> queue =
-                _propertyProcessing.GetRentActionQueue(out dependencies);
+                _propertyProcessing.GetRentActionQueue(out Unity.Jobs.JobHandle dependencies);
             dependencies.Complete();
             queue.Enqueue(new RentAction { m_Property = property, m_Renter = company });
 
@@ -1169,8 +1025,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
         private bool IsSettling(Entity property)
         {
-            uint until;
-            if (!_settling.TryGetValue(property, out until)) return false;
+            if (!_settling.TryGetValue(property, out uint until)) return false;
             if (FramePrecedes(_simulationSystem.frameIndex, until)) return true;
             _settling.Remove(property);
             return false;

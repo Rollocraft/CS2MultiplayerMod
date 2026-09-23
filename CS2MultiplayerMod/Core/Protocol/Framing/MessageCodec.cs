@@ -5,14 +5,8 @@ using CS2MultiplayerMod.Core.Protocol.Messages;
 namespace CS2MultiplayerMod.Core.Protocol
 {
     /// <summary>
-    /// Translates between <see cref="INetMessage"/> instances and the byte payloads the
-    /// transport delivers. The wire layout is: [1 byte MessageType][message body].
-    ///
-    /// Decoding is table-driven: each known <see cref="MessageType"/> maps to a factory
-    /// producing a fresh, empty instance to read into, plus a per-type payload size cap.
-    /// The cap is the first line of defense: a chat line claiming to be 10 MB is
-    /// rejected before a single body byte is parsed, so the blanket
-    /// <see cref="ProtocolConstants.MaxPayloadBytes"/> only matters for blob chunks.
+    /// [1 byte MessageType][body]. Each type has a factory and a size cap checked before any body byte
+    /// is parsed; <see cref="ProtocolConstants.MaxPayloadBytes"/> only matters for blob chunks.
     /// </summary>
     public sealed class MessageCodec
     {
@@ -79,8 +73,7 @@ namespace CS2MultiplayerMod.Core.Protocol
             var reader = new NetworkReader(payload);
             var type = (MessageType)reader.ReadByte();
 
-            Entry entry;
-            if (!_entries.TryGetValue(type, out entry))
+            if (!_entries.TryGetValue(type, out Entry entry))
                 throw new ProtocolException("Unknown message type: " + (byte)type + ".");
 
             if (payload.Length > entry.MaxPayloadBytes)

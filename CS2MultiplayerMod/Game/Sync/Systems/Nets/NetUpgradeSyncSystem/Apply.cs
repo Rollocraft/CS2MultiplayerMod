@@ -1,8 +1,6 @@
-using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Text;
 using Colossal.Mathematics;
-using Game;
 using Game.Common;
 using Game.Net;
 using Game.Prefabs;
@@ -17,17 +15,11 @@ using CS2MultiplayerMod.Game.Sync.Commands;
 using CS2MultiplayerMod.Game.Sync.Infrastructure;
 namespace CS2MultiplayerMod.Game.Sync.Systems
 {
-    // Applying a peer's upgrade to the local edge or node at the same place, and the sub-
-    // replacement list and position keys that identify one across two machines.
     public partial class NetUpgradeSyncSystem
     {
-        // ---------------------------------------------------------------- realize
-
         private void Apply(List<NetUpgradeCommand> commands, long now)
         {
-            // Each command carries the FULL resulting state, so within one drain the last
-            // command per target wins - applying an older retry after a newer arrival
-            // would land the wrong final state.
+            // Commands carry the full state, so the last per target wins.
             var lastIndex = new Dictionary<string, int>();
             for (int i = 0; i < commands.Count; i++)
             {
@@ -46,8 +38,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 var d = new float3(c.Dx, c.Dy, c.Dz);
                 if (lastIndex[c.IsNode ? NodeKey(a) : EdgeKey(a, d)] != i) continue;
 
-                Entity prefab;
-                if (!_prefabIndex.TryResolve(c.PrefabName, out prefab)) continue;
+                if (!_prefabIndex.TryResolve(c.PrefabName, out Entity prefab)) continue;
                 if (c.IsNode) nodeTargets.Add((prefab, a, c));
                 else edgeTargets.Add((prefab, a, d, c));
             }
@@ -97,8 +88,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                         };
                         NetUpgradeCommand.SubRep[] subs = cmd.SubReps ?? new NetUpgradeCommand.SubRep[0];
 
-                        // Our edge runs the other way: mirror the game's own invert recipe -
-                        // swap left/right flags and negate sub-replacement sides.
+                        // Our edge runs the other way: the game's invert recipe.
                         if (backward)
                         {
                             flags = NetCompositionHelpers.InvertCompositionFlags(flags);
@@ -114,8 +104,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                             }
                         }
 
-                        // Record what this machine will now hold (LOCAL orientation) so our
-                        // own capture sees "already known" instead of echoing it back.
+                        // Record the local state so our capture does not echo it.
                         _lastSeen[EdgeKey(b.a, b.d)] = new SeenState
                         {
                             General = (uint)flags.m_General,
@@ -138,8 +127,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
                         if (cleared)
                         {
-                            // The game never stores zero flags - removing the last upgrade
-                            // strips the components, so mirror that exactly.
+                            // The game never stores zero flags; removing the last upgrade strips the components.
                             if (hasUpgraded) EntityManager.RemoveComponent<Upgraded>(entity);
                             if (EntityManager.HasBuffer<SubReplacement>(entity)) EntityManager.RemoveComponent<SubReplacement>(entity);
                         }
@@ -151,8 +139,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                         }
 
                         EntityManager.AddComponent<Updated>(entity);
-                        // The composition at each end (crosswalks, transitions) is selected
-                        // per node - re-update them like the game's own commit does.
+                        // End compositions are chosen per node; re-update them as the game's commit does.
                         Edge ends = EntityManager.GetComponentData<Edge>(entity);
                         TagUpdated(ends.m_Start);
                         TagUpdated(ends.m_End);
@@ -192,9 +179,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                         float distSq = math.distancesq(pos.xz, wanted.xz);
                         if (distSq > MatchTolSq) continue;
 
-                        // Prefer a node of the announced prefab, but a junction's node prefab
-                        // can legitimately differ per machine (it inherits one of the touching
-                        // roads) - position decides when no exact-prefab node is nearby.
+                        // A junction node's prefab can differ per machine; position decides when no exact match is near.
                         bool exact = EntityManager.GetComponentData<PrefabRef>(entities[i]).m_Prefab == targets[t].prefab;
                         if ((exact && !bestExact) || (exact == bestExact && distSq < bestDistSq))
                         {
@@ -244,14 +229,11 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                         else EntityManager.AddComponentData(best, new Upgraded { m_Flags = flags });
                     }
 
-                    // The game's commit strips the runtime traffic-light state so it is
-                    // re-initialized from the new composition - mirror that.
+                    // The game's commit strips runtime traffic-light state; mirror it.
                     if (EntityManager.HasComponent<TrafficLights>(best))
                         EntityManager.RemoveComponent<TrafficLights>(best);
 
-                    // Snapshot the connected edges before adding Updated. Adding that component
-                    // is structural and invalidates a live ConnectedEdge buffer mid-iteration,
-                    // which otherwise leaves only a prefix of the junction refreshed.
+                    // Snapshot connected edges first: adding Updated invalidates the live buffer.
                     NetAttachment.TagParentUpdated(EntityManager, best);
 
                     targets.RemoveAt(t);
@@ -264,8 +246,6 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             }
             return applied;
         }
-
-        // ---------------------------------------------------------------- helpers
 
         private void TagUpdated(Entity entity)
         {
@@ -300,8 +280,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             var resolved = new List<SubReplacement>(subs.Length);
             for (int i = 0; i < subs.Length; i++)
             {
-                Entity prefab;
-                if (!_prefabIndex.TryResolve(subs[i].PrefabName, out prefab)) continue;
+                if (!_prefabIndex.TryResolve(subs[i].PrefabName, out Entity prefab)) continue;
                 resolved.Add(new SubReplacement
                 {
                     m_Prefab = prefab,
@@ -337,11 +316,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         private static string Quant(float3 p) =>
             (long)math.round(p.x * 2f) + "|" + (long)math.round(p.y * 2f) + "|" + (long)math.round(p.z * 2f);
 
-        /// <summary>
-        /// Orientation-independent, prefab-free edge identity: the endpoints in a canonical
-        /// order (0.5 m buckets). Survives in-place direction flips and road-type replacements,
-        /// both of which keep the segment but would invalidate a name- or order-keyed cache.
-        /// </summary>
+        /// <summary>Canonical endpoint key: survives direction flips and road-type replacements.</summary>
         private static string EdgeKey(float3 a, float3 d)
         {
             bool swap = a.x > d.x || (a.x == d.x && (a.z > d.z || (a.z == d.z && a.y > d.y)));

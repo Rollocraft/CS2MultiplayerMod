@@ -20,25 +20,16 @@ namespace CS2MultiplayerMod.Core.Session
         /// <summary>Direct mode: the TCP port. Relay mode: unused.</summary>
         public readonly int Port;
 
-        /// <summary>
-        /// How to reach the peers. Relay mode opens no port and needs no forwarding;
-        /// it addresses the host by <see cref="JoinCode"/> instead.
-        /// </summary>
+        /// <summary>Relay mode opens no port and addresses the host by <see cref="JoinCode"/>.</summary>
         public readonly TransportMode Transport;
 
-        /// <summary>
-        /// Relay mode when joining: the host's join code. Ignored in direct mode and
-        /// unused when hosting (a host's own code comes from the relay provider).
-        /// </summary>
+        /// <summary>The host's join code when joining over relay; unused otherwise.</summary>
         public readonly string JoinCode;
 
         /// <summary>When hosting: required password (empty = open). When joining: password to present.</summary>
         public readonly string Password;
 
-        /// <summary>
-        /// Host only: when true (default), non-private address connections refused.
-        /// Session LAN-only. Internet play requires password.
-        /// </summary>
+        /// <summary>Host only (default true): refuse non-private addresses. Internet play needs a password.</summary>
         public readonly bool LanOnly;
 
         /// <summary>TLS for all connections. Must match between host and clients.</summary>
@@ -48,17 +39,13 @@ namespace CS2MultiplayerMod.Core.Session
         public readonly int MaxPlayers;
 
         /// <summary>
-        /// Host only. When true, a join that passes every automatic check still waits for
-        /// the host to approve it by hand before the player is admitted. Defaults to false
-        /// so programmatic hosts (and the test harness) admit valid joins immediately; the
-        /// in-game host setting turns it on by default.
+        /// Host only: joins wait for manual approval. False here so tests admit immediately; the in-game
+        /// setting defaults on.
         /// </summary>
         public readonly bool RequireJoinApproval;
 
         /// <summary>
-        /// Host only. While manual join approval is enabled, authenticated friends on the
-        /// platform transport bypass the prompt. Direct connections have no trusted account
-        /// identity and therefore always remain subject to manual approval.
+        /// Host only: platform friends skip manual approval. Direct connections have no account identity.
         /// </summary>
         public readonly bool AutoApprovePlatformFriends;
 
@@ -69,29 +56,18 @@ namespace CS2MultiplayerMod.Core.Session
         public readonly string ModVersion;
 
         /// <summary>
-        /// Host only. Allows a different multiplayer-mod build through the handshake.
-        /// Protocol compatibility remains mandatory and is checked before this flag is
-        /// considered. This is deliberately opt-in because command behavior can still
-        /// differ even when both builds use the same wire format.
+        /// Host only, opt-in: admit a different mod build. The protocol must still match; behaviour can
+        /// still differ.
         /// </summary>
         public readonly bool IgnoreModCompatibilityChecks;
 
-        /// <summary>
-        /// Host only. Whether the session replicates the simulation's own decisions - the
-        /// buildings zoning grows, who occupies them, and the demand behind them. Announced to
-        /// every client on acceptance, because a peer that disagrees would hold its local
-        /// simulation for messages the host is never going to send.
-        /// </summary>
+        /// <summary>Host only: replicate simulation decisions; announced to every client on acceptance.</summary>
         public readonly bool SimulationSync;
 
         /// <summary>Game build identifier, compared strictly during the handshake.</summary>
         public readonly string GameVersion;
 
-        /// <summary>
-        /// Canonical (sorted) DLC names this machine owns. Compared as a complete set
-        /// during the handshake because differing DLCs mean differing prefab catalogues.
-        /// An empty array is a real set: this machine owns no sync-relevant DLC.
-        /// </summary>
+        /// <summary>Sorted owned DLC names, compared as a set; empty means no sync-relevant DLC.</summary>
         public readonly string[] DlcList;
 
         public MultiplayerConfig(string playerName, string hostAddress, int port, string password = "",

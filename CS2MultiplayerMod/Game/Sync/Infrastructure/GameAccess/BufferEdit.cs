@@ -3,9 +3,8 @@ using Unity.Entities;
 namespace CS2MultiplayerMod.Game.Sync.Infrastructure
 {
     /// <summary>
-    /// Compare a buffer without marking its chunk changed or waiting for its readers.
-    /// Acquire writable access only on the first edit. Like DynamicBuffer, this value must
-    /// not survive a structural change; use it only inside the current synchronous operation.
+    /// Compares a buffer without dirtying its chunk; write access only on the first edit. Must not
+    /// survive a structural change.
     /// </summary>
     internal struct BufferEdit<T> where T : unmanaged, IBufferElementData
     {

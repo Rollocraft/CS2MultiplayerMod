@@ -26,8 +26,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             var swap = _known;
             _known = _next;
             _next = swap;
-            // The very first scan of a session only records — both machines already
-            // share the same state (defaults or the streamed world), so nothing to send.
+            // The first scan only records: both machines share the same state.
             _primed = true;
         }
 
@@ -43,22 +42,18 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 {
                     Entity entity = entities[i];
                     Entity prefab = EntityManager.GetComponentData<PrefabRef>(entity).m_Prefab;
-                    // Both tool entry points for an upgrade require ServiceUpgradeData, so anything
-                    // else parented to a building is lot content the simulation spawns and despawns
-                    // (a storage yard's container piles) - never a player's on/off decision.
+                    // Without ServiceUpgradeData it is simulation lot content, not a player's toggle.
                     if (playerUpgradesOnly &&
                         !EntityManager.HasComponent<ServiceUpgradeData>(prefab)) continue;
                     string targetName = _prefabSystem.GetPrefabName(prefab);
                     if (string.IsNullOrEmpty(targetName)) continue;
 
-                    float3 anchor;
-                    if (!TryAnchor(kind, entity, out anchor)) continue;
+                    if (!TryAnchor(kind, entity, out float3 anchor)) continue;
 
                     var current = playerUpgradesOnly
                         ? ReadUpgradePolicies(entity)
                         : ReadPolicies(entity);
-                    List<PolicyEntry> old;
-                    bool had = _known.TryGetValue(entity, out old);
+                    bool had = _known.TryGetValue(entity, out List<PolicyEntry> old);
                     _next[entity] = current;
                     if (!had || !_primed) continue;
 
@@ -121,6 +116,5 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 (active ? "on" : "off") + ", " + adjustment + ") on " + KindName(kind) + " '" +
                 targetName + "'.");
         }
-
     }
 }

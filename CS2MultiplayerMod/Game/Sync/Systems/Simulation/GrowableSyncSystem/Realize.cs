@@ -1,58 +1,28 @@
-using Game.Buildings;
 using Game.Common;
 using Game.Objects;
 using Game.Prefabs;
-using Game.Tools;
 using Unity.Collections;
 using Unity.Entities;
 using Unity.Mathematics;
 using CS2MultiplayerMod.Core.Diagnostics;
-using CS2MultiplayerMod.Core.Protocol.Messages;
 using CS2MultiplayerMod.Core.Session;
 using CS2MultiplayerMod.Game.Diagnostics;
 using CS2MultiplayerMod.Game.Sync.Commands;
 
 namespace CS2MultiplayerMod.Game.Sync.Systems
 {
-    // Applying the host's zoned-building lifecycle: a building spawns, changes level, is removed,
-    // or has its condition and state corrected. A correction that arrives before the building does
-    // is held and retried rather than dropped.
-    //
-    // Finding the building a command refers to is in RealizeMatch.cs; keeping a client from
-    // growing its own is in RealizeGuard.cs.
     public partial class GrowableSyncSystem
     {
         /// <summary>Zone cells are 8 m; a lot's half-extent is therefore its cell count times four.</summary>
         private const float ZoneCellSize = 8f;
 
-        /// <summary>
-        /// Slack on the overlap test, in metres. Two buildings that merely touch along a shared lot
-        /// edge are not in conflict - that is how a street of houses is meant to look.
-        /// </summary>
+        /// <summary>Lots that merely touch along an edge do not conflict.</summary>
         private const float OverlapTolerance = 0.5f;
 
         /// <summary>How far from the anchor an existing building may be and still be the same one.</summary>
         private const float AnchorMatchDistance = 0.5f;
 
         private const float AnchorSearchRadius = 8f;
-
-        /// <summary>
-        /// Applies the host's zoned-building decisions. Called from <see cref="SyncRealizeSystem"/>
-        /// during ToolUpdate, the only phase in which a creation definition becomes a building.
-        /// </summary>
-        /// <summary>
-        /// Called by <see cref="SyncRealizeSystem"/> on frames this system is not allowed to run -
-        /// terrain is catching up, or the net pipeline still has placements queued.
-        ///
-        /// A pending state correction's window is for waiting on its building to be generated, not
-        /// for waiting on permission to look for it. Against the wall it expired while this system
-        /// was gated off, and expiring asks for a world reload over a correction that was never
-        /// once attempted. A stalled net placement holds this gate for its whole retry window.
-        /// </summary>
-        public void NotifyRealizeHeld(long nowMs)
-        {
-            ExtendPendingStateWindows(nowMs);
-        }
 
         /// <summary>When this system last got to attempt its pending corrections.</summary>
         private long _lastGrowableRealizeMs;
@@ -66,37 +36,38 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 _pendingStateCorrections[i].Expiry += heldMs;
         }
 
+        /// <summary>Applies the host's zoned-building decisions during ToolUpdate.</summary>
         public void RealizePending()
         {
             MultiplayerService service = Mod.Service;
             if (service == null) return;
-            if (!service.SimulationSyncReady) { ExtendPendingStateWindows(service.NowMs); return; }
+
+            // Waits while roads, zoning or terrain are held; held time does not count against a correction.
+            if (Infrastructure.RealizeGate.WorldBuildingHeld || !service.SimulationSyncReady)
+            {
+                ExtendPendingStateWindows(service.NowMs);
+                return;
+            }
 
             MultiplayerSession session = service.Session;
             long now = service.NowMs;
 
-            // A host authors these; it must never apply one. Guards against a client that forges
-            // the command as much as against a relay that echoes it back.
+            // A host never applies these, whether forged or echoed.
             if (session.Role == SessionRole.Host)
             {
                 _incoming.Clear();
                 return;
             }
-
-            // A zoned building's transmitted height was sampled on the sender's terrain. Realizing
-            // it while remote terraforming is still backlogged buries or floats it.
-            if (DeferForTerrain) { ExtendPendingStateWindows(now); return; }
             _lastGrowableRealizeMs = now;
 
             _applied.Prune(now);
             RetryPendingStateCorrections(now);
 
             int realized = 0, states = 0;
-            // Bound attempts, including rejected/duplicate work: lookups and validation
-            // consume frame time even when no entity is changed.
-            GrowableLifecycleCommand command;
+            // Rejected and duplicate work count too: lookups cost frame time.
             while (_incoming.TryTake(realized < MaxRealizePerFrame,
-                       states < Infrastructure.GrowableCommandInbox.StateBudgetPerFrame, out command))
+                       states < Infrastructure.GrowableCommandInbox.StateBudgetPerFrame,
+                       out GrowableLifecycleCommand command))
             {
                 if (command.Op == GrowableLifecycleCommand.OpState) states++;
                 else realized++;
@@ -110,8 +81,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     continue;
                 }
 
-                // A newer lifecycle/state command supersedes corrections still waiting for
-                // this lot. Otherwise an old construction sample can overwrite completion.
+                // A newer command supersedes waiting corrections for this lot.
                 SupersedePendingState(command, now);
                 Apply(command, now);
             }
@@ -120,9 +90,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         }
 
         /// <summary>
-        /// Returns true when the command consumed realize budget. Every outcome is terminal -
-        /// built, corrected, refused, or aimed at something that is already gone - and each one is
-        /// recorded in the replay window, so a redelivery is recognised rather than re-applied.
+        /// True when budget was consumed. Every outcome is terminal and recorded in the replay window.
         /// </summary>
         private bool Apply(GrowableLifecycleCommand command, long now)
         {
@@ -140,13 +108,11 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         {
             var position = new float3(command.AnchorX, command.AnchorY, command.AnchorZ);
 
-            Entity prefab;
             if (!_prefabIndex.TryResolve(command.PrefabName,
                     candidate => EntityManager.HasComponent<SpawnableBuildingData>(candidate),
-                    out prefab))
+                    out Entity prefab))
             {
-                // Either an asset this machine does not have, or a command aimed at something that
-                // is not a zoned building at all. Neither is retryable.
+                // Missing asset or not a zoned building; not retryable.
                 _unknownPrefab++;
                 _applied.Remember(command.Sequence, now, ReplayWindowMs);
                 SyncLog.Warn(LogTopic.Buildings, "GrowableSync: unknown zoned-building prefab '" +
@@ -163,15 +129,14 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             {
                 CollectOverlapping(prefab, position, rotation, blockers);
 
-                // Already standing, same building, same lot: a redelivery whose sequence has aged
-                // out of the replay window. Rebuilding it would be the duplicate this whole path
-                // exists to prevent.
+                // Same building already on the lot: a redelivery older than the replay window.
                 if (AlreadySatisfied(blockers, prefab, position, now))
                 {
                     Entity existing = FindGrowableAt(position, prefab, now);
                     if (existing != Entity.Null)
                     {
-                        if (ApplyConditionAndState(existing, command))
+                        bool variantChanged = RepairSpawnVariant(existing, command.RandomSeed);
+                        if (ApplyConditionAndState(existing, command) || variantChanged)
                             EntityManager.AddComponent<Updated>(existing);
                     }
                     _duplicates++;
@@ -185,9 +150,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 Entity placedBlocker = FirstPlayerPlaced(blockers, now);
                 if (placedBlocker != Entity.Null)
                 {
-                    // A building a player put here by hand outranks a grown one: the host's own
-                    // simulation would have condemned the growable against it too. Refusing keeps
-                    // the two cities agreeing about the building that was deliberately placed.
+                    // A player-placed building outranks a grown one, as on the host.
                     _conflicts++;
                     _applied.Remember(command.Sequence, now, ReplayWindowMs);
                     SyncLog.Warn(LogTopic.Buildings, "GrowableSync conflict: '" + command.PrefabName +
@@ -197,9 +160,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     return true;
                 }
 
-                // Everything left is a grown building this machine produced on its own - only
-                // possible if its spawner ran while the session was not synchronized. The host is
-                // the authority on grown buildings, so these lose and are cleared out of the way.
+                // The rest are buildings this machine grew while unsynchronized; the host's wins.
                 for (int i = 0; i < blockers.Length; i++)
                 {
                     _conflicts++;
@@ -229,19 +190,14 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             return true;
         }
 
-        /// <summary>
-        /// Hands a standing building the prefab it is becoming - the game's own level-change
-        /// mechanism, so construction, notification and zone bookkeeping all run as usual. The
-        /// target may be a prefab this machine's own simulation would never have chosen.
-        /// </summary>
+        /// <summary>Hands the building its target prefab through the game's own level-change path.</summary>
         private bool ApplyLevel(GrowableLifecycleCommand command, long now)
         {
             var position = new float3(command.AnchorX, command.AnchorY, command.AnchorZ);
 
-            Entity prefab;
             if (!_prefabIndex.TryResolve(command.PrefabName,
                     candidate => EntityManager.HasComponent<SpawnableBuildingData>(candidate),
-                    out prefab))
+                    out Entity prefab))
             {
                 _unknownPrefab++;
                 _applied.Remember(command.Sequence, now, ReplayWindowMs);
@@ -260,9 +216,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 return true;
             }
 
-            // Already becoming that prefab: re-applying would restart construction. This is the
-            // idempotence that matters in practice, because the local simulation may have proposed
-            // its own level change for the same building before this one arrived.
+            // Already becoming that prefab; re-applying would restart construction.
             if (EntityManager.HasComponent<UnderConstruction>(building))
             {
                 UnderConstruction current = EntityManager.GetComponentData<UnderConstruction>(building);
@@ -305,13 +259,11 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         {
             var position = new float3(command.AnchorX, command.AnchorY, command.AnchorZ);
 
-            Entity prefab;
-            _prefabIndex.TryResolve(command.PrefabName, out prefab);
+            _prefabIndex.TryResolve(command.PrefabName, out Entity prefab);
             Entity building = FindGrowableAt(position, prefab, now);
             if (building == Entity.Null)
             {
-                // Nothing to remove. Convergent either way: the building this refers to was never
-                // built here (its spawn was refused), or a player already bulldozed it.
+                // Never built here or already bulldozed: convergent either way.
                 _unmatched++;
                 _applied.Remember(command.Sequence, now, ReplayWindowMs);
                 SyncLog.Detail(LogTopic.Buildings, "GrowableSync: no building at " +
@@ -327,16 +279,12 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             return true;
         }
 
-        private bool ApplyState(GrowableLifecycleCommand command, long now)
-        {
-            return ApplyState(command, now, true);
-        }
+        private bool ApplyState(GrowableLifecycleCommand command, long now) => ApplyState(command, now, true);
 
         private bool ApplyState(GrowableLifecycleCommand command, long now, bool allowPending)
         {
             var position = new float3(command.AnchorX, command.AnchorY, command.AnchorZ);
-            Entity prefab;
-            _prefabIndex.TryResolve(command.PrefabName, out prefab);
+            _prefabIndex.TryResolve(command.PrefabName, out Entity prefab);
 
             Entity building = FindGrowableAt(position, prefab, now);
             if (building == Entity.Null)
@@ -345,8 +293,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 {
                     if (_pendingStateCorrections.Count >= MaxPendingStateCorrections)
                     {
-                        // Convergent to shed: corrections are progress ticks sent twice a
-                        // second, and completion is announced by its own command.
+                        // Progress ticks are sent twice a second; completion has its own command.
                         _pendingStateSequences.Remove(command.Sequence);
                         _unmatched++;
                         _applied.Remember(command.Sequence, now, ReplayWindowMs);
@@ -373,8 +320,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         {
             bool needsUpdate = RepairCompletedPrefab(building, prefab, command);
             needsUpdate |= ApplyConditionAndState(building, command);
-            // Condition and the construction clock are read directly by their consumers.
-            // Updated rebuilds road/utility/lot data and is only needed for lifecycle changes.
+            // Updated rebuilds road/utility/lot data; only lifecycle changes need it.
             if (needsUpdate)
             {
                 EntityManager.AddComponent<Updated>(building);
@@ -385,10 +331,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             _gotState++;
         }
 
-        /// <summary>
-        /// A state update can share a network burst with the spawn whose live entity is generated
-        /// later in the frame. Keep it ordered and bounded instead of terminally dropping it.
-        /// </summary>
+        /// <summary>A state update can arrive with a spawn realized later in the frame; kept ordered and bounded.</summary>
         private void RetryPendingStateCorrections(long now)
         {
             int remaining = _pendingStateCorrections.Count;
@@ -402,10 +345,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 if (pending.Expiry <= now)
                 {
                     attempts++;
-                    // Skipped, like the level change and the removal that cannot find their
-                    // building either. Completed state can also repair a missed level prefab, but
-                    // the absolute occupancy/company pages carry the same completed identity and
-                    // remain its backstop after this short ordering window.
+                    // Occupancy and company pages carry the completed identity as a backstop.
                     _pendingStateSequences.Remove(pending.Command.Sequence);
                     _pendingStateCorrections.RemoveAt(i);
                     _unmatched++;
@@ -425,8 +365,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
                 var position = new float3(pending.Command.AnchorX,
                     pending.Command.AnchorY, pending.Command.AnchorZ);
-                Entity prefab;
-                _prefabIndex.TryResolve(pending.Command.PrefabName, out prefab);
+                _prefabIndex.TryResolve(pending.Command.PrefabName, out Entity prefab);
                 Entity building = FindGrowableAt(position, prefab, now);
                 if (building == Entity.Null) continue;
 
@@ -448,6 +387,5 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 _applied.Remember(previous.Sequence, now, ReplayWindowMs);
             }
         }
-
     }
 }

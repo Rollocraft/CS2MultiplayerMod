@@ -1,25 +1,18 @@
 using System;
-using System.Collections.Concurrent;
 using System.Collections.Generic;
-using Colossal.Entities;
 using CS2MultiplayerMod.Game.Sync.Commands;
-using Game;
 using Game.Buildings;
 using Game.Common;
 using Game.Objects;
 using Game.Prefabs;
 using Game.Rendering;
 using Game.Tools;
-using Game.UI.InGame;
 using Game.Vehicles;
-using Unity.Collections;
 using Unity.Entities;
 using Unity.Mathematics;
 
 namespace CS2MultiplayerMod.Game.Sync.Systems
 {
-    // Reading an entity's current appearance, matching it against what a command describes, and
-    // converting between the game's colour set and the one that travels on the wire.
     public partial class VisualCustomizationSyncSystem
     {
         // ---- target resolution ----------------------------------------------
@@ -46,8 +39,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     return hinted;
             }
 
-            // The bucket already satisfies every IsBaseCandidate condition except an in-frame
-            // delete, so only the winner needs re-validating against live state.
+            // The bucket already filters everything but an in-frame delete.
             CandidateCache.Bucket bucket = _candidates.For(prefab, _targetQuery, EntityManager);
             int bestSeed = -1;
             int bestNear = -1;
@@ -109,8 +101,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         private bool TryReadState(Entity entity, out VisualState state)
         {
             state = default(VisualState);
-            Entity prefab;
-            if (!TryGetPrefab(entity, out prefab)) return false;
+            if (!TryGetPrefab(entity, out Entity prefab)) return false;
 
             state.SupportsColor =
                 !EntityManager.HasComponent<Plant>(entity) &&
@@ -154,7 +145,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
             DynamicBuffer<CustomMeshColor> custom =
                 EntityManager.GetBuffer<CustomMeshColor>(entity, true);
-            if (custom.Length > 0)
+            if (EntityManager.IsComponentEnabled<CustomMeshColor>(entity) && custom.Length > 0)
             {
                 color = FromGameColor(custom[0].m_ColorSet);
                 return true;

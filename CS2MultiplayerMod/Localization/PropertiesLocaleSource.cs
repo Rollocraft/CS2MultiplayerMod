@@ -8,12 +8,9 @@ using Colossal;
 namespace CS2MultiplayerMod.Localization
 {
     /// <summary>
-    /// One language's locale, loaded from an embedded <c>locales/&lt;lang&gt;.properties</c>
-    /// file. Registered per language in <see cref="Mod.OnLoad"/>; the mod follows the game
-    /// language, with no mod-specific setting. Keys starting with '@' are options-screen
-    /// entries resolved here against the game's settings ID scheme; every other key (the
-    /// <c>CS2MP.*</c> runtime keys) is used verbatim. Key parity across the languages is a
-    /// CI check (<c>.github/workflows/locale.yml</c>), not a runtime one.
+    /// One language from an embedded <c>locales/&lt;lang&gt;.properties</c>. '@' keys are options-screen
+    /// entries resolved against the game's settings ids; <c>CS2MP.*</c> keys are used verbatim. Key parity
+    /// across languages is not checked at runtime.
     /// </summary>
     public sealed class PropertiesLocaleSource : IDictionarySource
     {
@@ -30,8 +27,7 @@ namespace CS2MultiplayerMod.Localization
             IList<IDictionaryEntryError> errors, Dictionary<string, int> indexCounts)
         {
             var entries = new Dictionary<string, string>();
-            // Last-one-wins on a duplicate key: a duplicate is a CI failure, never a
-            // reason to throw out of locale registration at mod load.
+            // Last one wins on a duplicate key; locale registration must not throw at load.
             foreach (var pair in LoadRaw(_language))
                 entries[Resolve(pair.Key)] = pair.Value;
             return entries;
@@ -64,20 +60,12 @@ namespace CS2MultiplayerMod.Localization
                 }
             }
 
-            // Unknown @directive: leave as-is so the bad key shows up in-game instead of
-            // masquerading as a real option string.
+            // Unknown @directive: left as-is so the bad key shows in game.
             return fileKey;
         }
 
-        /// <summary>
-        /// Parse a language file into its raw <c>key -> value</c> pairs (no '@' resolution).
-        /// Used by <see cref="ReadEntries"/> and by <see cref="L10n"/> for the English
-        /// fallback. Order is preserved; the caller decides how to handle duplicates.
-        /// </summary>
-        internal static List<KeyValuePair<string, string>> LoadRaw(string language)
-        {
-            return Parse(ReadResource(language));
-        }
+        /// <summary>Raw ordered pairs without '@' resolution, also used for the English fallback.</summary>
+        internal static List<KeyValuePair<string, string>> LoadRaw(string language) => Parse(ReadResource(language));
 
         internal static List<KeyValuePair<string, string>> Parse(string text)
         {

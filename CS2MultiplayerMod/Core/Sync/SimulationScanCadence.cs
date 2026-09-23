@@ -3,9 +3,8 @@ using System;
 namespace CS2MultiplayerMod.Core.Sync
 {
     /// <summary>
-    /// Keep fallback scanning near its 1x frequency as simulation ticks accelerate. This must
-    /// never gate event capture, arrived state, native-writer corrections or queue draining.
-    /// Partitions advance only when visited, independently of the game's current partition.
+    /// Keeps fallback scans near 1x frequency at higher simulation speeds. Never gates event capture,
+    /// arrived state, corrections or draining. Partitions advance only when visited.
     /// </summary>
     public sealed class SimulationScanCadence
     {

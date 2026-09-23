@@ -37,8 +37,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     Transform transform = EntityManager.GetComponentData<Transform>(entity);
                     if (_guard.Consume(DeleteKey(name, transform.m_Position), now)) continue;
 
-                    List<ObjectDeleteBatchCommand.Position> positions;
-                    if (!batches.TryGetValue(name, out positions))
+                    if (!batches.TryGetValue(name, out List<ObjectDeleteBatchCommand.Position> positions))
                     {
                         positions = new List<ObjectDeleteBatchCommand.Position>();
                         batches[name] = positions;

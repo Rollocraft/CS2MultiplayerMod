@@ -1,19 +1,11 @@
+import { GROUP, useT } from "mods/ui-helpers";
 import { bindValue, useValue } from "cs2/api";
-import { useLocalization } from "cs2/l10n";
 import { CSSProperties } from "react";
 import { HELP_PAGE, OpenHelpButton } from "mods/help-link";
-
-// Binding group shared with MultiplayerUISystem on the C# side.
-const GROUP = "cs2mp";
 
 const LOC = {
     title: "CS2MP.UI.ModsBlockedTitle",
     ignoredTitle: "CS2MP.UI.ModsIgnoredTitle",
-};
-
-const useT = () => {
-    const { translate } = useLocalization();
-    return (id: string, fallback: string) => translate(id, fallback) ?? fallback;
 };
 
 // Localized sentence built C#-side (it names the other mods). Empty when this mod

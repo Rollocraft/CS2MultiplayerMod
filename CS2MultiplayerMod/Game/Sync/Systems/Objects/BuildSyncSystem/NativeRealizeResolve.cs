@@ -1,10 +1,6 @@
 using System.Collections.Generic;
-using Colossal.Mathematics;
-using Game.Common;
-using Game.Net;
 using Game.Prefabs;
 using Game.Tools;
-using Unity.Collections;
 using Unity.Entities;
 using Unity.Mathematics;
 using CS2MultiplayerMod.Core.Diagnostics;
@@ -15,8 +11,6 @@ using CS2MultiplayerMod.Game.Sync.Infrastructure;
 
 namespace CS2MultiplayerMod.Game.Sync.Systems
 {
-    // Resolving a remote operation against local entities: claiming the original it edits,
-    // matching each definition's target, and replaying or completing the operation once done.
     public partial class BuildSyncSystem
     {
         private void ReplayNativeObject(SimulationCommandMessage message)
@@ -47,8 +41,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             {
                 if (command.IsAssetStamp)
                 {
-                    Entity stampPrefab;
-                    if (_prefabIndex.TryResolve(command.AssetStampPrefabName, out stampPrefab))
+                    if (_prefabIndex.TryResolve(command.AssetStampPrefabName, out Entity stampPrefab))
                         ConstructionCharger.ChargeObject(EntityManager, stampPrefab,
                             command.AssetStampPrefabName);
                 }
@@ -84,11 +77,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 command.OperationId);
         }
 
-        /// <summary>
-        /// True when two <see cref="PortableEntityRef"/> values name the same source entity. Used to
-        /// tell "the batch referenced one entity twice" apart from "two different source entities
-        /// collapsed onto one local entity" - the latter is the aliasing hazard below.
-        /// </summary>
+        /// <summary>Same source entity: a duplicate reference, not two sources collapsed onto one.</summary>
         private static bool SamePortableSource(PortableEntityRef left, PortableEntityRef right)
         {
             if (left.Kind != right.Kind ||
@@ -108,21 +97,14 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         }
 
         /// <summary>
-        /// Claim one live entity as the original of exactly one definition in this batch.
-        ///
-        /// A tool's own output names every original at most once (its attachment set is de-duplicated
-        /// and each owned element is visited once), so two definitions landing on the SAME local
-        /// entity means this machine's geometry is subdivided differently from the sender's - it never
-        /// received the split that separated them. Committing both would hand the apply passes two
-        /// Temps sharing one original, which they dereference without a liveness check: the confirmed
-        /// native crash. Refuse the batch instead; the caller retries and then requests recovery.
+        /// Claims a live entity as one definition's original. Two definitions on one local entity mean a
+        /// missing split, and two Temps sharing an original crash the apply passes natively; refuse.
         /// </summary>
         private bool TryClaimObjectOriginal(
             Dictionary<Entity, PortableEntityRef> claims, PortableEntityRef source, Entity target)
         {
             if (target == Entity.Null) return true;
-            PortableEntityRef claimed;
-            if (!claims.TryGetValue(target, out claimed))
+            if (!claims.TryGetValue(target, out PortableEntityRef claimed))
             {
                 claims[target] = source;
                 return true;
@@ -137,11 +119,10 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             var originalClaims = new Dictionary<Entity, PortableEntityRef>();
             if (command.IsAssetStamp)
             {
-                Entity stampPrefab;
                 if (!_prefabIndex.TryResolve(command.AssetStampPrefabName,
                         candidate => EntityManager.Exists(candidate) &&
                                      EntityManager.HasComponent<AssetStampData>(candidate),
-                        out stampPrefab))
+                        out Entity stampPrefab))
                 {
                     reason = "asset-stamp prefab is unavailable or incompatible";
                     return false;
@@ -193,11 +174,10 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 }
                 if (!string.IsNullOrEmpty(definition.AttachedPrefabName))
                 {
-                    Entity attachedPrefab;
                     if (target.Attached != Entity.Null ||
                         !_prefabIndex.TryResolve(definition.AttachedPrefabName,
                             candidate => IsCompatiblePlaceholderAttachment(definition,
-                                target.Prefab, candidate), out attachedPrefab))
+                                target.Prefab, candidate), out Entity attachedPrefab))
                     {
                         reason = "prefab-local attachment is unavailable or incompatible";
                         return false;

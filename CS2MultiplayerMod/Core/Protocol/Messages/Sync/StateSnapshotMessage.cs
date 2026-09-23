@@ -1,10 +1,6 @@
 namespace CS2MultiplayerMod.Core.Protocol.Messages
 {
-    /// <summary>
-    /// Host-authoritative replicated state slice. ChannelId selects game-side synchronizer
-    /// (money, population, ...). Core treats body as opaque to keep protocol stable
-    /// as state channels are added in game layer.
-    /// </summary>
+    /// <summary>A host state slice; ChannelId picks the game-side channel, the body is opaque to Core.</summary>
     public sealed class StateSnapshotMessage : INetMessage
     {
         public byte ChannelId;
@@ -23,18 +19,13 @@ namespace CS2MultiplayerMod.Core.Protocol.Messages
         public void Write(NetworkWriter writer)
         {
             writer.WriteByte(ChannelId);
-            writer.WriteInt(Data != null ? Data.Length : 0);
-            if (Data != null && Data.Length > 0)
-                writer.WriteBytes(Data, 0, Data.Length);
+            writer.WriteLengthPrefixedBytes(Data);
         }
 
         public void Read(NetworkReader reader)
         {
             ChannelId = reader.ReadByte();
-            int length = reader.ReadInt();
-            if (length < 0 || length != reader.Remaining)
-                throw new ProtocolException("State snapshot body length does not match its envelope.");
-            Data = length > 0 ? reader.ReadBytes(length) : System.Array.Empty<byte>();
+            Data = reader.ReadRemainingLengthPrefixedBytes("State snapshot");
         }
     }
 }

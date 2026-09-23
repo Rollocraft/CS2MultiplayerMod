@@ -4,10 +4,8 @@ using CS2MultiplayerMod.Core.Sync;
 namespace CS2MultiplayerMod.Game.Sync.Commands
 {
     /// <summary>
-    /// "A player bulldozed this road segment." Identified by prefab name + the segment's full
-    /// cubic Bézier. The receiver deletes every local edge of that prefab whose endpoints lie on
-    /// this curve, so a road the two machines subdivided differently still deletes completely - see
-    /// <see cref="DeleteSyncSystem"/>.
+    /// A bulldozed segment by prefab and full Bézier; the receiver deletes every local edge on that
+    /// curve, however it was subdivided.
     /// </summary>
     public sealed class NetDeleteCommand : ISimulationCommand
     {

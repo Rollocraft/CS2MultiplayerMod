@@ -1,28 +1,19 @@
 using System;
-using System.Collections.Concurrent;
-using System.Collections.Generic;
 using System.Runtime.InteropServices;
-using System.Threading;
 using CS2MultiplayerMod.Core.Diagnostics;
 using Steamworks;
 
 namespace CS2MultiplayerMod.Core.Networking.Steam
 {
-    // Choosing how fast to push bytes at a peer. Steam's relay reports its own view of link
-    // quality and ping, and the rate is walked up while that looks healthy and backed off when it
-    // does not - a world transfer saturating the link is the case that matters.
+    // The send-rate governor: climb while Steam reports a healthy link, back off when it does not.
     public sealed partial class SteamRelayTransport
     {
-        /// <summary>
-        /// Which path the traffic is taking. The first thing to read when a transfer
-        /// disappoints: a relayed route explains a rate the uplink could beat on its own.
-        /// </summary>
+        /// <summary>The route in use; a relayed route explains a rate the uplink could beat.</summary>
         private static string RouteOf(Endpoint endpoint)
         {
             try
             {
-                SteamNetConnectionInfo_t info;
-                if (!SteamNetworkingSockets.GetConnectionInfo(endpoint.Handle, out info))
+                if (!SteamNetworkingSockets.GetConnectionInfo(endpoint.Handle, out SteamNetConnectionInfo_t info))
                     return "unknown";
                 return (info.m_nFlags & Constants.k_nSteamNetworkConnectionInfoFlags_Relayed) != 0
                     ? "relayed"
@@ -67,22 +58,16 @@ namespace CS2MultiplayerMod.Core.Networking.Steam
         }
 
         /// <summary>
-        /// Drop to a measured rate and stop reacting for a while. The clamp bounds how much
-        /// one reading may take away, so a pessimistic sample costs some throughput rather
-        /// than the transfer.
+        /// Drops to a measured rate and holds. The clamp limits what one pessimistic reading can take away.
         /// </summary>
         private void Backoff(Endpoint endpoint, int target)
         {
             int least = (int)(endpoint.SendRate * MaxSingleBackoff);
             int rate = Math.Max(SendRateFloorBytesPerSecond, Math.Max(least, Math.Min(endpoint.SendRate, target)));
 
-            // The rate known to hold is the one that was flowing when the path complained,
-            // shaded down - not the one just cut to. Setting it to the cut made every
-            // backoff permanent: the fast climb only runs below SafeRate, so a connection
-            // that backed off once crawled upward in single steps for the rest of the
-            // session, and the idle clamp then handed that crawl to the next transfer as
-            // its starting rate. Shading is what still walks a repeatedly congested
-            // estimate downwards instead of oscillating around a level it never carried.
+            // Known-good is the rate flowing when the path complained, shaded down, not the rate cut to:
+            // otherwise every backoff is permanent, since the fast climb only runs below SafeRate. Shading
+            // still walks a repeatedly congested estimate down.
             endpoint.SafeRate = Math.Max(
                 rate, (int)(Math.Min(endpoint.SafeRate, endpoint.SendRate) * SafeRateShare));
             endpoint.HoldTicks = BackoffHoldTicks;
@@ -91,9 +76,8 @@ namespace CS2MultiplayerMod.Core.Networking.Steam
         }
 
         /// <summary>
-        /// Pin the connection's paced rate. Min and max are set together because Steam
-        /// documents them that way: nothing estimates the bandwidth for us, so a min above
-        /// what the path carries is a floor the sender cannot come down from.
+        /// Pins the paced rate by setting min and max together, as Steam documents; nothing estimates
+        /// bandwidth for us.
         /// </summary>
         private void ApplySendRate(Endpoint endpoint, int bytesPerSecond)
         {
@@ -108,30 +92,12 @@ namespace CS2MultiplayerMod.Core.Networking.Steam
         }
 
         /// <summary>
-        /// Congestion control for the rate Steam will not work out on its own: climb while
-        /// the path is quiet, fall back when it complains twice running, and probe upwards
-        /// from there a step at a time. <see cref="Endpoint.SafeRate"/> remembers what held,
-        /// so the expensive overshoot happens once per session rather than once per cycle -
-        /// and recovering to it is the fast climb, which is why <see cref="Backoff"/> must
-        /// not collapse the two together.
-        ///
-        /// Two different things throttle this path and only one of them shows up as delay.
-        /// A queue that fills raises the ping within a second. A rate limiter - Valve's
-        /// relays police their traffic - just discards the excess, so the ping stays flat
-        /// at 60 ms while the peer receives half of what was sent. Watching delay alone is
-        /// blind to that, which is how a run once sat at 2400 KB/s paced, 48% received and
-        /// 180 KB/s of actual progress for three minutes.
-        ///
-        /// So loss cuts the rate too, and it sizes its own cut: the share the peer received
-        /// of what went out is the share of the wire rate that fits, and multiplying gives
-        /// the limit directly instead of feeling for it 25% at a time. Both readings
-        /// describe a window several seconds old, hence the hold after every cut - without
-        /// it the same congestion is punished repeatedly and the rate walks to the floor.
-        ///
-        /// The hold alone did not cover it. A transfer was seen falling 1790 -> 1479 -> 983 ->
-        /// 676 KB/s over three cuts whose own ticks each delivered 99% of their pace, on a path
-        /// carrying 1.7 MB/s. So a complaint the current rate is delivering through is treated
-        /// as the tail of congestion already past: it holds the rate rather than cutting it.
+        /// Congestion control: climb while quiet, fall back after two complaints running, then probe up a
+        /// step at a time; <see cref="Endpoint.SafeRate"/> remembers what held, so recovering is the fast
+        /// climb (why <see cref="Backoff"/> keeps the two apart). A filling queue raises ping, but relays
+        /// police by discarding, leaving ping flat, so loss also cuts: the received share times the wire
+        /// rate is the limit. Readings lag, hence the hold after a cut, and a complaint the current rate is
+        /// delivering through holds rather than cuts.
         /// </summary>
         private void Govern()
         {
@@ -157,6 +123,10 @@ namespace CS2MultiplayerMod.Core.Networking.Steam
                     }
                     catch (Exception) { continue; }
 
+                    // Steam holds everything behind a lost segment; a lossy path can complete no message for seconds.
+                    if (status.m_flInBytesPerSec >= InboundActivityBytesPerSecond)
+                        endpoint.LastInboundMs = MonotonicClock.NowMs;
+
                     long outstanding = endpoint.QueuedBytes +
                                        status.m_cbPendingReliable + status.m_cbSentUnackedReliable;
                     bool bulk = outstanding >= BulkBacklogBytes;
@@ -177,14 +147,12 @@ namespace CS2MultiplayerMod.Core.Networking.Steam
                         continue;
                     }
 
-                    // Steam reports no ping until traffic has flowed; folding that in would
-                    // pin the baseline at zero and read every real ping as congestion. The
-                    // floor then creeps up so a path that genuinely got slower re-baselines.
+                    // No ping until traffic flows; a zero baseline would read every ping as congestion. The floor creeps
+                    // up so a genuinely slower path re-baselines.
                     bool pingKnown = status.m_nPing > 0;
                     if (pingKnown)
                     {
-                        // Rises a millisecond at a time so a plateau of mild congestion
-                        // cannot quietly become this connection's idea of normal.
+                        // One millisecond at a time, so mild congestion does not become the baseline.
                         if (status.m_nPing < endpoint.PingFloorMs) endpoint.PingFloorMs = status.m_nPing;
                         else endpoint.PingFloorMs++;
                     }
@@ -196,34 +164,35 @@ namespace CS2MultiplayerMod.Core.Networking.Steam
                     bool queueing = pingKnown && status.m_nPing > pingBudget;
                     bool losing = quality >= 0f && quality < HealthyRemoteQuality;
                     bool delivering = RelaySendFeedback.IsDelivering(goodput, endpoint.SendRate, DeliveredShare);
+                    // Until the peer reports quality, our own acknowledgements are the only loss signal.
+                    bool starving = quality < 0f &&
+                                    !RelaySendFeedback.IsDelivering(goodput, endpoint.SendRate, StarvedShare);
 
                     if (endpoint.HoldTicks > 0)
                     {
                         endpoint.HoldTicks--;
                     }
-                    else if ((queueing || losing) && !delivering)
+                    else if ((queueing || losing || starving) && !delivering)
                     {
                         if (++endpoint.Strikes >= StrikesBeforeBackoff)
                         {
-                            // What the peer actually received is what the path will carry,
-                            // so fall straight to it rather than stepping down and
-                            // overshooting. A queue that fills has no such measurement
-                            // behind it and only says "less than this".
+                            // What the peer received is what the path carries: fall straight to it. A filling queue only says
+                            // "less than this".
                             float wire = status.m_flOutBytesPerSec;
                             float carrying = wire > 0f ? wire : endpoint.SendRate;
                             Backoff(endpoint, losing
                                 ? (int)(carrying * quality * 0.95f)
-                                : (int)(endpoint.SendRate * 0.75f));
+                                : starving
+                                    ? (int)Math.Min(goodput, int.MaxValue)
+                                    : (int)(endpoint.SendRate * 0.75f));
                         }
                     }
                     else
                     {
                         endpoint.Strikes = 0;
 
-                        // A complaint the current rate is delivering through is stale, so it
-                        // holds rather than cuts - but it is not grounds to climb either.
-                        // Below what already held, climb back to it; above it, feel the way
-                        // up one step at a time.
+                        // A stale complaint holds, but does not climb. Below the known-good rate climb back to it; above,
+                        // step up.
                         if (!queueing && !losing)
                         {
                             int rate = endpoint.SendRate;

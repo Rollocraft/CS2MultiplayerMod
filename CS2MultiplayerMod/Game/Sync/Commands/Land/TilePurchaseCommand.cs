@@ -4,10 +4,8 @@ using CS2MultiplayerMod.Core.Sync;
 namespace CS2MultiplayerMod.Game.Sync.Commands
 {
     /// <summary>
-    /// "A player purchased these map tiles." Tiles are matched by their polygon centroid
-    /// (the tile grid is generated identically from the same map on every machine).
-    /// Carries the price the buyer's game charged so the host can charge the shared
-    /// treasury the exact same amount - see <see cref="TilePurchaseSyncSystem"/>.
+    /// Purchased map tiles, by polygon centroid (the grid is identical per map). Carries the charged
+    /// price so the host charges the treasury the same amount.
     /// </summary>
     public sealed class TilePurchaseCommand : ISimulationCommand
     {

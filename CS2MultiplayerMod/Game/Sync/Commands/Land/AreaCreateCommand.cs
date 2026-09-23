@@ -3,10 +3,7 @@ using CS2MultiplayerMod.Core.Sync;
 
 namespace CS2MultiplayerMod.Game.Sync.Commands
 {
-    /// <summary>
-    /// "A player drew this district/surface polygon." Carries the area prefab name and
-    /// the full node ring - see <see cref="AreaSyncSystem"/>.
-    /// </summary>
+    /// <summary>A drawn district or surface polygon: prefab name and full node ring.</summary>
     public sealed class AreaCreateCommand : ISimulationCommand
     {
         public const ushort Id = 10;

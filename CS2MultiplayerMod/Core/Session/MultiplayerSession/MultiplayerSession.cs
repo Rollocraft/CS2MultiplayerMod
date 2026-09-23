@@ -7,11 +7,9 @@ using CS2MultiplayerMod.Core.Protocol;
 namespace CS2MultiplayerMod.Core.Session
 {
     /// <summary>
-    /// The multiplayer core session manager. Owns transport, handshake, peer list,
-    /// keep-alives, and message routing. Host-authoritative: clients talk only to host,
-    /// which relays commands in canonical order. Challenge-response auth, rate budgeting,
-    /// and protocol violations trigger disconnects. All public methods run on game thread.
-    /// See <see cref="Update"/>, <see cref="HandshakeAuth"/>, <see cref="ITransport.Poll"/>.
+    /// The core session: transport, handshake, peers, keep-alives and routing. Host-authoritative:
+    /// clients talk only to the host, which relays commands in canonical order. All public methods run on
+    /// the game thread.
     /// </summary>
     public sealed partial class MultiplayerSession
     {
@@ -19,9 +17,13 @@ namespace CS2MultiplayerMod.Core.Session
         private const int PeerTimeoutMs = 10000;
         private const int HandshakeTimeoutMs = 10000;
 
-        /// <summary>A join awaiting the host's manual approval is auto-declined after this
-        /// long, so an absent host never leaves the would-be player waiting forever and a
-        /// pre-handshake socket is never held open indefinitely.</summary>
+        /// <summary>
+        /// Longest a peer may go without a whole payload while its traffic still arrives (a lossy reliable
+        /// stream waiting for a resend).
+        /// </summary>
+        private const int StalledPeerTimeoutMs = 60000;
+
+        /// <summary>A join awaiting approval is auto-declined after this.</summary>
         private const int JoinApprovalTimeoutMs = 120000;
 
         private const int HostPlayerId = 1;
@@ -46,10 +48,10 @@ namespace CS2MultiplayerMod.Core.Session
         private readonly HashSet<ushort> _allowedCommandIds = new HashSet<ushort>();
         private readonly HashSet<int> _administrativeRemovals = new HashSet<int>();
         private readonly HashSet<string> _hostBannedAddresses = new HashSet<string>();
-        // Connections already told to go. The transport only removes a peer when its
-        // Disconnected event arrives, so without this every frame already queued behind a
-        // flood is dispatched - and logged - against a connection that is on its way out.
+        // Already told to go: frames queued behind a flood are not dispatched or logged.
         private readonly HashSet<int> _puntedConnections = new HashSet<int>();
+        // Why this machine closed a connection; the transport's text is the same for every local close.
+        private readonly Dictionary<int, string> _localCloseReasons = new Dictionary<int, string>();
         private readonly FailedAuthTracker _failedAuth = new FailedAuthTracker();
 
         private ITransport _transport;
@@ -87,10 +89,8 @@ namespace CS2MultiplayerMod.Core.Session
         public bool PublicExposure => Role == SessionRole.Host && _config != null && !_config.LanOnly;
 
         /// <summary>
-        /// Whether this session replicates the simulation's own decisions. The host answers from
-        /// its own config; a client answers with what the host announced when it was accepted,
-        /// never with its local setting - the two machines have to hold the same half of the
-        /// simulation or one of them waits forever for the other's messages.
+        /// The host's config, or on a client what the host announced; both must hold the same half of the
+        /// simulation.
         /// </summary>
         public bool SimulationSyncEnabled => Role == SessionRole.Client
             ? _hostSimulationSync
@@ -108,16 +108,6 @@ namespace CS2MultiplayerMod.Core.Session
         /// <summary>TCP port of the active session's config (0 before the first session).</summary>
         public int Port => _config != null ? _config.Port : 0;
 
-        /// <summary>
-        /// What the router made of opening this host's port. Null whenever nothing was
-        /// asked: a client, a relay session, or a LAN-only host, none of which need one.
-        /// </summary>
-        public PortForwardState? PortForwardStatus =>
-            _portForward != null ? _portForward.State : (PortForwardState?)null;
-
-        /// <summary>The public address the router reported, or null if it never told us.</summary>
-        public string PortForwardAddress => _portForward != null ? _portForward.ExternalAddress : null;
-
         /// <summary>Bytes queued in the transport but not yet on the wire (0 when idle).</summary>
         public long PendingSendBytes => _transport != null ? _transport.PendingSendBytes : 0;
 
@@ -127,15 +117,10 @@ namespace CS2MultiplayerMod.Core.Session
         public int IncomingBlobTotal { get; private set; }
         public long IncomingBlobTransferId { get; private set; }
 
-        /// <summary>
-        /// True between a world-sync Begin and its matching Resume/Abort. Gameplay traffic is
-        /// rejected at the session boundary during this interval, in addition to game-layer gates.
-        /// </summary>
+        /// <summary>Between Begin and Resume/Abort; gameplay traffic is rejected here too.</summary>
         public bool WorldSyncSuspended => _worldSyncSuspended;
 
-        // Host-side "Sending world %": a streamed blob is queued instantly (the send is
-        // non-blocking) and then drains off the transport's send thread; these track that
-        // drain so the host can show a progress bar instead of appearing frozen.
+        // "Sending world %": tracks the blob draining off the send thread.
         private bool _outgoingBlobActive;
         private long _outgoingBlobTotal;
         private long _outgoingBlobSent;
@@ -145,16 +130,10 @@ namespace CS2MultiplayerMod.Core.Session
 
         public IReadOnlyCollection<Peer> Peers => _peers.Values;
 
-        /// <summary>
-        /// Client-only: the host acknowledged the join and it is waiting for the host to
-        /// approve it by hand. True between the host's HandshakePending and its accept/reject.
-        /// </summary>
+        /// <summary>Client only: between the host's HandshakePending and its verdict.</summary>
         public bool AwaitingHostApproval => _awaitingHostApproval;
 
-        /// <summary>
-        /// Host-only: joins that passed every automatic check and are waiting for the host
-        /// to approve or decline them. Enumerated on the game thread alongside the pump.
-        /// </summary>
+        /// <summary>Host only: joins awaiting approval; game thread.</summary>
         public IEnumerable<Peer> PendingJoins
         {
             get
@@ -183,37 +162,25 @@ namespace CS2MultiplayerMod.Core.Session
 
         // ---- Authorization registries (filled by the game layer at startup) -----
 
-        /// <summary>
-        /// Declare a blob channel clients may receive with size ceiling. Unregistered blobs are dropped - secure by default.
-        /// </summary>
+        /// <summary>A blob channel clients may receive, with a size ceiling; others are dropped.</summary>
         public void AllowBlobChannel(string channel, int maxBytes)
         {
             if (!string.IsNullOrEmpty(channel) && maxBytes > 0)
                 _allowedBlobChannels[channel] = maxBytes;
         }
 
-        /// <summary>
-        /// Declare the simulation command ids peers are allowed to send. Once any id is
-        /// registered, a command outside the set disconnects its sender.
-        /// </summary>
+        /// <summary>Allowed command ids; once any is registered, others disconnect their sender.</summary>
         public void AllowCommands(params ushort[] commandIds)
         {
             if (commandIds == null) return;
             for (int i = 0; i < commandIds.Length; i++) _allowedCommandIds.Add(commandIds[i]);
         }
 
-        // ---- Lifecycle --------------------------------------------------------
-
-
-
-
-
         // ---- Per-tick pump ----------------------------------------------------
 
         /// <summary>
-        /// Advance the session: drain transport events, dispatch messages, send
-        /// keep-alives, and reap timed-out peers. <paramref name="nowUnixMs"/> is the
-        /// caller's monotonic clock so the core stays free of <c>DateTime.Now</c>.
+        /// Drains events, dispatches, sends keep-alives and reaps timed-out peers. <paramref name="nowUnixMs"/>
+        /// is the caller's monotonic clock.
         /// </summary>
         public void Update(long nowUnixMs)
         {
@@ -221,12 +188,21 @@ namespace CS2MultiplayerMod.Core.Session
 
             _eventBuffer.Clear();
             _transport.Poll(_eventBuffer);
+
+            // Handle each event at its arrival time: a long frame drains a second of honest traffic at once,
+            // which metered at drain time reads as a flood. Only the distance back from now is carried over.
+            long monotonicNow = MonotonicClock.NowMs;
             for (int i = 0; i < _eventBuffer.Count; i++)
-                HandleEvent(_eventBuffer[i], nowUnixMs);
+            {
+                TransportEvent evt = _eventBuffer[i];
+                long waited = monotonicNow - evt.ReceivedAtMs;
+                HandleEvent(evt, waited > 0 ? nowUnixMs - waited : nowUnixMs);
+            }
 
             if (Status == SessionStatus.Connected)
             {
                 PumpHeartbeats(nowUnixMs);
+                ReportCommandOverruns(nowUnixMs);
                 ReapTimedOutPeers(nowUnixMs);
                 SweepStalledBlobs(nowUnixMs);
                 PumpOutgoingBlobs();
@@ -252,9 +228,7 @@ namespace CS2MultiplayerMod.Core.Session
             long sent = _outgoingBlobTotal - remaining - pending;
             _outgoingBlobSent = sent < 0 ? 0 : (sent > _outgoingBlobTotal ? _outgoingBlobTotal : sent);
 
-            // Drained to a trickle (only small keep-alives/commands left): the world is sent.
-            // Gameplay traffic keeps flowing, so waiting for an exactly empty queue would leave
-            // the transfer reported as active for the rest of the session.
+            // Down to keep-alives and commands: the world is sent. Gameplay keeps the queue non-empty.
             if (_outgoingBlobs.Count == 0 && pending < 65536)
             {
                 _outgoingBlobSent = _outgoingBlobTotal;
@@ -262,73 +236,7 @@ namespace CS2MultiplayerMod.Core.Session
             }
         }
 
-
-
-
-
-
-
-
-        // ---- Handshake --------------------------------------------------------
-
-
-
-
-
-
-
-
-        // ---- Keep-alive -------------------------------------------------------
-
-
-
-
-        // ---- Chat & commands --------------------------------------------------
-
-
-
-        // ---- On-demand world resync (/sync) ------------------------------------
-
-
-
-
-
-        // ---- Replicated state -------------------------------------------------
-
-
-
-
-
-        // ---- Player positions -------------------------------------------------
-
-
-
-        // ---- Large blobs (e.g. savegame for map sync) -------------------------
-
-
-
-
-
-
-
-        // ---- Send helpers -----------------------------------------------------
-
-
-
         // ---- Observer fan-out -------------------------------------------------
-        // Every callback is isolated: one observer throwing must never kill the pump,
-        // stop the remaining observers, or take the session down.
-
-
-
-
-
-
-
-
-
-
-
-
+        // Each callback is isolated: a throwing observer never stops the pump or the others.
     }
 }

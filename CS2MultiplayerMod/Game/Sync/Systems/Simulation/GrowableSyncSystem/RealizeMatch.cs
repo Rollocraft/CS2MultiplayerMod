@@ -1,7 +1,6 @@
 using CS2MultiplayerMod.Game.Sync.Infrastructure;
 using Game.Buildings;
 using Game.Common;
-using Game.Objects;
 using Game.Prefabs;
 using Game.Tools;
 using Unity.Collections;
@@ -11,16 +10,9 @@ using CS2MultiplayerMod.Game.Sync.Commands;
 
 namespace CS2MultiplayerMod.Game.Sync.Systems
 {
-    // Finding the growable a command refers to, and deciding whether something already standing on
-    // the lot is that building, a player's own placement, or a blocker worth reporting. Matching
-    // is by lot footprint, because the two peers share no entity ids.
     public partial class GrowableSyncSystem
     {
-        /// <summary>
-        /// The building standing at an anchor. Positions are computed from the same road and block
-        /// geometry on both machines, so the tolerance only absorbs float noise and a terrain
-        /// height that was sampled independently.
-        /// </summary>
+        /// <summary>Positions derive from the same geometry; the tolerance absorbs float noise and terrain.</summary>
         private Entity FindGrowableAt(float3 position, Entity prefab, long now)
         {
             var candidates = new NativeList<Entity>(16, Allocator.Temp);
@@ -35,17 +27,15 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 for (int i = 0; i < candidates.Length; i++)
                 {
                     Entity candidate = candidates[i];
-                    PropertyEntitySnapshot snapshot;
-                    if (!PropertyEntitySnapshot.TryRead(EntityManager, candidate, out snapshot) ||
+                    if (!PropertyEntitySnapshot.TryRead(EntityManager, candidate,
+                        out PropertyEntitySnapshot snapshot) ||
                         !IsLiveGrowable(candidate, now)) continue;
 
                     float distance =
                         math.distancesq(snapshot.Transform.m_Position.xz, position.xz);
                     if (distance > AnchorMatchDistance * AnchorMatchDistance) continue;
 
-                    // Prefer the named prefab, but stay tolerant of a different one: a building
-                    // that levelled up no longer carries the prefab a removal names, and that
-                    // removal still has to reach it.
+                    // Prefer the named prefab; a levelled building no longer carries it.
                     bool exact = prefab != Entity.Null && snapshot.Prefab == prefab;
                     if (bestIsExact && !exact) continue;
                     if (exact && !bestIsExact)
@@ -67,12 +57,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             }
         }
 
-        /// <summary>
-        /// Everything already standing on the lot this spawn wants. Compares the two lot rectangles
-        /// rather than the two pivots: buildings of different sizes conflict long before their
-        /// centres coincide, and two neighbours on one street share a centre-to-centre distance
-        /// that says nothing about whether they fit.
-        /// </summary>
+        /// <summary>Everything on the lot, by rectangle overlap rather than pivot distance.</summary>
         private void CollectOverlapping(Entity prefab, float3 position, quaternion rotation,
             NativeList<Entity> blockers)
         {
@@ -116,19 +101,14 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             }
         }
 
-        /// <summary>
-        /// True when the host's building is the one already standing here. Same prefab on the same
-        /// lot is the redelivery case; a different prefab at the same anchor is a real level
-        /// difference and has to be resolved, not ignored.
-        /// </summary>
+        /// <summary>Same prefab on the same lot is a redelivery; a different prefab is a level difference.</summary>
         private bool AlreadySatisfied(NativeList<Entity> blockers, Entity prefab, float3 position,
             long now)
         {
             for (int i = 0; i < blockers.Length; i++)
             {
                 Entity blocker = blockers[i];
-                PropertyEntitySnapshot snapshot;
-                if (!PropertyEntitySnapshot.TryRead(EntityManager, blocker, out snapshot) ||
+                if (!PropertyEntitySnapshot.TryRead(EntityManager, blocker, out PropertyEntitySnapshot snapshot) ||
                     !IsAutonomousGrowable(blocker, now)) continue;
                 if (snapshot.Prefab != prefab) continue;
                 float distance = math.distancesq(snapshot.Transform.m_Position.xz, position.xz);
@@ -143,8 +123,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             for (int i = 0; i < blockers.Length; i++)
             {
                 // The search tree can still name a torn-down entity; that is not a blocker.
-                PropertyEntitySnapshot snapshot;
-                if (!PropertyEntitySnapshot.TryRead(EntityManager, blockers[i], out snapshot))
+                if (!PropertyEntitySnapshot.TryRead(EntityManager, blockers[i], out PropertyEntitySnapshot snapshot))
                     continue;
                 if (!IsAutonomousGrowable(blockers[i], now)) return blockers[i];
             }
@@ -154,10 +133,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         private static float2 LotExtent(int2 lotSize) =>
             new float2(lotSize.x, lotSize.y) * (ZoneCellSize * 0.5f) - OverlapTolerance;
 
-        /// <summary>
-        /// Separating-axis test between two rotated lot rectangles. Four axes suffice: the two
-        /// rectangles' own edge normals, which for rectangles are their local x and z.
-        /// </summary>
+        /// <summary>Separating-axis test; each rectangle's local x and z suffice.</summary>
         private static bool RectanglesOverlap(float3 centreA, quaternion rotationA, float2 extentA,
             float3 centreB, quaternion rotationB, float2 extentB)
         {
@@ -208,13 +184,22 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             return (grown ? "a grown '" : "a placed '") + (name ?? "?") + "'";
         }
 
-        private int SeedFor(GrowableLifecycleCommand command)
+        private bool RepairSpawnVariant(Entity building, ushort seed)
         {
-            // The built entity keeps the low 16 bits as its PseudoRandomSeed, which is the variant.
-            // Zero is the one value the game's own random rejects, so it is nudged rather than
-            // passed through - a building with no seed at all would fail to pick a mesh.
-            int seed = command.RandomSeed;
-            return seed == 0 ? 1 : seed;
+            if (EntityManager.HasComponent<PseudoRandomSeed>(building))
+            {
+                if (EntityManager.GetComponentData<PseudoRandomSeed>(building).m_Seed == seed)
+                    return false;
+                EntityManager.SetComponentData(building, new PseudoRandomSeed(seed));
+            }
+            else EntityManager.AddComponentData(building, new PseudoRandomSeed(seed));
+
+            EntityManager.AddComponent<BatchesUpdated>(building);
+            return true;
         }
+
+        private static int SeedFor(GrowableLifecycleCommand command) =>
+            // All 16 bits are stored, including zero; GetRandom mixes in a nonzero state.
+            command.RandomSeed;
     }
 }

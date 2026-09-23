@@ -11,12 +11,8 @@ using CS2MultiplayerMod.Game.Sync.Systems.Net;
 namespace CS2MultiplayerMod.Game.Sync.Systems
 {
     /// <summary>
-    /// Records which owner each generated sub-element was told to attach to, in the one window where
-    /// that is still knowable. A generated sub-element whose owner is described by prefab and
-    /// transform is born with its <see cref="Owner"/> unset; the game's resolution pass fills it in
-    /// by an exact transform match and removes the description before it knows whether the match
-    /// succeeded, so a miss leaves an orphan that nothing can trace back. Running immediately before
-    /// that pass keeps the description available to the commit validator, which re-links from it.
+    /// Records each generated sub-element's intended owner just before the game's owner resolution
+    /// removes that description, so the commit validator can re-link an orphan the match missed.
     /// </summary>
     public partial class OwnerDefinitionSnapshotSystem : GameSystemBase
     {

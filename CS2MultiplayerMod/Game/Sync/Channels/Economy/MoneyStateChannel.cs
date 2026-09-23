@@ -5,11 +5,7 @@ using CS2MultiplayerMod.Core.Protocol;
 using CS2MultiplayerMod.Game.Sync.Infrastructure;
 namespace CS2MultiplayerMod.Game.Sync.Channels
 {
-    /// <summary>
-    /// Replicates the city treasury (<see cref="Game.City.PlayerMoney"/>), a singleton
-    /// component on the City entity. The host's value is authoritative; clients snap to
-    /// it each snapshot so both players see the same budget while building together.
-    /// </summary>
+    /// <summary>The city treasury (<see cref="Game.City.PlayerMoney"/>); clients snap to the host's value.</summary>
     public sealed class MoneyStateChannel : IStateChannel
     {
         public const byte Id = 1;

@@ -5,9 +5,8 @@ using Unity.Entities;
 namespace CS2MultiplayerMod.Game.Sync.Systems
 {
     /// <summary>
-    /// Classifies native definition batches that create a new top-level object. Some network
-    /// prefabs create an object as the owner of their complete course/sub-net graph; that batch is
-    /// one object transaction even though the network tool produced it.
+    /// Batches creating a new top-level object, including network prefabs that own their course graph
+    /// through an object.
     /// </summary>
     internal static class NativeObjectGraph
     {

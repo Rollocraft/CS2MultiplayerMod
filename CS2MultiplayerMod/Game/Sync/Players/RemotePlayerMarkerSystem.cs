@@ -1,7 +1,5 @@
 using System.Collections.Generic;
 using Colossal.Mathematics;
-using CS2MultiplayerMod.Core.Diagnostics;
-using CS2MultiplayerMod.Game.Diagnostics;
 using Game;
 using Game.Rendering;
 using Unity.Jobs;
@@ -11,12 +9,8 @@ using UnityEngine;
 namespace CS2MultiplayerMod.Game.Sync.Players
 {
     /// <summary>
-    /// Draws a coloured ground ring at every other player's camera focus - the point on
-    /// the map they are looking at - so partners can see where each other is working.
-    /// The positions themselves are published by <see cref="PlayerCursorSyncSystem"/>
-    /// (the gameplay camera pivot) and kept fresh in
-    /// <see cref="MultiplayerService.RemotePlayers"/>; this system renders them,
-    /// interpolating between the received positions and trailing a short motion smear.
+    /// Draws a ground ring at every other player's camera focus, interpolated between received
+    /// positions with a short motion smear.
     /// </summary>
     public partial class RemotePlayerMarkerSystem : GameSystemBase
     {
@@ -29,26 +23,15 @@ namespace CS2MultiplayerMod.Game.Sync.Players
         /// <summary>Width of the line drawn from the ground focus up to the camera.</summary>
         private const float BeamWidth = 3f;
 
-        /// <summary>
-        /// Beam length cap. The overlay quad is camera-facing, so its screen area grows with the
-        /// partner's altitude even though the line itself stays 3 m wide - and a zoomed-out camera
-        /// sits kilometres up. The first stretch above the ground already reads as height.
-        /// </summary>
+        /// <summary>Beam length cap: the camera-facing quad grows with altitude.</summary>
         private const float MaxBeamLength = 400f;
 
-        /// <summary>
-        /// Keep-out radius around the local camera. The beam's far end is the partner's eye, which
-        /// in a shared view lands on top of the local camera; a camera-facing quad ending there is
-        /// clipped against the near plane and covers most of the screen in translucent fill.
-        /// </summary>
+        /// <summary>Keep-out radius around the local camera, or a quad ending there fills the screen.</summary>
         private const float BeamCameraClearance = 80f;
 
         /// <summary>
-        /// How far behind the newest received position the marker is drawn. Positions arrive about
-        /// ten times a second and never evenly - they share the reliable stream with the city sync -
-        /// so the marker is drawn between the two positions that bracket this point instead of
-        /// chasing the newest one. Under the arrival gap it runs out of positions and stalls; over
-        /// it, the whole difference is marker latency.
+        /// Render delay behind the newest position: drawn between the two bracketing positions, since
+        /// they arrive about ten times a second and unevenly.
         /// </summary>
         private const long PlayoutDelayMs = 140;
 
@@ -58,34 +41,19 @@ namespace CS2MultiplayerMod.Game.Sync.Players
         /// <summary>Positions held per partner while they wait out the playout delay.</summary>
         private const int SampleCapacity = 8;
 
-        /// <summary>
-        /// Lag of each smear copy behind the one in front of it. Times the partner's pan speed
-        /// this is also their spacing on the ground: short enough that they overlap into one
-        /// smear instead of reading as a row of separate rings.
-        /// </summary>
+        /// <summary>Lag between smear copies, short enough that they overlap into one smear.</summary>
         private const float SmearLagSeconds = 0.05f;
 
-        /// <summary>
-        /// Strength of each smear copy relative to the ring, nearest first. The length decides how
-        /// many there are, and each one costs a single overlay entry - no extra pass, no shader.
-        /// </summary>
+        /// <summary>Strength of each smear copy, nearest first; one overlay entry each.</summary>
         private static readonly float[] SmearStrength = { 0.45f, 0.28f, 0.16f };
 
-        /// <summary>
-        /// How far the back of the smear has to fall behind the ring for the smear to reach full
-        /// strength. The whole smear fades on this one distance rather than each copy fading on its
-        /// own: a marker standing still has them all sitting on top of it, where they have to come
-        /// out to nothing rather than thicken the ring.
-        /// </summary>
+        /// <summary>Distance at which the whole smear reaches full strength, so a still marker shows none.</summary>
         private const float SmearFullLagDistance = 12f;
 
         /// <summary>Weaker than this is invisible anyway, so it does not get an overlay entry.</summary>
         private const float SmearMinStrength = 0.02f;
 
-        /// <summary>
-        /// A step larger than this is a jump rather than a pan - a minimap click, or a snap to a
-        /// notification - and easing into it would drag the marker across half the map.
-        /// </summary>
+        /// <summary>A larger step is a jump (minimap, notification), not a pan.</summary>
         private const float SnapDistance = 350f;
 
         // Distinct, readable colours cycled by player id so each partner is recognisable.
@@ -180,8 +148,7 @@ namespace CS2MultiplayerMod.Game.Sync.Players
             _localEye = localEye;
             _hoverHeights = _hoverTerrain.GetHeightData();
 
-            // Writing the buffer forces the game's overlay pass on for the frame and completes its
-            // writers on this thread, so decide there is something visible to draw before taking it.
+            // Taking the buffer forces the overlay pass on; only do it when something is visible.
             bool haveBuffer = false;
             OverlayRenderSystem.Buffer buffer = default(OverlayRenderSystem.Buffer);
 
@@ -193,8 +160,7 @@ namespace CS2MultiplayerMod.Game.Sync.Players
                     continue;
                 }
 
-                // Eased before culling: the marker has to keep moving while it is off screen, or it
-                // lurches on the frame it comes back into view.
+                // Eased before culling so it keeps moving off screen.
                 Trail trail = Advance(p, frameSeconds, now);
                 if (p.LastUpdateMs > _hoverResetMs) AdvanceHover(trail, p, frameSeconds, now);
                 else trail.HoverCount = 0;
@@ -202,22 +168,17 @@ namespace CS2MultiplayerMod.Game.Sync.Players
                 float smearLength = math.distance(trail.Smear[trail.Smear.Length - 1], focus);
 
                 bool ringVisible = !culling || SphereVisible(focus, RingDiameter + smearLength);
-                Line3.Segment beam;
-                bool beamVisible = TryBuildBeam(focus, trail.Eye, localEye, out beam) &&
+                bool beamVisible = TryBuildBeam(focus, trail.Eye, localEye, out Line3.Segment beam) &&
                                    (!culling || SegmentVisible(beam));
                 bool hoverVisible = HoverVisible(trail, culling);
                 if (!ringVisible && !beamVisible && !hoverVisible) continue;
 
                 if (!haveBuffer)
                 {
-                    // Taking the buffer turns the game's overlay pass on for this frame and blocks
-                    // here until everything the overlay system depends on has finished. Both halves
-                    // are paid per frame and both get more expensive the more the frame is already
-                    // doing, so this is measured separately from the cheap culling above.
+                    // Measured separately: taking the buffer blocks on the overlay's dependencies.
                     using (Diagnostics.SyncProfiler.Measure("PartnerMarkers.Overlay"))
                     {
-                        JobHandle dependencies;
-                        buffer = _overlay.GetBuffer(out dependencies);
+                        buffer = _overlay.GetBuffer(out JobHandle dependencies);
                         dependencies.Complete();
                     }
                     haveBuffer = true;
@@ -227,13 +188,11 @@ namespace CS2MultiplayerMod.Game.Sync.Players
                 Color fill = new Color(color.r, color.g, color.b, 0.12f);
                 color.a = 0.9f;
 
-                // Ground ring where the partner is looking, over fading copies of itself along the
-                // ground it just covered - those first, so the ring stays on top of its own smear.
+                // Smear first, so the ring stays on top.
                 if (ringVisible)
                 {
                     float moving = math.saturate(smearLength / SmearFullLagDistance);
-                    // Outline only - copies of the ring, not more translucent discs over the
-                    // ground. The fill keeps the colour so it tints rather than darkens.
+                    // Outline only; the fill keeps the colour so it tints.
                     var noFill = new Color(color.r, color.g, color.b, 0f);
                     for (int i = 0; i < trail.Smear.Length; i++)
                     {
@@ -249,27 +208,22 @@ namespace CS2MultiplayerMod.Game.Sync.Players
                         new float2(0f, 1f), focus, RingDiameter);
                 }
 
-                // A line from that point up towards their camera, so you can see how high they
-                // are "flying" (and roughly where they are when zoomed out).
+                // A line up towards their camera shows height.
                 if (beamVisible) buffer.DrawLine(color, beam, BeamWidth, true);
                 if (hoverVisible) DrawHover(buffer, trail, color, culling);
             }
 
-            // A player who left the session stops turning up in the loop above, so their trail is
-            // only reachable from here.
+            // Departed players no longer appear in the loop above.
             if (_trails.Count > fresh) DropDepartedTrails(now);
         }
 
         /// <summary>
-        /// Moves a partner's drawn marker and its smear to where they were
-        /// <see cref="PlayoutDelayMs"/> ago, between the two positions that bracket that moment.
-        /// The remaining steps close the same fraction of the distance per second, so the result
-        /// does not change with frame rate.
+        /// Moves the marker to where the partner was <see cref="PlayoutDelayMs"/> ago; the easing is frame-rate
+        /// independent.
         /// </summary>
         private Trail Advance(RemotePlayer player, float frameSeconds, long now)
         {
-            Trail trail;
-            if (!_trails.TryGetValue(player.PlayerId, out trail))
+            if (!_trails.TryGetValue(player.PlayerId, out Trail trail))
             {
                 trail = new Trail();
                 _trails.Add(player.PlayerId, trail);
@@ -283,8 +237,7 @@ namespace CS2MultiplayerMod.Game.Sync.Players
                 if (Push(trail, focus, eye, player.LastUpdateMs)) Land(trail, focus, eye);
             }
 
-            float3 playoutFocus, playoutEye;
-            if (Playout(trail, now - PlayoutDelayMs, out playoutFocus, out playoutEye))
+            if (Playout(trail, now - PlayoutDelayMs, out float3 playoutFocus, out float3 playoutEye))
             {
                 float toMarker = 1f - math.exp(-frameSeconds / SmoothingSeconds);
                 trail.Focus += (playoutFocus - trail.Focus) * toMarker;
@@ -303,11 +256,7 @@ namespace CS2MultiplayerMod.Game.Sync.Players
             return trail;
         }
 
-        /// <summary>
-        /// Files a received position. True when the track had to start over: the first position, or
-        /// a step too large to be a pan - a minimap click, or a snap to a notification - which
-        /// interpolating through would drag the marker across half the map.
-        /// </summary>
+        /// <summary>Files a position; true when the track restarts (first position, or a jump).</summary>
         private static bool Push(Trail trail, float3 focus, float3 eye, long atMs)
         {
             bool restart = trail.SampleCount == 0 ||
@@ -316,8 +265,7 @@ namespace CS2MultiplayerMod.Game.Sync.Players
             if (restart) trail.SampleCount = 0;
             else if (trail.SampleCount == trail.Samples.Length)
             {
-                // Nothing is draining the buffer - a stalled marker, or a burst off the reliable
-                // stream - and it is the newest positions that are worth keeping.
+                // Nothing is draining the buffer; keep the newest positions.
                 for (int i = 1; i < trail.SampleCount; i++) trail.Samples[i - 1] = trail.Samples[i];
                 trail.SampleCount--;
             }
@@ -327,9 +275,7 @@ namespace CS2MultiplayerMod.Game.Sync.Players
         }
 
         /// <summary>
-        /// Where the partner was at <paramref name="renderMs"/>, between the two positions that
-        /// bracket it. False before anything has arrived. Out of newer positions the marker holds
-        /// the last one: extrapolating would overshoot every time a partner stops panning.
+        /// The position at <paramref name="renderMs"/>; holds the last one rather than extrapolate past a stop.
         /// </summary>
         private static bool Playout(Trail trail, long renderMs, out float3 focus, out float3 eye)
         {
@@ -385,10 +331,7 @@ namespace CS2MultiplayerMod.Game.Sync.Players
             _departed.Clear();
         }
 
-        /// <summary>
-        /// The drawable part of the focus-to-eye line: capped in length and cut short of the local
-        /// camera's keep-out sphere. False when nothing worth drawing is left.
-        /// </summary>
+        /// <summary>The drawable beam: length-capped and cut short of the camera keep-out.</summary>
         private static bool TryBuildBeam(float3 focus, float3 eye, float3 localEye,
             out Line3.Segment beam)
         {
@@ -400,8 +343,7 @@ namespace CS2MultiplayerMod.Game.Sync.Players
             float3 direction = delta / length;
             length = math.min(length, MaxBeamLength);
 
-            // Both ends inside the keep-out sphere: the partner is where the local camera is, so
-            // the beam has nothing to say and everything to fill.
+            // The partner is at the local camera: nothing to draw.
             float3 fromCamera = focus - localEye;
             float distanceToStart = math.length(fromCamera);
             if (distanceToStart < BeamCameraClearance) return false;

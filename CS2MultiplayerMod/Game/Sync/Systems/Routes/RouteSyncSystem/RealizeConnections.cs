@@ -1,9 +1,6 @@
 using System;
-using System.Collections.Generic;
-using Game.Common;
 using Game.Prefabs;
 using Game.Routes;
-using Game.Tools;
 using Unity.Collections;
 using Unity.Entities;
 using Unity.Mathematics;
@@ -14,15 +11,9 @@ using CS2MultiplayerMod.Game.Sync.Infrastructure;
 
 namespace CS2MultiplayerMod.Game.Sync.Systems
 {
-    // Turning a command's waypoints into local connections. A stop is named by position and owner
-    // rather than id, so each one is matched against what stands there now, and a route whose
-    // prefab contract does not hold is refused rather than built wrong.
     public partial class RouteSyncSystem
     {
-        /// <summary>
-        /// A line may carry waypoints that only shape its path, but it is meaningless - and a sign
-        /// of a truncated graph - if it serves no stop at all.
-        /// </summary>
+        /// <summary>A line that serves no stop is a truncated graph.</summary>
         private bool ValidateRouteContract(Entity routePrefab,
             RouteWaypointIntent[] waypoints, string prefabName)
         {
@@ -53,9 +44,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         }
 
         /// <summary>
-        /// Maps each waypoint's portable stop identity onto a live local stop. Also returns the
-        /// waypoint positions to submit: a connected waypoint takes its resolved stop's own
-        /// transform, which is what the route tool records for a locally drawn line.
+        /// Maps each waypoint to a live local stop. A connected waypoint takes its stop's own transform,
+        /// as the route tool records it.
         /// </summary>
         private bool TryResolveConnections(Entity routePrefab,
             RouteWaypointIntent[] waypoints, out Entity[] result, out float3[] positions,
@@ -85,8 +75,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 var stopPositions = new float3[stops.Length];
                 for (int s = 0; s < stops.Length; s++)
                 {
-                    // Two prefabs can share a name, so identity is checked on each candidate's own
-                    // prefab rather than by resolving the name to a single entity.
+                    // Prefabs can share a name, so check each candidate's own prefab.
                     Entity candidatePrefab =
                         EntityManager.GetComponentData<PrefabRef>(stops[s]).m_Prefab;
                     stopNames[s] = PrefabNameOf(candidatePrefab);
@@ -127,8 +116,6 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                             math.distance(candidatePosition, wantedPosition));
                         if (!StopPositionsMatch(candidatePosition, wantedPosition)) continue;
 
-                        // The owner is the only thing separating identical platforms of one
-                        // station, so an owner-identified candidate outranks an anonymous one.
                         bool ownerMatch = StopOwnerMatches(candidate, wanted);
                         float score = math.distancesq(candidatePosition, wantedPosition);
                         bool better = best == Entity.Null ||
@@ -165,10 +152,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             }
         }
 
-        /// <summary>
-        /// A line whose own purpose the stop does not serve is a blocking validation error in the
-        /// game, so a captured line never used one.
-        /// </summary>
+        /// <summary>A stop that does not serve the line's purpose is a validation error in the game.</summary>
         private bool StopServesLine(Entity stopPrefab, TransportLineData lineData)
         {
             if (!EntityManager.HasComponent<TransportStopData>(stopPrefab)) return false;
@@ -181,8 +165,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
         private string PrefabNameOf(Entity prefab)
         {
-            string name;
-            if (_prefabNames.TryGetValue(prefab, out name)) return name;
+            if (_prefabNames.TryGetValue(prefab, out string name)) return name;
             name = _prefabSystem.GetPrefabName(prefab) ?? string.Empty;
             _prefabNames[prefab] = name;
             return name;
@@ -196,8 +179,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         {
             if (string.IsNullOrEmpty(wanted.OwnerPrefabName)) return true;
 
-            Entity topOwner;
-            if (!TryFindTopOwner(stop, out topOwner) || topOwner == Entity.Null ||
+            if (!TryFindTopOwner(stop, out Entity topOwner) || topOwner == Entity.Null ||
                 !EntityManager.HasComponent<PrefabRef>(topOwner) ||
                 !EntityManager.HasComponent<global::Game.Objects.Transform>(topOwner))
                 return false;
@@ -227,8 +209,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 });
             }
 
-            // Route generation reads a repeated first position as "this loop closes", and compares
-            // it exactly - so the closing entry repeats the same value, never a recomputed one.
+            // Generation compares the closing position exactly: repeat the same value.
             if (appendClosure)
             {
                 buffer.Add(new WaypointDefinition

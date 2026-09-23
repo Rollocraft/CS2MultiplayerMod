@@ -88,10 +88,7 @@ namespace CS2MultiplayerMod.Game.Sync.Commands
         }
     }
 
-    /// <summary>
-    /// A stable target hint plus spatial fallback. Entity ids make the common same-save
-    /// path exact; prefab, seed, and position cover entities created independently.
-    /// </summary>
+    /// <summary>Entity ids are exact within one save; prefab, seed and position cover independent entities.</summary>
     public struct VisualCustomizationTarget
     {
         public const int EncodedBytes = 24;
@@ -149,8 +146,8 @@ namespace CS2MultiplayerMod.Game.Sync.Commands
     }
 
     /// <summary>
-    /// Full resulting visual state for one or more instances of the same prefab. A field
-    /// mask keeps simultaneous color and historical edits independent.
+    /// Full resulting visual state for instances of one prefab; a field mask keeps color and historical
+    /// edits independent.
     /// </summary>
     public sealed class VisualCustomizationCommand : ISimulationCommand
     {
@@ -203,11 +200,11 @@ namespace CS2MultiplayerMod.Game.Sync.Commands
 
             if ((Fields & VisualCustomizationFields.MeshColor) != 0)
             {
-                HasCustomColor = ReadStrictBool(reader, "custom-color state");
+                HasCustomColor = WireGuard.ReadStrictBool(reader, "custom-color state");
                 if (HasCustomColor) Color = VisualColorSet.Read(reader);
             }
             if ((Fields & VisualCustomizationFields.Historical) != 0)
-                IsHistorical = ReadStrictBool(reader, "historical state");
+                IsHistorical = WireGuard.ReadStrictBool(reader, "historical state");
 
             int count = WireGuard.ReadCount(reader, VisualCustomizationTarget.EncodedBytes, MaxTargets);
             if (count == 0)
@@ -236,13 +233,6 @@ namespace CS2MultiplayerMod.Game.Sync.Commands
             var command = new VisualCustomizationCommand();
             command.Read(new NetworkReader(body));
             return command;
-        }
-
-        private static bool ReadStrictBool(NetworkReader reader, string name)
-        {
-            byte value = reader.ReadByte();
-            if (value > 1) throw new ProtocolException("Invalid " + name + ".");
-            return value != 0;
         }
 
         private static void ValidateName(string value)

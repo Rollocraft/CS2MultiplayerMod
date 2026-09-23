@@ -5,10 +5,7 @@ using CS2MultiplayerMod.Core.Protocol;
 using CS2MultiplayerMod.Game.Sync.Infrastructure;
 namespace CS2MultiplayerMod.Game.Sync.Channels
 {
-    /// <summary>
-    /// Replicates city XP (<see cref="Game.City.XP"/>) - progression toward the next
-    /// milestone, with its recorded peak population/income.
-    /// </summary>
+    /// <summary>City XP, with its recorded peak population and income.</summary>
     public sealed class XpStateChannel : IStateChannel
     {
         public const byte Id = 3;

@@ -1,40 +1,23 @@
-using System;
-using System.Collections.Concurrent;
 using System.Collections.Generic;
-using Colossal.Entities;
 using CS2MultiplayerMod.Game.Sync.Commands;
-using Game;
-using Game.Buildings;
 using Game.Common;
 using Game.Objects;
-using Game.Prefabs;
-using Game.Rendering;
-using Game.Tools;
-using Game.UI.InGame;
-using Game.Vehicles;
 using Unity.Collections;
 using Unity.Entities;
 using Unity.Mathematics;
 
 namespace CS2MultiplayerMod.Game.Sync.Systems
 {
-    // Capturing local recolouring. An edit is held until it settles rather than sent per frame -
-    // dragging a colour picker would otherwise be one command per mouse move - and the batch
-    // recolour of a whole prefab is captured as its own change.
+    // Edits are held until they settle: a colour picker drag changes every frame.
     public partial class VisualCustomizationSyncSystem
     {
-        // ---- local capture ---------------------------------------------------
-
         private void CaptureLocalVisualChanges(long now)
         {
             CaptureSelectedChange(now);
             CaptureBatchColorChanges(now);
         }
 
-        /// <summary>
-        /// Emits the field changes that are ready to leave: the Historical flag immediately
-        /// (a single click), plus every color edit whose value has settled.
-        /// </summary>
+        /// <summary>The Historical flag immediately, plus every color edit that has settled.</summary>
         private List<VisualCustomizationCommand> TakeSettledVisualChanges(long now)
         {
             CollectSettledColorEdits(now);
@@ -77,8 +60,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         private void CaptureSelectedChange(long now)
         {
             Entity selected = _selectedInfo.selectedEntity;
-            VisualState current;
-            if (!TryReadState(selected, out current))
+            if (!TryReadState(selected, out VisualState current))
             {
                 _lastSelected = selected;
                 _lastSelectedValid = false;
@@ -114,8 +96,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
             Entity selected = _selectedInfo.selectedEntity;
             Entity selectedPrefab = Entity.Null;
-            VisualColorSet selectedEffective = default(VisualColorSet);
-            bool canBeSetToAll = TryGetEffectiveColor(selected, out selectedEffective) &&
+            bool canBeSetToAll = TryGetEffectiveColor(selected, out VisualColorSet selectedEffective) &&
                                  TryGetPrefab(selected, out selectedPrefab);
 
             NativeArray<Entity> entities = _batchColorQuery.ToEntityArray(Allocator.Temp);
@@ -124,13 +105,10 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 for (int i = 0; i < entities.Length; i++)
                 {
                     Entity entity = entities[i];
-                    VisualState current;
-                    if (!TryReadState(entity, out current) || !current.SupportsColor) continue;
+                    if (!TryReadState(entity, out VisualState current) || !current.SupportsColor) continue;
 
-                    VisualState known;
-                    bool hadKnown = _known.TryGetValue(entity, out known);
-                    long suppressUntil;
-                    if (_suppressColorBatch.TryGetValue(entity, out suppressUntil))
+                    bool hadKnown = _known.TryGetValue(entity, out VisualState known);
+                    if (_suppressColorBatch.TryGetValue(entity, out long suppressUntil))
                     {
                         if (suppressUntil >= now && hadKnown && SameColorState(in current, in known))
                             continue;
@@ -143,20 +121,17 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                         continue;
                     }
 
-                    Entity prefab;
                     bool setToAllTarget =
                         canBeSetToAll &&
                         current.HasCustomColor &&
-                        TryGetPrefab(entity, out prefab) &&
+                        TryGetPrefab(entity, out Entity prefab) &&
                         prefab == selectedPrefab &&
                         current.Color.Equals(selectedEffective);
 
                     bool changed = hadKnown && !SameColorState(in current, in known);
                     _known[entity] = current;
 
-                    // "Set to all" writes every sibling and tags it BatchesUpdated even
-                    // when its value was already equal, so the selected entity's effective
-                    // color is the reliable signature for those otherwise-invisible writes.
+                    // "Set to all" tags every sibling even when unchanged, so the selected entity is the signature.
                     if (setToAllTarget || changed)
                         AddChange(entity, VisualCustomizationFields.MeshColor, in current, now);
                 }
@@ -214,8 +189,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 _pendingAnchorValid = true;
             }
 
-            PendingColorEdit entry;
-            if (!_pendingColor.TryGetValue(entity, out entry)) entry.FirstChangeMs = now;
+            if (!_pendingColor.TryGetValue(entity, out PendingColorEdit entry)) entry.FirstChangeMs = now;
             entry.State = state;
             entry.LastChangeMs = now;
             _pendingColor[entity] = entry;
@@ -224,13 +198,11 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         private void AddTarget(List<CommandBuilder> builders, Entity entity,
             VisualCustomizationFields fields, in VisualState state)
         {
-            Entity prefab;
-            if (!TryGetPrefab(entity, out prefab)) return;
+            if (!TryGetPrefab(entity, out Entity prefab)) return;
             string prefabName = _prefabSystem.GetPrefabName(prefab);
             if (string.IsNullOrEmpty(prefabName)) return;
 
-            VisualCustomizationTarget target;
-            if (!TryBuildTarget(entity, out target)) return;
+            if (!TryBuildTarget(entity, out VisualCustomizationTarget target)) return;
 
             for (int i = 0; i < builders.Count; i++)
             {

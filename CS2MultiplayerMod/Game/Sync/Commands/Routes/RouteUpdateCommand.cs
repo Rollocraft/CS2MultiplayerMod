@@ -3,10 +3,7 @@ using CS2MultiplayerMod.Core.Sync;
 
 namespace CS2MultiplayerMod.Game.Sync.Commands
 {
-    /// <summary>
-    /// "A player edited this transport line" (stops, color, or number). The old route number
-    /// and first waypoint identify the receiver's copy; the payload is the complete new state.
-    /// </summary>
+    /// <summary>An edited line: old number and first waypoint identify it, the payload is the new state.</summary>
     public sealed class RouteUpdateCommand : ISimulationCommand
     {
         public const ushort Id = 17;

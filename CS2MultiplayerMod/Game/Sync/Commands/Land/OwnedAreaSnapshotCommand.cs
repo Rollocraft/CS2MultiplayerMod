@@ -4,9 +4,8 @@ using CS2MultiplayerMod.Core.Sync;
 namespace CS2MultiplayerMod.Game.Sync.Commands
 {
     /// <summary>
-    /// Complete live polygon for an extractor or storage area owned by a placed building.
-    /// The stable owner identity disambiguates otherwise identical nearby lots and lets the
-    /// receiver repair a missing owned area without replacing its building.
+    /// Complete polygon of a building-owned extractor or storage area; the owner identity separates
+    /// identical nearby lots and repairs the area without replacing the building.
     /// </summary>
     public sealed class OwnedAreaSnapshotCommand : ISimulationCommand
     {

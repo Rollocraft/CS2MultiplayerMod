@@ -3,10 +3,7 @@ using CS2MultiplayerMod.Core.Sync;
 
 namespace CS2MultiplayerMod.Game.Sync.Commands
 {
-    /// <summary>
-    /// All same-prefab objects removed by one brush frame. A deletion stroke is one bounded inbox
-    /// item instead of one simulation command per tree or prop.
-    /// </summary>
+    /// <summary>Same-prefab objects removed by one brush frame, as one inbox item.</summary>
     public sealed class ObjectDeleteBatchCommand : ISimulationCommand
     {
         public const ushort Id = 32;

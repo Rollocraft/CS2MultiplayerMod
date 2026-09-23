@@ -12,19 +12,10 @@ using CS2MultiplayerMod.Core.Protocol;
 namespace CS2MultiplayerMod.Core.Networking.Tcp
 {
     /// <summary>
-    /// Wraps a single TCP socket and turns its byte stream into discrete payloads,
-    /// optionally upgrading to TLS first.
-    ///
-    /// Wire framing is a 4-byte little-endian length prefix followed by that many
-    /// payload bytes. A dedicated background thread performs the TLS handshake (if
-    /// enabled), raises <see cref="OnReady"/>, then blocks on reads and raises
-    /// <see cref="OnData"/>/<see cref="OnClosed"/>; writes are queued to a dedicated
-    /// send thread (the sole socket writer), so any thread can send without blocking
-    /// behind a slow peer. Closing is idempotent and always raises
-    /// <see cref="OnClosed"/> exactly once.
-    ///
-    /// Shared by both <see cref="TcpServerTransport"/> and <see cref="TcpClientTransport"/>
-    /// so the framing logic lives in one place.
+    /// One TCP socket as discrete payloads (4-byte little-endian length prefix), optionally over TLS.
+    /// A read thread does the handshake and raises <see cref="OnReady"/>, <see cref="OnData"/> and
+    /// <see cref="OnClosed"/> (exactly once); a send thread is the only writer, so no caller blocks on
+    /// a slow peer. Shared by both TCP transports.
     /// </summary>
     internal sealed class FramedConnection
     {
@@ -37,11 +28,8 @@ namespace CS2MultiplayerMod.Core.Networking.Tcp
         private readonly X509Certificate2 _serverCertificate; // server-side TLS; null otherwise
         private readonly bool _clientTls;                     // client-side TLS upgrade
 
-        // Outgoing payloads are queued and written by a dedicated send thread, so the game
-        // thread never blocks on a slow/backpressured socket. A 50 MB world send to a slow
-        // client used to block the main thread for ~30 s — long enough that Windows reports
-        // the game as "Not Responding". The send thread is the sole writer (no write lock),
-        // and _pendingSendBytes (the unsent backlog) drives the host's "Sending world %".
+        // Written by the send thread only, so a large world send never blocks the game thread.
+        // _pendingSendBytes drives "Sending world %".
         private readonly BlockingCollection<byte[]> _sendQueue = new BlockingCollection<byte[]>();
         private long _pendingSendBytes;
         private Thread _sendThread;
@@ -49,12 +37,10 @@ namespace CS2MultiplayerMod.Core.Networking.Tcp
         /// <summary>Hard cap on the unsent backlog before a too-slow peer is dropped.</summary>
         private const long MaxPendingSendBytes = 256L * 1024 * 1024;
 
-        // Separate prefix buffers: the send thread and read thread run concurrently, so a
-        // shared buffer would let an incoming frame's length overwrite an outgoing one.
+        // Separate prefix buffers: send and read threads run concurrently.
         private readonly byte[] _sendPrefix = new byte[4];
         private readonly byte[] _readPrefix = new byte[4];
-        // Per-type size caps, consulted on the type byte before the body is allocated. Without
-        // them any frame up to the blanket 16 MiB cap is allocated first and rejected later.
+        // Per-type caps checked on the type byte before the body is allocated.
         private static readonly MessageCodec FrameLimits = MessageCodec.CreateDefault();
 
         private volatile Stream _stream; // set once the connection (incl. TLS) is ready
@@ -62,6 +48,7 @@ namespace CS2MultiplayerMod.Core.Networking.Tcp
         private byte[] _channelBinding = Array.Empty<byte>();
         private Thread _readThread;
         private int _closed; // 0 = open, 1 = closed (Interlocked guarded)
+        private long _lastInboundMs = long.MinValue;
 
         /// <summary>Raised on the read thread once the connection is usable (TLS done).</summary>
         public Action<ConnectionId> OnReady;
@@ -79,6 +66,9 @@ namespace CS2MultiplayerMod.Core.Networking.Tcp
         /// <summary>Bytes queued for sending but not yet written to the socket (the drain backlog).</summary>
         public long PendingSendBytes => Interlocked.Read(ref _pendingSendBytes);
 
+        /// <summary><see cref="MonotonicClock"/> reading of the last bytes read, partial payloads included.</summary>
+        public long LastInboundMs => Interlocked.Read(ref _lastInboundMs);
+
         public FramedConnection(ConnectionId id, TcpClient client,
                                 X509Certificate2 serverCertificate = null, bool clientTls = false)
         {
@@ -90,8 +80,9 @@ namespace CS2MultiplayerMod.Core.Networking.Tcp
 
             try
             {
-                var endpoint = client.Client.RemoteEndPoint as IPEndPoint;
-                RemoteAddress = endpoint != null ? endpoint.Address.ToString() : null;
+                RemoteAddress = client.Client.RemoteEndPoint is IPEndPoint endpoint
+                    ? endpoint.Address.ToString()
+                    : null;
             }
             catch { RemoteAddress = null; }
         }
@@ -106,10 +97,7 @@ namespace CS2MultiplayerMod.Core.Networking.Tcp
             _readThread.Start();
         }
 
-        /// <summary>
-        /// Queue a payload for sending. Non-blocking: the actual (blocking) socket write
-        /// happens on the send thread, so the game thread never stalls behind a slow peer.
-        /// </summary>
+        /// <summary>Queues a payload; the blocking write happens on the send thread.</summary>
         public void Send(byte[] payload)
         {
             if (Volatile.Read(ref _closed) != 0 || payload == null) return;
@@ -117,8 +105,7 @@ namespace CS2MultiplayerMod.Core.Networking.Tcp
             long pending = Interlocked.Add(ref _pendingSendBytes, payload.Length + 4L);
             if (pending > MaxPendingSendBytes)
             {
-                // The peer cannot keep up (or is stalling). Shedding it beats letting the
-                // host's memory grow without bound.
+                // A peer that cannot keep up is shed rather than growing host memory.
                 Interlocked.Add(ref _pendingSendBytes, -(payload.Length + 4L));
                 Close("send backlog exceeded " + (MaxPendingSendBytes >> 20) + " MiB");
                 return;
@@ -150,8 +137,7 @@ namespace CS2MultiplayerMod.Core.Networking.Tcp
                     }
                 }
 
-                // The queue completed and fully drained. If a graceful close was requested
-                // (deliver a final message, e.g. a rejection reason, then hang up), do it now.
+                // Drained: perform a requested graceful close now.
                 string graceful = _gracefulCloseReason;
                 if (graceful != null) Close(graceful);
             }
@@ -162,10 +148,8 @@ namespace CS2MultiplayerMod.Core.Networking.Tcp
         }
 
         /// <summary>
-        /// Stop accepting new sends and close once everything already queued has gone out -
-        /// used to deliver a final message (e.g. a handshake rejection reason) before
-        /// hanging up. Non-blocking: the send thread performs the close after it drains, so
-        /// an immediate close cannot race the (asynchronous) send.
+        /// Stops new sends and closes after the queue drains; non-blocking, so the close cannot race the
+        /// asynchronous send.
         /// </summary>
         public void CloseAfterFlush(string reason)
         {
@@ -179,12 +163,10 @@ namespace CS2MultiplayerMod.Core.Networking.Tcp
             // Ensure OnClosed fires exactly once even under concurrent close attempts.
             if (Interlocked.Exchange(ref _closed, 1) != 0) return;
 
-            // Unblock the send thread (it either drains and exits, or its current write
-            // throws once the stream below is closed).
+            // Unblocks the send thread: it drains and exits, or its write throws once the stream closes.
             try { _sendQueue.CompleteAdding(); } catch { /* ignore */ }
 
-            byte[] abandoned;
-            while (_sendQueue.TryTake(out abandoned))
+            while (_sendQueue.TryTake(out byte[] abandoned))
                 Interlocked.Add(ref _pendingSendBytes, -(abandoned.Length + 4L));
 
             var stream = _stream;
@@ -201,9 +183,7 @@ namespace CS2MultiplayerMod.Core.Networking.Tcp
             {
                 if (!Upgrade()) return;
 
-                // The stream (incl. TLS) is ready — stand up the writer before announcing
-                // readiness, so a payload sent the instant the session sees Connected has a
-                // drain already running.
+                // Start the writer before announcing readiness, so an immediate send has a drain running.
                 _sendThread = new Thread(SendLoop) { IsBackground = true, Name = "mp-send-" + Id.Value };
                 _sendThread.Start();
 
@@ -230,6 +210,7 @@ namespace CS2MultiplayerMod.Core.Networking.Tcp
                     }
 
                     int type = _stream.ReadByte();
+                    if (type >= 0) Interlocked.Exchange(ref _lastInboundMs, MonotonicClock.NowMs);
                     if (type < 0 || !FrameLimits.AcceptsFrame((byte)type, length))
                     {
                         Close("invalid message frame size or type");
@@ -270,11 +251,9 @@ namespace CS2MultiplayerMod.Core.Networking.Tcp
         }
 
         /// <summary>
-        /// Establish the application stream: plain TCP, or TLS 1.2 when configured.
-        /// Runs on the read thread so a slow/hostile TLS handshake never blocks the
-        /// accept loop or the game thread. The server presents its ephemeral
-        /// certificate; the client accepts any certificate but records its hash as the
-        /// channel binding - authentication comes from the password proof, not a CA.
+        /// Plain TCP or TLS 1.2, on the read thread so a slow handshake blocks neither accept loop nor game
+        /// thread. The client accepts any certificate and records its hash as channel binding;
+        /// authentication is the password proof.
         /// </summary>
         private bool Upgrade()
         {
@@ -316,6 +295,7 @@ namespace CS2MultiplayerMod.Core.Networking.Tcp
             {
                 int n = stream.Read(buffer, read, count - read);
                 if (n <= 0) return false;
+                Interlocked.Exchange(ref _lastInboundMs, MonotonicClock.NowMs);
                 read += n;
             }
             return true;

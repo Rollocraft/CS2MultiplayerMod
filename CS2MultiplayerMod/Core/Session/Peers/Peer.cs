@@ -2,15 +2,12 @@ using CS2MultiplayerMod.Core.Networking;
 
 namespace CS2MultiplayerMod.Core.Session
 {
-    /// <summary>
-    /// A participant in the session as seen by the local machine
-    /// </summary>
+    /// <summary>A session participant as seen locally.</summary>
     public sealed class Peer
     {
         public readonly ConnectionId Connection;
 
-        /// <summary>Assigned by the host. 0 until the host assigns one - at the approval
-        /// prompt when approval is required, otherwise when the handshake completes.</summary>
+        /// <summary>Host-assigned; 0 until the approval prompt or the completed handshake.</summary>
         public int PlayerId;
 
         public string Name;
@@ -18,8 +15,7 @@ namespace CS2MultiplayerMod.Core.Session
         /// <summary>True once the handshake has succeeded for this peer.</summary>
         public bool Handshaked;
 
-        /// <summary>Host-side: the join passed every automatic check and is waiting for the
-        /// host to approve or decline it by hand. Never overlaps <see cref="Handshaked"/>.</summary>
+        /// <summary>Host side: awaiting manual approval. Never overlaps <see cref="Handshaked"/>.</summary>
         public bool AwaitingApproval;
 
         /// <summary>Host-side: a client world-sync request waiting for an explicit host answer.</summary>
@@ -27,8 +23,11 @@ namespace CS2MultiplayerMod.Core.Session
         public string PendingResyncReason;
         public bool PendingResyncAutomatic;
 
-        /// <summary>Local monotonic timestamp (Unix ms) of the last byte received from this peer.</summary>
+        /// <summary>Local monotonic timestamp (Unix ms) of the last whole payload received from this peer.</summary>
         public long LastSeenUnixMs;
+
+        /// <summary>The <see cref="LastSeenUnixMs"/> a stalled-but-alive notice was already logged for.</summary>
+        internal long StallReportedForSeenMs = long.MinValue;
 
         /// <summary>When the underlying connection appeared - pending peers expire on this.</summary>
         public long ConnectedAtUnixMs;
@@ -42,11 +41,7 @@ namespace CS2MultiplayerMod.Core.Session
         /// <summary>Host-side: the one-time nonce sent in this peer's handshake challenge.</summary>
         public byte[] ChallengeNonce;
 
-        /// <summary>
-        /// What this peer said it was running, from its handshake. Kept so the ungated accept
-        /// line can name it: a desync report is read from two machines' logs, and "which build
-        /// was the other player on" is the first thing it has to answer. Null until handshaked.
-        /// </summary>
+        /// <summary>The peer's mod build from its handshake, for the accept line. Null until handshaked.</summary>
         public string ModVersion;
 
         /// <summary>The peer's game version, for the same reason as <see cref="ModVersion"/>.</summary>

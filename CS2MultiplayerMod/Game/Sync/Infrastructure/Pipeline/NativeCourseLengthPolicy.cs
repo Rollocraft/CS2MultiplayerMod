@@ -4,8 +4,7 @@ namespace CS2MultiplayerMod.Game.Sync.Infrastructure
 {
     internal static class NativeCourseLengthPolicy
     {
-        // Generator state need not equal final arc length. This deliberately broad bound
-        // rejects unusable/module-exploding inputs without rewriting valid native lengths.
+        // Generator state, not arc length: a broad bound that rejects only unusable inputs.
         public static bool IsPlausible(float length, float measuredLength, bool point)
         {
             if (float.IsNaN(length) || float.IsInfinity(length) ||

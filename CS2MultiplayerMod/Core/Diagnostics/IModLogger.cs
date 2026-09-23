@@ -1,36 +1,19 @@
 namespace CS2MultiplayerMod.Core.Diagnostics
 {
     /// <summary>
-    /// Logging abstraction for the multiplayer core.
-    ///
-    /// The core deliberately does not reference Colossal.Logging (or any game assembly) so it
-    /// stays portable and unit-testable. The game layer supplies a concrete adapter; tests can
-    /// pass <see cref="NullModLogger"/>.
-    ///
-    /// The shape mirrors the game layer's logger exactly, so there is one vocabulary across the
-    /// whole mod: every line names a <see cref="LogTopic"/>, and the severity decides whether the
-    /// topic's switch is consulted at all. <see cref="Detail"/> is troubleshooting chatter and is
-    /// gated; <see cref="Trace"/> is kept in the crash log either way; and everything from
-    /// <see cref="Event"/> upwards is written to both logs whatever the switches say, because a
-    /// player cannot be expected to have turned on the right switch before the thing they are
-    /// reporting happened.
+    /// Core logging abstraction, free of game assemblies so Core stays testable (tests pass
+    /// <see cref="NullModLogger"/>). Same shape as the game logger: <see cref="Detail"/> is gated,
+    /// <see cref="Trace"/> always reaches the crash log, <see cref="Event"/> and above are never gated.
     /// </summary>
     public interface IModLogger
     {
-        /// <summary>
-        /// Whether a <see cref="Detail"/> line on this topic would be written. Ask before
-        /// <i>computing</i> a diagnostic, not only before logging one: a counter nobody reads
-        /// must not cost a frame.
-        /// </summary>
+        /// <summary>Whether a <see cref="Detail"/> line is written; ask before computing a diagnostic.</summary>
         bool IsEnabled(LogTopic topic);
 
         /// <summary>Troubleshooting detail. Written only while the topic is switched on.</summary>
         void Detail(LogTopic topic, string message);
 
-        /// <summary>
-        /// A short breadcrumb: always kept in the crash log, shown in the readable log only while
-        /// the topic is switched on.
-        /// </summary>
+        /// <summary>A breadcrumb: always in the crash log, in the readable log only when the topic is on.</summary>
         void Trace(LogTopic topic, string message);
 
         /// <summary>A milestone worth having in every player's log. Never gated.</summary>

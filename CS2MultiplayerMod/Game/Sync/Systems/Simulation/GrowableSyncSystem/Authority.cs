@@ -6,14 +6,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
     public partial class GrowableSyncSystem
     {
         /// <summary>
-        /// The simulation systems a client must not run, because each one decides on its own
-        /// whether a zoned building exists - and decides it from a per-machine random draw.
-        /// Left running, a client grows and demolishes a city the host has never seen.
-        ///
-        /// BuildingUpkeepSystem is also held. It does not merely collect upkeep: from locally
-        /// drifting renters/resources it can choose a random level target or irreversibly abandon
-        /// the building, removing its renter and electricity/water components. Host lifecycle and
-        /// occupancy messages mirror those decisions without allowing that destructive local race.
+        /// Systems a client must not run: each decides from a per-machine random draw whether a zoned
+        /// building exists. BuildingUpkeepSystem is held too: it can pick a level target or abandon a
+        /// building from locally drifting state.
         /// </summary>
         private readonly LocalAuthorityHold _authority = new LocalAuthorityHold(
             "GrowableSync", "zoned-building authority", "zoned buildings", "growable authority",
@@ -23,14 +18,10 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             typeof(global::Game.Simulation.DestroyAbandonedSystem),
             typeof(global::Game.Simulation.CollapsedBuildingSystem));
 
-        /// <summary>
-        /// Hands the growable lifecycle to the host. Idempotent, and re-checked every frame so a
-        /// system the game re-enables on a state change does not quietly start growing again.
-        /// </summary>
+        /// <summary>Idempotent; re-checked every frame because the game can re-enable held systems.</summary>
         private void ApplyLocalAuthority(MultiplayerSession session)
         {
-            // A session hosted with simulation sync off never announces these decisions, so
-            // holding the local systems would leave this city unable to make them either.
+            // Without simulation sync the host never sends these decisions.
             if (!session.SimulationSyncEnabled)
             {
                 RestoreLocalAuthority();
@@ -39,10 +30,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             _authority.Apply(World, session);
         }
 
-        /// <summary>
-        /// Gives the local simulation its buildings back when the session ends. Without this a
-        /// player who leaves a session keeps a city that can never grow again.
-        /// </summary>
+        /// <summary>Gives the local growth back when the session ends.</summary>
         private void RestoreLocalAuthority() => _authority.Restore(World);
     }
 }

@@ -3,10 +3,8 @@ using CS2MultiplayerMod.Core.Diagnostics;
 namespace CS2MultiplayerMod.Core.Networking
 {
     /// <summary>
-    /// Supplies relay transports. Kept behind an interface so Core never links the
-    /// platform SDK directly: the game layer registers the real implementation at
-    /// load, and the test harness leaves <see cref="RelayProvider.Current"/> null,
-    /// which reads as "relay unavailable".
+    /// Supplies relay transports so Core never links the platform SDK. Null
+    /// <see cref="RelayProvider.Current"/> (tests) means relay unavailable.
     /// </summary>
     public interface IRelayProvider
     {
@@ -16,11 +14,7 @@ namespace CS2MultiplayerMod.Core.Networking
         /// <summary>What other players type to reach this machine; empty when unavailable.</summary>
         string LocalJoinCode { get; }
 
-        /// <summary>
-        /// The display name this machine's platform account already goes by, or empty
-        /// when there is none. Used once as the first-run player name, so a signed-in
-        /// player is not called "Player" by default.
-        /// </summary>
+        /// <summary>The platform account's display name, or empty; used once as the first-run player name.</summary>
         string LocalPlayerName { get; }
 
         ITransport CreateHost(IModLogger log);
@@ -36,21 +30,10 @@ namespace CS2MultiplayerMod.Core.Networking
 
         public static IRelayProvider Current;
 
-        /// <summary>
-        /// Whether relay sessions exist as a choice on this machine at all. False on
-        /// copies of the game that ship no Steam library (Microsoft Store / Game Pass):
-        /// there is nothing to be signed in to and nothing to wait for, so the option is
-        /// not offered rather than shown as unavailable.
-        /// </summary>
-        public static bool IsSupported
-        {
-            get { return Current != null; }
-        }
+        /// <summary>False on copies without a Steam library (Microsoft Store / Game Pass): the option is hidden.</summary>
+        public static bool IsSupported => Current != null;
 
-        public static bool IsAvailable
-        {
-            get { return Current != null && Current.UnavailableReason == null; }
-        }
+        public static bool IsAvailable => Current != null && Current.UnavailableReason == null;
 
         public static string UnavailableReason
         {
@@ -62,15 +45,9 @@ namespace CS2MultiplayerMod.Core.Networking
             }
         }
 
-        public static string LocalJoinCode
-        {
-            get { return Current != null ? (Current.LocalJoinCode ?? "") : ""; }
-        }
+        public static string LocalJoinCode => Current != null ? (Current.LocalJoinCode ?? "") : "";
 
-        /// <summary>
-        /// The platform account's display name, or empty on a copy of the game with no
-        /// platform backend (Microsoft Store / Game Pass) - those keep the plain default.
-        /// </summary>
+        /// <summary>The platform display name, or empty without a platform backend.</summary>
         public static string LocalPlayerName
         {
             get
@@ -82,9 +59,8 @@ namespace CS2MultiplayerMod.Core.Networking
         }
 
         /// <summary>
-        /// Whether a typed target is a join code rather than an address. Pure format test
-        /// so the join screen can route the player without Steam being up, and so an IPv4
-        /// address (dots) or host name never resolves as a code.
+        /// A pure format test, so the join screen routes without Steam running; an IPv4 address or host
+        /// name never parses as a code.
         /// </summary>
         public static bool LooksLikeJoinCode(string text)
         {

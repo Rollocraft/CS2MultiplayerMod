@@ -13,10 +13,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
     public partial class BuildSyncSystem
     {
         /// <summary>
-        /// Recognize the only native object operations that may bypass the serialized Temp/apply
-        /// coordinator: independent top-level object creates/deletes. The portable shape check is
-        /// followed by runtime prefab/entity checks, keeping buildings, attachments and owned
-        /// graphs on the full atomic lifecycle path.
+        /// Independent top-level creates/deletes, the only object operations that may bypass the serialized
+        /// coordinator; owned graphs stay on the atomic path.
         /// </summary>
         private bool IsIndependentObjectBatch(ObjectToolOperationCommand command,
             ResolvedObjectDefinition[] resolved)
@@ -55,11 +53,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         }
 
         /// <summary>
-        /// Apply one complete simple-object batch in this ToolUpdate. Deletes run first so a brush
-        /// replacement at the same transform is not mistaken for a duplicate of the object it is
-        /// replacing. Every placement definition is created before Modification1, so the game
-        /// materializes the whole brush batch together rather than one isolated transaction at a
-        /// time across later frames.
+        /// One simple-object batch this ToolUpdate, deletes first so a replacement is not taken for a
+        /// duplicate; every definition exists before Modification1.
         /// </summary>
         private NativeObjectResult RealizeIndependentObjectBatch(NativeObjectOperationKey key,
             ObjectToolOperationCommand command, ResolvedObjectDefinition[] resolved,
@@ -69,8 +64,6 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             int placedBefore = _rzFrameSpawned;
             DeleteSyncSystem deleteSync = World.GetExistingSystemManaged<DeleteSyncSystem>();
 
-            // First remove every original named by the brush transaction. This also makes the
-            // placement duplicate snapshot exclude replaced objects later in this same method.
             for (int i = 0; i < command.Definitions.Length; i++)
             {
                 ObjectToolDefinitionIntent definition = command.Definitions[i];

@@ -31,8 +31,7 @@ namespace CS2MultiplayerMod.Core.Session
             {
                 string address = _transport.GetRemoteAddress(connection);
 
-                // Addresses that keep failing the password are refused before any
-                // protocol work happens.
+                // Addresses that keep failing the password are refused before any protocol work.
                 if (_failedAuth.IsBanned(address, nowUnixMs))
                 {
                     _log.Warn(LogTopic.Transport, "Refused " + connection + " (" + address +
@@ -92,9 +91,14 @@ namespace CS2MultiplayerMod.Core.Session
 
         private void OnTransportDisconnected(ConnectionId connection, string reason)
         {
-            Peer peer;
             _puntedConnections.Remove(connection.Value);
-            if (_peers.TryGetValue(connection.Value, out peer))
+            bool closedHere = _localCloseReasons.TryGetValue(connection.Value, out string localReason);
+            if (closedHere)
+            {
+                _localCloseReasons.Remove(connection.Value);
+                reason = localReason;
+            }
+            if (_peers.TryGetValue(connection.Value, out Peer peer))
             {
                 _peers.Remove(connection.Value);
                 bool removedByHost = _administrativeRemovals.Remove(connection.Value);
@@ -103,9 +107,7 @@ namespace CS2MultiplayerMod.Core.Session
                     NotifyPeerLeft(peer, reason);
                     if (Role == SessionRole.Host)
                     {
-                        // Mirror of the join notice: clients get no OnPeerLeft for each
-                        // other, so this system chat line is how every machine learns of
-                        // a leave (and the host's own UI via NotifyChat).
+                        // Clients get no OnPeerLeft for each other; this line is how they learn of leaves.
                         string notice = removedByHost
                             ? peer.Name + " was removed by the host."
                             : peer.Name + " left.";
@@ -114,9 +116,7 @@ namespace CS2MultiplayerMod.Core.Session
                     }
                 }
                 else if (Role == SessionRole.Host)
-                    // Without this line a client that connects but never authenticates
-                    // (TLS failure, crash, wrong build) vanishes without a trace in the
-                    // host's log — the single worst blind spot when debugging joins.
+                    // A connection that never authenticates must still show up in the host's log.
                     _log.Warn(LogTopic.Transport, "Connection " + connection + " (" +
                         (peer.RemoteAddress ?? "?") + ") closed before completing the handshake: " +
                         reason);
@@ -124,31 +124,30 @@ namespace CS2MultiplayerMod.Core.Session
 
             if (Role == SessionRole.Client)
             {
-                // Losing the host ends the session for a client. Distinguish the two cases:
-                //  - still Connecting  → the join never completed (host absent, rejected, TLS/handshake
-                //    failure): a genuine failure the player needs to see, so fault.
-                //  - already Connected → the host closed a LIVE session (quit the game, stopped hosting,
-                //    or simply left). That is a normal end of session, not a client-side error — hosts
-                //    rarely wait for everyone to leave first. Treat it as a clean disconnect: no error
-                //    log, no Faulted status, no OnError; just end the session quietly.
+                // Losing the host while Connecting is a failed join (fault). While Connected the host ended a live
+                // session: a normal end, so no error log, no Faulted, no OnError.
                 if (Status == SessionStatus.Connecting)
                     Fault("Could not join: " + reason);
+                else if (closedHere)
+                    LoseHost(reason);
                 else
                     EndByRemote(reason);
             }
         }
 
-        /// <summary>
-        /// End client session because host went away - normal, expected event, not a fault.
-        /// Logs at Info, stops cleanly, and <see cref="Stop"/> sets Offline status.
-        /// UI reports plain disconnect rather than error.
-        /// </summary>
+        /// <summary>This machine gave up on the host: not a fault, and not reported as the host closing.</summary>
+        private void LoseHost(string reason)
+        {
+            _log.Warn(LogTopic.Transport, "Lost the connection to the host (" + reason + ").");
+            Stop("Lost the connection to the host (" + reason + ").");
+        }
+
+        /// <summary>The host went away: a normal end, logged at Info and shown as a plain disconnect.</summary>
         private void EndByRemote(string reason)
         {
             _log.Event(LogTopic.Transport, "Host ended the session (" + reason +
                 "). Disconnecting cleanly.");
-            // Preserve the host notice / transport failure for the game layer. It uses
-            // this detail to tell the player why their temporary host world is closing.
+            // Keep the reason: the game layer tells the player why the host world is closing.
             Stop(reason);
         }
 
@@ -157,8 +156,7 @@ namespace CS2MultiplayerMod.Core.Session
             // Everything this connection had already sent before it was punted is discarded.
             if (_puntedConnections.Contains(connection.Value)) return;
 
-            Peer peer;
-            if (_peers.TryGetValue(connection.Value, out peer))
+            if (_peers.TryGetValue(connection.Value, out Peer peer))
                 peer.LastSeenUnixMs = nowUnixMs;
 
             INetMessage message;
@@ -168,8 +166,7 @@ namespace CS2MultiplayerMod.Core.Session
             }
             catch (Exception ex)
             {
-                // Malformed bytes from a peer must never take the session down — and a
-                // peer that sends them has no business staying connected.
+                // Malformed bytes never take the session down; their sender is disconnected.
                 Punt(connection, peer, "malformed payload (" + ex.Message + ")", "decode");
                 return;
             }
@@ -179,10 +176,8 @@ namespace CS2MultiplayerMod.Core.Session
 
         private void Dispatch(ConnectionId connection, Peer peer, INetMessage message, int payloadBytes, long nowUnixMs)
         {
-            // Security gate: until a connection has completed the handshake (and with it
-            // the protocol-version and password checks), the only thing it may say is the
-            // handshake itself. Without this, a raw TCP connection could inject commands,
-            // chat, blobs or resync requests while skipping the password entirely.
+            // Before the handshake (version and password checks) a connection may only send the handshake;
+            // otherwise a raw connection could inject traffic without the password.
             bool handshakeTraffic = message.Type == MessageType.HandshakeRequest ||
                                     message.Type == MessageType.HandshakeResponse ||
                                     message.Type == MessageType.HandshakeChallenge ||
@@ -196,9 +191,12 @@ namespace CS2MultiplayerMod.Core.Session
             // Traffic budgets: the host meters everything an authenticated client sends.
             if (Role == SessionRole.Host && peer != null && peer.Handshaked)
             {
+                int commandId = message.Type == MessageType.SimulationCommand
+                    ? ((SimulationCommandMessage)message).CommandId
+                    : -1;
+
                 string violation = peer.RateLimiter.Account(
-                    nowUnixMs, payloadBytes,
-                    message.Type == MessageType.SimulationCommand,
+                    nowUnixMs, payloadBytes, commandId,
                     message.Type == MessageType.Chat,
                     message.Type == MessageType.ResyncRequest);
                 if (violation != null)
@@ -257,15 +255,10 @@ namespace CS2MultiplayerMod.Core.Session
             }
         }
 
-        /// <summary>
-        /// Disconnect a peer that violated the protocol, with a structured log line
-        /// carrying everything needed to understand the event later: connection,
-        /// player identity, remote address, offending message type, and reason.
-        /// </summary>
+        /// <summary>Disconnects a protocol violator with connection, player, address, message type and reason logged.</summary>
         private void Punt(ConnectionId connection, Peer peer, string reason, string messageType)
         {
-            // A client never disconnects the host for a stray message — losing the host
-            // ends the whole session. Strays are logged and dropped instead.
+            // A client never disconnects its host over a stray message; it logs and drops it.
             if (Role == SessionRole.Client)
             {
                 _log.Warn(LogTopic.Transport, "Dropping " + messageType + " from host: " + reason +
@@ -286,9 +279,9 @@ namespace CS2MultiplayerMod.Core.Session
             _log.Warn(LogTopic.Transport, "Disconnecting " + connection + " " + who + " (" + address +
                 "): " + reason + " [type=" + messageType + "]");
 
+            _localCloseReasons[connection.Value] = reason;
             if (_transport != null) _transport.Disconnect(connection);
             // Removal + observer notification happen on the transport's Disconnected event.
         }
-
     }
 }

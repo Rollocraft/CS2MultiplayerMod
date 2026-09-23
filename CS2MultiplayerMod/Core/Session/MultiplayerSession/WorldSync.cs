@@ -8,12 +8,9 @@ namespace CS2MultiplayerMod.Core.Session
     public sealed partial class MultiplayerSession
     {
         /// <summary>
-        /// Host: atomically suspend gameplay traffic and send Begin to the exact peer set that
-        /// will receive this snapshot. A peer joining later is intentionally not folded into a
-        /// transfer whose causal cut is already being prepared.
-        ///
-        /// <paramref name="snapshotTargets"/> narrows who is actually sent a world; every other
-        /// target holds the barrier only. Null means every target receives one.
+        /// Host: suspend gameplay traffic and send Begin to this snapshot's exact peer set; later joiners
+        /// are not folded in. <paramref name="snapshotTargets"/> receive a world, the rest hold the barrier
+        /// only; null means all.
         /// </summary>
         public bool BeginWorldSync(long epoch, float resumeSpeed, IList<ConnectionId> targets,
             IList<ConnectionId> snapshotTargets = null)
@@ -22,8 +19,7 @@ namespace CS2MultiplayerMod.Core.Session
                 _worldSyncSuspended)
                 return false;
 
-            // A new barrier gets its own progress interval. Otherwise the completed percentage
-            // from the previous snapshot would briefly appear while this one is still being saved.
+            // Fresh progress, so the last snapshot's percentage does not flash up.
             ClearOutgoingBlobs();
             _outgoingBlobActive = false;
             _outgoingBlobTotal = 0;
@@ -58,10 +54,7 @@ namespace CS2MultiplayerMod.Core.Session
             SendTo(ConnectionId.Server, new WorldSyncControlMessage(epoch, stage));
         }
 
-        /// <summary>
-        /// Host: queue Resume behind all snapshot chunks, then reopen local gameplay traffic.
-        /// TCP ordering guarantees each client sees Resume before any later command.
-        /// </summary>
+        /// <summary>Host: Resume queues behind every chunk, so TCP ordering puts it before any later command.</summary>
         public bool ResumeWorldSync(long epoch, float resumeSpeed, IList<ConnectionId> targets)
         {
             if (Role != SessionRole.Host || !_worldSyncSuspended || epoch != _worldSyncEpoch)
@@ -109,8 +102,7 @@ namespace CS2MultiplayerMod.Core.Session
 
         private void SendWorldSyncTo(ConnectionId target, WorldSyncControlMessage message)
         {
-            Peer peer;
-            if (_peers.TryGetValue(target.Value, out peer) && peer.Handshaked)
+            if (_peers.TryGetValue(target.Value, out Peer peer) && peer.Handshaked)
                 SendTo(target, message);
         }
 
@@ -155,8 +147,7 @@ namespace CS2MultiplayerMod.Core.Session
                     _worldSyncEpoch = control.Epoch;
                     _worldSyncSuspended = true;
                 }
-                // Duplicate Begin is deliberately delivered: the game layer re-sends Quiesced,
-                // making a lost acknowledgement self-healing.
+                // A duplicate Begin is delivered: the game layer re-sends Quiesced, healing a lost ack.
                 NotifyWorldSync(control.Stage, control.Epoch, control.ResumeSpeed, from);
                 return;
             }

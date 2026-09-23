@@ -1,6 +1,4 @@
-using System.Collections.Concurrent;
 using System.Collections.Generic;
-using Game;
 using Game.Common;
 using Game.Prefabs;
 using Game.Tools;
@@ -18,14 +16,11 @@ using CS2MultiplayerMod.Game.Sync.Commands;
 namespace CS2MultiplayerMod.Game.Sync.Systems
 {
     /// <summary>
-    /// Replicates selected cells from native zoning commits. Sparse patches preserve unrelated
-    /// local edits and merge across bounded frame budgets. Receivers retain only unresolved
-    /// cells while their road/grid dependencies catch up.
+    /// Replicates selected cells from zoning commits as sparse patches; receivers retain unresolved
+    /// cells while their roads and grids catch up.
     /// </summary>
-    public partial class ZoneSyncSystem : GameSystemBase
+    public partial class ZoneSyncSystem : CommandSyncSystem, IRealizeStage
     {
-        private readonly ConcurrentQueue<SimulationCommandMessage> _incoming =
-            new ConcurrentQueue<SimulationCommandMessage>();
         private readonly ActiveRetryClock _retryClock = new ActiveRetryClock();
         private readonly LatestByKeyQueue<ZoneBlockKey, ZonePaintCommand> _outgoing =
             new LatestByKeyQueue<ZoneBlockKey, ZonePaintCommand>();
@@ -37,13 +32,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         private ToolSystem _toolSystem;
         private EntityQuery _allBlocks;
         private EntityQuery _zonePrefabs;
-        private CommandObserver _observer;
 
-        // A zone command whose target Block doesn't exist yet — the road, or the zoning
-        // grid the game generates for it, hasn't finished building on this machine — is
-        // deferred and retried until it matches or times out. This lag (zoning right after
-        // laying road) was the main reason zoning "didn't sync": the old apply matched once
-        // and dropped every miss.
+        // Commands whose Block does not exist yet (zoning right after laying road); retried until timeout.
         private readonly LatestByKeyQueue<ZoneBlockKey, PendingZone> _pending =
             new LatestByKeyQueue<ZoneBlockKey, PendingZone>();
         private long _lastRetryMs;
@@ -90,9 +80,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             }
         }
 
-        // Reusing the spatial index for a short window avoids rescanning every Block for every
-        // source cell in a large zoning burst. Each list is pooled across rebuilds, and stale
-        // entities are validated before use.
+        // Short-lived spatial index of Blocks; entries are validated before use.
         private readonly Dictionary<long, List<Entity>> _blockLookup =
             new Dictionary<long, List<Entity>>();
         private readonly List<List<Entity>> _blockLookupListPool = new List<List<Entity>>();
@@ -112,8 +100,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         private int _diagnosticUnzonable;
         private const long DiagnosticWindowMs = 5000;
 
-        // ZoneType.m_Index <-> prefab name, rebuilt whenever an unknown index appears
-        // (zone prefabs can register late, e.g. DLC/mod zones).
+        // Rebuilt when an unknown index appears: DLC and mod zones register late.
         private readonly Dictionary<ushort, string> _indexToName = new Dictionary<ushort, string>();
         private readonly Dictionary<string, ushort> _nameToIndex = new Dictionary<string, ushort>();
 
@@ -140,24 +127,12 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 ComponentType.ReadOnly<ZoneData>(),
                 ComponentType.ReadOnly<PrefabData>());
 
-            _observer = SyncObserverBinding.Bind(
-                () => new CommandObserver(_incoming, ZonePaintCommand.Id)
-                    {
-                        // A marquee can cover many blocks in one commit. Retain the burst while
-                        // the frame-budgeted patch coalescer catches up.
-                        QueueCap = MaxIncomingZones,
-                        MaxBodyBytes = ZonePaintCommand.MaxEncodedBytes,
-                    },
-                DrainQueue);
+            // A marquee can cover many blocks in one commit.
+            ListenFor(new[] { ZonePaintCommand.Id },
+                ZonePaintCommand.MaxEncodedBytes, MaxIncomingZones);
         }
 
-        protected override void OnDestroy()
-        {
-            SyncObserverBinding.Unbind(_observer, DrainQueue);
-            base.OnDestroy();
-        }
-
-        private void DrainQueue()
+        protected override void DrainQueue()
         {
             SyncInbox.Clear(_incoming);
             _outgoing.Clear();
@@ -192,15 +167,21 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             MultiplayerService service = Mod.Service;
             if (service == null) return;
 
+            // Zoning is laid on the road edges the held net pipeline has not delivered yet.
+            if (RealizeGate.WorldBuildingHeld)
+            {
+                _retryClock.Observe(service.NowMs, true);
+                return;
+            }
+
             MultiplayerSession session = service.Session;
             if (!service.GameplaySyncReady) return;
 
             long now = service.NowMs;
             _retryClock.Observe(now, false);
 
-            SimulationCommandMessage message;
             int examined = 0;
-            while (examined < MaxDecodePerFrame && _incoming.TryDequeue(out message))
+            while (examined < MaxDecodePerFrame && _incoming.TryDequeue(out SimulationCommandMessage message))
             {
                 examined++;
                 if (message.OriginPlayerId == session.LocalPlayerId) continue;
@@ -208,11 +189,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 {
                     ZonePaintCommand command = ZonePaintCommand.Decode(message.Body);
                     ZoneBlockKey key = StateKey(command);
-                    ZonePaintCommand earlier;
-                    bool coalesced = _ready.TryGetValue(key, out earlier);
+                    bool coalesced = _ready.TryGetValue(key, out ZonePaintCommand earlier);
                     if (coalesced) command.MergeEarlier(earlier);
-                    PendingZone pending;
-                    if (_pending.TryGetValue(key, out pending))
+                    if (_pending.TryGetValue(key, out PendingZone pending))
                     {
                         command.MergeEarlier(pending.Command);
                         WithdrawZoneRecovery(pending, now);
@@ -234,8 +213,6 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 }
             }
 
-            // Always process fresh commands; retry deferred ones on a timer (their blocks
-            // may have finished generating since the last attempt).
             bool retryDue = _pending.Count > 0 && now - _lastRetryMs >= ZoneRetryIntervalMs;
             if (_ready.Count > 0 || retryDue) ApplyZoneCommands(retryDue, now);
         }
@@ -283,13 +260,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             _diagnosticWindowStartMs = now;
         }
 
-
-        internal void NotifyRealizeHeld(long now) => _retryClock.Observe(now, true);
-
         private string ResolveZoneName(ushort index)
         {
-            string name;
-            if (_indexToName.TryGetValue(index, out name)) return name;
+            if (_indexToName.TryGetValue(index, out string name)) return name;
             RebuildZoneMap();
             return _indexToName.TryGetValue(index, out name) ? name : null;
         }
@@ -325,8 +298,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
         private static long QuantizedPos(float3 position)
         {
-            // 0.5 m buckets packed into a single key (blocks are metres apart, so this is
-            // far finer than block spacing yet tolerant of float drift).
+            // 0.5 m buckets: far finer than block spacing, tolerant of float drift.
             return PackQuant((long)math.round(position.x * 2f),
                              (long)math.round(position.y * 2f),
                              (long)math.round(position.z * 2f));
@@ -351,6 +323,5 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 SizeX = sizeX,
                 SizeY = sizeY,
             };
-
     }
 }

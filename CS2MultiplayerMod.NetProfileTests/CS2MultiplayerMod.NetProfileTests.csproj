@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net9.0</TargetFramework>
+    <OutputType>Exe</OutputType>
+    <LangVersion>9.0</LangVersion>
+    <Nullable>disable</Nullable>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="..\CS2MultiplayerMod\Game\Sync\Infrastructure\Spatial\NetWaterProfilePin.cs"
+             Link="NetWaterProfilePin.cs" />
+  </ItemGroup>
+</Project>

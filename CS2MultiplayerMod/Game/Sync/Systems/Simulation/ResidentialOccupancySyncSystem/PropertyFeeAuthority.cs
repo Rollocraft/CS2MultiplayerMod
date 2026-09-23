@@ -29,9 +29,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         }
 
         /// <summary>
-        /// Apply only the quantities used by ResidentsSection's fee calculation. Wanted demand,
-        /// graph connectivity, cooldowns and warning flags remain products of the receiver's real
-        /// utility simulation.
+        /// Only the quantities ResidentsSection's fee calculation uses; demand, connectivity, cooldowns and
+        /// warnings stay local.
         /// </summary>
         private void ApplyPropertyFeeInputs(Entity property, CachedProperty cached)
         {
@@ -66,10 +65,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             _feeInputCorrections++;
         }
 
-        // The dispatch systems write a consumer on every building they serve, so these arrays
-        // arrive holding the whole residential city. Only a property this peer holds a host page
-        // for can be corrected at all - the drain drops the rest again - so test that first and
-        // keep the uncorrectable majority out of the pending set entirely.
+        // Dispatch writes every building; only properties with a host page can be corrected.
         internal void QueueElectricityFeeCorrections(NativeArray<Entity> properties)
         {
             for (int i = 0; i < properties.Length; i++)
@@ -105,11 +101,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 ? _electricityFeeCorrectionQueue.Count : MaxPropertyFeeCorrectionsPerFrame;
             for (int i = 0; i < examine; i++)
             {
-                Entity property;
-                if (!_electricityFeeCorrectionQueue.TryDequeue(out property)) break;
+                if (!_electricityFeeCorrectionQueue.TryDequeue(out Entity property)) break;
                 _electricityFeeCorrectionMembers.Remove(property);
-                CachedProperty cached;
-                if (!_cache.TryGetValue(property, out cached) ||
+                if (!_cache.TryGetValue(property, out CachedProperty cached) ||
                     !MatchesCachedProperty(property, cached)) continue;
                 ApplyElectricityFeeInput(property, cached);
             }
@@ -129,11 +123,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 ? _waterFeeCorrectionQueue.Count : MaxPropertyFeeCorrectionsPerFrame;
             for (int i = 0; i < examine; i++)
             {
-                Entity property;
-                if (!_waterFeeCorrectionQueue.TryDequeue(out property)) break;
+                if (!_waterFeeCorrectionQueue.TryDequeue(out Entity property)) break;
                 _waterFeeCorrectionMembers.Remove(property);
-                CachedProperty cached;
-                if (!_cache.TryGetValue(property, out cached) ||
+                if (!_cache.TryGetValue(property, out CachedProperty cached) ||
                     !MatchesCachedProperty(property, cached)) continue;
                 ApplyWaterFeeInput(property, cached);
             }

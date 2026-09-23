@@ -1,5 +1,4 @@
-import { useLocalization } from "cs2/l10n";
-import { getModule } from "cs2/modding";
+import { tryModule, useT } from "mods/ui-helpers";
 import { Button, Dropdown, DropdownToggle } from "cs2/ui";
 import { CSSProperties } from "react";
 
@@ -23,14 +22,6 @@ export const CONNECTION_LOC = {
     joinCodeEntryHint: "CS2MP.Connection.JoinCodeEntryHint",
 };
 
-const tryModule = (path: string, exportName: string): any => {
-    try {
-        return getModule(path, exportName);
-    } catch {
-        return null;
-    }
-};
-
 // The menu's own dropdown skin, so this matches the native dropdowns elsewhere.
 const dropdownTheme: Record<string, string> | undefined =
     tryModule("game-ui/menu/themes/dropdown.module.scss", "classes") ??
@@ -51,11 +42,6 @@ const fallbackOption: CSSProperties = {
     padding: "9rem 14rem",
     fontSize: "17rem",
     textAlign: "left",
-};
-
-export const useT = () => {
-    const { translate } = useLocalization();
-    return (id: string, fallback: string) => translate(id, fallback) ?? fallback;
 };
 
 interface ConnectionDropdownProps {

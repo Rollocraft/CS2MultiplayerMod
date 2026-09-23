@@ -1,26 +1,13 @@
 ﻿using System;
-using System.Collections.Generic;
 using System.Diagnostics;
 using System.Text;
 using CS2MultiplayerMod.Core.Diagnostics;
 using CS2MultiplayerMod.Game.Diagnostics;
 using CS2MultiplayerMod.Game.Sync.Commands;
-using Game.Buildings;
-using Game.Citizens;
-using Game.Common;
-using Game.Economy;
-using Game.Prefabs;
-using Game.Simulation;
-using Game.Tools;
-using Game.Vehicles;
-using Unity.Collections;
 using Unity.Entities;
 
 namespace CS2MultiplayerMod.Game.Sync.Systems
 {
-    // The per-roster trace lines that make a mismatch legible in the log, and the small shared
-    // helpers the capture path folds ids and clamps wire values with. Change detection itself
-    // lives in CaptureProbe.cs, which never builds the object it would otherwise hash.
     public partial class ResidentialOccupancySyncSystem
     {
         private static int HashId(int hash, ulong id)
@@ -36,8 +23,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         private void TraceSentRoster(Entity propertyEntity, OccupancyProperty property)
         {
             int hash = TraceRosterHash(property);
-            int previous;
-            if (_traceSentRosterHashes.TryGetValue(propertyEntity, out previous) &&
+            if (_traceSentRosterHashes.TryGetValue(propertyEntity, out int previous) &&
                 previous == hash) return;
             bool first = !_traceSentRosterHashes.ContainsKey(propertyEntity);
             _traceSentRosterHashes[propertyEntity] = hash;
@@ -49,8 +35,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         private void TraceReceivedRoster(OccupancyProperty property)
         {
             int hash = TraceRosterHash(property);
-            int previous;
-            if (_traceReceivedRosterHashes.TryGetValue(property.Identity, out previous) &&
+            if (_traceReceivedRosterHashes.TryGetValue(property.Identity, out int previous) &&
                 previous == hash) return;
             bool first = !_traceReceivedRosterHashes.ContainsKey(property.Identity);
             _traceReceivedRosterHashes[property.Identity] = hash;

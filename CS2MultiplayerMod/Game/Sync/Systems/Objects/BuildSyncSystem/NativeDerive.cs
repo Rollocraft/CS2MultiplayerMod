@@ -37,16 +37,11 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         private EntityQuery _freshDefinitions;
         private EntityQuery _standingDefinitions;
 
-        // The tool seed that produced the definitions currently standing. A one-shot Apply advances
-        // the tool's own seed as part of applying, so the value sampled on the apply frame is already
-        // the next one; the previous frame's sample is the one that built what just committed.
+        // An Apply advances the tool seed, so the previous frame's sample built what committed.
         private uint _lifecycleToolSeed;
         private uint _previousLifecycleToolSeed;
 
-        /// <summary>
-        /// Seed of the tool action that applied on this frame. Travels with upgrade/relocation
-        /// commands so the receiver's generator draws the same variations and object seeds.
-        /// </summary>
+        /// <summary>The seed the applied action used, so the receiver draws the same variations.</summary>
         public uint AppliedLifecycleToolSeed => _previousLifecycleToolSeed;
 
         /// <summary>True when the game exposes the definition generator this path drives.</summary>
@@ -59,18 +54,14 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             _upgradeToolSystem = World.GetOrCreateSystemManaged<UpgradeToolSystem>();
             _toolOutputBarrier = World.GetOrCreateSystemManaged<ToolOutputBarrier>();
 
-            // Every definition that is not already one of ours. Sync-created definitions carry
-            // Deleted from birth - "consume me this frame, then go away" - which is also what keeps
-            // DefinitionGateSystem off them, so the complement is exactly the local tool's.
+            // Everything not born Deleted: exactly the local tool's definitions.
             _freshDefinitions = GetEntityQuery(new EntityQueryDesc
             {
                 All = SyncQuery.ReadOnly<CreationDefinition>(),
                 None = SyncQuery.ReadOnly<Deleted>(),
             });
 
-            // A tool's definitions lose their Updated tag at the Cleanup after they were consumed and
-            // are destroyed on its next update, so "definition without Updated" is the graph standing
-            // behind the previews now committing. Our own definitions are born Deleted.
+            // Definitions without Updated: the graph behind the previews now committing.
             _standingDefinitions = GetEntityQuery(new EntityQueryDesc
             {
                 All = SyncQuery.ReadOnly<CreationDefinition>(),
@@ -78,10 +69,6 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             });
         }
 
-        /// <summary>
-        /// Sample the active object-lifecycle tool's seed once per frame; see
-        /// <see cref="AppliedLifecycleToolSeed"/> for why the previous sample is the useful one.
-        /// </summary>
         private void SampleLifecycleToolSeed(global::Game.Tools.ToolBaseSystem lifecycleTool)
         {
             _previousLifecycleToolSeed = _lifecycleToolSeed;
@@ -94,8 +81,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 return _createDefinitionsMethod != null && _randomSeedValueField != null;
             _deriveReflectionResolved = true;
 
-            // Runtime access to the loaded game assembly's own definition generator. Every argument
-            // is a public type; a rename in a future patch degrades to the reduced fallback paths.
+            // The game's own definition generator; a future rename degrades to the reduced paths.
             _createDefinitionsMethod = typeof(ObjectToolBaseSystem).GetMethod("CreateDefinitions",
                 BindingFlags.Instance | BindingFlags.NonPublic);
             _createDefinitionsTakesOverrides = false;
@@ -116,21 +102,15 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             return _createDefinitionsMethod != null && _randomSeedValueField != null;
         }
 
-        // Game 1.6.2 appended a placement-overrides argument ahead of the job handle; earlier
-        // builds have one fewer. Bind to whichever this build declares rather than refusing the
-        // generator outright, which silently drops upgrades and moves to the reduced path.
+        // Game 1.6.2 added a placement-overrides argument; bind to whichever signature exists.
         private const int CreateDefinitionsArgumentCount = 23;
 
         private static bool _createDefinitionsTakesOverrides;
 
-        // Isolated so that a build without the type never has to resolve it: the JIT binds every
-        // type a method names when it first compiles that method, not when the line runs.
+        // Isolated: the JIT resolves every type a method names when compiling it.
         [System.Runtime.CompilerServices.MethodImpl(
             System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
-        private static object EmptyPlacementOverrides()
-        {
-            return default(PlacementOverrides);
-        }
+        private static object EmptyPlacementOverrides() => default(PlacementOverrides);
 
         /// <summary>Drops the second-to-last (overrides) slot for a build that predates it.</summary>
         private static object[] TrimOverridesArgument(object[] arguments)
@@ -143,8 +123,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
         private static FieldInfo ToolSeedField(System.Type toolType)
         {
-            FieldInfo field;
-            if (_toolSeedFields.TryGetValue(toolType, out field)) return field;
+            if (_toolSeedFields.TryGetValue(toolType, out FieldInfo field)) return field;
             field = toolType.GetField("m_RandomSeed",
                 BindingFlags.Instance | BindingFlags.NonPublic);
             _toolSeedFields[toolType] = field;
@@ -168,17 +147,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         }
 
         /// <summary>
-        /// Reproduce a remote upgrade or relocation by running the game's own definition generator
-        /// against this machine's world, with the inputs the tool had: the prefab, owner/original
-        /// object, one control point (including its snapped target), and the tool's random seed.
-        ///
-        /// Everything else the transaction contains - the host building's re-commit, the road it
-        /// attaches to, re-commits of every existing sub-net with its end nodes preserved, the
-        /// <see cref="global::Game.Prefabs.CreationFlags.Delete"/> of host sub-nets the new footprint
-        /// covers, and the lot-surface snapping of the new connection paths - is derived here from
-        /// local geometry. Shipping the sender's finished definitions instead required resolving 230+
-        /// of their entity references by geometry, which fails outright whenever the two machines have
-        /// a road subdivided differently.
+        /// Reproduces a remote upgrade or relocation by running the game's generator on this world with
+        /// the tool's inputs (prefab, owner/original, one snapped control point, seed). Host re-commits,
+        /// road attachment, covered sub-net deletes and lot snapping all derive from local geometry.
         /// </summary>
         internal NativeDeriveResult TryDeriveObjectTransaction(Entity objectPrefab, Entity owner,
             Entity original, Entity attachmentTarget, float3 position, quaternion rotation,
@@ -198,9 +169,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             var controlPoints = new NativeList<ControlPoint>(1, Allocator.Temp);
             try
             {
-                // The local tool may already have buffered this frame's preview definitions. Play the
-                // barrier back and drop them now, so that after the generator runs the only fresh
-                // definitions standing are the ones it just produced.
+                // Drop the tool's buffered preview first, so the only fresh definitions are the generator's.
                 DiscardBufferedLocalDefinitions();
 
                 controlPoints.Add(new ControlPoint
@@ -208,8 +177,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     m_Position = position,
                     m_HitPosition = position,
                     m_Rotation = rotation,
-                    // The snapped road/node is semantic input, not just preview state. It drives
-                    // attachment changes, route-lane movement, and old/new road re-commits.
+                    // The snapped road/node drives attachment, lane movement and road re-commits.
                     m_OriginalEntity = attachmentTarget,
                     m_Elevation = elevation,
                 });
@@ -228,20 +196,16 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     false,                                      // editorMode
                     _cityConfig != null && _cityConfig.leftHandTraffic,
                     false,                                      // removing
-                    // Stamping makes the generator omit the asset-stamp root object and expand the
-                    // prefab's subnet/subobject/area graph directly, exactly as the local tool does.
+                    // Stamping omits the stamp root and expands its graph, as the local tool does.
                     stamping,
                     0f, 0f, 0f,                                 // brush size/angle/strength
                     0f,                                         // distance (0 = single placement)
                     0f,                                         // deltaTime (creature spawning only)
                     MakeRandomSeed(toolSeed),
-                    // Snap only reaches the brush and curve branches, neither of which a single
-                    // placement takes.
                     Snap.None,
                     AgeMask.Sapling,
                     false,                                      // decorationMode
-                    // Placement overrides (parent mesh, group index, probability) are editor
-                    // staging values; a replicated placement carries none.
+                    // Editor staging values; a replicated placement has none.
                     _createDefinitionsTakesOverrides ? EmptyPlacementOverrides() : null,
                     default(JobHandle),
                 };
@@ -251,8 +215,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 object handle = _createDefinitionsMethod.Invoke(tool, arguments);
                 if (handle is JobHandle) ((JobHandle)handle).Complete();
 
-                // Materialise what the generator buffered. Nothing else ran in between, so every
-                // fresh definition standing now belongs to this transaction.
+                // Nothing ran in between: every fresh definition is this transaction's.
                 FlushToolOutputBarrier();
             }
             catch (System.Exception ex)
@@ -268,8 +231,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             }
             finally
             {
-                // Whatever happened above, the tool barrier must be left usable: the rest of this
-                // frame's tool phases create their command buffers from it.
+                // The rest of this frame's tool phases need the barrier.
                 _toolOutputBarrier.AllowUsage();
             }
             controlPoints.Dispose();
@@ -283,9 +245,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 return NativeDeriveResult.Failed;
             }
 
-            // A stamp graph is rootless by design - the generator omits the stamp's own object -
-            // so it must be armed as one, or transaction validation rejects it for having no
-            // top-level object and the placement is replayed until it is dropped.
+            // A stamp graph is rootless and must be armed as one, or validation rejects it.
             if (!_nativeNetCoordinator.ArmObjectCommit(onCommitLost, onCommitComplete,
                     "derived " + source + " defs=" + derived, stamping))
             {
@@ -299,13 +259,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         }
 
         /// <summary>
-        /// Play the tool output barrier back early, then re-enable it.
-        ///
-        /// Playing it back is how definitions buffered into it become entities we can see. But the
-        /// barrier disables itself as it plays back, and every tool system that runs later in the
-        /// frame - the clear pass, the apply pass, the tools' own definition destruction - creates its
-        /// command buffer from it. Leaving it disabled therefore breaks the whole local tool pipeline
-        /// for the rest of the frame, which is what <c>AllowUsage</c> exists for.
+        /// Plays the tool barrier back early and re-enables it: playback disables it, and later tool systems
+        /// this frame create their buffers from it.
         /// </summary>
         private void FlushToolOutputBarrier()
         {
@@ -314,10 +269,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         }
 
         /// <summary>
-        /// Flush the tool output barrier and remove the local preview definitions it just played
-        /// back. This is the same rule <see cref="DefinitionGateSystem"/> applies on an armed frame,
-        /// brought forward so the generator's output can be identified without ambiguity. The tool is
-        /// asked to regenerate, so the visible preview returns on its next update.
+        /// Flushes the barrier and removes the local preview it played back, as the definition gate does;
+        /// the tool regenerates next update.
         /// </summary>
         private void DiscardBufferedLocalDefinitions()
         {
@@ -338,9 +291,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         }
 
         /// <summary>
-        /// Mark the generator's fresh definitions as ours. Deleted on a definition means "consume me
-        /// this frame, then go away": the Generate* systems still read it, Cleanup destroys it, and
-        /// the definition gate leaves it alone.
+        /// Tags the generator's definitions Deleted: consumed this frame, destroyed at Cleanup, ignored by
+        /// the gate.
         /// </summary>
         private int TagDerivedDefinitions()
         {

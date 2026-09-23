@@ -1,9 +1,5 @@
 using System.Text;
-using Colossal.Mathematics;
-using Game.Common;
 using Game.Prefabs;
-using Game.Simulation;
-using Game.Tools;
 using Unity.Collections;
 using Unity.Entities;
 using Unity.Mathematics;
@@ -16,12 +12,6 @@ using CS2MultiplayerMod.Game.Sync.Commands;
 
 namespace CS2MultiplayerMod.Game.Sync.Systems
 {
-    // Realizing a remote object placement: drain the queue, retry the ones whose attachment target
-    // has not arrived, and place the rest.
-    //
-    // Recognising an object this peer already has, and finding what a placement attaches to, is in
-    // RealizeMatch.cs. Creating the object and the lot, areas and sub-nets that come with it is in
-    // RealizeOwned.cs and RealizeSubNets.cs.
     public partial class BuildSyncSystem
     {
         /// <summary>Attach-node position match tolerance, squared metres (2 m XZ).</summary>
@@ -34,10 +24,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         private const float AttachEdgeTol = 2f;
 
         /// <summary>
-        /// Ceiling on object spawns per frame. A human's placement rate is a few per second; a
-        /// burst beyond this (a flood, or a backlog draining after a stall) would materialise many
-        /// buildings plus their lot/net sub-definitions in ONE Modification pass — a load shape the
-        /// game's own tools never produce. The rest stay queued for the following frames.
+        /// Spawns per frame; a burst beyond this would put a load shape into one Modification pass that the
+        /// game's tools never produce. The rest wait.
         /// </summary>
         private const int MaxRealizePerFrame = 8;
 
@@ -66,14 +54,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             if (_incoming.IsEmpty && _nativeObjectReplayPrefix.Count == 0 &&
                 _attachRetry.Count == 0 && !_hasBlockedNativeObject) return;
 
-            // What these windows wait for is a ROAD - the attachment parent below says so in as
-            // many words - and roads are exactly what the realize pipeline holds back while
-            // terrain or the net commit catches up. Spending the window during that hold expires
-            // it against a parent that could not have arrived, and the expiry asks for a full
-            // world reload. Below, the same three conditions skip the attempt entirely.
+            // These windows wait for roads, which the pipeline holds back; held time does not count.
             long heldMs = _targetHold.Observe(now,
-                RealizeGate.WorldBuildingHeld || DeferForTerrain ||
-                _nativeNetCoordinator.IsCommitBusy);
+                RealizeGate.WorldBuildingHeld || _nativeNetCoordinator.IsCommitBusy);
             if (heldMs > 0)
             {
                 for (int h = 0; h < _attachRetry.Count; h++)
@@ -93,7 +76,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             {
                 if (!TryRealizeBlockedNativeObject(now)) return;
 
-                if (!DeferForTerrain)
+                // A transmitted Y assumes the sender's terrain.
+                if (!RealizeGate.TerrainBacklog)
                 {
                     RetryPendingAttachments(now);
                     DrainIncoming(session, now);
@@ -123,8 +107,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
         private void DrainIncoming(MultiplayerSession session, long now)
         {
-            SimulationCommandMessage message;
-            while (TryTakeNextObjectMessage(out message))
+            while (TryTakeNextObjectMessage(out SimulationCommandMessage message))
             {
                 // Our own placement coming back to us — already built locally.
                 if (message.OriginPlayerId == session.LocalPlayerId) continue;
@@ -151,24 +134,20 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     continue;
                 }
 
-                // The small per-frame budget protects standalone building/prop messages. Native
-                // tree/prop brush operations are checked above because their complete definition
-                // batch is one indivisible frame; making them wait here recreated a visible queue
-                // after the preceding brush batch had already been applied atomically.
+                // Brush batches are checked above: each is one indivisible frame.
                 if (_rzFrameSpawned >= MaxRealizePerFrame)
                 {
                     _nativeObjectReplayPrefix.Insert(0, message);
                     break;
                 }
 
-                ObjectPlacementCommand command;
-                try { command = ObjectPlacementCommand.Decode(message.Body); }
-                catch (System.Exception ex) { SyncLog.Warn(LogTopic.Buildings, "BuildSync: dropping malformed command: " + ex.Message); continue; }
+                if (!CommandDecode.TryDecode(message, ObjectPlacementCommand.Decode, LogTopic.Buildings,
+                        "BuildSync", out ObjectPlacementCommand command))
+                    continue;
 
-                Entity prefab;
                 if (!_prefabIndex.TryResolve(command.PrefabName,
                         candidate => EntityManager.HasComponent<ObjectData>(candidate),
-                        out prefab))
+                        out Entity prefab))
                 {
                     SyncLog.Warn(LogTopic.Buildings, "BuildSync realize: unknown prefab '" +
                         command.PrefabName + "' from player " + message.OriginPlayerId +
@@ -176,9 +155,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     continue;
                 }
 
-                // A standalone definition cannot establish the ownership links required by
-                // movers, and zone growables are created by the zoning simulation rather than
-                // a player placement. Refuse both before any game definition is allocated.
+                // A standalone definition cannot link movers, and zone growables are the simulation's.
                 if (IsSimulationOnlyPlacementPrefab(prefab))
                 {
                     RecordRefused(command.PrefabName);
@@ -186,9 +163,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 }
                 if (RequiresCompleteObjectLifecycle(prefab))
                 {
-                    // A reduced command can't represent a building's owned graph; the native
-                    // object-tool path owns those. This should not be emitted by v38 senders; if it
-                    // arrives, recover rather than silently accepting a missing building.
+                    // A reduced command cannot carry a building's owned graph; recover rather than accept a gap.
                     SyncLog.Warn(LogTopic.Buildings,
                         "BuildSync realize: reduced placement for spatial object '" +
                         command.PrefabName + "' was rejected; requesting world recovery.");
@@ -200,8 +175,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     continue;
                 }
 
-                // A net object placed on a road that has not reached us yet has nothing to hang off.
-                // Placing it now would strand it as an inert prop, so wait for the road instead.
+                // A net object without its road would be an inert prop; wait for the road.
                 if (command.AttachKind != ObjectAttachKind.None && FindAttachTarget(command) == Entity.Null)
                 {
                     if (_attachRetry.Count >= MaxPendingAttachments)
@@ -251,8 +225,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 }
                 else if (now >= pending.deadline)
                 {
-                    // The parent road never reached us. The prop cannot safely be created without
-                    // it, but silently dropping it leaves known divergence.
+                    // The parent road never arrived; dropping silently would leave known divergence.
                     _attachRetry.RemoveAt(i);
                     SyncLog.Warn(LogTopic.Buildings, "BuildSync realize: no local road for '" +
                         pending.command.PrefabName + "' after " + (AttachRetryWindowMs / 1000) +
@@ -275,9 +248,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 new float4(command.RotX, command.RotY, command.RotZ, command.RotW),
                 new float4(0f, 0f, 0f, 1f)));
 
-            // The same placement arriving twice (a replayed message, a lagged echo) would stack a
-            // second building exactly inside the first — geometry the sender's own validation can
-            // never produce, and native systems don't tolerate what the tools forbid.
+            // A replayed placement would stack a second building inside the first.
             if (AlreadyStandsAt(command, prefab, position, rotation))
             {
                 _rzFrameDuplicates++;

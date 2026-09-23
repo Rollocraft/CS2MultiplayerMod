@@ -3,11 +3,7 @@ using CS2MultiplayerMod.Game.Sync.Commands;
 
 namespace CS2MultiplayerMod.Game
 {
-    /// <summary>
-    /// Single source of truth for gameplay commands accepted at the session boundary.
-    /// Keeping authorization and diagnostic names together makes a newly introduced
-    /// command visible in logs as soon as it is admitted to the protocol.
-    /// </summary>
+    /// <summary>Gameplay commands accepted at the session boundary, with their diagnostic names.</summary>
     internal static class GameplayCommandRegistry
     {
         private static readonly ushort[] AllowedCommandIds =
@@ -29,10 +25,7 @@ namespace CS2MultiplayerMod.Game
             ObjectPlacementBatchCommand.Id, ObjectDeleteBatchCommand.Id,
         };
 
-        internal static void Register(MultiplayerSession session)
-        {
-            session.AllowCommands(AllowedCommandIds);
-        }
+        internal static void Register(MultiplayerSession session) => session.AllowCommands(AllowedCommandIds);
 
         /// <summary>A copy for callers that iterate the allow-list without being able to edit it.</summary>
         internal static ushort[] CopyAllowedIds() => (ushort[])AllowedCommandIds.Clone();

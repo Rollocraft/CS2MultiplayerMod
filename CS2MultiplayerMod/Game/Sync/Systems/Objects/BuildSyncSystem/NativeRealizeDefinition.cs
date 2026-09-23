@@ -4,15 +4,12 @@ using Game.Common;
 using Game.Net;
 using Game.Prefabs;
 using Game.Tools;
-using Unity.Collections;
 using Unity.Entities;
 using Unity.Mathematics;
 using CS2MultiplayerMod.Game.Sync.Commands;
 
 namespace CS2MultiplayerMod.Game.Sync.Systems
 {
-    // Building the game's own tool-definition entities from a remote operation's intents, and
-    // recognising an operation whose result this peer already has.
     public partial class BuildSyncSystem
     {
         private Entity CreateObjectToolDefinition(ObjectToolDefinitionIntent source,
@@ -26,8 +23,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 m_Original = resolved.Original,
                 m_Owner = resolved.Owner,
                 m_Attached = resolved.Attached,
-                // Defense in depth: remote definitions always enter through the coordinator's
-                // isolated transaction, even if a future caller skips the decode normalization.
+                // Remote definitions always go through the isolated transaction.
                 m_Flags = (CreationFlags)source.CreationFlags & ~CreationFlags.Permanent,
                 m_RandomSeed = source.RandomSeed,
             });
@@ -135,8 +131,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         private bool EquivalentObjectOperationAlreadyExists(ObjectToolOperationCommand command,
             ResolvedObjectDefinition[] resolved)
         {
-            // A stamp has no root object identity. Replay suppression is handled by OperationId;
-            // geometry proximity would incorrectly suppress two intentional adjacent stamps.
+            // A stamp has no root identity; OperationId handles replays.
             if (command.IsAssetStamp) return false;
             ObjectToolDefinitionIntent root = command.Definitions[command.RootIndex];
             if (root.Kind != ObjectToolDefinitionKind.Object ||
@@ -162,10 +157,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         }
 
         /// <summary>
-        /// Geometry alone is not a placement identity. Two players can legitimately place the same
-        /// prefab close together, especially small roadside buildings and props. Require the
-        /// generated variant seed as well, plus orientation for a free-standing object, before
-        /// treating a different operation as an already-committed replay.
+        /// A committed replay needs the same variant seed (and orientation, if free-standing); geometry
+        /// alone allows legitimate close placements.
         /// </summary>
         private Entity FindEquivalentPlacedObject(Entity prefab, ObjectDefinitionIntent source,
             int randomSeed, PortableEntityRef identity)
@@ -187,16 +180,12 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 float distance = math.distancesq(transform.m_Position, position);
                 if (distance >= bestDistance) continue;
 
-                // Attachment resolution may rotate the committed instance relative to its source
-                // definition. For unattached objects, orientation is stable and distinguishes two
-                // intentional close placements that happen to share a variant seed.
+                // Attachment can rotate the instance; orientation only counts when unattached.
                 bool attached = EntityManager.HasComponent<global::Game.Objects.Attached>(candidate);
                 float rotationDot = attached ? 1f : math.abs(math.dot(
                     math.normalizesafe(transform.m_Rotation.value,
                         new float4(0f, 0f, 0f, 1f)), rotation));
-                // Exact overlap can happen when two players click before receiving one another's
-                // edit. It is a genuine collision even though their independently advanced seeds
-                // differ; do not feed an impossible stacked graph into the native apply pipeline.
+                // Exact overlap from simultaneous clicks is a real collision despite different seeds.
                 if (distance <= ExactDuplicateDistanceSq && rotationDot >= 0.99999f)
                     return candidate;
                 if (!EntityManager.HasComponent<PseudoRandomSeed>(candidate) ||

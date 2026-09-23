@@ -1,4 +1,3 @@
-using System;
 using System.Collections.Generic;
 using Game.City;
 using Unity.Entities;
@@ -7,19 +6,13 @@ using CS2MultiplayerMod.Game.Sync.Infrastructure;
 
 namespace CS2MultiplayerMod.Game.Sync.Channels
 {
-    /// <summary>
-    /// Replicates the service-fee sliders (electricity/water price etc.): the
-    /// <see cref="ServiceFee"/> buffer on the city entity, keyed by
-    /// <see cref="PlayerResource"/> which is a stable enum (same on every machine).
-    /// Player-editable - every player may move the sliders; the host arbitrates.
-    /// </summary>
+    /// <summary>Service-fee sliders, keyed by the stable <see cref="PlayerResource"/> enum. Editable.</summary>
     public sealed class ServiceFeeStateChannel : IStateChannel
     {
         public const byte Id = 8;
         public byte ChannelId => Id;
 
-        // Native slider limits are substantially smaller. Keep a generous forward-compatible
-        // ceiling while rejecting non-finite or overflow-sized editable payloads.
+        // Generous forward-compatible ceiling; rejects non-finite or overflow-sized payloads.
         private const float MaxFee = 1000000f;
 
         private EntityQuery _cityQuery;
@@ -91,8 +84,7 @@ namespace CS2MultiplayerMod.Game.Sync.Channels
                 throw new ProtocolException("Service-fee table length differs from this game build (" +
                     count + " on wire, " + fees.Length + " locally).");
 
-            // Prove the complete table matches before changing any entry. A forged partial or
-            // foreign-build table can therefore never leave the host half-updated.
+            // Validate the whole table before changing any entry.
             var localResources = new HashSet<byte>();
             for (int f = 0; f < fees.Length; f++)
             {

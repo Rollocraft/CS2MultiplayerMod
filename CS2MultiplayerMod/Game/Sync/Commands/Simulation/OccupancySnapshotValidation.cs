@@ -1,23 +1,16 @@
 using System;
 using System.Collections.Generic;
-using System.Text;
 using CS2MultiplayerMod.Core.Protocol;
 
 namespace CS2MultiplayerMod.Game.Sync.Commands
 {
-    // What a page has to satisfy before any of it is applied. Every bound is checked on read, on a
-    // body a peer supplied, so a malformed or hostile page is refused at the decoder rather than
-    // part-applied - and every name index is checked against the table it claims to index.
-    //
-    // The page-local name table lives here too: prefab names repeat heavily inside a page, so they
-    // are interned once and referenced by index.
+    // Page bounds checked on read, so a hostile page is refused rather than part-applied, plus the
+    // page-local interned name table.
     public sealed partial class ResidentialOccupancySnapshot
     {
         /// <summary>
-        /// Shared validation for the codec and for host capture. Capture calls it before an entry
-        /// reaches a page, so one broken local prefab or transform is skipped rather than making
-        /// <see cref="Write"/> throw — city-state capture is shared, and a throw there would
-        /// suppress money, clock, demand and every other channel in the same snapshot.
+        /// Shared by codec and capture: capture skips a broken entry instead of making <see cref="Write"/>
+        /// throw, which would suppress every channel in the shared snapshot.
         /// </summary>
         public static bool IsValidProperty(OccupancyProperty property)
         {
@@ -115,9 +108,8 @@ namespace CS2MultiplayerMod.Game.Sync.Commands
         }
 
         /// <summary>
-        /// A random name slot is a plain index into a localized name list, or -1 for "this prefab
-        /// has no list". Both are drawn per machine from its own clock, which is why they have to
-        /// travel: without them the same family has a different surname on every peer.
+        /// Name-list indices or -1 for "no list". Drawn per machine, so they travel; otherwise one family has
+        /// a different surname on every peer.
         /// </summary>
         private static bool IsValidNameIndices(int[] indices)
         {
@@ -158,12 +150,7 @@ namespace CS2MultiplayerMod.Game.Sync.Commands
             return index;
         }
 
-        private static bool ReadStrictBool(NetworkReader reader)
-        {
-            byte value = reader.ReadByte();
-            if (value > 1) throw new ProtocolException("Invalid occupancy page flag.");
-            return value != 0;
-        }
+        private static bool ReadStrictBool(NetworkReader reader) => WireGuard.ReadStrictBool(reader, "occupancy page flag");
 
         private static bool IsValidName(string name)
         {
@@ -194,8 +181,7 @@ namespace CS2MultiplayerMod.Game.Sync.Commands
 
             public int IndexOf(string name)
             {
-                int index;
-                if (!_index.TryGetValue(name, out index))
+                if (!_index.TryGetValue(name, out int index))
                     throw new ProtocolException("Occupancy name missing from its own page table.");
                 return index;
             }

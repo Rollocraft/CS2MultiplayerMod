@@ -1,24 +1,14 @@
-using System;
 using System.Collections.Generic;
-using System.Diagnostics;
 using System.Text;
 using CS2MultiplayerMod.Game.Sync.Commands;
 using Game.Buildings;
-using Game.Citizens;
-using Game.Common;
-using Game.Economy;
 using Game.Prefabs;
 using Game.Simulation;
-using Game.Tools;
-using Game.Vehicles;
 using Unity.Collections;
 using Unity.Entities;
 
 namespace CS2MultiplayerMod.Game.Sync.Systems
 {
-    // Finding the properties whose roster changed. A rotating cursor walks one partition per
-    // update so the cost does not grow with the city, and native renter events prioritise a
-    // property the moment it changes rather than waiting for the sweep to come round.
     public partial class ResidentialOccupancySyncSystem
     {
         private PageAddResult TryAddPageEntry(ResidentialOccupancySnapshot snapshot,
@@ -96,12 +86,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         }
 
         /// <summary>
-        /// The change detector that gets a newly occupied building onto the wire in seconds rather
-        /// than waiting for the rolling baseline sweep to come round to it. It walks at most
-        /// <see cref="MaxPropertiesObservedPerUpdate"/> properties of one residential partition per
-        /// update and resumes where it stopped, so its cost does not grow with the city. A
-        /// partition counts as initialized, and its stale observations are pruned, only once the
-        /// cursor has been all the way round it.
+        /// Rolling change detector: at most <see cref="MaxPropertiesObservedPerUpdate"/> per update,
+        /// resuming where it stopped. A partition initializes and prunes only after one full lap.
         /// </summary>
         private void ScanHostChanges(int bucket)
         {
@@ -122,25 +108,17 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     Entity property = properties[cursor++];
                     _observedProperties++;
 
-                    // The allocation-free probe decides this; almost every property it looks at is
-                    // unchanged and stops here. See CaptureProbe.cs for why the full capture is
-                    // the wrong instrument for the question.
-                    int hash;
-                    if (!TryHashProperty(property, out hash)) continue;
-                    HostObserved observed;
-                    bool known = _hostObserved.TryGetValue(property, out observed);
+                    // The allocation-free probe; see CaptureProbe.cs.
+                    if (!TryHashProperty(property, out int hash)) continue;
+                    bool known = _hostObserved.TryGetValue(property, out HostObserved observed);
                     if (known && !observed.Stale && observed.Hash == hash)
                     {
                         _probeSkipped++;
                         continue;
                     }
 
-                    // Queue an identity, not a throwaway serialized roster. The page builder
-                    // captures current state, validates it and registers departure tracking before
-                    // emission. Previously we allocated/captured here and repeated it at send time.
-                    // Identities never sent to a peer do not need speculative tombstone tracking.
-                    PropertyRentIdentity identity;
-                    if (!TryGetHostPropertyIdentity(property, out identity)) continue;
+                    // Queue the identity; the page builder captures and validates at send time.
+                    if (!TryGetHostPropertyIdentity(property, out PropertyIdentity identity)) continue;
                     if (!known)
                     {
                         _hostObserved[property] = new HostObserved { Hash = hash, Bucket = bucket };
@@ -171,11 +149,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             if (wrapped) PruneHostObservedBucket(bucket);
         }
 
-        /// <summary>
-        /// Fast path for native renter transactions. This is called every simulation frame after
-        /// PropertyProcessingSystem, while its RentersUpdated event still names the exact property
-        /// whose absolute roster changed.
-        /// </summary>
+        /// <summary>Every frame after PropertyProcessingSystem, while RentersUpdated names the property.</summary>
         internal void CaptureRenterChanges()
         {
             MultiplayerService service = Mod.Service;
@@ -191,28 +165,18 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     Entity property = updates[i].m_Property;
                     if (service.Session.Role == Core.Session.SessionRole.Client)
                     {
-                        // PropertyProcessing and removal systems are intentionally still live on
-                        // the client. If either changes a renter link, immediately reassert the
-                        // last absolute host roster instead of waiting up to a full rolling sweep.
+                        // PropertyProcessing and removals still run on the client: reassert the host roster at once.
                         if (!IsLiveProperty(property) || !_cache.ContainsKey(property)) continue;
                         MarkDirty(property);
                         _clientRenterRepairSignals++;
                         continue;
                     }
 
-                    // Only the portable identity is needed to queue the signal. Serializing the
-                    // whole roster here was work thrown away: the page builder recaptures a
-                    // priority property at send time anyway, and this runs every simulation frame
-                    // over however many renter transactions the city just completed.
-                    PropertyRentIdentity identity;
-                    if (!TryGetHostPropertyIdentity(property, out identity)) continue;
+                    // Only the identity; the page builder recaptures at send time.
+                    if (!TryGetHostPropertyIdentity(property, out PropertyIdentity identity)) continue;
 
-                    // The event is authoritative proof of a completed renter mutation, so it is
-                    // always queued. The observer's stored hash now describes a roster that no
-                    // longer exists; mark it rather than recomputing it, so the next rolling pass
-                    // re-baselines without queueing the same property a second time.
-                    HostObserved observed;
-                    if (_hostObserved.TryGetValue(property, out observed)) observed.Stale = true;
+                    // Always queued. Mark the stored hash stale so the next pass re-baselines without re-queueing.
+                    if (_hostObserved.TryGetValue(property, out HostObserved observed)) observed.Stale = true;
                     Prioritize(property, identity);
                 }
             }
@@ -222,13 +186,10 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             }
         }
 
-        /// <summary>
-        /// The property's portable identity without serializing anything inside it. Prefab names
-        /// come from the cached catalogue, so this is a handful of component reads.
-        /// </summary>
-        private bool TryGetHostPropertyIdentity(Entity property, out PropertyRentIdentity identity)
+        /// <summary>The portable identity from a few component reads.</summary>
+        private bool TryGetHostPropertyIdentity(Entity property, out PropertyIdentity identity)
         {
-            identity = default(PropertyRentIdentity);
+            identity = default(PropertyIdentity);
             if (!IsLiveProperty(property)) return false;
             Entity prefab = EntityManager.GetComponentData<PrefabRef>(property).m_Prefab;
             if (prefab == Entity.Null || !EntityManager.Exists(prefab) ||
@@ -237,15 +198,14 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             if (string.IsNullOrEmpty(prefabName)) return false;
             global::Game.Objects.Transform transform =
                 EntityManager.GetComponentData<global::Game.Objects.Transform>(property);
-            identity = new PropertyRentIdentity(prefabName, transform.m_Position.x,
+            identity = new PropertyIdentity(prefabName, transform.m_Position.x,
                 transform.m_Position.y, transform.m_Position.z);
             return true;
         }
 
-        private void Prioritize(Entity entity, PropertyRentIdentity identity)
+        private void Prioritize(Entity entity, PropertyIdentity identity)
         {
-            int dropped;
-            if (_propertyState.Prioritize(identity, entity, MaxPriorityProperties, out dropped)) _priorityChanges++;
+            if (_propertyState.Prioritize(identity, entity, MaxPriorityProperties, out int dropped)) _priorityChanges++;
             _priorityDrops += dropped;
         }
 
@@ -256,8 +216,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             for (int i = 0; i < entities.Count; i++)
             {
                 Entity entity = entities[i];
-                HostObserved observed;
-                if (!_hostObserved.TryGetValue(entity, out observed)) continue;
+                if (!_hostObserved.TryGetValue(entity, out HostObserved observed)) continue;
                 if (!IsLiveProperty(entity) || observed.Bucket != bucket ||
                     EntityManager.GetSharedComponent<UpdateFrame>(entity).m_Index != (uint)bucket)
                 {

@@ -11,9 +11,8 @@ using Unity.Entities;
 namespace CS2MultiplayerMod.Game.Sync.Systems
 {
     /// <summary>
-    /// Watches the game's real dynamic buffers after citizen initialization. A changed-version
-    /// query makes this proportional to lifecycle work, rather than to the population, and the
-    /// flag cache filters HealthProblem jobs which acquired a writable chunk but changed no flag.
+    /// Watches household buffers after citizen initialization; cost follows lifecycle work, and the flag
+    /// cache drops HealthProblem writes that changed nothing.
     /// </summary>
     public sealed partial class ResidentialHouseholdLifecycleObservationSystem : GameSystemBase
     {
@@ -67,8 +66,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                             HealthProblem problem = EntityManager
                                 .GetComponentData<HealthProblem>(citizen);
                             byte flags = (byte)(0x80 | ((byte)problem.m_Flags & 0x7F));
-                            byte previous;
-                            if (_healthFlags.TryGetValue(citizen, out previous) &&
+                            if (_healthFlags.TryGetValue(citizen, out byte previous) &&
                                 previous == flags) continue;
                             _healthFlags[citizen] = flags;
                             changedHealth.Add(citizen);

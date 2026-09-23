@@ -20,14 +20,11 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
     {
         private void RealizeObjectDeletes(List<(ObjectDeleteCommand cmd, long deadline)> commands, long now)
         {
-            // Resolve prefab names once, restricted to object prefabs: net, area and stamp
-            // collections can expose the same display name, and resolving to one of those left
-            // every comparison below unable to match anything the tree could return.
+            // Object prefabs only: net, area and stamp collections can share a display name.
             var targets = new List<(Entity prefab, float3 pos, string name)>();
             for (int i = 0; i < commands.Count; i++)
             {
-                Entity prefab;
-                _prefabIndex.TryResolve(commands[i].cmd.PrefabName, IsObjectPrefab, out prefab);
+                _prefabIndex.TryResolve(commands[i].cmd.PrefabName, IsObjectPrefab, out Entity prefab);
                 targets.Add((prefab, new float3(commands[i].cmd.PosX, commands[i].cmd.PosY, commands[i].cmd.PosZ),
                     commands[i].cmd.PrefabName));
             }
@@ -36,19 +33,14 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             float radiusSq = ObjectMatchRadius * ObjectMatchRadius;
             int deleted = 0, deletedOwned = 0, waiting = 0, expired = 0;
 
-            // Candidates come from the game's object search tree (see ObjectSearch), which covers
-            // Object+Static and drops Deleted entries — exactly the top-level objects and owned
-            // upgrades this match used to walk the whole object domain to find.
+            // The object search tree covers Object+Static and drops Deleted entries.
             var candidates = new NativeList<Entity>(64, Allocator.Temp);
             var taken = new HashSet<Entity>();
             try
             {
                 for (int t = 0; t < targets.Count; t++)
                 {
-                    // The cross-prefab fallback exists for ONE case: a growable that levelled up
-                    // (same lot, new prefab name). It must never widen any other delete into a
-                    // building — that is how a stray sim-side delete near a hospital erased the
-                    // hospital on this machine and, via the echo below, on the sender's too.
+                    // Cross-prefab only for a growable that levelled up; never widen a delete into another building.
                     bool growableCmd = targets[t].prefab != Entity.Null
                         && EntityManager.HasComponent<BuildingData>(targets[t].prefab)
                         && EntityManager.HasComponent<SpawnableObjectData>(targets[t].prefab);
@@ -86,10 +78,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
                     if (best != Entity.Null)
                     {
-                        List<Entity> ownedDeleteGraph;
-                        string invalidReason;
-                        if (!TryCollectObjectDeleteGraph(best, out ownedDeleteGraph,
-                                out invalidReason))
+                        if (!TryCollectObjectDeleteGraph(best, out List<Entity> ownedDeleteGraph,
+                                out string invalidReason))
                         {
                             if (now < commands[t].deadline)
                             {
@@ -119,22 +109,15 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                             }
                             continue;
                         }
-                        // Mark with the VICTIM's prefab name — that is the key our own capture
-                        // derives from the entity next frame. Marking the command's name instead
-                        // left a cross-prefab victim unguarded, so its delete was re-broadcast
-                        // and tore down the sender's (different-named) original as well.
+                        // Guard with the victim's name: that is the key our own capture derives next frame.
                         string victimName = bestExact ? targets[t].name : _prefabSystem.GetPrefabName(bestPrefab);
                         if (string.IsNullOrEmpty(victimName)) victimName = targets[t].name;
                         _guard.Mark(DeleteKey(victimName, EntityManager.GetComponentData<Transform>(best).m_Position), now);
 
-                        // Read the parent before the delete: removing a roundabout island or a turn
-                        // sign only drops its effect if the parent re-selects its composition now.
+                        // Read before deleting: the parent must re-select its composition to drop the effect.
                         Entity attachParent = NetAttachment.GetNetParent(EntityManager, best);
 
-                        // Object-shaped service extensions are not removed merely because their
-                        // building receives Deleted. Delete owned descendants deepest-first so the
-                        // normal reference and sub-element systems can remove every upgrade,
-                        // extension network, and area without leaving an orphan behind.
+                        // Extensions survive their building's Deleted; delete owned descendants deepest-first.
                         for (int i = ownedDeleteGraph.Count - 1; i >= 0; i--)
                             EntityManager.AddComponent<Deleted>(ownedDeleteGraph[i]);
                         EntityManager.AddComponent<Deleted>(best);
@@ -153,8 +136,6 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     else
                     {
                         expired++;
-                        // Name the target: a delete that never finds a victim means the two cities
-                        // disagree about what stands here, and the prefab says which kind.
                         SyncLog.Warn(LogTopic.Buildings, "DeleteSync: no local match for '" +
                             targets[t].name + "' at " + targets[t].pos + " within " +
                             ObjectMatchRadius + "m (" + candidates.Length +
@@ -174,8 +155,6 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     " object root(s) and " + deletedOwned + " owned upgrade/subobject(s); " +
                     waiting + " awaiting a local match, " + expired +
                     " gave up (already gone, or geometry diverged).");
-            // Same reasoning as the road case: a demolition that found nothing to demolish leaves
-            // this city holding a building the other player has already removed.
             if (expired > 0)
                 Diagnostics.SyncLog.Warn(LogTopic.Buildings, "Build sync: " + expired +
                     " demolished object(s) had no match here and were " + "dropped after " +
@@ -253,11 +232,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             return true;
         }
 
-        /// <summary>
-        /// The candidate pools the match runs against: live top-level objects, plus owned service
-        /// upgrades so a removal aimed at one can reach that owned entity (the cross-prefab growable
-        /// fallback cannot, because an upgrade is not a spawnable building).
-        /// </summary>
+        /// <summary>Live top-level objects plus owned service upgrades.</summary>
         private bool IsDeleteCandidate(Entity entity)
         {
             if (!EntityManager.Exists(entity)) return false;
@@ -271,10 +246,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         }
 
         /// <summary>Restricts a name lookup to the object collection. See RealizeObjectDeletes.</summary>
-        private bool IsObjectPrefab(Entity prefab)
-        {
-            return EntityManager.HasComponent<ObjectData>(prefab);
-        }
+        private bool IsObjectPrefab(Entity prefab) => EntityManager.HasComponent<ObjectData>(prefab);
 
         private bool ValidateOwnedDeleteElement(Entity expectedOwner, Entity child, out string reason)
         {
@@ -294,16 +266,10 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             return true;
         }
 
-        // Endpoint-to-curve match tolerance (metres, XZ). The two cities' roads share the same XZ
-        // path but may be split into different edges and drift a little in terrain height, so a few
-        // metres in XZ reliably says "this edge lies on the bulldozed segment" without ever reaching
-        // a parallel road (a lane is wider than this).
+        // XZ tolerance: roads may be split differently on each machine, but a lane is wider than this.
         private const float EdgeMatchCurveTol = 4f;
 
-        // Max height difference (metres) for that match. Roads stack: a bridge can run directly above
-        // the bulldozed ground road on the same XZ line — a different LEVEL that must never match.
-        // Terrain and curves are both synced, so genuine height drift stays far below this, while
-        // stacked levels differ by a full elevation step.
+        // Y tolerance: a bridge over the bulldozed road differs by a full elevation step.
         private const float EdgeMatchCurveTolY = 4f;
 
         private void RealizeEdgeDeletes(List<(NetDeleteCommand cmd, long deadline)> commands, long now)
@@ -311,19 +277,14 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             var targets = new List<(Entity prefab, Bezier4x3 curve, string name, NetDeleteCommand cmd, long deadline)>();
             for (int i = 0; i < commands.Count; i++)
             {
-                Entity prefab;
-                if (_prefabIndex.TryResolve(commands[i].cmd.PrefabName, out prefab))
+                if (_prefabIndex.TryResolve(commands[i].cmd.PrefabName, out Entity prefab))
                     targets.Add((prefab, CurveOf(commands[i].cmd), commands[i].cmd.PrefabName,
                         commands[i].cmd, commands[i].deadline));
             }
             if (targets.Count == 0) return;
 
-            // Match phase first (no structural changes), then build the delete-definitions in one go.
-            // Coverage is against the UNION of the batch's same-prefab curves: one bulldoze can map to
-            // several local sub-edges AND — when this machine is LESS subdivided — one local edge can
-            // span several of the sender's deleted edges, so each sample point only needs to sit on
-            // SOME deleted curve. The midpoint sample keeps a U-shaped edge whose two ENDS happen to
-            // rest on the span (a loop) from being torn down.
+            // Match first, then build all delete definitions. Coverage is against the union of the batch's
+            // same-prefab curves, since subdivision differs per machine. The midpoint sample protects loops.
             var matched = new bool[targets.Count];
             var matchedEdges = new List<(Entity edge, string name, Bezier4x3 curve)>();
             NativeArray<Entity> entities = _liveEdges.ToEntityArray(Allocator.Temp);
@@ -334,8 +295,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     Entity candidatePrefab = EntityManager.GetComponentData<PrefabRef>(entities[i]).m_Prefab;
                     Bezier4x3 live = EntityManager.GetComponentData<Curve>(entities[i]).m_Bezier;
 
-                    string name;
-                    if (!CoveredByBatch(live, candidatePrefab, targets, matched, out name)) continue;
+                    if (!CoveredByBatch(live, candidatePrefab, targets, matched, out string name)) continue;
                     matchedEdges.Add((entities[i], name, live));
                 }
             }
@@ -347,10 +307,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             int deleted = 0;
             if (matchedEdges.Count > 0)
             {
-                // Reserve the default-tool definition frame, then build one real bulldoze
-                // delete-definition per matched edge: the game's
-                // ApplyNetSystem commits it, tearing down the edge's props/lanes, restoring the
-                // terrain and recombining nodes. A raw Deleted tag left "lanterns" and sunken road.
+                // A real delete definition: ApplyNetSystem removes props and lanes, restores terrain and
+                // recombines nodes, which a raw Deleted tag does not.
                 _netSync.PrepareDefinitionFrame();
                 for (int i = 0; i < matchedEdges.Count; i++)
                 {
@@ -360,11 +318,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 }
             }
 
-            // Hand the just-created delete-definitions to NetSync's ApplyTool commit; they become
-            // Temp+Delete edges at this frame's Modification and commit next frame (with any tool
-            // out — the commit overrides its applyMode). If the apply window expires without Temps,
-            // the matched commands replay: the original edges are still alive, so the re-match
-            // recreates the same delete-definitions next cycle.
+            // Committed through NetSync's ApplyTool pass. If the window expires the originals are still
+            // alive, so the commands replay and re-match.
             if (deleted > 0)
             {
                 var armed = new List<NetDeleteCommand>();
@@ -395,11 +350,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     " road segment(s); " + waiting + " awaiting a local match, " + expired +
                     " gave up (already gone, or geometry diverged).");
             }
-            // A bulldoze that never found its road is a road the other player no longer has and
-            // this one still does - a silent divergence, and one that surfaces later as somebody
-            // else's edit failing to resolve. It was only ever visible with verbose logging on,
-            // which is exactly the switch nobody has set during the session that needs explaining.
-            // Production level, always.
+            // Always logged: an unmatched bulldoze is a divergence that surfaces later elsewhere.
             if (expired > 0)
                 Diagnostics.SyncLog.Warn(LogTopic.Buildings, "Road sync: " + expired +
                     " bulldozed road segment(s) had no match here and " + "were dropped after " +
@@ -407,22 +358,12 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     "stand in this city and no longer stand in the other player's.");
         }
 
-        /// <summary>
-        /// Build bulldoze delete-definition for <paramref name="edge"/>: non-Permanent
-        /// <see cref="CreationDefinition"/> with <see cref="CreationFlags.Delete"/> and <see cref="NetCourse"/>.
-        /// Returns false if edge missing or lacks geometry.
-        /// </summary>
-        private bool CreateEdgeDeleteDef(Entity edge)
-        {
-            return CreateEdgeDeleteDefEntity(edge) != Entity.Null;
-        }
+        /// <summary>Bulldoze delete definition for <paramref name="edge"/>; false if it has no geometry.</summary>
+        private bool CreateEdgeDeleteDef(Entity edge) => CreateEdgeDeleteDefEntity(edge) != Entity.Null;
 
         /// <summary>Add a bulldoze definition to a caller-owned atomic net transaction.</summary>
         internal Entity CreateAtomicEdgeDeleteDef(Entity edge, string prefabName,
-            Bezier4x3 liveCurve, long now)
-        {
-            return CreateEdgeDeleteDefEntity(edge);
-        }
+            Bezier4x3 liveCurve, long now) => CreateEdgeDeleteDefEntity(edge);
 
         internal void MarkAtomicEdgeDelete(string prefabName, Bezier4x3 liveCurve, long now) =>
             _guard.Mark(DeleteKey(prefabName, liveCurve.a), now);
@@ -437,8 +378,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             {
                 Bezier4x3 curve = EntityManager.GetComponentData<Curve>(edge).m_Bezier;
                 Edge ends = EntityManager.GetComponentData<Edge>(edge);
-                // A net of repeating fixed elements (dam, fixed roundabout piece) identifies which
-                // piece an edge is by this index. Reporting -1 for one names no piece.
+                // Which piece of a repeating fixed-element net (dam, fixed roundabout) this edge is.
                 int fixedIndex = EntityManager.HasComponent<global::Game.Net.Fixed>(edge)
                     ? EntityManager.GetComponentData<global::Game.Net.Fixed>(edge).m_Index
                     : -1;
@@ -469,9 +409,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     },
                 });
                 EntityManager.AddComponent<Updated>(def);
-                // Self-cleanup: the definition is consumed this frame (Updated) and swept at frame
-                // end (Deleted) — same recipe as the build path's courses. Without it stale
-                // definitions linger until a build tool's own destroy pass happens to run.
+                // Consumed this frame, swept at frame end, like the build path's courses.
                 EntityManager.AddComponent<Deleted>(def);
                 completed = true;
                 return def;
@@ -499,9 +437,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         };
 
         /// <summary>
-        /// True when <paramref name="live"/> endpoints and midpoint lie within <see cref="EdgeMatchCurveTol"/>
-        /// (XZ) and <see cref="EdgeMatchCurveTolY"/> (Y) of same-prefab batch curves. Flags matches in
-        /// <paramref name="matched"/>, returns prefab name in <paramref name="name"/>.
+        /// Endpoints and midpoint of <paramref name="live"/> lie on same-prefab batch curves within the
+        /// match tolerances; flags <paramref name="matched"/>.
         /// </summary>
         private static bool CoveredByBatch(Bezier4x3 live, Entity livePrefab,
             List<(Entity prefab, Bezier4x3 curve, string name, NetDeleteCommand cmd, long deadline)> targets,
@@ -527,8 +464,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             for (int t = 0; t < targets.Count; t++)
             {
                 if (targets[t].prefab != livePrefab) continue;
-                float tt;
-                if (MathUtils.Distance(targets[t].curve.xz, p.xz, out tt) > EdgeMatchCurveTol) continue;
+                if (MathUtils.Distance(targets[t].curve.xz, p.xz, out float tt) > EdgeMatchCurveTol) continue;
                 if (math.abs(MathUtils.Position(targets[t].curve, tt).y - p.y) > EdgeMatchCurveTolY) continue;
                 return t;
             }

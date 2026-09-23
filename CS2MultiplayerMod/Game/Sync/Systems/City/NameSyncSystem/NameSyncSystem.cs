@@ -1,6 +1,4 @@
-using System.Collections.Concurrent;
 using System.Collections.Generic;
-using Game;
 using Game.Areas;
 using Game.Common;
 using Game.Prefabs;
@@ -8,40 +6,27 @@ using Game.Tools;
 using Unity.Entities;
 using Unity.Mathematics;
 using Colossal.Mathematics;
-using CS2MultiplayerMod.Core.Diagnostics;
 using CS2MultiplayerMod.Core.Sync;
-using CS2MultiplayerMod.Core.Protocol.Messages;
 using CS2MultiplayerMod.Core.Session;
-using CS2MultiplayerMod.Game.Diagnostics;
 using CS2MultiplayerMod.Game.Sync.Commands;
 using CS2MultiplayerMod.Game.Sync.Infrastructure;
 
 namespace CS2MultiplayerMod.Game.Sync.Systems
 {
     /// <summary>
-    /// Replicates what things are called: street, district, transport-line and building names.
-    ///
-    /// Two separate mechanisms produce a name. A player's typed name is held by the game's naming
-    /// system, which keeps it outside the entity itself - so it is detected by a 1 Hz diff of that
-    /// system's own lookup and applied through it. An untouched entity is instead named from its
-    /// prefab's name list by an index drawn when the entity appears, from a seed that differs per
-    /// machine: a road built on one machine got a different name on the other. The host's draw is
-    /// the city's, and is republished whenever a street's edge set changes - a street is an
-    /// aggregate, and aggregates are created, merged and dropped again as roads are drawn.
-    ///
-    /// Names are cosmetic, so a target that never appears is dropped with a warning rather than
-    /// escalated to a world resync.
+    /// Replicates street, district, line and building names. Typed names live in the game's naming
+    /// system and are found by a 1 Hz diff. Auto-names are per-machine random draws, so the host's
+    /// draw is published and republished whenever a street's edge set changes. Names are cosmetic: a
+    /// missing target is dropped, never escalated.
     /// </summary>
-    public partial class NameSyncSystem : GameSystemBase
+    public partial class NameSyncSystem : CommandSyncSystem
     {
         private const long ScanIntervalMs = 1000;
         private const long RetryIntervalMs = 500;
         private const long TargetRetryWindowMs = 15000;
         private const int MaxPendingTargets = 512;
 
-        // A street regroups for several frames while an operation's courses keep arriving, so its
-        // draw is published only once it has stood still - one command per street per gesture
-        // instead of one per intermediate grouping.
+        // A street regroups over several frames; publish once it stands still.
         private const long AutoNameSettleMs = 400;
 
         /// <summary>How long a receiver keeps defending an applied draw against its own regrouping.</summary>
@@ -49,22 +34,18 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
         private const long PublishedPruneIntervalMs = 10000;
 
-        // A street's identity on the wire is a point on one of its edges, so resolving it means
-        // finding that edge. Same-edge geometry is identical on both machines; the tolerance only
-        // absorbs float noise and keeps a road stacked above another (bridge) from answering.
+        // A street is found through a point on one of its edges; the tolerance absorbs float noise
+        // and keeps a bridge above from answering.
         private const float StreetSearchRadius = 8f;
         private const float StreetTolXZ = 4f;
         private const float StreetTolY = 4f;
 
-        // Placed objects sit at the same position on every machine; districts can differ far more,
-        // because their centroid moves whenever the polygon is redrawn.
+        // Districts differ more: their centroid moves when redrawn.
         private const float ObjectSearchRadius = 8f;
         private const float ObjectMatchDistance = 4f;
         private const float RouteMatchDistance = 16f;
         private const float DistrictMatchDistance = 500f;
 
-        private readonly ConcurrentQueue<SimulationCommandMessage> _incoming =
-            new ConcurrentQueue<SimulationCommandMessage>();
         private readonly LatestTargetRetryQueue<string, (EntityNameCommand cmd, int origin)> _targetRetry =
             new LatestTargetRetryQueue<string, (EntityNameCommand, int)>(MaxPendingTargets, TargetRetryWindowMs);
 
@@ -99,13 +80,10 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         private EntityQuery _createdDistricts;
         private EntityQuery _districts;
         private EntityQuery _routes;
-        private CommandObserver _observer;
 
         /// <summary>
-        /// An auto-name draw this machine adopted, kept until <see cref="AutoNameHoldMs"/> passes.
-        /// The street it was written to is remembered so a newer draw for the same street replaces
-        /// it instead of fighting it, and the anchor so the hold survives that street being merged
-        /// away.
+        /// An adopted auto-name draw, held for <see cref="AutoNameHoldMs"/>; keyed by street so a newer draw
+        /// replaces it, and by anchor so it survives a merge.
         /// </summary>
         private sealed class AutoNameHold
         {
@@ -128,19 +106,14 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             _objectSearch = new ObjectSearch(
                 World.GetOrCreateSystemManaged<global::Game.Objects.SearchSystem>());
 
-            // Everything that carries a typed name, whatever kind it is. The marker component is
-            // what the game adds alongside the name itself, so this query stays as small as the
-            // number of things a player has actually renamed.
+            // Entities with a typed name; the marker keeps this as small as the number of renames.
             _namedEntities = GetEntityQuery(new EntityQueryDesc
             {
                 All = SyncQuery.ReadOnly<global::Game.UI.CustomName, PrefabRef>(),
                 None = SyncQuery.ReadOnly<Temp, Deleted>(),
             });
 
-            // A street's draw is published whenever its edge set changes, not only when the street
-            // first appears: an aggregate that swallows another keeps its own draw, and which of the
-            // two survives is decided per machine. Updated covers both cases - the archetype a new
-            // aggregate is built from carries it alongside Created.
+            // Published whenever the edge set changes: which aggregate survives a merge is per machine.
             _changedStreets = GetEntityQuery(new EntityQueryDesc
             {
                 All = SyncQuery.ReadOnly<Updated, global::Game.Net.Aggregate,
@@ -154,8 +127,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 None = SyncQuery.ReadOnly<Temp, Deleted>(),
             });
 
-            // Districts are never merged, so their draw still travels from the one frame the area
-            // appears. Loading a world does not tag entities Created, so a join never re-broadcasts.
+            // Districts never merge, so their draw travels once; loaded worlds are not tagged Created.
             _createdDistricts = GetEntityQuery(new EntityQueryDesc
             {
                 All = SyncQuery.ReadOnly<Created, District, RandomLocalizationIndex, Node, PrefabRef>(),
@@ -173,28 +145,16 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 None = SyncQuery.ReadOnly<Temp, Deleted>(),
             });
 
-            _observer = SyncObserverBinding.Bind(
-                () => new CommandObserver(_incoming, EntityNameCommand.Id)
-                    {
-                        MaxBodyBytes = EntityNameCommand.MaxEncodedBytes,
-                    },
-                DrainQueue);
+            ListenFor(new[] { EntityNameCommand.Id }, EntityNameCommand.MaxEncodedBytes);
         }
 
-        protected override void OnDestroy()
-        {
-            SyncObserverBinding.Unbind(_observer, DrainQueue);
-            base.OnDestroy();
-        }
-
-        private void DrainQueue()
+        protected override void DrainQueue()
         {
             if (!_incoming.IsEmpty) SyncInbox.Clear(_incoming);
             if (_targetRetry.Count > 0) _targetRetry.Clear();
             if (_autoHold.Count > 0) _autoHold.Clear();
             if (_dirtyStreets.Count > 0) _dirtyStreets.Clear();
-            // A replaced world invalidates every entity the baseline holds; the next scan primes
-            // against the installed one instead of reporting all of it as renamed.
+            // A replaced world: prime again instead of reporting everything as renamed.
             if (_knownNames.Count > 0) _knownNames.Clear();
             if (_publishedAuto.Count > 0) _publishedAuto.Clear();
             _primed = false;
@@ -211,8 +171,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 MultiplayerSession session = service.Session;
                 if (!service.GameplaySyncReady)
                 {
-                    // Anything queued while a world is loading is already part of that world; holding it
-                    // would only fill the inbox until it overflowed.
+                    // Queued during a load is already in that world.
                     DrainQueue();
                     return;
                 }
@@ -251,9 +210,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 kind = EntityNameCommand.KindRoute;
                 return true;
             }
-            // Static excludes citizens, vehicles and animals: they can be renamed too, but the
-            // simulation spawns them independently on each machine, so nothing identifies them
-            // across the wire.
+            // Citizens, vehicles and animals are spawned per machine and have no shared identity.
             if (EntityManager.HasComponent<global::Game.Objects.Transform>(entity) &&
                 EntityManager.HasComponent<global::Game.Objects.Static>(entity))
             {
@@ -321,10 +278,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         }
 
         /// <summary>
-        /// A street is a road aggregate: a set of edges with no geometry of its own. Its identity is
-        /// therefore a point on one of those edges - the midpoint of the edge that sorts first by
-        /// position. The choice has to be order-independent because the aggregate's own edge list is
-        /// built by walking the road from whichever end it grew from, which differs per machine.
+        /// A street's identity: the midpoint of its first edge by position, order-independent because
+        /// each machine builds the edge list from a different end.
         /// </summary>
         private bool TryStreetAnchor(Entity aggregate, out float3 anchor)
         {

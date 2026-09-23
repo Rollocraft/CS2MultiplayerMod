@@ -13,9 +13,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
     public partial class NameSyncSystem
     {
         /// <summary>
-        /// Diff the game's typed-name lookup against the last observation. The lookup is a managed
-        /// table, updated the moment a player confirms a rename, so this sees a rename whether the
-        /// game is running or paused - and one scan covers every kind of name in one place.
+        /// Diffs the game's typed-name table, which updates on confirm, paused or not, for every kind.
         /// </summary>
         private void ScanCustomNames(MultiplayerSession session)
         {
@@ -28,13 +26,11 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     for (int i = 0; i < entities.Length; i++)
                     {
                         Entity entity = entities[i];
-                        string name;
-                        if (!_nameSystem.TryGetCustomName(entity, out name) ||
+                        if (!_nameSystem.TryGetCustomName(entity, out string name) ||
                             string.IsNullOrEmpty(name)) continue;
 
                         _seen.Add(entity);
-                        string previous;
-                        if (_knownNames.TryGetValue(entity, out previous) && previous == name) continue;
+                        if (_knownNames.TryGetValue(entity, out string previous) && previous == name) continue;
                         _knownNames[entity] = name;
                         if (_primed) SendCustomName(session, entity, name);
                     }
@@ -46,15 +42,12 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             }
 
             CollectClearedNames(session);
-            // The first scan of a session only records: both machines start from the same state
-            // (a fresh map, or the world just streamed from the host), so nothing has changed yet.
+            // The first scan only records: both machines start from the same state.
             _primed = true;
         }
 
         /// <summary>
-        /// A name that vanished from the lookup was either cleared by a player - which must
-        /// replicate - or removed with its entity, which must not: the peer bulldozed the same
-        /// thing and has nothing left to rename.
+        /// A vanished name was cleared (replicates) or went with its entity (does not: the peer deleted it too).
         /// </summary>
         private void CollectClearedNames(MultiplayerSession session)
         {
@@ -67,10 +60,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 Entity entity = _dropped[i];
                 bool alive = EntityManager.Exists(entity) &&
                              !EntityManager.HasComponent<Deleted>(entity);
-                string current;
-                // Still named, just not in the query yet: the marker component is added through a
-                // command buffer, so a rename made this frame is invisible here for one frame.
-                if (alive && _nameSystem.TryGetCustomName(entity, out current) &&
+                // The marker arrives through a command buffer, one frame late.
+                if (alive && _nameSystem.TryGetCustomName(entity, out string current) &&
                     !string.IsNullOrEmpty(current)) continue;
 
                 _knownNames.Remove(entity);
@@ -79,10 +70,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             }
         }
 
-        /// <summary>
-        /// Publish auto-name draws. Host only: the draw is a local random roll, so both machines
-        /// rolling and sending would overwrite each other forever. The host's roll is the city's.
-        /// </summary>
+        /// <summary>Host only: auto-names are local rolls, and the host's is the city's.</summary>
         private void CaptureAutoNames(MultiplayerSession session, long now)
         {
             if (session.Role != SessionRole.Host) return;
@@ -93,9 +81,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         }
 
         /// <summary>
-        /// Record what every street already shows, once per installed world. Both machines start
-        /// from the same save, so nothing standing at that point needs to travel; only what changes
-        /// afterwards does. A street created on this frame is left out - it is a real change.
+        /// Records every street's current name once per world; only later changes travel. A street
+        /// created this frame is a real change.
         /// </summary>
         private void BaselineStreets()
         {
@@ -121,10 +108,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         }
 
         /// <summary>
-        /// Note the streets whose edge set changed this frame. A grid regroups its aggregates
-        /// repeatedly while its courses commit, so the draw is read once the settle window has
-        /// passed rather than on each intermediate grouping. The window is set when a street first
-        /// goes dirty and never extended: a street that kept changing would otherwise never publish.
+        /// Notes streets whose edge set changed. A grid regroups repeatedly, so the draw is read after a
+        /// settle window that is never extended, or a busy street would never publish.
         /// </summary>
         private void CollectChangedStreets(long now)
         {
@@ -167,16 +152,12 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     continue;
                 }
 
-                byte kind;
-                string prefabName;
-                float3 anchor;
-                if (!TryIdentify(street, out kind, out prefabName, out anchor)) continue;
+                if (!TryIdentify(street, out byte kind, out string prefabName, out float3 anchor)) continue;
                 int[] indices = ReadRandomIndices(street);
                 if (indices.Length == 0) continue;
 
                 string stamp = Stamp(prefabName, anchor, ElementCount(street), indices);
-                string published;
-                if (_publishedAuto.TryGetValue(street, out published) && published == stamp) continue;
+                if (_publishedAuto.TryGetValue(street, out string published) && published == stamp) continue;
                 _publishedAuto[street] = stamp;
 
                 Send(session, new EntityNameCommand
@@ -203,10 +184,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     int[] indices = ReadRandomIndices(entities[i]);
                     if (indices.Length == 0) continue;
 
-                    byte kind;
-                    string prefabName;
-                    float3 anchor;
-                    if (!TryIdentify(entities[i], out kind, out prefabName, out anchor)) continue;
+                    if (!TryIdentify(entities[i], out byte kind, out string prefabName, out float3 anchor)) continue;
 
                     Send(session, new EntityNameCommand
                     {
@@ -227,19 +205,15 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
         private string StampOf(Entity street)
         {
-            byte kind;
-            string prefabName;
-            float3 anchor;
-            if (!TryIdentify(street, out kind, out prefabName, out anchor)) return null;
+            if (!TryIdentify(street, out byte kind, out string prefabName, out float3 anchor)) return null;
             int[] indices = ReadRandomIndices(street);
             if (indices.Length == 0) return null;
             return Stamp(prefabName, anchor, ElementCount(street), indices);
         }
 
         /// <summary>
-        /// Everything a peer needs to reproduce this street's name. The edge count belongs in it:
-        /// a merge can leave the surviving aggregate's draw and first-sorting edge untouched while
-        /// the street it stands for has grown, and the peer may have kept the other aggregate.
+        /// What a peer needs to reproduce the name, including the edge count: a merge can grow the street
+        /// without changing its draw or first edge.
         /// </summary>
         private string Stamp(string prefabName, float3 anchor, int elements, int[] indices) =>
             Infrastructure.ReplicationGuard.Key(prefabName, anchor) + "|" + elements + "|" +
@@ -265,21 +239,15 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
         private void SendCustomName(MultiplayerSession session, Entity entity, string name)
         {
-            byte kind;
-            string prefabName;
-            float3 anchor;
-            if (!TryIdentify(entity, out kind, out prefabName, out anchor))
+            if (!TryIdentify(entity, out byte kind, out string prefabName, out float3 anchor))
             {
-                // Expected for citizens, vehicles and animals. Naming the prefab keeps the line
-                // useful if some other kind of entity ever turns up here.
                 SyncLog.Detail(LogTopic.City, "NameSync: '" + name + "' is on '" +
                     (LocalPrefabName(entity) ?? "?") + "', which has no cross-machine " +
                     "identity; not replicated.");
                 return;
             }
 
-            // Clamp here rather than at the encoder: a name past the cap should still replicate,
-            // shortened, instead of being refused as an oversized command.
+            // Clamp here so an over-long name replicates shortened instead of being refused.
             string wire = CS2MultiplayerMod.Core.Protocol.WireGuard.SanitizeText(
                 name, EntityNameCommand.MaxCustomNameLength);
             Send(session, new EntityNameCommand

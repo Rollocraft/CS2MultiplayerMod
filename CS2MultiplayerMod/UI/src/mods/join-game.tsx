@@ -1,7 +1,6 @@
+import { GROUP, tryModule, useT } from "mods/ui-helpers";
 import { bindValue, trigger, useValue } from "cs2/api";
 import { AutoNavigationScope, BackConsumer, NavigationDirection } from "cs2/input";
-import { useLocalization } from "cs2/l10n";
-import { getModule } from "cs2/modding";
 import { Button, DialogContext, DialogStack, MenuButton } from "cs2/ui";
 import { CSSProperties, ReactNode, useContext, useEffect, useRef, useState } from "react";
 import {
@@ -14,18 +13,13 @@ import {
 import { DisclaimerModal, disclaimerAccepted$ } from "mods/disclaimer";
 import { MultiplayerJoinLoadingScreen } from "mods/loading-screen";
 import { OtherModsBanner, useModsBlocked } from "mods/mods-banner";
+import { FormField, FormFieldProps } from "mods/form-field";
 import { MULTIPLAYER_BLUE } from "mods/multiplayer-theme";
 import { RESYNC_ALLOW, RESYNC_LOC, ResyncPolicyDropdown } from "mods/resync-policy";
 import { VersionWarningBanner } from "mods/version-banner";
 
-// Binding group shared with MultiplayerUISystem on the C# side. The field values
-// live in the mod's Setting object, so this screen, the in-game hub and Options
-// all share the same multiplayer data.
-const GROUP = "cs2mp";
-
-// Locale keys served by the mod's LocaleEN/LocaleDE dictionary sources (constants
-// in L10n.Key on the C# side). The game resolves them against its active language;
-// the inline fallbacks only cover a dictionary that has not loaded yet.
+// Keys from the mod's locales/<lang>.properties; the inline fallbacks only cover a dictionary that
+// has not loaded yet.
 const LOC = {
     multiplayer: "CS2MP.UI.Multiplayer",
     joinGame: "CS2MP.UI.JoinGame",
@@ -46,13 +40,6 @@ const LOC = {
     closeSession: "CS2MP.UI.CloseSession",
     ...CONNECTION_LOC,
     ...RESYNC_LOC,
-};
-
-// translate() is typed string | null; this narrows it to the English fallback so
-// JSX/props that require a string stay clean.
-const useT = () => {
-    const { translate } = useLocalization();
-    return (id: string, fallback: string) => translate(id, fallback) ?? fallback;
 };
 
 const playerName$ = bindValue<string>(GROUP, "playerName", "Player");
@@ -89,13 +76,7 @@ const openMultiplayerScreen = () => trigger(GROUP, "openMultiplayerScreen");
 // sizing and layout identical to those screens. The paths are vanilla-internal and
 // can move on a game update, hence the inline fallbacks that replicate the same
 // geometry.
-const tryModule = (path: string, exportName: string): any => {
-    try {
-        return getModule(path, exportName);
-    } catch {
-        return null;
-    }
-};
+
 const VanillaSubScreen = tryModule("game-ui/menu/components/shared/sub-screen/sub-screen.tsx", "SubScreen");
 const VanillaTransitionGroup = tryModule(
     "game-ui/common/animations/transition-group-coordinator.tsx",
@@ -115,8 +96,6 @@ const subScreenClasses: Record<string, string> | null =
 const childOpacityTransitionClass = subScreenClasses?.header
     ?.split(/\s+/)
     .find((className) => className.startsWith("child-opacity-transition"));
-// The game scales its UI by adjusting the root font size, so rem behaves like
-// resolution-independent pixels; all sizes below follow that convention.
 const styles: Record<string, CSSProperties> = {
     pageHost: {
         width: "100%",
@@ -397,53 +376,8 @@ const styles: Record<string, CSSProperties> = {
     },
 };
 
-interface FieldProps {
-    label: string;
-    value: string;
-    secret?: boolean;
-    disabled?: boolean;
-    onChange: (value: string) => void;
-}
-
-const Field = ({ label, value, secret, disabled, onChange }: FieldProps) => {
-    const [draft, setDraft] = useState(value);
-    const [editing, setEditing] = useState(false);
-
-    useEffect(() => {
-        if (!editing) setDraft(value);
-    }, [value]);
-
-    const updateValue = (next: string) => {
-        setDraft(next);
-        onChange(next);
-    };
-
-    return (
-        <div style={styles.row}>
-            <div style={styles.label}>{label}</div>
-            <input
-                type={secret ? "password" : "text"}
-                style={disabled ? { ...styles.input, ...styles.inputDisabled } : styles.input}
-                value={draft}
-                disabled={disabled}
-                spellCheck={false}
-                autoComplete="off"
-                onFocus={() => setEditing(true)}
-                onBlur={() => {
-                    setEditing(false);
-                    if (draft !== value) onChange(draft);
-                }}
-                onMouseDown={(e) => e.stopPropagation()}
-                onKeyDown={(e) => {
-                    // Let Escape reach the native BackConsumer even while a text
-                    // field is active; keep gameplay/menu shortcuts out otherwise.
-                    if (e.key !== "Escape") e.stopPropagation();
-                }}
-                onChange={(e) => updateValue((e.target as HTMLInputElement).value)}
-            />
-        </div>
-    );
-};
+// Escape still reaches the native BackConsumer while a field is focused.
+const Field = (props: FormFieldProps) => <FormField {...props} styles={styles} escapeBubbles />;
 
 interface ChoiceTileProps {
     focusKey: string;

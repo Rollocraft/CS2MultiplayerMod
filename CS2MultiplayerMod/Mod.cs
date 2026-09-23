@@ -17,19 +17,14 @@ namespace CS2MultiplayerMod
     {
         public const string Name = "CS2MultiplayerMod";
 
-        /// <summary>
-        /// The game's logger, and the destination <see cref="Game.Diagnostics.SyncLog"/> writes to.
-        /// Not a front door: log through SyncLog so the line gets its topic, its switch and its
-        /// copy in the flight log.
-        /// </summary>
+        /// <summary>The game logger behind <see cref="Game.Diagnostics.SyncLog"/>; log through SyncLog.</summary>
         public static ILog log = LogManager.GetLogger(Name).SetShowsErrorsInUI(false);
 
         public static Setting Setting;
 
         /// <summary>
-        /// Game locale ID -> the <c>locales/&lt;lang&gt;.properties</c> file backing it.
-        /// The IDs are the ones the game ships its own dictionaries under, so they must
-        /// match exactly (Simplified Chinese is <c>zh-HANS</c>, not <c>zh-CN</c>).
+        /// Game locale id -> <c>locales/&lt;lang&gt;.properties</c>. The ids must match the game's exactly
+        /// (Simplified Chinese is <c>zh-HANS</c>).
         /// </summary>
         private static readonly KeyValuePair<string, string>[] LocaleSources =
         {
@@ -44,50 +39,30 @@ namespace CS2MultiplayerMod
             new KeyValuePair<string, string>("zh-HANS", "zh-HANS"),
         };
 
-        /// <summary>
-        /// The live multiplayer bridge. Created here and pumped each tick by
-        /// <see cref="MultiplayerSystem"/>; the settings screen drives it via
-        /// host/join/disconnect buttons.
-        /// </summary>
+        /// <summary>The live multiplayer bridge, pumped by <see cref="MultiplayerSystem"/>.</summary>
         public static MultiplayerService Service;
 
         /// <summary>
-        /// The version this build reports to the log, the flight log and the options screen -
-        /// the published one, hotfix suffix and all. What a peer is shown is
+        /// The published version, hotfix suffix included, from the informational version stamped out of
+        /// Properties/PublishConfiguration.xml; the assembly version stays 1.0.0.0. Peers see
         /// <see cref="CompatibilityVersion"/>.
-        ///
-        /// Read from the informational version, which the build stamps from
-        /// Properties/PublishConfiguration.xml (see the csproj): that is the number the store
-        /// shows and the one a player quotes in a report. The assembly version is only the
-        /// fallback - it stays 1.0.0.0 across releases, so while it was the source every build
-        /// called itself the same thing and the handshake's version check could never fire.
         /// </summary>
         internal static string Version => _version ?? (_version = ReadVersion());
 
         /// <summary>
-        /// The version a peer is compared against: the numeric release part of
-        /// <see cref="Version"/>, so "0.1.6.1h1" meets "0.1.6.1". A hotfix suffix marks a build
-        /// that changed nothing the two machines have to agree on - the wire, the prefabs and the
-        /// simulation are the release's - so those two still play together, while a different
-        /// release is refused (the host can still admit it: IgnoreModCompatibilityChecks).
+        /// The numeric release part of <see cref="Version"/>, so "0.1.6.1h1" meets "0.1.6.1": a hotfix changes
+        /// nothing peers must agree on. A different release is refused unless the host ignores compatibility.
         /// </summary>
         internal static string CompatibilityVersion =>
             _compatibilityVersion ?? (_compatibilityVersion = ReleasePart(Version));
 
         /// <summary>
-        /// The stamp a locally built copy carries after the version, and an empty string in a
-        /// published one: a released build is the version and nothing else. The number changes
-        /// on every local build, so it answers the only question a dev build raises - whether
-        /// the game is running what was just compiled. Never on the wire: peers compare
-        /// <see cref="CompatibilityVersion"/>, which two dev builds of one release share.
+        /// A local build's stamp (empty when published), to confirm the game runs what was just compiled.
+        /// Never on the wire.
         /// </summary>
         internal static string BuildStamp => _buildStamp ?? (_buildStamp = ReadBuildStamp());
 
-        /// <summary>
-        /// What the options screen shows. A released build is the version and nothing else - the
-        /// protocol number is a development detail and means nothing to a player. A locally built
-        /// copy adds the build stamp and the protocol, which is what a dev build is read for.
-        /// </summary>
+        /// <summary>The options-screen version: plain when released; local builds add stamp and protocol.</summary>
         internal static string VersionLine =>
             BuildStamp.Length == 0
                 ? Version
@@ -117,8 +92,7 @@ namespace CS2MultiplayerMod
 
         private static string ReadVersion()
         {
-            // A build that has SourceLink, a revision id or our own dev stamp appends "+<...>";
-            // these strings are read and compared, so keep only the part a human calls a version.
+            // Drop a "+<...>" suffix; the result is compared and read as a version.
             string stamped = ReadInformationalVersion();
             if (stamped.Length > 0)
             {
@@ -152,12 +126,10 @@ namespace CS2MultiplayerMod
 
         public void OnLoad(UpdateSystem updateSystem)
         {
-            // Crash forensics first: the flight log must be recording before anything
-            // else of ours can fail (see FlightRecorder).
+            // The flight log must be recording before anything else can fail.
             FlightRecorder.Start(StampedVersion);
 
-            // Route the sync inbox's rare backpressure/drain warnings through the one logger.
-            // They are pipeline faults, so they are never gated by a switch.
+            // Inbox backpressure warnings are pipeline faults, never gated.
             Game.Sync.Infrastructure.SyncInbox.LogWarn =
                 delegate(string message) { SyncLog.Warn(LogTopic.Pipeline, message); };
 
@@ -169,15 +141,10 @@ namespace CS2MultiplayerMod
                 modFolder = System.IO.Path.GetDirectoryName(asset.path);
             }
 
-            // Register settings and the locale sources backing them (and all runtime
-            // strings). The game picks the source matching the language the player
-            // set in the options — no mod-specific language setting, like vanilla.
+            // The game picks the locale source matching its language; no mod language setting.
             Setting = new Setting(this);
             Setting.RegisterInOptionsUI();
-            // Each language is one embedded locales/<lang>.properties file, keyed by the
-            // locale ID the game itself uses. Key parity across those files is enforced by
-            // CI (.github/workflows/locale.yml), not at runtime; a language the game does
-            // not offer simply never gets asked for, and unlisted ones fall back to English.
+            // One embedded locales/<lang>.properties per game locale id; unlisted languages fall back to English.
             foreach (var locale in LocaleSources)
                 GameManager.instance.localizationManager.AddSource(
                     locale.Key, new PropertiesLocaleSource(Setting, locale.Value));
@@ -185,12 +152,10 @@ namespace CS2MultiplayerMod
             // Persist / load settings to the standard mod settings store.
             AssetDatabase.global.LoadSettings(Name, Setting, new Setting(this));
 
-            // Stand up the multiplayer core. The portable half logs through the same logger as
-            // the rest of the mod; ColossalModLogger is the seam (see there).
+            // Core logs through the same logger via ColossalModLogger.
             IModLogger coreLog = ColossalModLogger.Instance;
 
-            // Offer Steam's relay as a hosting backend. Availability is decided here once;
-            // when Steam is absent the mod simply keeps to direct connections.
+            // Relay availability is decided once; without Steam only direct connections exist.
             SteamRelayBootstrap.Register(coreLog, modFolder);
 
             // Needs the backend above: it is what knows the platform account's name.
@@ -198,173 +163,117 @@ namespace CS2MultiplayerMod
 
             Service = new MultiplayerService(coreLog);
 
-            // The sync pipeline asks before it reloads a world. Route that question at the live
-            // service, which owns the clock, the in-flight-recovery state and the arbiter.
+            // The live service owns the clock, recovery state and arbiter.
             Game.Sync.Infrastructure.SyncInbox.Arbitrate = Service.SettleResyncReport;
 
-            // UIUpdate, not GameSimulation: the session pump must also run in the main
-            // menu (joining from there) and while the game is paused - the options
-            // screen pauses the simulation, which previously froze all connection
-            // handling exactly while the player was looking at the connect buttons.
+            // UIUpdate: the pump must run in the main menu and while paused (the options screen pauses).
             updateSystem.UpdateAt<MultiplayerSystem>(SystemUpdatePhase.UIUpdate);
             // Bindings for the main-menu multiplayer screen (UI module in UI/).
             updateSystem.UpdateAt<MultiplayerUISystem>(SystemUpdatePhase.UIUpdate);
-            // UIUpdate, not GameSimulation: the GameSimulation phase stops ticking the
-            // moment the game is paused (selectedSpeed 0), so a system there can never
-            // observe a pause to replicate it, nor apply a remote pause once stopped -
-            // pause/play and speed changes never synced. UIUpdate runs every frame in
-            // every state, so the simulation-speed channel (and the rest of the city
-            // state) now stays in sync even while a player is paused. Channel capture is
-            // gated to ~1 Hz internally, so the render-rate phase adds no extra traffic.
+            // UIUpdate: GameSimulation stops at speed 0, so pauses could never replicate there. Capture is 1 Hz
+            // gated internally.
             updateSystem.UpdateAt<Game.Sync.Systems.CityStateSyncSystem>(SystemUpdatePhase.UIUpdate);
-            // Remote milestone popups use the game's native MilestoneReachedEvent so the full
-            // vanilla screen and our countdown appear. DevTreeSystem also treats that event as
-            // a reward; remove only the points from our marked presentation event immediately.
+            // Remote milestone popups use the native MilestoneReachedEvent; DevTreeSystem treats it as a reward,
+            // so remove the points from our marked event.
             updateSystem.UpdateAfter<Game.Sync.Systems.RemoteMilestoneRewardCorrectionSystem,
                 global::Game.City.DevTreeSystem>(SystemUpdatePhase.GameSimulation);
-            // Service fee accounting has producers on both sides of ServiceFeeSystem: transit and
-            // parking arrive before it, utility sales/trade after it. Empty the redundant client
-            // queue at both boundaries; the host's absolute collected records are reinstalled by
-            // channel 24, so no locally timed event can replace them between snapshots.
+            // Fee events arrive on both sides of ServiceFeeSystem (transit/parking before, utility sales after);
+            // clear the client queue at both, channel 24 reinstalls the host records.
             updateSystem.UpdateBefore<Game.Sync.Systems.ServiceFeeIngressBoundarySystem,
                 global::Game.Simulation.ServiceFeeSystem>(SystemUpdatePhase.GameSimulation);
             updateSystem.UpdateAfter<Game.Sync.Systems.ServiceFeeEgressBoundarySystem,
                 global::Game.Simulation.UtilityFeeSystem>(SystemUpdatePhase.GameSimulation);
-            // CityServiceBudgetSystem first reads last frame's collected fee/upkeep records and
-            // then rebuilds those records from local buildings, networks, upgrades and usage.
-            // Install the host input before that read and restore the host output immediately
-            // after it, while also pinning the fee/upkeep income and expense array slots.
+            // CityServiceBudgetSystem reads last frame's fee/upkeep records, then rebuilds them locally: install
+            // host input before the read, restore host output after, and pin the income/expense slots.
             updateSystem.UpdateBefore<Game.Sync.Systems.ServiceAccountingInputSystem,
                 global::Game.Simulation.CityServiceBudgetSystem>(
                 SystemUpdatePhase.ModificationEnd);
             updateSystem.UpdateAfter<Game.Sync.Systems.ServiceAccountingCorrectionSystem,
                 global::Game.Simulation.CityServiceBudgetSystem>(
                 SystemUpdatePhase.ModificationEnd);
-            // Capture the host's short-lived MovingAway decision immediately before its native
-            // consumer. Register this proxy exactly once: ordering registrations are additive.
+            // Capture the short-lived MovingAway decision before its consumer. Register once: orderings add up.
             updateSystem.UpdateBefore<
                 Game.Sync.Systems.ResidentialOccupancyDepartureCaptureSystem,
                 global::Game.Simulation.HouseholdMoveAwaySystem>(
                 SystemUpdatePhase.GameSimulation);
-            // Preserve the exact household contracts installed with the downloaded world before
-            // the client's first native rent calculation can replace them. This seed is a one-shot
-            // per world; the identity-aware correction itself runs at the boundary below.
+            // Keep the downloaded world's household contracts before the first native rent pass; one-shot per
+            // world.
             updateSystem.UpdateBefore<Game.Sync.Systems.ResidentialOccupancyRentSeedSystem,
                 global::Game.Simulation.RentAdjustSystem>(SystemUpdatePhase.GameSimulation);
-            // RentAdjustSystem writes one of sixteen property buckets. Insert the host correction
-            // directly after RentAdjust; the game's existing phase order also leaves it before
-            // PropertyRenterSystem, whose later payment pass consumes the corrected value.
-            // PropertyRentSyncSystem has the same 1024-frame interval, so this does not scan the
-            // whole cache every simulation tick.
+            // Directly after RentAdjustSystem and before PropertyRenterSystem's payment pass. Same 1024-frame
+            // interval, so no full cache scan per tick.
             updateSystem.UpdateAfter<Game.Sync.Systems.PropertyRentSyncSystem,
                 global::Game.Simulation.RentAdjustSystem>(SystemUpdatePhase.GameSimulation);
-            // Household economy is updated in household-specific partitions, independently from
-            // the building partition used by occupancy reconciliation. Correct changed households
-            // after the final daily-economy writers so every family in a multi-unit building uses
-            // the same authoritative snapshot when the residents panel calculates its averages.
+            // After the final daily-economy writers, in household partitions, so every family in a building
+            // reads the same host snapshot.
             updateSystem.UpdateAfter<Game.Sync.Systems.ResidentialHouseholdEconomyCorrectionSystem,
                 global::Game.Simulation.RentAdjustSystem>(SystemUpdatePhase.GameSimulation);
-            // Income is the one household scalar whose readers run before that boundary: the
-            // wealth component of citizen wellbeing is evaluated a few systems after the pass that
-            // recomputes income from this peer's own employment graph, and the building's
-            // good-wealth prop requirement is read later still. Restore the host value here, in
-            // between, or both follow the client's local employment instead of the host's.
+            // Income is read earlier (citizen wellbeing, the building's wealth prop), right after the pass that
+            // recomputes it from local employment; restore the host value in between.
             updateSystem.UpdateAfter<Game.Sync.Systems.ResidentialHouseholdIncomeBoundarySystem,
                 global::Game.Simulation.HouseholdBehaviorSystem>(SystemUpdatePhase.GameSimulation);
-            // ResourceBuyerSystem runs real shoppers and SaleEvents after the earlier household
-            // boundary. Keep those agents alive, then correct the money and shopped-value result
-            // to the host snapshot at the first safe point after the sale is booked.
+            // Let ResourceBuyerSystem's shoppers run, then correct money and shopped value after the sale books.
             updateSystem.UpdateAfter<Game.Sync.Systems.ResidentialHouseholdPurchaseCorrectionSystem,
                 global::Game.Simulation.ResourceBuyerSystem>(SystemUpdatePhase.GameSimulation);
-            // ResidentsSection derives average fees directly from fulfilled building utility
-            // quantities. Correct those fields after the exact native systems that rewrite them;
-            // wanted demand, graph connectivity and warning state remain locally simulated.
+            // Fees derive from fulfilled utility quantities: correct after their native writers; demand,
+            // connectivity and warnings stay local.
             updateSystem.UpdateAfter<Game.Sync.Systems.ResidentialElectricityFeeCorrectionSystem,
                 global::Game.Simulation.DispatchElectricitySystem>(SystemUpdatePhase.GameSimulation);
             updateSystem.UpdateAfter<Game.Sync.Systems.ResidentialWaterFeeCorrectionSystem,
                 global::Game.Simulation.DispatchWaterSystem>(SystemUpdatePhase.GameSimulation);
-            // Strip the client's own company closure/seeking proposals at the last point before
-            // anything acts on them. The systems that make those proposals stay running because
-            // they also produce the figures and demand the rest of the simulation reads.
+            // Strip local closure/seeking proposals before anything acts on them; the proposers keep running for
+            // the figures they produce.
             updateSystem.UpdateBefore<Game.Sync.Systems.CompanyLifecycleBoundarySystem,
                 global::Game.Simulation.CompanyMoveAwaySystem>(SystemUpdatePhase.GameSimulation);
-            // The host captures company bookkeeping at its native cadence. Clients hold the
-            // accounting calculator and consume host figures; keep this partition schedule for
-            // capture and for repairing fields also touched by other local company systems.
+            // Host capture at the native company cadence; clients hold the accounting calculator.
             updateSystem.UpdateAfter<Game.Sync.Systems.CompanyStatsSyncSystem,
                 global::Game.Simulation.CompanyEconomyStatisticSystem>(
                 SystemUpdatePhase.GameSimulation);
-            // Company pages can otherwise sit cached until a business's 2,048-frame accounting
-            // partition returns. Apply deep state on FindJobSystem's 16-frame cadence: this also
-            // repairs the real Employee/Worker graph after local job matching tries to diverge.
+            // FindJobSystem's 16-frame cadence, rather than the 2,048-frame accounting partition; also repairs
+            // the Employee/Worker graph after local matching.
             updateSystem.UpdateAfter<Game.Sync.Systems.CompanyStateBoundarySystem,
                 global::Game.Simulation.FindJobSystem>(SystemUpdatePhase.GameSimulation);
-            // The building panel recalculates Production from the property's efficiency factors on
-            // every UI frame, and these two native passes rewrite those factors from state that is
-            // local by construction - goods on hand plus a rounding draw for processing, area
-            // depletion for extraction. Each correction runs directly after its own writer, at that
-            // writer's interval and therefore its update offset, so the panel never reads the local
-            // result. The two passes are separate registrations with separate offsets, which is why
-            // this is two systems and not one.
+            // The panel recomputes Production from efficiency factors that these two passes rewrite from local
+            // state (stock and rounding; area depletion). Each correction follows its writer at its interval and
+            // offset, hence two systems.
             updateSystem.UpdateAfter<Game.Sync.Systems.CompanyProcessingBoundarySystem,
                 global::Game.Simulation.ProcessingCompanySystem>(SystemUpdatePhase.GameSimulation);
             updateSystem.UpdateAfter<Game.Sync.Systems.CompanyExtractorBoundarySystem,
                 global::Game.Simulation.ExtractorCompanySystem>(SystemUpdatePhase.GameSimulation);
-            // Before PropertyProcessingSystem: that system drains the rent-action queue this one
-            // fills. The queue is persistent, so an action always survives to the next drain; the
-            // ordering is what lets a move-in land in the same tick it was decided in whenever the
-            // two updates coincide. Their intervals differ, so the game assigns them independent
-            // offsets and that is not every time - worst case the move-in waits a few frames.
+            // Before PropertyProcessingSystem drains the rent-action queue. The queue persists; the ordering only
+            // lets a move-in land in the same tick when the two updates coincide.
             updateSystem.UpdateBefore<Game.Sync.Systems.ResidentialOccupancySyncSystem,
                 global::Game.Simulation.PropertyProcessingSystem>(SystemUpdatePhase.GameSimulation);
-            // Complete queued household move-ins immediately after the native transaction has
-            // established both renter links. PropertyRenterSystem is the next native stage, so a
-            // single registration puts finalization before its later payment pass without running
-            // the same managed system twice in one simulation phase.
+            // Finalize move-ins right after both renter links exist, before PropertyRenterSystem's payment pass.
             updateSystem.UpdateAfter<Game.Sync.Systems.ResidentialOccupancyFinalizeSystem,
                 global::Game.Simulation.PropertyProcessingSystem>(SystemUpdatePhase.GameSimulation);
-            // HouseholdCitizen is the authoritative inner roster. Birth, individual death and a
-            // household split mutate that buffer without emitting RentersUpdated because the
-            // family can stay in the same property. Observe it after native citizen initialization
-            // so a newborn is complete before the host prioritizes its building; later writers are
-            // still caught from their changed version on the following frame.
+            // Births, deaths and splits change HouseholdCitizen without RentersUpdated; observe after citizen
+            // initialization so a newborn is complete. Later writers are caught next frame.
             updateSystem.UpdateAfter<
                 Game.Sync.Systems.ResidentialHouseholdLifecycleObservationSystem,
                 global::Game.Citizens.CitizenInitializeSystem>(
                 SystemUpdatePhase.GameSimulation);
-            // Also UIUpdate: publishing the local camera focus must keep going while a
-            // player is paused (so partners still see where they are), and GameSimulation
-            // barely ticked it - the live log showed ~1 position sent per 30 s.
+            // UIUpdate: the camera focus must publish while paused.
             updateSystem.UpdateAt<Game.Sync.Players.PlayerCursorSyncSystem>(SystemUpdatePhase.UIUpdate);
-            // Raycast phase, after the tool's own input: the only point where an extra raycast
-            // input still joins this frame's job. Without it the default tool's narrow search
-            // leaves every road, track and pipe out of what a partner is shown pointing at.
+            // Raycast phase, after the tool's input: the only slot where an extra input joins this frame's job,
+            // so roads, tracks and pipes can be hovered.
             updateSystem.UpdateAfter<Game.Sync.Players.PlayerHoverRaycastSystem,
                 global::Game.Tools.ToolRaycastSystem>(SystemUpdatePhase.Raycast);
-            // Renders the other players' camera positions as ground rings. Rendering phase
-            // so the markers draw every frame, in every state (including paused).
+            // Rendering: markers draw every frame, paused or not.
             updateSystem.UpdateAt<Game.Sync.Players.RemotePlayerMarkerSystem>(SystemUpdatePhase.Rendering);
-            // UIUpdate, not GameSimulation: policies can be toggled while the game is paused
-            // (the policies panel works paused - the game routes the change through an event
-            // entity consumed by the every-frame modification pipeline), but the GameSimulation
-            // phase stops ticking at speed 0. A detector there never saw a change made while
-            // paused and never applied an incoming one until unpause. The content scan is
-            // 1 Hz-gated internally, so the render-rate phase adds no extra cost.
+            // UIUpdate: policies change while paused, and GameSimulation stops at speed 0. The scan is 1 Hz gated.
             updateSystem.UpdateAt<Game.Sync.Systems.PolicySyncSystem>(SystemUpdatePhase.UIUpdate);
-            // Placement capture runs at ModificationEnd, where the one-frame Created tags
-            // from a tool apply are still alive (they are gone by GameSimulation).
+            // ModificationEnd: a tool apply's one-frame Created tags are still alive.
             updateSystem.UpdateAt<Game.Sync.Systems.BuildSyncSystem>(SystemUpdatePhase.ModificationEnd);
             updateSystem.UpdateAt<Game.Sync.Systems.Net.NetSyncSystem>(SystemUpdatePhase.ModificationEnd);
             // Edge-only refreshes must include their junctions before native network processing.
             updateSystem.UpdateBefore<Game.Sync.Systems.Net.NetJunctionRefreshSystem,
                 global::Game.Net.ReferencesSystem>(SystemUpdatePhase.Modification2B);
             updateSystem.UpdateAt<Game.Sync.Systems.DeleteSyncSystem>(SystemUpdatePhase.ModificationEnd);
-            // After DeleteSyncSystem, which collects this frame's tool-originated removals first:
-            // a bulldozed zoned building is a player action and already travels as a delete, so
-            // GrowableSync has to be able to tell it apart from the simulation retiring one.
+            // After DeleteSyncSystem, so a bulldozed zoned building (a player delete) is told apart from the
+            // simulation retiring one.
             updateSystem.UpdateAt<Game.Sync.Systems.GrowableSyncSystem>(SystemUpdatePhase.ModificationEnd);
-            // In-place road-type replacement (a different net prefab drawn over an existing edge):
-            // detected as an Updated-not-Created edge whose PrefabRef changed - see NetReplaceSyncSystem.
+            // A different net prefab drawn over an edge: Updated, not Created, with a changed PrefabRef.
             updateSystem.UpdateAt<Game.Sync.Systems.NetReplaceSyncSystem>(SystemUpdatePhase.ModificationEnd);
             updateSystem.UpdateAt<Game.Sync.Systems.ZoneSyncSystem>(SystemUpdatePhase.ModificationEnd);
             updateSystem.UpdateAt<Game.Sync.Systems.TerrainSyncSystem>(SystemUpdatePhase.ModificationEnd);
@@ -374,78 +283,46 @@ namespace CS2MultiplayerMod
             updateSystem.UpdateAt<Game.Sync.Systems.AreaSyncSystem>(SystemUpdatePhase.ModificationEnd);
             updateSystem.UpdateAt<Game.Sync.Systems.RouteSyncSystem>(SystemUpdatePhase.ModificationEnd);
             updateSystem.UpdateAt<Game.Sync.Systems.TilePurchaseSyncSystem>(SystemUpdatePhase.ModificationEnd);
-            // ModificationEnd, with the rest of the capture systems: another mod's tool has applied
-            // by this point in the frame, and the engine's chunk-change record still says which of
-            // its types were written to. It also keeps running while the game is paused, and these
-            // mods are used on a paused city as much as a running one.
+            // ModificationEnd: other mods' tools have applied and chunk change versions still show what they
+            // wrote. It also runs while paused.
             updateSystem.UpdateAt<Game.Sync.Systems.Mods.ModStateSyncSystem>(
                 SystemUpdatePhase.ModificationEnd);
-            // ModificationEnd, after the game's event initialization at Modification2: that pass is
-            // what turns a bare disaster event into a placed one (position, radius, duration), and
-            // the Created tag it keys on is gone by the next frame. Capturing here reads the
-            // resolved disaster, not an empty shell.
+            // After Modification2's event initialization places the disaster; its Created tag is gone next frame.
             updateSystem.UpdateAt<Game.Sync.Systems.DisasterSyncSystem>(SystemUpdatePhase.ModificationEnd);
-            // After the game's own auto-name initialization, which runs late in ModificationEnd and
-            // is what fills in a new street's or district's name draw. Capturing before it would
-            // read the draw one frame stale. ModificationEnd also keeps working while the game is
-            // paused (unlike GameSimulation), so a rename made in a paused city still replicates,
-            // and the one-frame Created/Updated tags the auto-name capture keys on are alive here.
+            // After the game's auto-name initialization fills a new name draw. ModificationEnd also runs while
+            // paused and still sees the one-frame Created/Updated tags.
             updateSystem.UpdateAfter<Game.Sync.Systems.NameSyncSystem,
                 global::Game.Common.RandomLocalizationInitializeSystem>(SystemUpdatePhase.ModificationEnd);
-            // UIUpdate, NOT GameSimulation: dev-tree nodes can be purchased while the game
-            // is paused (the progression panel works paused, and a node's Locked clears
-            // outside the simulation loop), but GameSimulation freezes at selectedSpeed 0.
-            // A detector there never saw a purchase made while paused and never applied an
-            // incoming one - yet the authoritative DevTreePoints snapshot keeps flowing from
-            // CityStateSyncSystem (also UIUpdate) the whole time, refilling the buyer's spent
-            // points every second. The result was a client with effectively infinite points
-            // and a host that never learned which node was bought. Running here, alongside
-            // that points channel, the local spend and the host's deduction keep pace whether
-            // the game is paused or not.
+            // UIUpdate: nodes can be bought while paused, and the host's points snapshot (also UIUpdate) would
+            // otherwise refill the buyer's points without the purchase ever replicating.
             updateSystem.UpdateAt<Game.Sync.Systems.DevTreeSyncSystem>(SystemUpdatePhase.UIUpdate);
-            // The visual menu mutates render/building state directly and is usable while paused.
-            // Observe it after SelectedInfoUISystem so the resulting state is captured, not UI intent.
+            // Usable while paused; after SelectedInfoUISystem so the resulting state is captured.
             updateSystem.UpdateAfter<Game.Sync.Systems.VisualCustomizationSyncSystem,
                 global::Game.UI.InGame.SelectedInfoUISystem>(SystemUpdatePhase.UIUpdate);
-            // Realization must run at ToolUpdate: definition entities are consumed at
-            // Modification1 and their Updated tag is stripped at Cleanup, so a definition
-            // spawned at ModificationEnd is never realized (see SyncRealizeSystem).
-            // Repair stranded movers at the front of ToolUpdate, before the default tool can
-            // hover/select an invalid legacy instance. The sweep is one-shot per world load and
-            // internally frame-budgeted for large cities.
+            // Realization runs at ToolUpdate: definitions are consumed at Modification1 and lose Updated at
+            // Cleanup (see SyncRealizeSystem). Stranded movers are repaired first, before the default tool can
+            // select one; one-shot per load, frame-budgeted.
             updateSystem.UpdateBefore<Game.Sync.Systems.WorldRepairSystem>(
                 SystemUpdatePhase.ToolUpdate);
-            // Complete remote terrain GPU readback at the very start of ToolUpdate, before a local
-            // road/object tool can generate a preview from stale CPU heights.
+            // Finish remote terrain readback before a local tool previews against stale heights.
             updateSystem.UpdateBefore<Game.Sync.Systems.TerrainReadbackBarrierSystem>(
                 SystemUpdatePhase.ToolUpdate);
             updateSystem.UpdateAt<Game.Sync.Systems.SyncRealizeSystem>(SystemUpdatePhase.ToolUpdate);
-            // Capture one-frame object lifecycle applies after the active object/upgrade tool made
-            // its decision but before ToolOutputSystem consumes the complete standing definition
-            // graph. This is the only frame that serializes the graph; hover previews stay cheap.
+            // After the tool decided, before ToolOutputSystem consumes the graph: the only frame that serializes
+            // it.
             updateSystem.UpdateBefore<Game.Sync.Systems.ObjectToolApplyCaptureSystem,
                 global::Game.Tools.ToolOutputSystem>(SystemUpdatePhase.ToolUpdate);
-            // After ToolOutputBarrier: tools record their definitions through that end-of-phase
-            // buffer, so this is the first (and only) slot where they exist as entities but have
-            // not been consumed - the gate keeps them out of an armed net commit (see there).
+            // After ToolOutputBarrier: the only slot where tool definitions exist unconsumed.
             updateSystem.UpdateAfter<Game.Sync.Systems.DefinitionGateSystem, global::Game.Tools.ToolOutputBarrier>(
                 SystemUpdatePhase.ToolUpdate);
-            // Immediately before the game's owner resolution: a generated sub-element's owner
-            // description is removed by that pass whether or not it resolved, so this is the only
-            // slot where an unresolved sub-element can still be traced to its owner.
+            // Before owner resolution, which removes a sub-element's owner description resolved or not.
             updateSystem.UpdateBefore<Game.Sync.Systems.OwnerDefinitionSnapshotSystem,
                 global::Game.Tools.FindOwnersSystem2>(SystemUpdatePhase.Modification2B);
-            // UIUpdate, not GameSimulation, for the same reason as the session pump:
-            // hosting starts from the options screen, which pauses the simulation -
-            // at GameSimulation the queued initial world stream for a joining client
-            // was never processed while the host sat in the (paused) menu, leaving
-            // the client stuck in WaitingForMap forever.
+            // UIUpdate: hosting starts from the paused options screen, and a joiner's initial world must still
+            // stream.
             updateSystem.UpdateAt<Game.Sync.Systems.WorldResyncSystem>(SystemUpdatePhase.UIUpdate);
 
-            // One line, at the end, rather than a "ready" line per registered system: the thirty
-            // of those said nothing a reader could act on, and the only question they answered -
-            // "did the mod actually come up?" - is answered better here, with the numbers that
-            // decide whether two players can even play together.
+            // One startup line with the numbers that decide whether two players can play together.
             SyncLog.Event(LogTopic.Startup, "Loaded: mod v" + StampedVersion + ", protocol v" +
                 ProtocolConstants.ProtocolVersion + ", game v" + UnityEngine.Application.version +
                 ", sync systems registered, verbose logging " +

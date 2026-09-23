@@ -4,14 +4,9 @@ using CS2MultiplayerMod.Core.Sync;
 namespace CS2MultiplayerMod.Game.Sync.Commands
 {
     /// <summary>
-    /// "A player relocated this object." The old position plus optional seed/attachment identity
-    /// identifies the local entity, and the new transform plus attachment describes its destination
-    /// - see <see cref="MoveSyncSystem"/>.
-    ///
-    /// For anything with owned geometry (a building's lot, driveways, installed upgrades), the
-    /// receiver re-derives the whole relocation locally instead of moving the root alone. Roadside
-    /// objects and buildings also carry their snapped net parent: the generator needs that control-
-    /// point entity to update route lanes and both the old and new road compositions.
+    /// A relocation: old position (plus seed/attachment) finds the entity, new transform and attachment
+    /// describe the destination. Owned geometry is re-derived locally; the snapped net parent travels
+    /// because the generator updates lanes and both road compositions through it.
     /// </summary>
     public sealed class ObjectMoveCommand : ISimulationCommand
     {
@@ -26,28 +21,19 @@ namespace CS2MultiplayerMod.Game.Sync.Commands
         /// <summary>The moving tool's own seed; every per-definition seed is derived from it.</summary>
         public uint ToolRandomSeed;
 
-        /// <summary>
-        /// Stable identity of the existing object when it has one. Position remains the fallback for
-        /// objects created without <c>PseudoRandomSeed</c>.
-        /// </summary>
+        /// <summary>Stable identity when present; position is the fallback without <c>PseudoRandomSeed</c>.</summary>
         public bool HasOriginalRandomSeed;
         public int OriginalRandomSeed;
 
         /// <summary>
-        /// Set when the moved object is owned by another object - an installed upgrade or
-        /// sub-building relocated from the building's upgrade list, which is the only relocation the
-        /// base game offers. The host travels as prefab + position, the same identity
-        /// <see cref="UpgradePlacementCommand"/> uses, because the moved entity is not a top-level
-        /// object and cannot be found by position alone without risking a neighbour's upgrade.
+        /// An owned upgrade moved from the building's upgrade list. The owner travels as prefab + position
+        /// (as in <see cref="UpgradePlacementCommand"/>): position alone could pick a neighbour's upgrade.
         /// </summary>
         public bool HasOwnerIdentity;
         public string OwnerPrefabName;
         public float OwnerX, OwnerY, OwnerZ;
 
-        /// <summary>
-        /// Whether the sender could authoritatively classify the old/new attachment. "Known + None"
-        /// is deliberately different from unknown: the former means the object is free-standing.
-        /// </summary>
+        /// <summary>Known + None means free-standing, which differs from unknown.</summary>
         public bool SourceAttachmentKnown;
         public ObjectAttachKind SourceAttachKind;
         public float SourceAttachX, SourceAttachY, SourceAttachZ;

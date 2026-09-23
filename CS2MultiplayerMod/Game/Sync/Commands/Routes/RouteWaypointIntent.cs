@@ -1,12 +1,10 @@
-using System;
 using CS2MultiplayerMod.Core.Protocol;
 
 namespace CS2MultiplayerMod.Game.Sync.Commands
 {
     /// <summary>
-    /// Portable identity for one route waypoint and, when present, the transport-stop object to
-    /// which it is connected. Entity ids are world-local, so a stop is described by prefab and
-    /// transform; an optional top-level owner disambiguates identical station subobjects.
+    /// A waypoint and its connected stop, by prefab and transform; an optional owner separates identical
+    /// station sub-objects.
     /// </summary>
     public struct RouteWaypointIntent
     {

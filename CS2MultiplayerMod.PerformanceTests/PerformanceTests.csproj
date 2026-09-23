@@ -7,6 +7,8 @@
   </PropertyGroup>
   <ItemGroup>
     <Compile Include="../CS2MultiplayerMod/Core/Protocol/Wire/NetworkWriter.cs" />
+    <Compile Include="../CS2MultiplayerMod/Game/Sync/Commands/Simulation/OccupancyRecords.cs" />
+    <Compile Include="../CS2MultiplayerMod/Game/Sync/Commands/Simulation/OccupancyContentComparer.cs" />
     <Compile Include="../CS2MultiplayerMod/Core/Sync/OperationReplayWindow.cs" />
   </ItemGroup>
 </Project>

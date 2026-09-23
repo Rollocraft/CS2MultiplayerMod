@@ -4,7 +4,7 @@
 	<!--Name of the mod to display to players-->
 	<DisplayName Value="CS2 Multiplayer Mod" />
 	<!--Short description of the mod-->
-	<ShortDescription Value="Cities: Skylines 2 Multiplayer mod, build your city with your friends" />
+	<ShortDescription Value="Cities: Skylines 2 Multiplayer mod, build your city with your friendc" />
 	<!--Long description of the mod. Single line or multi line. Supports minimal markdown subset-->
 	<LongDescription>
 Build one city together.

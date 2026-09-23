@@ -1,6 +1,4 @@
-using System.Collections.Concurrent;
 using System.Collections.Generic;
-using Game;
 using Game.Common;
 using Game.Prefabs;
 using Game.Routes;
@@ -18,22 +16,19 @@ using CS2MultiplayerMod.Game.Sync.Systems.Net;
 namespace CS2MultiplayerMod.Game.Sync.Systems
 {
     /// <summary>
-    /// Replicates a route and its owned waypoint/segment graph. Route numbers provide the primary
-    /// portable identity; connected transport stops are resolved from prefab, transform, and owner.
+    /// Replicates routes and their waypoint graph. Route number is the portable identity; stops
+    /// resolve from prefab, transform and owner.
     /// </summary>
-    public partial class RouteSyncSystem : GameSystemBase
+    public partial class RouteSyncSystem : CommandSyncSystem, IRealizeStage
     {
         private const long EditScanIntervalMs = 1000;
-        // A stop a line depends on is often still being realized from its own command. Waiting is
-        // free; giving up costs a full world transfer, so the window is generous.
+        // Stops are often still being realized; giving up costs a world transfer.
         private const long RetryWindowMs = 30000;
         private const long InitialRetryDelayMs = 100;
         private const long MaximumRetryDelayMs = 1000;
         private const int MaxPendingCommands = 128;
         private const int MaxCommandsPerFrame = 16;
 
-        private readonly ConcurrentQueue<SimulationCommandMessage> _incoming =
-            new ConcurrentQueue<SimulationCommandMessage>();
         private readonly ReplicationGuard _guard = new ReplicationGuard();
         private Dictionary<Entity, RouteSnapshot> _knownRoutes = new Dictionary<Entity, RouteSnapshot>();
         private Dictionary<Entity, RouteSnapshot> _nextRoutes = new Dictionary<Entity, RouteSnapshot>();
@@ -106,7 +101,6 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         private EntityQuery _deletedRoutes;
         private EntityQuery _liveRoutes;
         private EntityQuery _transportStops;
-        private CommandObserver _observer;
         private NetSyncSystem _netSync;
 
         protected override void OnCreate()
@@ -143,19 +137,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 None = SyncQuery.ReadOnly<Temp, Deleted>(),
             });
 
-            _observer = SyncObserverBinding.Bind(
-                () => new CommandObserver(_incoming, RouteCreateCommand.Id,
-                        RouteUpdateCommand.Id, RouteDeleteCommand.Id)
-                    {
-                        MaxBodyBytes = RouteCreateCommand.MaxEncodedBytes,
-                    },
-                DrainQueue);
-        }
-
-        protected override void OnDestroy()
-        {
-            SyncObserverBinding.Unbind(_observer, DrainQueue);
-            base.OnDestroy();
+            ListenFor(new[] { RouteCreateCommand.Id, RouteUpdateCommand.Id, RouteDeleteCommand.Id },
+                RouteCreateCommand.MaxEncodedBytes);
         }
 
         protected override void OnUpdate()
@@ -190,20 +173,14 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             }
         }
 
-        /// <summary>
-        /// Finish identities for already committed route graphs even while a later network
-        /// transaction is backlogged. This never creates tool definitions.
-        /// </summary>
-        public void FinalizePending()
+        /// <summary>Finishes committed route graphs even while net work is backlogged.</summary>
+        private void FinalizePending()
         {
             MultiplayerService service = Mod.Service;
             if (service == null) return;
             if (!service.GameplaySyncReady) { ExtendCreateMetadataWindows(service.NowMs); return; }
 
-            // This pass is not gated, but what it waits for is a route the game builds from a
-            // definition that RealizePending submits - and RealizePending IS gated. Counting the
-            // window down through that hold expires it against a line that could not yet exist,
-            // and the expiry asks for a world reload.
+            // Not gated itself, but it waits on routes RealizeCommands submits, which is gated.
             ExtendCreateMetadataWindows(service.NowMs);
 
             _mutatedRoutesThisFrame.Clear();
@@ -222,22 +199,6 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 _pendingCreateMetadata[i].DeadlineMs += heldMs;
         }
 
-        /// <summary>Called by <see cref="SyncRealizeSystem"/> during ToolUpdate.</summary>
-        /// <summary>
-        /// Called by <see cref="SyncRealizeSystem"/> on frames this system is not allowed to run -
-        /// terrain is catching up, or the net pipeline still has placements queued.
-        ///
-        /// A route's retry window is for waiting on its own stop, line or road to arrive, not for
-        /// waiting on permission to look. Measured against the wall it expired while this system
-        /// was gated off, and the expiry then reported a dependency that "did not resolve" and
-        /// asked for a world reload - for a command it had never once attempted. A stalled net
-        /// placement holds this gate for its whole retry window, so that was not a rare race.
-        /// </summary>
-        public void NotifyRealizeHeld(long nowMs)
-        {
-            ExtendPendingRouteWindows(nowMs);
-        }
-
         /// <summary>When this system last got to attempt its pending commands.</summary>
         private long _lastRouteRealizeMs;
 
@@ -253,10 +214,25 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             }
         }
 
+        /// <summary>Called by <see cref="SyncRealizeSystem"/> during ToolUpdate.</summary>
         public void RealizePending()
+        {
+            // Two independent passes: a fault while finalizing must not also strand new routes.
+            try { FinalizePending(); }
+            finally { RealizeCommands(); }
+        }
+
+        private void RealizeCommands()
         {
             MultiplayerService service = Mod.Service;
             if (service == null) return;
+
+            // Held time does not count against a route's retry window.
+            if (Infrastructure.RealizeGate.WorldBuildingHeld)
+            {
+                ExtendPendingRouteWindows(service.NowMs);
+                return;
+            }
 
             MultiplayerSession session = service.Session;
             if (!service.GameplaySyncReady) { ExtendPendingRouteWindows(service.NowMs); return; }
@@ -273,8 +249,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             int retries = System.Math.Min(_pendingCommands.Count, MaxCommandsPerFrame / 2);
             for (int i = 0; i < retries; i++)
             {
-                // Round-robin prevents one unavailable station from monopolizing the retry budget
-                // and guarantees that fresh route commands continue to drain every frame.
+                // Round-robin so one unavailable station cannot monopolize the retry budget.
                 PendingRouteCommand pending = _pendingCommands[0];
                 _pendingCommands.RemoveAt(0);
                 if (now >= pending.DeadlineMs)
@@ -293,8 +268,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 if (result == RealizeResult.Retry) QueueRetry(pending, now);
             }
 
-            SimulationCommandMessage message;
-            while (budget > 0 && _incoming.TryDequeue(out message))
+            while (budget > 0 && _incoming.TryDequeue(out SimulationCommandMessage message))
             {
                 if (message.OriginPlayerId == session.LocalPlayerId) continue;
                 budget--;
@@ -357,9 +331,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     ? RealizeDelete(pending.Delete, now)
                     : RealizeResult.Rejected;
 
-            // Every unmet dependency looks the same from outside: the command simply keeps
-            // retrying. Recording why the last attempt gave up makes an expired command
-            // attributable from the log instead of only visible as a missing line.
+            // Record why the last attempt gave up, for the expiry log.
             if (_lastRealizeFailure == null) return result;
             if (pending.LastFailure == null)
                 SyncLog.Trace(LogTopic.Routes, "route dependency unresolved: " +
@@ -398,8 +370,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             string prefabName = pending.Create != null ? pending.Create.PrefabName :
                 pending.Update != null ? pending.Update.PrefabName : pending.Delete.PrefabName;
 
-            // An unmatched delete is idempotent only when the line really is absent. Ambiguous
-            // candidates or a still-live target mean we deliberately declined a destructive guess.
+            // An unmatched delete is fine only when the line is truly absent, not ambiguous or still live.
             bool needsRecovery = pending.Delete == null ||
                                  DeleteStillNeedsRecovery(pending.Delete);
             if (needsRecovery)
@@ -415,7 +386,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 (needsRecovery ? "; requested a fresh world sync." : "; line is already absent."));
         }
 
-        private void DrainQueue()
+        protected override void DrainQueue()
         {
             SyncInbox.Clear(_incoming);
             _lastRouteRealizeMs = 0;
@@ -467,10 +438,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             }
         }
 
-        private static void HashCoordinate(ref uint hash, float value)
-        {
+        private static void HashCoordinate(ref uint hash, float value) =>
             hash = (hash ^ (uint)(int)math.round(value * 10f)) * 16777619u;
-        }
 
         private static void HashString(ref uint hash, string value)
         {

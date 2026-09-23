@@ -5,13 +5,8 @@ using CS2MultiplayerMod.Core.Protocol;
 namespace CS2MultiplayerMod.Core.Sync.ModSync
 {
     /// <summary>
-    /// One replicated third-party type as it travels: what it is called, how it attaches, and the
-    /// exact sequence of leaves its payload carries.
-    ///
-    /// The leaf sequence is part of the identity, not a hint. Both machines run the same mod build,
-    /// but "same mod" is a claim about files on disk; a type whose fields differ would decode a
-    /// payload into the wrong fields and write plausible nonsense into the other player's city.
-    /// The fingerprint turns that into a refusal naming the type.
+    /// A replicated third-party type: name, attachment and exact leaf sequence. The fingerprint turns a
+    /// differing field layout into a refusal instead of decoding into the wrong fields.
     /// </summary>
     public sealed class ModTypeDescriptor
     {
@@ -25,26 +20,28 @@ namespace CS2MultiplayerMod.Core.Sync.ModSync
 
         /// <summary>The flattened fields, in declaration order.</summary>
         public ModValueKind[] Leaves { get; private set; }
+        public string[] FieldPaths { get; private set; }
 
         /// <summary>Key plus leaf sequence, folded. Equal fingerprints mean equal decoding.</summary>
         public ulong Fingerprint { get; private set; }
 
-        public ModTypeDescriptor(string key, ModTypeKind kind, ModValueKind[] leaves)
+        public ModTypeDescriptor(string key, ModTypeKind kind, ModValueKind[] leaves,
+            string[] fieldPaths)
         {
             if (string.IsNullOrEmpty(key)) throw new ArgumentException("A mod type needs a key.", "key");
             Key = key;
             Kind = kind;
             Leaves = leaves ?? new ModValueKind[0];
-            Fingerprint = ComputeFingerprint(key, kind, Leaves);
+            FieldPaths = fieldPaths ?? new string[0];
+            if (FieldPaths.Length != Leaves.Length)
+                throw new ArgumentException("A mod type needs one path per field.", "fieldPaths");
+            Fingerprint = ComputeFingerprint(key, kind, Leaves, FieldPaths);
         }
 
         /// <summary>Leaves in one element - zero for a tag.</summary>
-        public int LeafCount { get { return Leaves.Length; } }
+        public int LeafCount => Leaves.Length;
 
-        public static string MakeKey(string assemblyName, string typeFullName)
-        {
-            return assemblyName + "|" + typeFullName;
-        }
+        public static string MakeKey(string assemblyName, string typeFullName) => assemblyName + "|" + typeFullName;
 
         /// <summary>The type name alone, for a log line that has to stay readable.</summary>
         public string DisplayName
@@ -56,7 +53,8 @@ namespace CS2MultiplayerMod.Core.Sync.ModSync
             }
         }
 
-        private static ulong ComputeFingerprint(string key, ModTypeKind kind, ModValueKind[] leaves)
+        private static ulong ComputeFingerprint(string key, ModTypeKind kind,
+            ModValueKind[] leaves, string[] paths)
         {
             // FNV-1a: stable across processes and runtimes, which string.GetHashCode is not.
             const ulong offset = 14695981039346656037UL;
@@ -65,7 +63,13 @@ namespace CS2MultiplayerMod.Core.Sync.ModSync
             byte[] keyBytes = Encoding.UTF8.GetBytes(key);
             for (int i = 0; i < keyBytes.Length; i++) { hash ^= keyBytes[i]; hash *= prime; }
             hash ^= (byte)kind; hash *= prime;
-            for (int i = 0; i < leaves.Length; i++) { hash ^= (byte)leaves[i]; hash *= prime; }
+            for (int i = 0; i < leaves.Length; i++)
+            {
+                hash ^= (byte)leaves[i]; hash *= prime;
+                byte[] path = Encoding.UTF8.GetBytes(paths[i]);
+                for (int j = 0; j < path.Length; j++) { hash ^= path[j]; hash *= prime; }
+                hash ^= 0; hash *= prime;
+            }
             return hash;
         }
 
@@ -75,7 +79,11 @@ namespace CS2MultiplayerMod.Core.Sync.ModSync
             writer.WriteByte((byte)Kind);
             writer.WriteLong(unchecked((long)Fingerprint));
             writer.WriteShort((short)Leaves.Length);
-            for (int i = 0; i < Leaves.Length; i++) writer.WriteByte((byte)Leaves[i]);
+            for (int i = 0; i < Leaves.Length; i++)
+            {
+                writer.WriteByte((byte)Leaves[i]);
+                writer.WriteString(FieldPaths[i]);
+            }
         }
 
         public static ModTypeDescriptor Read(NetworkReader reader)
@@ -88,12 +96,18 @@ namespace CS2MultiplayerMod.Core.Sync.ModSync
                 throw new ProtocolException("Mod type '" + key + "' declares " + count + " leaves.");
 
             var leaves = new ModValueKind[count];
-            for (int i = 0; i < count; i++) leaves[i] = (ModValueKind)reader.ReadByte();
+            var paths = new string[count];
+            for (int i = 0; i < count; i++)
+            {
+                leaves[i] = (ModValueKind)reader.ReadByte();
+                paths[i] = reader.ReadString();
+                if (string.IsNullOrEmpty(paths[i]) || paths[i].Length > 256)
+                    throw new ProtocolException("Mod type '" + key + "' has an invalid field path.");
+            }
 
-            var descriptor = new ModTypeDescriptor(key, kind, leaves);
+            var descriptor = new ModTypeDescriptor(key, kind, leaves, paths);
 
-            // The sender's own fingerprint has to agree with what its declaration reduces to here,
-            // or the table itself is inconsistent and nothing built on it can be trusted.
+            // The sender's fingerprint must match what its declaration reduces to here.
             if (descriptor.Fingerprint != claimed)
                 throw new ProtocolException("Mod type '" + key + "' carries a fingerprint that does not match its layout.");
             return descriptor;

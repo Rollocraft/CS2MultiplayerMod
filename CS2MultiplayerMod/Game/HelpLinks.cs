@@ -5,14 +5,12 @@ using CS2MultiplayerMod.Game.Diagnostics;
 namespace CS2MultiplayerMod.Game
 {
     /// <summary>
-    /// Stable, allow-listed destinations for help buttons in the game UI. The UI sends
-    /// only a relative page identifier; keeping the GitHub root and allow-list here
-    /// prevents a compromised or stale UI bundle from opening an arbitrary URL.
+    /// Allow-listed help pages; the UI sends only a relative page id, so a stale or compromised bundle
+    /// cannot open an arbitrary URL.
     /// </summary>
     internal static class HelpLinks
     {
-        // GitHub uses /tree/ for a directory and /blob/ for an individual Markdown
-        // file. Open the latter so headings such as #mod-version-issues work too.
+        // /blob/ opens the Markdown file itself, so heading anchors work.
         private const string PageRoot =
             "https://github.com/Rollocraft/CS2MultiplayerMod/blob/master/help/";
 

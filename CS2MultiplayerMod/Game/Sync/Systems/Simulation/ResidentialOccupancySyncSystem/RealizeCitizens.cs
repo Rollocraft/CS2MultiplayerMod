@@ -1,35 +1,23 @@
 using CS2MultiplayerMod.Game.Sync.Infrastructure;
 using System;
 using System.Collections.Generic;
-using System.Diagnostics;
 using CS2MultiplayerMod.Game.Sync.Commands;
-using Game.Agents;
 using Game.Buildings;
 using Game.Citizens;
 using Game.Common;
 using Game.Companies;
-using Game.Economy;
 using Game.Prefabs;
-using Game.Simulation;
-using Game.Vehicles;
-using Unity.Collections;
 using Unity.Entities;
-using Unity.Jobs;
-using Unity.Mathematics;
 
 namespace CS2MultiplayerMod.Game.Sync.Systems
 {
-    // The people and pets in a household: matching the host's roster against who is already
-    // there, moving citizens between households, removing duplicates, and applying each
-    // citizen's own state.
     public partial class ResidentialOccupancySyncSystem
     {
         private void ApplyCitizens(Entity household, Entity property, OccupancyHousehold wanted)
         {
             if (!EntityManager.HasBuffer<HouseholdCitizen>(household)) return;
             DedupeCitizens(household);
-            // Snapshot before touching anything: creating or deleting an entity is a structural
-            // change, and every dynamic buffer handle taken before it becomes invalid.
+            // Snapshot first: a structural change invalidates buffer handles.
             _memberScratch.Clear();
             DynamicBuffer<HouseholdCitizen> members =
                 EntityManager.GetBuffer<HouseholdCitizen>(household, true);
@@ -47,9 +35,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 if (!IsCitizenDesiredHere(desired.CitizenId, wanted.HouseholdId)) continue;
                 _wantedCitizenIds.Add(desired.CitizenId);
 
-                Entity citizen;
                 bool createdNow = false;
-                if (!TryResolveCitizen(desired.CitizenId, out citizen))
+                if (!TryResolveCitizen(desired.CitizenId, out Entity citizen))
                 {
                     citizen = FindBootstrapCitizen(desired);
                     if (citizen != Entity.Null) BindCitizen(desired.CitizenId, citizen);
@@ -86,14 +73,11 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 }
 
                 _claimedCitizens.Add(citizen);
-                // CitizenInitializeSystem consumes the small age-class marker on a Created
-                // citizen. Replacing it with the host's calendar birthday in this same frame
-                // would skip native initialization and leave the person outside population.
+                // A Created citizen still needs native initialization, which reads the age-class marker.
                 if (!createdNow) ApplyCitizen(citizen, desired);
             }
 
-            // Do not remove unmatched residents until every desired identity is present. This
-            // keeps a creation budget boundary from momentarily emptying and retiring the family.
+            // Remove nobody until every desired identity is present, or a budget boundary empties the family.
             if (settling || missingWanted) return;
             for (int i = _memberScratch.Count - 1; i >= 0; i--)
             {
@@ -101,9 +85,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 if (_claimedCitizens.Contains(citizen) || citizen == Entity.Null ||
                     !EntityManager.Exists(citizen) || EntityManager.HasComponent<Deleted>(citizen))
                     continue;
-                ulong localId, desiredHouseholdId;
-                bool bound = TryGetBoundCitizenId(citizen, out localId);
-                if (bound && TryGetDesiredHouseholdId(localId, out desiredHouseholdId)) continue;
+                bool bound = TryGetBoundCitizenId(citizen, out ulong localId);
+                if (bound && TryGetDesiredHouseholdId(localId, out ulong desiredHouseholdId)) continue;
                 if (!bound && DeferUnboundRetirement(citizen, _unboundCitizenSince))
                 {
                     ScheduleReapply(property);
@@ -119,9 +102,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         private Entity FindBootstrapCitizen(OccupancyCitizen wanted)
         {
             EnsureBootstrapIdentityIndex();
-            List<Entity> globalCandidates;
             if (!_bootstrapCitizenIndex.TryGetValue(CitizenBootstrapKey(wanted),
-                out globalCandidates)) return Entity.Null;
+                out List<Entity> globalCandidates)) return Entity.Null;
             Entity match = Entity.Null;
             for (int i = 0; i < globalCandidates.Count; i++)
             {
@@ -129,8 +111,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 if (_claimedCitizens.Contains(candidate) || candidate == Entity.Null ||
                     !EntityManager.Exists(candidate) || EntityManager.HasComponent<Deleted>(candidate))
                     continue;
-                ulong alreadyBound;
-                if (TryGetBoundCitizenId(candidate, out alreadyBound)) continue;
+                if (TryGetBoundCitizenId(candidate, out ulong alreadyBound)) continue;
                 if (!CitizenBootstrapMatches(candidate, wanted)) continue;
                 if (match != Entity.Null && match != candidate) return Entity.Null;
                 match = candidate;
@@ -158,9 +139,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 EntityManager.GetBuffer<HouseholdCitizen>(household, true);
             for (int i = 0; i < members.Length; i++)
             {
-                ulong citizenId, desiredHouseholdId;
-                if (TryGetBoundCitizenId(members[i].m_Citizen, out citizenId) &&
-                    TryGetDesiredHouseholdId(citizenId, out desiredHouseholdId)) return true;
+                if (TryGetBoundCitizenId(members[i].m_Citizen, out ulong citizenId) &&
+                    TryGetDesiredHouseholdId(citizenId, out ulong desiredHouseholdId)) return true;
             }
             return false;
         }
@@ -168,8 +148,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         private bool DeferUnboundRetirement(Entity entity, Dictionary<Entity, uint> observed)
         {
             uint now = _simulationSystem.frameIndex;
-            uint since;
-            if (!observed.TryGetValue(entity, out since))
+            if (!observed.TryGetValue(entity, out uint since))
             {
                 observed[entity] = now;
                 return true;
@@ -193,19 +172,14 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 }
             }
             SetOrAdd(citizen, new HouseholdMember { m_Household = household });
-            // Household membership and physical location are separate native graphs. An existing
-            // citizen may be at work, school, or in transit, so changing CurrentBuilding here would
-            // leave its Occupant/path state pointing at a different place. Newly created citizens
-            // receive their initial home location in CreateCitizen instead.
+            // Membership only: an existing citizen may be away, so CurrentBuilding stays untouched.
             LinkCitizen(household, citizen);
             DedupeCitizens(household);
         }
 
         /// <summary>
-        /// The game's citizen initialization appends every newly created citizen to its household,
-        /// including the ones this system already linked. Collapsing repeats here is cheaper and
-        /// safer than trying to predict that append, and it also clears out members whose entity
-        /// is gone.
+        /// Citizen initialization appends every new citizen, including ones already linked; collapse
+        /// repeats and dead members here.
         /// </summary>
         private void DedupeCitizens(Entity household)
         {
@@ -249,9 +223,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         }
 
         /// <summary>
-        /// Link an existing citizen moved between households immediately. Fresh citizens are left
-        /// for the initialization pass to append exactly once; a duplicate here would inflate the
-        /// household size used by the first-arrival population event.
+        /// Links a moved citizen now; fresh citizens are appended once by initialization, and a duplicate
+        /// would inflate the first-arrival population event.
         /// </summary>
         private void LinkCitizen(Entity household, Entity citizen)
         {
@@ -291,8 +264,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 _rewrittenCitizens++;
             }
 
-            Entity prefab;
-            if (ResolveCitizenPrefab(wanted.PrefabName, out prefab) &&
+            if (ResolveCitizenPrefab(wanted.PrefabName, out Entity prefab) &&
                 EntityManager.HasComponent<PrefabRef>(citizen) &&
                 EntityManager.GetComponentData<PrefabRef>(citizen).m_Prefab != prefab)
                 EntityManager.SetComponentData(citizen, new PrefabRef(prefab));
@@ -303,10 +275,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         }
 
         /// <summary>
-        /// HealthProblem is part of citizen lifecycle, not a cosmetic health value. In particular,
-        /// sick/injured death is drawn from RandomSeed.Next and therefore cannot be reproduced by
-        /// merely copying Citizen.m_PseudoRandom. Keep the local event/request handles (they name
-        /// local ambulances and events), but make component presence and flags match the host.
+        /// Health problems are lifecycle drawn from RandomSeed.Next, so presence and flags follow the host;
+        /// local event and request handles are kept.
         /// </summary>
         private void ApplyHealthProblem(Entity citizen, OccupancyCitizen wanted)
         {
@@ -350,9 +320,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         }
 
         /// <summary>
-        /// Mirrors the structural cleanup performed by DeathCheckSystem.Die. Native
-        /// HealthProblemSystem remains enabled and owns the local ambulance/hearse trip, while the
-        /// host decides that the person died.
+        /// Mirrors DeathCheckSystem.Die's structural cleanup; HealthProblemSystem still runs the local
+        /// hearse trip.
         /// </summary>
         private void ApplyHostDeathTransition(Entity citizen)
         {
@@ -376,10 +345,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         }
 
         /// <summary>
-        /// Keep the wage level coherent when both peers already have this citizen employed. The
-        /// employment graph remains local because a valid Worker also requires a matching workplace
-        /// Employee entry. Displayed household income is authoritative through Income on the
-        /// household snapshot, so no invalid placeholder job is manufactured here.
+        /// Aligns the wage level when both peers employ the citizen. Employment stays local; displayed
+        /// income comes from the household snapshot.
         /// </summary>
         private void ApplyWageLevel(Entity citizen, OccupancyCitizen wanted)
         {
@@ -396,8 +363,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 employeeIndex = i;
                 break;
             }
-            // A Worker without its reverse Employee link is already inconsistent. Do not mutate
-            // half of that graph; the local job systems own repairing or replacing the job.
+            // Worker without its Employee link: the local job systems own that repair.
             if (employeeIndex < 0) return;
 
             if (worker.m_Level != wanted.WorkerLevel)

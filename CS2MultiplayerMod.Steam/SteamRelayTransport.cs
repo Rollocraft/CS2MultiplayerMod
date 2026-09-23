@@ -1,26 +1,19 @@
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
-using System.Runtime.InteropServices;
-using System.Threading;
 using CS2MultiplayerMod.Core.Diagnostics;
 using CS2MultiplayerMod.Core.Networking.Tcp;
-using CS2MultiplayerMod.Core.Protocol;
 using Steamworks;
 
 namespace CS2MultiplayerMod.Core.Networking.Steam
 {
-    // State, the tuning constants, and starting a relay as host or client.
-    //
-    // The send-rate governor is in SteamRelayGovernor.cs, connection bookkeeping in
-    // SteamRelayConnections.cs, framing and the send/receive path in SteamRelayIo.cs, and
-    // shutdown plus the per-peer Endpoint in SteamRelayLifecycle.cs.
-    public sealed partial class SteamRelayTransport : ITransport, IPlatformFriendLookup
+    // State, tuning and startup. Governor, connections, I/O and lifecycle live in the other
+    // SteamRelay*.cs partials.
+    public sealed partial class SteamRelayTransport : ITransport, IPlatformFriendLookup, IInboundActivity
     {
         /// <summary>
-        /// Payload bytes per relay message. Steam refuses a reliable send above
-        /// <c>k_cbMaxSteamNetworkingSocketsMessageSizeSend</c> (512 KiB), so anything
-        /// larger is split across messages and rejoined by the receiver.
+        /// Below Steam's 512 KiB reliable-send limit (<c>k_cbMaxSteamNetworkingSocketsMessageSizeSend</c>);
+        /// larger payloads are split and rejoined.
         /// </summary>
         private const int FrameBytes = 480 * 1024;
 
@@ -29,19 +22,12 @@ namespace CS2MultiplayerMod.Core.Networking.Steam
         /// <summary>Per-connection send buffer requested from Steam (default is 512 KiB).</summary>
         private const int SendBufferBytes = 8 * 1024 * 1024;
 
-        /// <summary>
-        /// Steam drops a connection whose peer has gone quiet for this long. The 10 s
-        /// default is short enough that one stalled second of a 50 MB transfer ends it.
-        /// </summary>
+        /// <summary>Steam's 10 s default ends a large transfer on one stalled second.</summary>
         private const int ConnectedTimeoutMs = 30000;
 
         /// <summary>
-        /// Bounds for the paced send rate. Steam's send rate is a clamp, not an estimate -
-        /// its own documentation says to set the min and the max to the same value to pick
-        /// a rate - so whatever goes in here is what gets pushed at the wire, congestion or
-        /// not. <see cref="Govern"/> moves it, opening at four times Steam's 256 KiB/s
-        /// default because no broadband uplink is troubled by 1 MiB/s and every second
-        /// spent climbing to it is a second of the transfer.
+        /// Paced-rate bounds. Steam's rate is a clamp, not an estimate, so this is what hits the wire;
+        /// <see cref="Govern"/> moves it, opening at four times Steam's 256 KiB/s default.
         /// </summary>
         private const int SendRateFloorBytesPerSecond = 128 * 1024;
         private const int SendRateStartBytesPerSecond = 1024 * 1024;
@@ -55,62 +41,55 @@ namespace CS2MultiplayerMod.Core.Networking.Steam
         private const int ThroughputProbeMs = 3000;
 
         /// <summary>
-        /// Congestion signal for a path that queues: a ping standing more than this above
-        /// the connection's own best. Scaled by the baseline so a distant peer is not
-        /// permanently "congested".
+        /// Queueing signal: ping this far above the connection's best, scaled so a distant peer is not always
+        /// congested.
         /// </summary>
         private const int CongestedPingExcessMs = 40;
 
         /// <summary>
-        /// Below this the peer is dropping enough of what we send to act on. A saturated
-        /// path loses a percent or two as a matter of course and the reliable layer just
-        /// resends it, so a threshold set near perfect fires on healthy traffic and spends
-        /// the whole transfer backing away from a wire that was never the problem.
+        /// Loss worth acting on. A saturated path loses a percent or two that the reliable layer resends; a
+        /// near-perfect threshold backs off healthy traffic.
         /// </summary>
         private const float HealthyRemoteQuality = 0.90f;
 
         /// <summary>
-        /// Share of the paced rate the peer has to be acknowledging for a complaint to be read
-        /// as stale rather than current. Quality and ping both describe a window seconds old, so
-        /// a rate that is delivering in full right now is being judged on congestion that is
-        /// already over - and cutting it is what walks a working transfer down to the floor.
+        /// Acknowledged share of the paced rate above which a complaint is stale: cutting a rate that
+        /// delivers in full walks a working transfer to the floor.
         /// </summary>
         private const float DeliveredShare = 0.9f;
 
         /// <summary>
-        /// Floor on a single congestion-driven cut. A quality reading describes a window
-        /// several seconds old, so one sample must not be able to gut the rate - but it is
-        /// paired with <see cref="StrikesBeforeBackoff"/>, and a complaint confirmed twice
-        /// deserves a decisive answer rather than a timid one.
+        /// Acknowledged share needed before the peer's first quality report (which can take 20 s) for a
+        /// climb to count as carried. Below <see cref="DeliveredShare"/>: acknowledgements trail a rising rate.
+        /// </summary>
+        private const float StarvedShare = 0.5f;
+
+        /// <summary>Inbound rate that means the peer is still sending; keep-alives stay far below.</summary>
+        private const float InboundActivityBytesPerSecond = 16 * 1024;
+
+        /// <summary>
+        /// Floor on one cut, so a lagging sample cannot gut the rate; with
+        /// <see cref="StrikesBeforeBackoff"/> a confirmed complaint still gets a decisive cut.
         /// </summary>
         private const float MaxSingleBackoff = 0.5f;
 
-        /// <summary>
-        /// Consecutive seconds a path must complain before the rate moves. One reading is
-        /// as likely to be the tail of a cut already made as it is fresh congestion.
-        /// </summary>
+        /// <summary>Consecutive complaining seconds before the rate moves.</summary>
         private const int StrikesBeforeBackoff = 2;
 
         /// <summary>
-        /// Seconds to hold a rate after cutting it, so the peer's quality window has
-        /// refreshed before the next judgement and the same congestion is not punished
-        /// several times over. That window has been observed lagging its own event by
-        /// 6-9 s, and this plus <see cref="StrikesBeforeBackoff"/> is what has to cover it:
-        /// the strikes are counted after the hold expires, so cuts stay 7 s apart.
+        /// Hold after a cut so the peer's quality window (lagging 6-9 s) refreshes; strikes count after the
+        /// hold, keeping cuts 7 s apart.
         /// </summary>
         private const int BackoffHoldTicks = 5;
 
         /// <summary>
-        /// Share of the rate that was flowing when the path complained which still counts
-        /// as "known to carry". See <see cref="Backoff"/> - this is what decays a repeatedly
-        /// congested estimate downwards without letting one bad second become permanent.
+        /// Share of the complaining rate still counted as known-good (see <see cref="Backoff"/>).
         /// </summary>
         private const float SafeRateShare = 0.9f;
 
         /// <summary>
-        /// A backlog under this is ordinary gameplay traffic. Nothing that small says
-        /// anything about what the path would carry, and a rate left high while idle would
-        /// become the opening burst of the next world transfer.
+        /// Smaller backlogs are gameplay traffic: they say nothing about capacity, and a high idle rate would
+        /// open the next transfer.
         /// </summary>
         private const int BulkBacklogBytes = 256 * 1024;
 
@@ -140,22 +119,21 @@ namespace CS2MultiplayerMod.Core.Networking.Steam
         private int _nextConnectionId = ConnectionId.Server.Value + 1; // 0=None, 1=Server reserved
         private bool _active;
 
+        /// <summary>Steam's message clock offset from ours; see <c>ArrivalOf</c>.</summary>
+        private long _steamClockOffsetMs;
+        private bool _steamClockAligned;
+
         private SteamRelayTransport(IModLogger log, bool isHost)
         {
             _log = log ?? NullModLogger.Instance;
             _isHost = isHost;
         }
 
-        public bool IsActive
-        {
-            get { return _active; }
-        }
+        public bool IsActive => _active;
 
         /// <summary>
-        /// Everything not yet acknowledged by the peer: what Steam still holds plus what is
-        /// still queued here waiting for room. Drives the host's "Sending world %" exactly
-        /// as the socket backlog does on TCP - counting only Steam's share would read
-        /// complete the moment its buffer drained, with most of the world still to go.
+        /// Everything unacknowledged: Steam's share plus our outbox. Drives "Sending world %"; Steam's share
+        /// alone reads complete while most of the world is still queued here.
         /// </summary>
         public long PendingSendBytes
         {
@@ -204,8 +182,7 @@ namespace CS2MultiplayerMod.Core.Networking.Steam
                     "Steam refused to open a relay listen socket. Restart Steam and try again.");
             }
 
-            // Every client's traffic is read through this one group, so without it the host
-            // would accept connections and then never see a byte from any of them.
+            // Every client's traffic is read through this one group.
             transport._pollGroup = SteamNetworkingSockets.CreatePollGroup();
             if (transport._pollGroup == HSteamNetPollGroup.Invalid)
             {
@@ -223,8 +200,7 @@ namespace CS2MultiplayerMod.Core.Networking.Steam
         /// <summary>Dial a host by join code. Steam picks the route; there is no address to reach.</summary>
         public static SteamRelayTransport Connect(IModLogger log, string joinCode, int virtualPort)
         {
-            ulong steamId;
-            if (!ulong.TryParse((joinCode ?? "").Trim(), out steamId) || steamId == 0)
+            if (!ulong.TryParse((joinCode ?? "").Trim(), out ulong steamId) || steamId == 0)
                 throw new InvalidOperationException(
                     "'" + joinCode + "' is not a Steam join code. Ask the host for the code shown on their Host screen.");
 
@@ -244,8 +220,7 @@ namespace CS2MultiplayerMod.Core.Networking.Steam
                     "Steam could not start a relay connection to " + steamId + ".");
             }
 
-            // The client's single connection is the session's well-known Server id, bound
-            // before any callback can fire so the first status change already resolves.
+            // Bound before any callback, so the first status change resolves.
             transport.Bind(ConnectionId.Server, connection, steamId);
             transport._log.Detail(LogTopic.Transport, "Connecting to " + steamId + " over the Steam relay.");
             return transport;
@@ -253,8 +228,7 @@ namespace CS2MultiplayerMod.Core.Networking.Steam
 
         private void Begin()
         {
-            // Warming the relay network here means the first connection does not also pay
-            // for fetching the relay topology.
+            // Warm the relay network so the first connection does not also fetch the topology.
             try { SteamNetworkingUtils.InitRelayNetworkAccess(); }
             catch (Exception ex) { _log.Warn(LogTopic.Transport, "Could not pre-warm the Steam relay network: " + ex.Message); }
 
@@ -265,13 +239,8 @@ namespace CS2MultiplayerMod.Core.Networking.Steam
         }
 
         /// <summary>
-        /// Steam's defaults are tuned for a game's small, steady packets, not for handing
-        /// over a 50 MB world. The send buffer (512 KiB) holds barely one frame, so the
-        /// transfer would crawl forward one frame per rendered frame; and the 10 s
-        /// connected timeout ends a transfer that pauses once.
-        ///
-        /// The send rate is deliberately not set here - it belongs to the connection, and
-        /// <see cref="Govern"/> owns it.
+        /// Steam's defaults suit small steady packets: a 512 KiB send buffer holds about one frame, and a
+        /// 10 s timeout ends a transfer that pauses once. The send rate belongs to <see cref="Govern"/>.
         /// </summary>
         private void ConfigureForBulkTransfer()
         {
@@ -284,15 +253,9 @@ namespace CS2MultiplayerMod.Core.Networking.Steam
         }
 
         /// <summary>
-        /// Options applied to a connection as it is created. Route negotiation begins with
-        /// the connection, so this has to be asked for here rather than set afterwards.
-        ///
-        /// A direct peer-to-peer route is limited by the two players' own uplinks; a Valve
-        /// relay is a shared hop that polices what crosses it, and on a 50 MB world the
-        /// difference is minutes. Steam still chooses the route and still falls back to the
-        /// relay when no direct path forms - this only puts the direct candidate on the
-        /// ballot, which it is not by default. Peers on a direct route learn each other's
-        /// addresses, exactly as they already do on this mod's direct-connection mode.
+        /// Creation-time options (route negotiation starts with the connection). Offers a direct route, limited
+        /// only by the players' uplinks, besides the shared, policed relay; Steam still chooses and falls back
+        /// to the relay. Direct peers learn each other's addresses, as in direct mode.
         /// </summary>
         private static SteamNetworkingConfigValue_t[] CreationOptions()
         {

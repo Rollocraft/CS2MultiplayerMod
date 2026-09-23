@@ -1,49 +1,34 @@
-using System;
 using System.Collections.Generic;
-using System.Diagnostics;
 using Game.Agents;
 using Game.Buildings;
 using Game.Citizens;
 using Game.Common;
-using Game.Companies;
-using Game.Economy;
 using Game.Prefabs;
-using Game.Simulation;
-using Game.Vehicles;
 using Unity.Collections;
 using Unity.Entities;
 using Unity.Jobs;
-using Unity.Mathematics;
 
 namespace CS2MultiplayerMod.Game.Sync.Systems
 {
-    // Support for the rest of the realize pass: retiring and unbinding households, the settling
-    // grace period a freshly created household gets, and prefab/archetype lookups.
     public partial class ResidentialOccupancySyncSystem
     {
         private bool EnqueueRentAction(Entity property, Entity household)
         {
             if (!CanEnqueueRentAction() || property == Entity.Null || household == Entity.Null ||
                 !EntityManager.Exists(property) || !EntityManager.Exists(household)) return false;
-            JobHandle dependencies;
-            NativeQueue<RentAction> queue = _propertyProcessing.GetRentActionQueue(out dependencies);
+            NativeQueue<RentAction> queue = _propertyProcessing.GetRentActionQueue(out JobHandle dependencies);
             dependencies.Complete();
             queue.Enqueue(new RentAction { m_Property = property, m_Renter = household });
             _rentActions++;
             return true;
         }
 
-        /// <summary>
-        /// Retire a household the host no longer houses here. MovingAway is the game's own
-        /// emigration path: it frees the renter slot on the next rent pass, files the right
-        /// statistics, and deletes the household once its people have left the city.
-        /// </summary>
+        /// <summary>Retires through MovingAway, the game's own emigration path.</summary>
         private bool Retire(Entity household)
         {
             if (household == Entity.Null || !EntityManager.Exists(household)) return false;
             if (EntityManager.HasComponent<Deleted>(household)) return false;
-            // The every-frame client lifecycle guard removes locally-authored MovingAway markers.
-            // Mark this one first so the native executor can consume the host-requested retirement.
+            // Whitelisted so the lifecycle guard lets the native executor consume it.
             _authorizedMoveAways.Add(household);
             if (!EntityManager.HasComponent<MovingAway>(household))
                 EntityManager.AddComponentData(household,
@@ -62,27 +47,18 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 for (int i = 0; i < members.Length; i++)
                 {
                     Entity citizen = members[i].m_Citizen;
-                    ulong citizenId, desiredHouseholdId;
-                    if (!TryGetBoundCitizenId(citizen, out citizenId) ||
-                        TryGetDesiredHouseholdId(citizenId, out desiredHouseholdId)) continue;
+                    if (!TryGetBoundCitizenId(citizen, out ulong citizenId) ||
+                        TryGetDesiredHouseholdId(citizenId, out ulong desiredHouseholdId)) continue;
                     UnbindCitizen(citizenId);
                 }
             }
             UnbindHousehold(household);
         }
 
-        // ---- Helpers -----------------------------------------------------------
-
-        private void MarkSettling(Entity household)
-        {
+        private void MarkSettling(Entity household) =>
             _settling[household] = _simulationSystem.frameIndex + SettleFrames;
-        }
 
-        /// <summary>
-        /// Ask for one more pass over this property on the next update. The request is recorded
-        /// separately from the list because the list can be at its cap: either way this property
-        /// has outstanding work and must not be recorded as settled by <see cref="NoteReconciled"/>.
-        /// </summary>
+        /// <summary>Recorded apart from the capped list, so the property is never marked settled.</summary>
         private void ScheduleReapply(Entity property)
         {
             _reapplyRequested.Add(property);
@@ -92,8 +68,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
         private bool IsSettling(Entity household)
         {
-            uint until;
-            if (!_settling.TryGetValue(household, out until)) return false;
+            if (!_settling.TryGetValue(household, out uint until)) return false;
             if (_simulationSystem.frameIndex >= until)
             {
                 _settling.Remove(household);
@@ -210,8 +185,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
         private Entity GetVehicleCreationSource(Entity household, Entity property)
         {
-            Entity source;
-            if (_arrivalSources.TryGetValue(household, out source))
+            if (_arrivalSources.TryGetValue(household, out Entity source))
             {
                 if (IsRoadArrivalSource(source)) return source;
                 _arrivalSources.Remove(household);

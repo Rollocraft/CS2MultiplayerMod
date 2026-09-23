@@ -15,11 +15,7 @@ using CS2MultiplayerMod.Game.Sync.Infrastructure;
 
 namespace CS2MultiplayerMod.Game.Sync.Channels
 {
-    /// <summary>
-    /// Periodically repairs tree stage, growth and variation from the host. Tree growth advances
-    /// independently in each simulation, so reproducing placement alone cannot keep apparent size
-    /// synchronized over time.
-    /// </summary>
+    /// <summary>Repairs tree stage, growth and variation; growth advances independently per machine.</summary>
     public sealed class TreeStateChannel : IStateChannel, IPumpedStateChannel, IDisposable
     {
         public const byte Id = 16;
@@ -30,20 +26,12 @@ namespace CS2MultiplayerMod.Game.Sync.Channels
         private const int MaxPriority = TreeStateBatch.MaxRecords * 2;
 
         /// <summary>
-        /// Snapshots between rolling sweeps. The sweep is a repair treadmill rather than a
-        /// convergence: growth advances locally on the client too, so trees re-diverge about as
-        /// fast as they are corrected, and one sweep of a large map takes minutes either way.
-        /// Walking every tree in the city to advance the cursor is the host's whole cost here.
-        /// Newly placed trees do not wait for it - they arrive through <see cref="Prioritize"/>.
+        /// Snapshots between rolling sweeps. The sweep is a repair treadmill, and walking every tree is the
+        /// host's whole cost; new trees arrive through <see cref="Prioritize"/>.
         /// </summary>
         private const int SnapshotsPerSweep = 10;
 
-        /// <summary>
-        /// Records resolved per frame on the client. Each is a search-tree query plus a component
-        /// read per candidate, and in dense woodland the canopy-sized bounds around a query point
-        /// overlap heavily - resolving a whole snapshot in the frame it landed in is what made
-        /// forested maps stutter for clients.
-        /// </summary>
+        /// <summary>Records resolved per frame: canopy bounds overlap heavily in dense woodland.</summary>
         private const int RecordsPerFrame = 96;
 
         private readonly List<Entity> _priority = new List<Entity>();
@@ -63,9 +51,7 @@ namespace CS2MultiplayerMod.Game.Sync.Channels
         private int _corrected;
         private int _unmatched;
 
-        // Records this client has taken but not yet resolved. A snapshot is a rolling window of
-        // the host's trees, so a newer one replaces whatever is left of the old one instead of
-        // queueing behind it: the dropped part comes round again on a later sweep.
+        // A newer snapshot replaces the unresolved rest; it comes round again next sweep.
         private TreeStateRecord[] _pendingRecords = Array.Empty<TreeStateRecord>();
         private int _pendingCursor;
 
@@ -97,8 +83,7 @@ namespace CS2MultiplayerMod.Game.Sync.Channels
                 if (included.Add(entity)) TryCapture(em, entity, records);
             }
 
-            // ToEntityArray copies every tree in the city, so the sweep - not the send - is what
-            // this channel costs the host. Prioritized trees still go out on every snapshot.
+            // The sweep copies every tree, which is the cost; priority trees go every snapshot.
             if (_captureTick++ % SnapshotsPerSweep == 0)
             {
                 NativeArray<Entity> trees = _trees.ToEntityArray(Allocator.Temp);
@@ -165,12 +150,7 @@ namespace CS2MultiplayerMod.Game.Sync.Channels
             }
         }
 
-        /// <summary>
-        /// Resolve the next slice of the standing snapshot. One search-tree query per record:
-        /// indexing every tree in the city to serve a batch capped at MaxRecords cost the receiver
-        /// a whole-map walk per snapshot, and resolving the whole batch at once still put every
-        /// query of a forested map into a single frame.
-        /// </summary>
+        /// <summary>Resolves the next slice of the standing snapshot, one search-tree query per record.</summary>
         public void Pump(EntityManager em)
         {
             if (_pendingCursor >= _pendingRecords.Length) return;
@@ -182,15 +162,13 @@ namespace CS2MultiplayerMod.Game.Sync.Channels
             _redrawSet.Clear();
             try
             {
-                // One acquisition for the whole slice: the tree is only invalidated by a
-                // structural change, and the single batched tag below is the first of those.
+                // One acquisition per slice; only the batched tag below is structural.
                 ObjectSearch.Batch search = _objectSearch.BeginBatch();
 
                 for (int i = _pendingCursor; i < end; i++)
                 {
                     TreeStateRecord record = _pendingRecords[i];
-                    Entity prefab;
-                    if (!_prefabIndex.TryResolve(record.PrefabName, out prefab))
+                    if (!_prefabIndex.TryResolve(record.PrefabName, out Entity prefab))
                     {
                         _unmatched++;
                         continue;
@@ -215,9 +193,7 @@ namespace CS2MultiplayerMod.Game.Sync.Channels
                     seed.m_Seed = record.RandomSeed;
                     em.SetComponentData(entity, tree);
                     em.SetComponentData(entity, seed);
-                    // Deferred: tagging inline made every correction its own structural change.
-                    // Two records within the match radius can land on one tree, and the batched
-                    // add coalesces by chunk — it must not be handed the same entity twice.
+                    // Batched: two records can land on one tree, and the batched add must not get it twice.
                     if (!em.HasComponent<BatchesUpdated>(entity) && _redrawSet.Add(entity))
                         redraw.Add(entity);
                     _corrected++;
@@ -298,9 +274,8 @@ namespace CS2MultiplayerMod.Game.Sync.Channels
         }
 
         /// <summary>
-        /// Nearest same-prefab tree within <see cref="MatchRadius"/>, preferring an exact seed
-        /// match. Trees are indexed under their geometry bounds, so a canopy-sized box reaches the
-        /// query point long before the pivot does and the distance gate below does the real work.
+        /// Nearest same-prefab tree within <see cref="MatchRadius"/>, preferring an exact seed; bounds are
+        /// canopy-sized, so the distance gate does the real work.
         /// </summary>
         private Entity FindTree(EntityManager em, ObjectSearch.Batch search, Entity prefab,
             TreeStateRecord record, NativeList<Entity> candidates)
@@ -316,8 +291,6 @@ namespace CS2MultiplayerMod.Game.Sync.Channels
             {
                 Entity candidate = candidates[i];
 
-                // Range gate before the identity checks: bounds are canopy-sized, so most of what
-                // the tree reports is standing metres from the pivot we are matching.
                 if (!em.Exists(candidate) || !em.HasComponent<Transform>(candidate)) continue;
                 float distance = math.distancesq(
                     em.GetComponentData<Transform>(candidate).m_Position, wanted);
@@ -344,10 +317,8 @@ namespace CS2MultiplayerMod.Game.Sync.Channels
         }
 
         /// <summary>
-        /// The search tree carries owned sub-objects and everything else static, and its entries are
-        /// only as fresh as the last tree update — so the filtering <see cref="_trees"/> expresses as
-        /// a query has to be repeated per candidate here. Liveness and <c>Transform</c> are the
-        /// caller's, checked ahead of the range gate.
+        /// The tree holds owned sub-objects and may be stale, so <see cref="_trees"/>'s filter is repeated
+        /// here; liveness and Transform are checked by the caller.
         /// </summary>
         private static bool IsTreeCandidate(EntityManager em, Entity entity) =>
             em.HasComponent<Tree>(entity) &&

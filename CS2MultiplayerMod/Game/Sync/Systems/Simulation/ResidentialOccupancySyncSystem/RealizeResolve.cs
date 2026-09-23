@@ -1,27 +1,14 @@
-using System;
 using System.Collections.Generic;
-using System.Diagnostics;
 using CS2MultiplayerMod.Game.Sync.Commands;
 using CS2MultiplayerMod.Game.Sync.Infrastructure;
-using Game.Agents;
-using Game.Buildings;
-using Game.Citizens;
-using Game.Common;
-using Game.Companies;
-using Game.Economy;
 using Game.Prefabs;
 using Game.Simulation;
-using Game.Vehicles;
 using Unity.Collections;
 using Unity.Entities;
-using Unity.Jobs;
 using Unity.Mathematics;
 
 namespace CS2MultiplayerMod.Game.Sync.Systems
 {
-    // Turning a page's properties into local entities: resolve by identity and position, hold
-    // what cannot be matched yet for a later retry, and keep the resolved set cached so the
-    // apply pass has somewhere to start from.
     public partial class ResidentialOccupancySyncSystem
     {
         private void ResolveOrPend(OccupancyProperty wanted, uint sweepId, long now,
@@ -29,12 +16,10 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         {
             TraceReceivedRoster(wanted);
             ObserveIncomingRoster(wanted, sweepId);
-            bool ambiguous;
-            Entity property = ResolveProperty(wanted, search, candidates, out ambiguous);
+            Entity property = ResolveProperty(wanted, search, candidates, out bool ambiguous);
             if (property != Entity.Null && Cache(property, wanted, sweepId))
             {
-                PendingProperty newerPending;
-                if (!_pending.TryGetValue(wanted.Identity, out newerPending) ||
+                if (!_pending.TryGetValue(wanted.Identity, out PendingProperty newerPending) ||
                     newerPending.Property.Revision <= wanted.Revision)
                     _pending.Remove(wanted.Identity);
                 _resolved++;
@@ -43,9 +28,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             if (ambiguous) _ambiguous++;
             else _unresolved++;
 
-            PropertyRentIdentity identity = wanted.Identity;
-            PendingProperty pending;
-            if (_pending.TryGetValue(identity, out pending))
+            PropertyIdentity identity = wanted.Identity;
+            if (_pending.TryGetValue(identity, out PendingProperty pending))
             {
                 if (pending.Property.Revision <= wanted.Revision)
                 {
@@ -56,41 +40,22 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     {
                         pending.ExpiresMs = now + ResolveTimeoutMs;
                         pending.NextAttemptMs = now + ResolveRetryMs;
-                        long retry = pending.NextAttemptMs;
-                        if (_nextPendingPumpMs == 0 || retry < _nextPendingPumpMs)
-                            _nextPendingPumpMs = retry;
+                        _propertyState.ScheduleRetry(pending.NextAttemptMs);
                     }
                 }
                 return;
             }
-            if (_pending.Count >= MaxPendingIdentities)
-            {
+            if (!_propertyState.Hold(identity, new PendingProperty { Property = wanted }, sweepId, now,
+                    ResolveTimeoutMs))
                 _cacheDrops++;
-                return;
-            }
-            _pending[identity] = new PendingProperty
-            {
-                Property = wanted,
-                SweepId = sweepId,
-                ExpiresMs = now + ResolveTimeoutMs,
-                NextAttemptMs = now + ResolveRetryMs,
-            };
-            _pendingOrder.Enqueue(identity);
-            long firstRetry = now + ResolveRetryMs;
-            if (_nextPendingPumpMs == 0 || firstRetry < _nextPendingPumpMs)
-                _nextPendingPumpMs = firstRetry;
         }
 
         private void RetryPending(long now, ObjectSearch.Batch search, NativeList<Entity> candidates)
         {
-            PropertyRetryPump.Pump(_pending, _pendingOrder, now,
-                MaxPendingRetriesPerPump,
-                value => value.ExpiresMs, value => value.NextAttemptMs,
-                (value, retry) => value.NextAttemptMs = retry,
+            _propertyState.RetryPending(now, MaxPendingRetriesPerPump,
                 value =>
                 {
-                    bool ambiguous;
-                    Entity property = ResolveProperty(value.Property, search, candidates, out ambiguous);
+                    Entity property = ResolveProperty(value.Property, search, candidates, out bool ambiguous);
                     if (property == Entity.Null) return false;
                     if (!Cache(property, value.Property, value.SweepId)) return false;
                     _resolved++;
@@ -99,32 +64,22 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         }
 
         /// <summary>
-        /// Find the local building a roster entry describes. Position is the primary identity;
-        /// prefab only breaks a same-distance tie because a level change swaps prefab in place.
-        ///
-        /// That fallback is what keeps occupancy working across a level change. A building that
-        /// levels up carries a different prefab, and the two peers do not change level at the same
-        /// moment - the renovation each of them runs is given its own build rate. Insisting on the
-        /// prefab would silently stop syncing that house until the levels happened to agree, which
-        /// is exactly the case where the two cities visibly disagree. The same reasoning is why
-        /// growable realization matches on the nearest grown building.
+        /// Position is identity; the prefab only breaks a tie, because a level change swaps the prefab at
+        /// a different moment on each peer.
         /// </summary>
         private Entity ResolveProperty(OccupancyProperty wanted, ObjectSearch.Batch search,
             NativeList<Entity> candidates, out bool ambiguous)
         {
             ambiguous = false;
-            // Most pages name a property already bound by an earlier sweep. Validate that
-            // binding before resolving prefabs or walking the spatial tree again.
-            Entity mapped;
-            if (_propertiesByIdentity.TryGetValue(wanted.Identity, out mapped) &&
+            // Validate an existing binding before resolving again.
+            if (_propertiesByIdentity.TryGetValue(wanted.Identity, out Entity mapped) &&
                 PositionMatchesAnchor(mapped, wanted.Identity) &&
                 CanClaimProperty(mapped, wanted.Identity))
                 return mapped;
 
-            Entity prefab;
             _prefabIndex.TryResolve(wanted.PrefabName,
                 candidate => EntityManager.Exists(candidate) &&
-                    EntityManager.HasComponent<BuildingPropertyData>(candidate), out prefab);
+                    EntityManager.HasComponent<BuildingPropertyData>(candidate), out Entity prefab);
             PropertyResolution result = PropertyEntityResolver.Resolve(EntityManager, search,
                 candidates, new float3(wanted.AnchorX, wanted.AnchorY, wanted.AnchorZ),
                 AnchorSearchRadius, AnchorMatchDistance, AmbiguousDistanceEpsilon, prefab,
@@ -134,25 +89,23 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             return result.Entity;
         }
 
-        private bool CanClaimProperty(Entity property, PropertyRentIdentity wanted)
+        private bool CanClaimProperty(Entity property, PropertyIdentity wanted)
         {
-            CachedProperty owner;
-            if (!_cache.TryGetValue(property, out owner) || owner.Identity.Equals(wanted) ||
+            if (!_cache.TryGetValue(property, out CachedProperty owner) || owner.Identity.Equals(wanted) ||
                 SameAnchor(owner.Identity, wanted)) return true;
 
-            // A moved entity may shed its stale cache ownership. A house which still stands at its
-            // old anchor must never be borrowed for a roster whose real house has not appeared yet.
+            // A house still at its old anchor is never borrowed for another roster.
             return !PositionMatchesAnchor(property, owner.Identity);
         }
 
-        private static bool SameAnchor(PropertyRentIdentity first, PropertyRentIdentity second)
+        private static bool SameAnchor(PropertyIdentity first, PropertyIdentity second)
         {
             float dx = first.AnchorX - second.AnchorX;
             float dz = first.AnchorZ - second.AnchorZ;
             return dx * dx + dz * dz <= AnchorMatchDistance * AnchorMatchDistance;
         }
 
-        private bool PositionMatchesAnchor(Entity property, PropertyRentIdentity identity)
+        private bool PositionMatchesAnchor(Entity property, PropertyIdentity identity)
         {
             if (!IsLiveProperty(property)) return false;
             float3 position = EntityManager
@@ -163,22 +116,19 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         }
 
         /// <summary>
-        /// Installs one half of the property-identity bijection. False means the candidate is still
-        /// owned by another anchor (or the bounded cache is full), so the caller must keep the
-        /// roster pending instead of treating it as resolved.
+        /// One half of the property-identity bijection. False: still owned by another anchor or the cache
+        /// is full, so the roster stays pending.
         /// </summary>
         private bool Cache(Entity property, OccupancyProperty wanted, uint sweepId)
         {
-            Entity alreadyMapped;
-            if (_propertiesByIdentity.TryGetValue(wanted.Identity, out alreadyMapped) &&
+            if (_propertiesByIdentity.TryGetValue(wanted.Identity, out Entity alreadyMapped) &&
                 alreadyMapped != property && IsLiveProperty(alreadyMapped) &&
                 PositionMatchesAnchor(alreadyMapped, wanted.Identity))
                 return false;
 
             int bucket = (int)(EntityManager.GetSharedComponent<UpdateFrame>(property).m_Index %
                                UpdatePartitions);
-            CachedProperty cached;
-            if (_cache.TryGetValue(property, out cached))
+            if (_cache.TryGetValue(property, out CachedProperty cached))
             {
                 bool changedIdentity = !cached.Identity.Equals(wanted.Identity);
                 bool sameAnchor = changedIdentity && SameAnchor(cached.Identity, wanted.Identity);
@@ -186,19 +136,37 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     PositionMatchesAnchor(property, cached.Identity))
                     return false;
 
-                // Revisions are issued from one world-global counter, so even a delayed page from
-                // before an object move must not roll a newer cross-anchor mapping back.
+                // Revisions are world-global: a delayed page never rolls back a newer mapping.
                 if (wanted.Revision < cached.Revision)
                 {
                     _stalePages++;
-                    // A stale page for some other identity did not resolve that identity. Keep it
-                    // pending; a newer queued page may be the legitimate in-place/move migration.
+                    // Stays pending: a newer queued page may be the legitimate migration.
                     return !changedIdentity;
                 }
                 if (wanted.Revision == cached.Revision)
                 {
                     if (changedIdentity) return false;
-                    if (sweepId == _clientSweepId) cached.LastSeenSweep = sweepId;
+                    if (sweepId == _propertyState.SweepId) cached.LastSeenSweep = sweepId;
+                    return true;
+                }
+
+                // Baseline pages get a fresh revision even when unchanged: keep coverage, skip the reapply.
+                if (!changedIdentity && !cached.RemoveAfterApply &&
+                    OccupancyContentComparer.Same(in wanted, in cached.LastReceived))
+                {
+                    ulong previousRevision = cached.Revision;
+                    cached.Revision = wanted.Revision;
+                    cached.LastReceived = wanted;
+                    cached.LastSeenSweep = sweepId;
+                    _unchangedProperties++;
+                    if (!_dirtyMembers.Contains(property) &&
+                        !_reapplyRequested.Contains(property) &&
+                        _appliedState.TryGetValue(property, out AppliedState applied) &&
+                        applied.Revision == previousRevision)
+                    {
+                        applied.Revision = wanted.Revision;
+                        _appliedState[property] = applied;
+                    }
                     return true;
                 }
             }
@@ -225,6 +193,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             cached.WaterFulfilledFresh = wanted.WaterFulfilledFresh;
             cached.WaterFulfilledSewage = wanted.WaterFulfilledSewage;
             cached.Households = wanted.Households;
+            cached.LastReceived = wanted;
             cached.Bucket = bucket;
             cached.LastSeenSweep = sweepId;
             cached.RemoveAfterApply = false;
@@ -242,18 +211,15 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             for (int i = 0; i < _cacheScratch.Count; i++)
             {
                 Entity property = _cacheScratch[i];
-                CachedProperty cached;
-                if (!_cache.TryGetValue(property, out cached)) continue;
-                // A delayed older sweep must never erase a roster learned at a revision beyond
-                // that sweep's closing watermark.
+                if (!_cache.TryGetValue(property, out CachedProperty cached)) continue;
+                // An older sweep never erases a roster learned beyond its closing watermark.
                 if (cached.Revision > revisionWatermark) continue;
                 if (!IsLiveProperty(property))
                 {
                     if (RemoveCachedProperty(property)) _pruned++;
                     continue;
                 }
-                // Keep a local tombstone until GameSimulation has drained or transferred every
-                // renter. Dropping the cache here would lose the only safe structural-write point.
+                // Tombstone until GameSimulation drains every renter: the only safe structural-write point.
                 cached.Households = new OccupancyHousehold[0];
                 if (revisionWatermark > cached.Revision) cached.Revision = revisionWatermark;
                 cached.LastSeenSweep = sweepId;
@@ -265,8 +231,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
         private bool RemoveCachedProperty(Entity property)
         {
-            CachedProperty cached;
-            if (!_cache.TryGetValue(property, out cached)) return false;
+            if (!_cache.TryGetValue(property, out CachedProperty cached)) return false;
             UnregisterResolvedProperty(cached.Identity, property);
             _appliedState.Remove(property);
             return _cache.Remove(property);
@@ -277,24 +242,11 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             if (_cacheBucketMembers[bucket].Add(property)) _cacheBuckets[bucket].Add(property);
         }
 
-        private void MarkDirty(Entity property)
-        {
-            if (!_dirtyMembers.Add(property)) return;
-            _dirty.Add(property);
-            // Shedding the oldest is safe: the entry is still cached and still in the rolling
-            // partition, so it is repaired on the next pass over its bucket rather than lost.
-            if (_dirty.Count <= MaxDirtyProperties) return;
-            _dirtyMembers.Remove(_dirty[0]);
-            _dirty.RemoveAt(0);
-        }
+        private void MarkDirty(Entity property) =>
+            // Shedding the oldest is safe: the rolling partition can still repair it.
+            BoundedUniquePropertyList.Enqueue(_dirty, _dirtyMembers, property, MaxDirtyProperties);
 
-        // ---- Apply ------------------------------------------------------------
-
-        /// <summary>
-        /// Properties whose roster just changed are reconciled first; whatever budget is left goes
-        /// to one rolling partition, which is what repairs drift the host never reported (a local
-        /// death, a local birth the host did not have).
-        /// </summary>
+        /// <summary>Changed properties first, then one rolling partition for unreported drift.</summary>
         private void ApplyPending()
         {
             _budget.Reset();
@@ -308,8 +260,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
             using (Diagnostics.SyncProfiler.Measure("Occupancy.Apply", Diagnostics.SyncZone.Residential))
             {
-                // Anything created last update is re-examined now: the game's own initialization has
-                // since run over those residents, randomising the very fields the roster specifies.
+                // Initialization has since randomized the fields the roster specifies.
                 for (int i = 0; i < _reapply.Count; i++) MarkDirty(_reapply[i]);
                 _reapply.Clear();
                 _reapplyRequested.Clear();
@@ -323,9 +274,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 }
                 if (processed > 0) _dirty.RemoveRange(0, processed);
 
-                int repairBucket;
                 if (!_budget.Exhausted && _repairScanCadence.TryTakePartition(
-                        _simulationSystem.selectedSpeed, UpdatePartitions, out repairBucket))
+                        _simulationSystem.selectedSpeed, UpdatePartitions, out int repairBucket))
                     ApplyBucket(repairBucket);
                 _appliedThisUpdate.Clear();
             }

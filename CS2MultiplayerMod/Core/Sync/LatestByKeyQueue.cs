@@ -4,8 +4,8 @@ using System.Collections.Generic;
 namespace CS2MultiplayerMod.Core.Sync
 {
     /// <summary>
-    /// FIFO work queue that keeps only the newest value for each key. Replacing queued work does
-    /// not move it to the back, so a frequently updated key cannot starve older distinct keys.
+    /// FIFO keeping the newest value per key; replacing does not move the key back, so a busy key cannot
+    /// starve others.
     /// </summary>
     public sealed class LatestByKeyQueue<TKey, TValue>
     {
@@ -24,8 +24,7 @@ namespace CS2MultiplayerMod.Core.Sync
 
         public bool TryGetValue(TKey key, out TValue value)
         {
-            Entry entry;
-            if (_entries.TryGetValue(key, out entry))
+            if (_entries.TryGetValue(key, out Entry entry))
             {
                 value = entry.Value;
                 return true;
@@ -34,16 +33,12 @@ namespace CS2MultiplayerMod.Core.Sync
             return false;
         }
 
-        /// <summary>
-        /// Add a new key or replace its queued value. Existing keys can always be replaced even
-        /// when the queue is at capacity.
-        /// </summary>
+        /// <summary>Adds or replaces; replacing works even at capacity.</summary>
         public bool TrySetLatest(TKey key, TValue value, int capacity)
         {
             if (capacity <= 0) throw new ArgumentOutOfRangeException(nameof(capacity));
 
-            Entry existing;
-            if (_entries.TryGetValue(key, out existing))
+            if (_entries.TryGetValue(key, out Entry existing))
             {
                 existing.Value = value;
                 return true;
@@ -76,8 +71,7 @@ namespace CS2MultiplayerMod.Core.Sync
 
         public bool Remove(TKey key)
         {
-            Entry entry;
-            if (!_entries.TryGetValue(key, out entry)) return false;
+            if (!_entries.TryGetValue(key, out Entry entry)) return false;
             _order.Remove(entry.Node);
             _entries.Remove(key);
             return true;

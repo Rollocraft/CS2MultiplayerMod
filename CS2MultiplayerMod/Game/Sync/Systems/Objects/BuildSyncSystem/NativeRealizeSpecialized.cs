@@ -1,27 +1,16 @@
-using System.Collections.Generic;
-using Colossal.Mathematics;
-using Game.Common;
-using Game.Net;
 using Game.Prefabs;
 using Game.Tools;
-using Unity.Collections;
 using Unity.Entities;
 using Unity.Mathematics;
 using CS2MultiplayerMod.Game.Sync.Commands;
 
 namespace CS2MultiplayerMod.Game.Sync.Systems
 {
-    // What a client is allowed to reproduce for specialized industry: which placements own an
-    // area, which spawnables and placeholder attachments are compatible with the prefab, and
-    // which references point at something moving and so must not be resolved against.
     public partial class BuildSyncSystem
     {
         /// <summary>
-        /// Reject object-tool batches that attempt to create or manipulate entities owned by
-        /// simulation spawning. Their prefab names are enough to decide this before resolving
-        /// live entity references, so a forged mover target cannot stall the ordered retry queue.
-        /// Existing growables may be referenced by a legitimate edit, but they may not be the
-        /// newly-created object in a placement batch.
+        /// Rejects batches that create simulation-owned entities, by prefab name before any resolution, so a
+        /// forged mover cannot stall the queue. Existing growables may be referenced but not created.
         /// </summary>
         private bool TryFindUnsafeSimulationReference(ObjectToolOperationCommand command,
             out string prefabName)
@@ -30,10 +19,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             for (int i = 0; i < command.Definitions.Length; i++)
             {
                 ObjectToolDefinitionIntent definition = command.Definitions[i];
-                Entity prefab;
 
                 if (!definition.PrefabIsNull &&
-                    _prefabIndex.TryResolve(definition.PrefabName, out prefab))
+                    _prefabIndex.TryResolve(definition.PrefabName, out Entity prefab))
                 {
                     if (EntityManager.HasComponent<MovingObjectData>(prefab) ||
                         (definition.Kind == ObjectToolDefinitionKind.Object &&
@@ -68,11 +56,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         }
 
         /// <summary>
-        /// A specialized-industry placement is distinguishable from arbitrary growable creation:
-        /// its new root owns an extractor/storage area declared by that root prefab. Some
-        /// facilities use a placeholder root plus one level-one spawnable building attached to the
-        /// placeholder prefab; older/direct variants use a spawnable root. Require the complete
-        /// graph before exempting either exact form from the generic growable rejection.
+        /// A specialized-industry placement: its new root owns the extractor/storage area its prefab
+        /// declares, via a placeholder root with an attached level-one building or a spawnable root. The
+        /// complete graph is required before the growable rejection is waived.
         /// </summary>
         private bool IsSpecializedIndustryPlacement(ObjectToolOperationCommand command)
         {
@@ -90,8 +76,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                               CreationFlags.Recreate | CreationFlags.Upgrade |
                               CreationFlags.Permanent)) != 0) return false;
 
-            Entity rootPrefab;
-            if (!_prefabIndex.TryResolve(root.PrefabName, out rootPrefab)) return false;
+            if (!_prefabIndex.TryResolve(root.PrefabName, out Entity rootPrefab)) return false;
             bool directSpawnable =
                 EntityManager.HasComponent<SpawnableBuildingData>(rootPrefab) &&
                 !EntityManager.HasComponent<SignatureBuildingData>(rootPrefab);
@@ -105,10 +90,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             {
                 for (int i = 0; i < command.Definitions.Length; i++)
                 {
-                    Entity candidatePrefab;
                     if (i != command.RootIndex &&
                         TryGetSpecializedPlaceholderAttachment(command, i, root,
-                            rootPrefab, out candidatePrefab))
+                            rootPrefab, out Entity candidatePrefab))
                     {
                         hasPlaceholderAttachment = true;
                         break;
@@ -123,11 +107,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             return false;
         }
 
-        /// <summary>
-        /// One extractor/storage lot belonging to this placement's root. The polygon is not
-        /// required to be a drawn ring: the game lets a player leave the area tool without
-        /// drawing one, and the building then commits with the lot its prefab declares.
-        /// </summary>
+        /// <summary>An extractor/storage lot of this root; the player may leave it undrawn.</summary>
         private bool IsOwnedSpecializedAreaDefinition(ObjectToolDefinitionIntent area,
             ObjectToolDefinitionIntent root, Entity rootPrefab)
         {
@@ -155,8 +135,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 area.OwnerDefinitionRotW);
             if (math.abs(math.dot(rootRotation, ownerRotation)) < 0.999f) return false;
 
-            Entity areaPrefab;
-            return _prefabIndex.TryResolve(area.PrefabName, out areaPrefab) &&
+            return _prefabIndex.TryResolve(area.PrefabName, out Entity areaPrefab) &&
                    IsSpecializedAreaPrefab(areaPrefab) &&
                    PrefabDeclaresOwnedArea(rootPrefab, areaPrefab);
         }
@@ -165,15 +144,13 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             int definitionIndex, Entity definitionPrefab)
         {
             ObjectToolDefinitionIntent root = command.Definitions[command.RootIndex];
-            Entity rootPrefab;
-            if (!_prefabIndex.TryResolve(root.PrefabName, out rootPrefab)) return false;
+            if (!_prefabIndex.TryResolve(root.PrefabName, out Entity rootPrefab)) return false;
             if (definitionIndex == command.RootIndex)
                 return definitionPrefab == rootPrefab &&
                        EntityManager.HasComponent<SpawnableBuildingData>(rootPrefab);
 
-            Entity attachmentPrefab;
             return TryGetSpecializedPlaceholderAttachment(command, definitionIndex,
-                       root, rootPrefab, out attachmentPrefab) &&
+                       root, rootPrefab, out Entity attachmentPrefab) &&
                    attachmentPrefab == definitionPrefab;
         }
 
@@ -220,11 +197,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 placeholderPrefab);
         }
 
-        /// <summary>
-        /// The prefab relationship used by a specialized-industry placeholder and its visible
-        /// level-one building. Kept separate from the transient definition checks above so the
-        /// same relationship can identify the committed live graph at ModificationEnd.
-        /// </summary>
+        /// <summary>The placeholder-to-visible-building relationship, for definitions and live graphs.</summary>
         private bool IsCompatiblePlaceholderAttachmentPrefab(Entity attachmentPrefab,
             Entity placeholderPrefab)
         {
@@ -269,21 +242,14 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                             placeholderBuilding.m_LotSize);
         }
 
-        /// <summary>
-        /// True for a committed spawnable building that belongs to a player-placed specialized
-        /// industry graph. Placeholder variants attach their visible level-one building to the
-        /// placeholder; direct variants declare the extractor/storage area on the spawnable root.
-        /// </summary>
+        /// <summary>A committed spawnable that belongs to a player-placed specialized-industry graph.</summary>
         private bool IsLiveSpecializedIndustrySpawnable(Entity entity, Entity prefab)
         {
             if (entity == Entity.Null || prefab == Entity.Null ||
                 !EntityManager.Exists(entity) || !EntityManager.Exists(prefab) ||
                 !EntityManager.HasComponent<SpawnableBuildingData>(prefab)) return false;
 
-            // The prefab declaration alone is not origin evidence: a future simulation spawner
-            // could legitimately choose a spawnable which also declares an area. Direct variants
-            // count as placed only when this live instance actually owns the specialized area
-            // graph produced by the object tool.
+            // The prefab declaration is not origin evidence; the live instance must own the area graph.
             if (PrefabDeclaresSpecializedArea(prefab) &&
                 HasLiveOwnedSpecializedArea(entity)) return true;
             if (!EntityManager.HasComponent<global::Game.Objects.Attached>(entity)) return false;
@@ -293,8 +259,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             if (parent == Entity.Null || parent == entity || !EntityManager.Exists(parent))
                 return false;
 
-            // Prefab-local attachment definitions initially name the placeholder prefab itself;
-            // after owner resolution the same relationship may name its live instance.
+            // Names the placeholder prefab at first, its live instance after owner resolution.
             Entity parentPrefab = Entity.Null;
             if (EntityManager.HasComponent<PrefabData>(parent))
                 parentPrefab = parent;
@@ -321,8 +286,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 Entity areaPrefab = EntityManager.GetComponentData<PrefabRef>(area).m_Prefab;
                 if (!IsSpecializedAreaPrefab(areaPrefab)) continue;
 
-                Entity topOwner;
-                if (TryFindTopOwner(area, out topOwner) && topOwner == owner) return true;
+                if (TryFindTopOwner(area, out Entity topOwner) && topOwner == owner) return true;
             }
             return false;
         }
@@ -381,8 +345,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         {
             unsafeName = null;
             if (string.IsNullOrEmpty(name)) return false;
-            Entity prefab;
-            if (!_prefabIndex.TryResolve(name, out prefab)) return false;
+            if (!_prefabIndex.TryResolve(name, out Entity prefab)) return false;
             if (!EntityManager.HasComponent<MovingObjectData>(prefab)) return false;
             unsafeName = name;
             return true;
@@ -393,8 +356,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             unsafeName = null;
             if (reference.Kind == PortableEntityKind.None ||
                 string.IsNullOrEmpty(reference.PrefabName)) return false;
-            Entity prefab;
-            if (!_prefabIndex.TryResolve(reference.PrefabName, out prefab) ||
+            if (!_prefabIndex.TryResolve(reference.PrefabName, out Entity prefab) ||
                 !EntityManager.HasComponent<MovingObjectData>(prefab)) return false;
             unsafeName = reference.PrefabName;
             return true;

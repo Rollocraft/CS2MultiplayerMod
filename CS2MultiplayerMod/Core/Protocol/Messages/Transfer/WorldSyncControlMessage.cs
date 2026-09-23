@@ -10,17 +10,13 @@ namespace CS2MultiplayerMod.Core.Protocol.Messages
         Resume = 5,
         Abort = 6,
 
-        /// <summary>
-        /// Begin for a peer that already holds this world: it quiesces and resumes with the
-        /// others, but no snapshot is streamed to it and it never replaces its world.
-        /// </summary>
+        /// <summary>Begin for a peer that already holds the world: it quiesces and resumes, nothing is streamed.</summary>
         BeginBarrierOnly = 7,
     }
 
     /// <summary>
-    /// Control plane for a world snapshot. Begin/Resume/Abort flow host to client;
-    /// Quiesced/Loaded/Failed flow client to host. The epoch prevents stale controls or
-    /// chunks from a superseded transfer affecting the current world.
+    /// World snapshot control: Begin/Resume/Abort host to client, Quiesced/Loaded/Failed back. The epoch
+    /// discards stale controls and chunks.
     /// </summary>
     public sealed class WorldSyncControlMessage : INetMessage
     {

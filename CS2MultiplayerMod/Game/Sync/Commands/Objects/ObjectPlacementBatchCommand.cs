@@ -3,11 +3,7 @@ using CS2MultiplayerMod.Core.Sync;
 
 namespace CS2MultiplayerMod.Game.Sync.Commands
 {
-    /// <summary>
-    /// All simple objects of one prefab created by one brush frame. Keeping the prefab once and
-    /// carrying every transform in one command prevents a dense vegetation stroke from filling the
-    /// simulation-command inbox with thousands of tiny object-placement messages.
-    /// </summary>
+    /// <summary>One brush frame's objects of one prefab, so a vegetation stroke does not flood the inbox.</summary>
     public sealed class ObjectPlacementBatchCommand : ISimulationCommand
     {
         public const ushort Id = 31;

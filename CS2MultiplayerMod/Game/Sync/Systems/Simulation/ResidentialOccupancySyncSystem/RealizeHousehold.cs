@@ -1,26 +1,14 @@
 using CS2MultiplayerMod.Game.Sync.Infrastructure;
-using System;
-using System.Collections.Generic;
-using System.Diagnostics;
 using CS2MultiplayerMod.Game.Sync.Commands;
 using Game.Agents;
 using Game.Buildings;
 using Game.Citizens;
 using Game.Common;
-using Game.Companies;
-using Game.Economy;
 using Game.Prefabs;
-using Game.Simulation;
-using Game.Vehicles;
-using Unity.Collections;
 using Unity.Entities;
-using Unity.Jobs;
-using Unity.Mathematics;
 
 namespace CS2MultiplayerMod.Game.Sync.Systems
 {
-    // Where a household lives: the renter links between household and property, the checks
-    // that decide whether a property can take one, and applying the host's household state.
     public partial class ResidentialOccupancySyncSystem
     {
         private bool IsHouseholdAtProperty(Entity household, Entity property)
@@ -84,8 +72,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
         private void MarkRentersUpdated(Entity property)
         {
-            // This notification is an event entity, not a tag on the building. Clean up the old
-            // malformed marker as well so upgraded sessions can emit a valid notification.
+            // The notification is an event entity, not a tag; clean up the old malformed marker too.
             if (EntityManager.HasComponent<RentersUpdated>(property) &&
                 !EntityManager.HasComponent<global::Game.Common.Event>(property))
                 EntityManager.RemoveComponent<RentersUpdated>(property);
@@ -119,8 +106,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         private bool CanStageTransferTo(Entity destination)
         {
             if (!CanEnqueueRentAction() || !IsLiveProperty(destination)) return false;
-            CachedProperty cached;
-            if (!_cache.TryGetValue(destination, out cached) || cached.RemoveAfterApply ||
+            if (!_cache.TryGetValue(destination, out CachedProperty cached) || cached.RemoveAfterApply ||
                 cached.Households == null) return false;
             if (EntityManager.HasComponent<global::Game.Objects.UnderConstruction>(destination) &&
                 cached.ConstructionSpeed == 0) return false;
@@ -156,16 +142,14 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     continue;
                 }
 
-                ulong renterId;
-                PropertyRentIdentity desiredIdentity, destinationIdentity;
-                if (!TryGetBoundHouseholdId(renter, out renterId))
+                if (!TryGetBoundHouseholdId(renter, out ulong renterId))
                     continue; // an unbound bootstrap extra is retireable
-                if (!TryGetDesiredPropertyIdentity(renterId, out desiredIdentity))
+                if (!TryGetDesiredPropertyIdentity(renterId, out PropertyIdentity desiredIdentity))
                 {
                     if (HasActiveDesiredCitizenStillLinked(renter)) fixedOccupants++;
                     continue;
                 }
-                if (!TryGetPropertyIdentity(destination, out destinationIdentity))
+                if (!TryGetPropertyIdentity(destination, out PropertyIdentity destinationIdentity))
                 {
                     fixedOccupants++;
                     continue;
@@ -185,8 +169,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     continue;
                 }
 
-                Entity outgoingDestination;
-                if (!TryGetDesiredProperty(renterId, out outgoingDestination)) fixedOccupants++;
+                if (!TryGetDesiredProperty(renterId, out Entity outgoingDestination)) fixedOccupants++;
             }
             return desiredCount + fixedOccupants <= capacity;
         }
@@ -209,16 +192,14 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
         private void ApplyHousehold(Entity household, Entity property, OccupancyHousehold wanted)
         {
-            Entity prefab;
-            if (ResolvePrefab<HouseholdData>(wanted.PrefabName, out prefab) &&
+            if (ResolvePrefab<HouseholdData>(wanted.PrefabName, out Entity prefab) &&
                 EntityManager.HasComponent<PrefabRef>(household) &&
                 EntityManager.GetComponentData<PrefabRef>(household).m_Prefab != prefab)
                 EntityManager.SetComponentData(household, new PrefabRef(prefab));
 
             Household data = EntityManager.GetComponentData<Household>(household);
             var flags = (HouseholdFlags)(wanted.Flags & HouseholdFlagMask);
-            // Arrival owns this bit on every peer. Preserve a completed local move-in, but never
-            // import it early from a host page because that would suppress the population event.
+            // Arrival owns MovedIn on every peer; never import it early.
             if ((data.m_Flags & HouseholdFlags.MovedIn) != 0)
                 flags |= HouseholdFlags.MovedIn;
             if (data.m_Flags != flags)
@@ -227,7 +208,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 EntityManager.SetComponentData(household, data);
             }
             ApplyHouseholdEconomy(household, property,
-                DesiredHouseholdEconomy.From(wanted, default(PropertyRentIdentity), 0));
+                DesiredHouseholdEconomy.From(wanted, default(PropertyIdentity), 0));
 
             ApplyNameIndices(household, wanted.NameIndices);
             ApplyCitizens(household, property, wanted);

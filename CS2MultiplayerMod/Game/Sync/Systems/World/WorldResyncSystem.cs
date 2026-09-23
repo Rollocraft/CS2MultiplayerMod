@@ -15,10 +15,8 @@ using Game;
 namespace CS2MultiplayerMod.Game.Sync.Systems
 {
     /// <summary>
-    /// Runs world replacement as a distributed transaction:
-    /// Begin -> every client quiesced -> local native work drained -> save -> epoch-tagged map ->
-    /// every client loaded -> Resume. Requests are coalesced and a second save can never overtake
-    /// an active map stream.
+    /// World replacement as a distributed transaction: Begin, clients quiesce, native work drains,
+    /// save, epoch-tagged map, clients load, Resume. A second save never overtakes an active stream.
     /// </summary>
     public partial class WorldResyncSystem : GameSystemBase
     {
@@ -140,19 +138,12 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             }
         }
 
-        /// <summary>
-        /// This system survives session restarts inside the same loaded city. Discard
-        /// observer events and join labels from the previous role/session so a later
-        /// host never attributes its first refresh to an old connection id.
-        /// </summary>
+        /// <summary>Survives session restarts: forget the previous session's observers and labels.</summary>
         private void ResetInactiveState()
         {
-            RecoveryRequest request;
-            while (_requests.TryDequeue(out request)) { }
-            ControlEvent control;
-            while (_controls.TryDequeue(out control)) { }
-            ConnectionId left;
-            while (_leaves.TryDequeue(out left)) { }
+            while (_requests.TryDequeue(out RecoveryRequest request)) { }
+            while (_controls.TryDequeue(out ControlEvent control)) { }
+            while (_leaves.TryDequeue(out ConnectionId left)) { }
 
             _state = RecoveryState.Idle;
             CancelSave();
@@ -172,8 +163,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
         private void DrainObserverEvents(MultiplayerSession session)
         {
-            RecoveryRequest request;
-            while (_requests.TryDequeue(out request))
+            while (_requests.TryDequeue(out RecoveryRequest request))
             {
                 if (request.IsJoin && !request.Connection.IsNone)
                     _pendingJoinRequests.Add(request.Connection.Value);
@@ -183,15 +173,13 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 else _rerunRequested = true;
             }
 
-            ConnectionId left;
-            while (_leaves.TryDequeue(out left))
+            while (_leaves.TryDequeue(out ConnectionId left))
             {
                 _pendingJoinRequests.Remove(left.Value);
                 RemoveParticipant(left);
             }
 
-            ControlEvent evt;
-            while (_controls.TryDequeue(out evt))
+            while (_controls.TryDequeue(out ControlEvent evt))
             {
                 if (_state == RecoveryState.Idle || evt.Epoch != _epoch ||
                     !ContainsParticipant(evt.Connection))
@@ -234,9 +222,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     _joiningParticipants.Add(_participants[i]);
             service.PrepareHostWorldSyncUi(_joiningParticipants);
 
-            // A join only owes the world to whoever joined; everyone else is already holding it
-            // and just crosses the barrier. Divergence-driven and player-requested epochs
-            // re-baseline every peer, which is the whole point of them.
+            // A join streams only to the joiner; divergence and player-requested epochs re-baseline everyone.
             _snapshotTargets.Clear();
             if (_fullSnapshotRequested || _joiningParticipants.Count == 0)
                 _snapshotTargets.AddRange(_participants);
@@ -295,8 +281,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 return;
             }
 
-            // Two complete UI frames after every acknowledgement/native Temp drain close races
-            // with a tool apply that was already scheduled when Begin arrived.
+            // Two clean frames close races with a tool apply already scheduled when Begin arrived.
             if (++_cleanFrames < RequiredCleanFrames) return;
             StartSave(service, now);
         }
@@ -366,8 +351,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             finally { snapshot.Dispose(); }
 
             _loaded.Clear();
-            // Barrier-only participants install nothing, so they never acknowledge a load. They
-            // are already where the snapshot would have put them.
+            // Barrier-only participants install nothing, so they never acknowledge a load.
             for (int i = 0; i < _participants.Count; i++)
                 if (!_snapshotTargets.Contains(_participants[i]))
                     _loaded.Add(_participants[i].Value);
@@ -406,21 +390,17 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         private void CompleteEpoch(MultiplayerService service, MultiplayerSession session, long now)
         {
             var targets = new List<ConnectionId>(_participants);
-            // A peer that asked for a world mid-epoch is not a new participant, so it would
-            // otherwise be left waiting: this epoch may only have streamed to whoever joined.
+            // A peer that asked mid-epoch may not have been streamed to; rerun for it.
             bool needsRerun = _rerunRequested &&
                 (_fullSnapshotRequested || HasNewParticipant(session, targets));
-            // Resume is queued first. Session command sends are reopened only afterward, preserving
-            // Resume-before-command order on every TCP connection.
+            // Resume first, then reopen command sends: Resume-before-command order on every connection.
             session.ResumeWorldSync(_epoch, _resumeSpeed, targets);
             service.CompleteHostWorldSync(_epoch, _resumeSpeed);
             SyncLog.Event(LogTopic.Resync, "World sync epoch " + _epoch + " completed for " +
                 targets.Count + " participant(s).");
             ResetEpoch();
 
-            // A peer that joined after this snapshot was queued needs another snapshot. Open the
-            // next Begin immediately after Resume in the same update, leaving no gameplay frame
-            // between epochs and never overlapping blob streams.
+            // Open the next Begin in the same update: no gameplay frame between epochs.
             _rerunRequested = false;
             if (needsRerun)
             {

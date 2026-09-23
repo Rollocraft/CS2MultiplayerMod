@@ -1,12 +1,10 @@
 using System;
-using System.Collections.Concurrent;
 using System.Collections.Generic;
+using CS2MultiplayerMod.Core.Protocol;
 using CS2MultiplayerMod.Core.Diagnostics;
 using CS2MultiplayerMod.Core.Session;
-using CS2MultiplayerMod.Game.Diagnostics;
 using CS2MultiplayerMod.Game.Sync.Commands;
 using CS2MultiplayerMod.Game.Sync.Infrastructure;
-using Game;
 using Game.Buildings;
 using Game.Common;
 using Game.Prefabs;
@@ -17,16 +15,9 @@ using Unity.Entities;
 
 namespace CS2MultiplayerMod.Game.Sync.Systems
 {
-    // The work that runs around the apply pass rather than inside it: holding the client's own
-    // household decisions at the lifecycle boundary, the page plumbing either peer needs, the host
-    // sweep's revision counter, and the periodic stats line.
     public partial class ResidentialOccupancySyncSystem
     {
-        /// <summary>
-        /// Kept engaged from the city-state pump as well as from <see cref="OnUpdate"/>. The
-        /// GameSimulation phase stops ticking the moment a player pauses, so a client that leaves
-        /// a session while paused would otherwise keep its household systems held forever.
-        /// </summary>
+        /// <summary>Also called from the pump: GameSimulation stops while paused.</summary>
         internal void MaintainAuthority()
         {
             MultiplayerService service = Mod.Service;
@@ -38,11 +29,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             ApplyLocalAuthority(service.Session);
         }
 
-        /// <summary>
-        /// Called every simulation frame immediately before the native move-away consumer. The
-        /// main occupancy system runs at a wider interval and can otherwise miss a short-lived
-        /// MovingAway entity entirely.
-        /// </summary>
+        /// <summary>Every frame before the native move-away consumer; MovingAway can be short-lived.</summary>
         internal void ProcessHouseholdLifecycleBoundary()
         {
             MultiplayerService service = Mod.Service;
@@ -54,15 +41,11 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         }
 
         /// <summary>
-        /// HouseholdBehaviorSystem must run locally because it produces shopping needs and car
-        /// demand. It also proposes moves. Remove only those proposals at the last safe boundary;
-        /// retirements explicitly requested by the received host roster are whitelisted.
+        /// Strips HouseholdBehaviorSystem's move proposals; host-requested retirements are whitelisted.
         /// </summary>
         private void CancelClientLifecycleDecisions()
         {
-            // This runs every simulation frame. A large city proposes hundreds of these decisions
-            // per frame, and cancelling them one entity at a time makes each removal its own
-            // structural change; both cancellations are therefore issued in bulk.
+            // Issued in bulk: one structural change per family would be one sync point each.
             if (!_departingHouseholds.IsEmptyIgnoreFilter)
             {
                 if (_authorizedMoveAways.Count == 0)
@@ -96,9 +79,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 }
             }
 
-            // PropertySeeker is enableable, so this query holds exactly the households whose flag
-            // is set - including any that were departing above. Clearing the bits a chunk at a
-            // time replaces one main-thread call per family.
+            // PropertySeeker is enableable: clear the bits a chunk at a time.
             if (!_clientPropertySeekers.IsEmptyIgnoreFilter)
                 EntityManager.SetComponentEnabled<global::Game.Agents.PropertySeeker>(
                     _clientPropertySeekers, false);
@@ -113,10 +94,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             _authorizedMoveAwayScratch.Clear();
         }
 
-        /// <summary>
-        /// The channel's reset. Called both when a session ends and on an in-session world
-        /// replacement, so authority is only handed back in the first case.
-        /// </summary>
+        /// <summary>Session end and in-session world replacement; authority returns only on session end.</summary>
         internal void ResetPending()
         {
             DrainForWorldChange();
@@ -132,6 +110,12 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         {
             if (snapshot != null) _droppedPages += _propertyState.Enqueue(snapshot);
         }
+
+        // Authority is maintained from the pump too: it also runs while paused.
+        bool Channels.IPagedPropertyRuntime<ResidentialOccupancySnapshot>.Capture(NetworkWriter writer) => Capture(writer);
+        void Channels.IPagedPropertyRuntime<ResidentialOccupancySnapshot>.Enqueue(ResidentialOccupancySnapshot snapshot) => Enqueue(snapshot);
+        void Channels.IPagedPropertyRuntime<ResidentialOccupancySnapshot>.Pump() { MaintainAuthority(); PumpIncoming(); }
+        void Channels.IPagedPropertyRuntime<ResidentialOccupancySnapshot>.ResetPending() => ResetPending();
 
         internal void DrainForWorldChange()
         {
@@ -151,18 +135,14 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             Array.Clear(_cacheBucketCursor, 0, _cacheBucketCursor.Length);
             _dirty.Clear();
             _dirtyMembers.Clear();
-            _pending.Clear();
-            PropertyRentIdentity discardedPending;
-            while (_pendingOrder.TryDequeue(out discardedPending)) { }
+            _propertyState.ClearPending();
             _pendingMoveIns.Clear();
-            ulong discardedMoveIn;
-            while (_pendingMoveInOrder.TryDequeue(out discardedMoveIn)) { }
+            while (_pendingMoveInOrder.TryDequeue(out ulong discardedMoveIn)) { }
             _stagedTransfers.Clear();
             _stagedTransferCooldownUntil.Clear();
             _stagedTransferScratch.Clear();
             _pendingCitizenRetirementIds.Clear();
-            ulong discardedCitizenRetirement;
-            while (_pendingCitizenRetirements.TryDequeue(out discardedCitizenRetirement)) { }
+            while (_pendingCitizenRetirements.TryDequeue(out ulong discardedCitizenRetirement)) { }
             _settling.Clear();
             _unreachableSince.Clear();
             _unboundHouseholdSince.Clear();
@@ -192,7 +172,6 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             ClearRentAuthorityState();
             _applyWarned = false;
             _arrivalSourceWarned = false;
-            _nextPendingPumpMs = 0;
             _prefabIndex = new PrefabIndex(_prefabSystem, _prefabs);
             _citizenCreationPrefab = Entity.Null;
 
@@ -204,29 +183,22 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             _traceReceivedRosterHashes.Clear();
             _tracePlacedHouseholds.Clear();
             _priority.Clear();
-            PropertyRentIdentity discardedPriority;
-            while (_priorityOrder.TryDequeue(out discardedPriority)) { }
+            while (_priorityOrder.TryDequeue(out PropertyIdentity discardedPriority)) { }
             _hostDepartures.Clear();
             _hostDepartureOrderMembers.Clear();
-            ulong discardedDeparture;
-            while (_hostDepartureOrder.TryDequeue(out discardedDeparture)) { }
+            while (_hostDepartureOrder.TryDequeue(out ulong discardedDeparture)) { }
             _hostCitizenDepartures.Clear();
             _hostCitizenDepartureOrderMembers.Clear();
-            ulong discardedCitizenDeparture;
-            while (_hostCitizenDepartureOrder.TryDequeue(out discardedCitizenDeparture)) { }
+            while (_hostCitizenDepartureOrder.TryDequeue(out ulong discardedCitizenDeparture)) { }
             _hostCitizens.Clear();
             _hostCitizenOrderMembers.Clear();
-            ulong discardedTrackedCitizen;
-            while (_hostCitizenOrder.TryDequeue(out discardedTrackedCitizen)) { }
+            while (_hostCitizenOrder.TryDequeue(out ulong discardedTrackedCitizen)) { }
             _hostHouseholds.Clear();
             _hostRenterMembership.Reset();
             _hostHouseholdOrderMembers.Clear();
-            ulong discardedTrackedHousehold;
-            while (_hostHouseholdOrder.TryDequeue(out discardedTrackedHousehold)) { }
+            while (_hostHouseholdOrder.TryDequeue(out ulong discardedTrackedHousehold)) { }
             _hostHouseholdCitizens.Clear();
-            _clientSweepId = 0;
-            _clientNextPage = 0;
-            _clientSweepIntact = false;
+            _propertyState.ResetSweep();
             _hostCaptureRevision = 1;
             RestartHostSweep();
         }
@@ -274,16 +246,6 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             _captureBaselineNeedsEmptyPage = false;
         }
 
-        private void DropIncomingPages()
-        {
-            if (_incoming.IsEmpty) return;
-            lock (_incoming)
-            {
-                ResidentialOccupancySnapshot ignored;
-                while (_incoming.TryDequeue(out ignored)) _droppedPages++;
-            }
-        }
-
         private bool IsLiveProperty(Entity property) =>
             property != Entity.Null && EntityManager.Exists(property) &&
             EntityManager.HasComponent<Building>(property) &&
@@ -325,7 +287,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     _unresolved + ", ambiguous=" + _ambiguous + ", expired=" + _expired + ", stale=" +
                     _stalePages + ", pruned=" + _pruned + ", cacheDropped=" + _cacheDrops +
                     ", appliedProperties=" + _appliedProperties +
-                    ", reconcileSkipped=" + _reconcileSkipped + ", households +" +
+                    ", reconcileSkipped=" + _reconcileSkipped + ", unchangedProperties=" +
+                    _unchangedProperties + ", households +" +
                     _createdHouseholds + "/-" + _retiredHouseholds + ", citizens +" +
                     _createdCitizens + "/-" + _removedCitizens + "/~" + _rewrittenCitizens +
                     ", healthCorrections=" + _healthProblemCorrections + ", hostDeaths=" +
@@ -345,7 +308,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     ", dirty=" + _dirty.Count + ".");
             }
             _sentPages = _sentProperties = _priorityChanges = _priorityDrops = _captureSkips = 0;
-            _observedProperties = _probeSkipped = _reconcileSkipped = 0;
+            _observedProperties = _probeSkipped = _reconcileSkipped = _unchangedProperties = 0;
             _sentBytes = 0;
             _receivedPages = _droppedPages = _resolved = _unresolved = _ambiguous = 0;
             _expired = _stalePages = _pruned = _cacheDrops = _appliedProperties = 0;

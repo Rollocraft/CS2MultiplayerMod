@@ -1,6 +1,4 @@
 using System.Collections.Concurrent;
-using System.Collections.Generic;
-using Game;
 using Game.Common;
 using Game.Net;
 using Game.Prefabs;
@@ -14,17 +12,13 @@ using CS2MultiplayerMod.Game.Sync.Infrastructure;
 using CS2MultiplayerMod.Game.Sync.Commands;
 namespace CS2MultiplayerMod.Game.Sync.Systems.Net
 {
-    // Creating the system and tearing it down, draining every queue on a world change, and the
-    // observer that feeds them.
     public partial class NetSyncSystem
     {
         protected override void OnCreate()
         {
             base.OnCreate();
 
-            // An owned connector re-cut beside an already-standing building names an owner that is
-            // live, not part of the transaction. Owner resolution only ever matches a Temp to a
-            // Temp, so that link has to be found by asking what stands at the described point.
+            // A connector beside a standing building names a live owner; found by asking what stands there.
             _ownerSearch = new ObjectSearch(
                 World.GetOrCreateSystemManaged<global::Game.Objects.SearchSystem>());
             _prefabSystem = World.GetOrCreateSystemManaged<PrefabSystem>();
@@ -39,8 +33,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
             _netSearchSystem = World.GetOrCreateSystemManaged<global::Game.Net.SearchSystem>();
             _terrainSystem = World.GetOrCreateSystemManaged<global::Game.Simulation.TerrainSystem>();
             _waterSystem = World.GetOrCreateSystemManaged<global::Game.Simulation.WaterSystem>();
-            // Mirror the net apply pass's structural query, including any Temp already carrying
-            // Deleted. The operation-level query below expands this with native side-effect domains.
+            // The net apply pass's structural query, including Temps already Deleted.
             _netTransactionTemps = GetEntityQuery(new EntityQueryDesc
             {
                 All = SyncQuery.ReadOnly<Temp>(),
@@ -68,19 +61,16 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                     global::Game.Routes.Segment>(),
             });
 
-            // Zone cell blocks are excluded: an isolated commit only ever drives the object, net,
-            // area and route apply passes, none of which read Block/Cell, so a zoning preview can
-            // never ride along. It is also the one preview a player builds across many frames and
-            // commits in a single one (the marquee), so isolating it discards the whole gesture.
+            // Zoning previews are excluded: no isolated commit reads Block/Cell, and isolating the marquee
+            // would discard the gesture.
             _standingTemps = GetEntityQuery(new EntityQueryDesc
             {
                 All = SyncQuery.ReadOnly<Temp>(),
                 None = SyncQuery.ReadOnly<Deleted, global::Game.Zones.Block>(),
             });
 
-            // Tool definitions lose Updated after the frame that materializes their preview. Those
-            // untagged definitions are therefore the exact graph ToolOutputSystem consumes on Apply.
-            // Sync-created definitions carry Deleted from birth and must never be recaptured.
+            // Untagged tool definitions are exactly what ToolOutputSystem consumes on Apply; sync ones carry
+            // Deleted from birth.
             _standingLocalDefinitions = GetEntityQuery(new EntityQueryDesc
             {
                 All = SyncQuery.ReadOnly<CreationDefinition>(),
@@ -100,16 +90,12 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                 {
                     ComponentType.ReadOnly<Temp>(),
                     ComponentType.ReadOnly<Deleted>(),
-                    // Exclude sub-networks owned by a road/building (the invisible
-                    // pedestrian/car/road paths and lane connectors the game auto-creates).
+                    // Hidden sub-networks owned by roads and buildings.
                     ComponentType.ReadOnly<Owner>(),
                 },
             });
 
-            // Standalone net nodes we can snap incoming segment endpoints onto. Owner-less so
-            // we only ever connect to real roads/paths, never to a building's or road's hidden
-            // sub-network nodes; Temp/Deleted excluded so we never snap to a preview or a node
-            // that is being torn down this frame.
+            // Owner-less, live nodes only: never hidden sub-nets, previews or dying nodes.
             _existingNodes = GetEntityQuery(new EntityQueryDesc
             {
                 All = SyncQuery.ReadOnly<Node>(),
@@ -123,25 +109,21 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                 None = SyncQuery.ReadOnly<Temp, Deleted, Owner>(),
             });
 
-            // OWNED nodes — building sub-net stubs among them. A power line / pipe endpoint may
-            // connect to one of these when its net layers say so (see UtilityConnectLayers and
-            // FindUtilityNodeAt); everything else keeps ignoring them, exactly like _existingNodes.
+            // Owned nodes, for utility connections only (see UtilityConnectLayers).
             _ownedNodes = GetEntityQuery(new EntityQueryDesc
             {
                 All = SyncQuery.ReadOnly<Node, Owner, PrefabRef>(),
                 None = SyncQuery.ReadOnly<Temp, Deleted>(),
             });
 
-            // Owned connector edges are kept out of all fallback searches. Captured native intent
-            // may target one explicitly, in which case ResolveIntent searches this separate pool.
+            // Kept out of fallback searches; explicit native intent searches this pool.
             _ownedEdges = GetEntityQuery(new EntityQueryDesc
             {
                 All = SyncQuery.ReadOnly<Edge, Curve, Owner, PrefabRef>(),
                 None = SyncQuery.ReadOnly<Temp, Deleted>(),
             });
 
-            // Diagnostic: pre-existing edges whose geometry CHANGED this frame (Updated but NOT
-            // freshly Created) — exactly what an in-place split of the original edge looks like.
+            // Diagnostic: Updated-not-Created edges, i.e. an in-place split.
             _updatedEdges = GetEntityQuery(new EntityQueryDesc
             {
                 All = SyncQuery.ReadOnly<Edge, Curve, Updated>(),
@@ -172,10 +154,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
             MultiplayerService service = Mod.Service;
             if (service != null && service.WorldSyncBarrierActive && IsCommitBusy)
             {
-                // A world-sync Begin is an admission barrier, not permission to tear down work that
-                // the native pipeline already owns. Drop commands which have not started, but retain
-                // the armed/committing/quarantined graph and its validation/callback state so
-                // RealizePending can drive it to a clean boundary before the snapshot is taken.
+                // A world-sync Begin stops admission; work the native pipeline already owns is driven to a clean
+                // boundary before the snapshot.
                 SyncInbox.Clear(_incoming);
                 _remoteDeferred.Clear();
                 _deferredSpanPieces.Clear();
@@ -187,11 +167,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                 return;
             }
 
-            // Never leave an isolated remote Temp transaction behind for a later local click. Which
-            // side is enabled depends on whether this frame had protected the remote batch.
-            // Uncommitted work is safe to clear. Once an apply pass has been scheduled, however,
-            // deleting its graph manually can race native apply/cleanup jobs; quarantine it and wait
-            // for its exact entities to leave Temp state instead.
+            // Never leave an isolated remote transaction behind. Uncommitted work is cleared; a scheduled apply
+            // is quarantined instead, since deleting it races native jobs.
             if (_protectedRemoteNetTemps.Count > 0)
             {
                 TrackInvalidatedTemps(_protectedRemoteNetTemps);
@@ -211,8 +188,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
             if (_committingRemoteNetTemps.Count > 0)
             {
                 TrackInvalidatedTemps(_committingRemoteNetTemps);
-                // Also removes a short-lived commit shield, if present. The entities themselves
-                // remain untouched so the already-scheduled native transaction can finish safely.
+                // Removes the commit shield only; the scheduled transaction finishes.
                 ReleaseTrackedTemps(_committingRemoteNetTemps);
             }
             ReleaseAllIsolation();
@@ -243,9 +219,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
             _committingTransactionKind = RemoteToolTransactionKind.None;
             _awaitingDrain = false;
             _drainCleanFrames = 0;
-            // A world-sync barrier has already closed gameplay and drained every feeder. Keeping
-            // a release-frame admission fence here could otherwise make recovery wait for another
-            // ToolUpdate while the simulation is paused, even though no new native work can enter.
+            // Everything is already drained at the barrier; a fence would stall a paused recovery.
             _drainReleasedThisFrame = false;
             _pendingNetConstructionCharge = 0;
             _pendingNetConstructionChargeCourses = 0;
@@ -272,7 +246,6 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
             _lastInvalidReason = null;
             _suppressCaptureThisFrame = false;
             _prepDoneThisFrame = false;
-            DeferForTerrain = false;
         }
 
         protected override void OnUpdate()
@@ -293,10 +266,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                 _guard.Prune(now);
                 PruneCommittedNetSideEffects(now);
 
-                // Sample net-edge lifecycle tags every frame (peak over the 5 s window). Runs at
-                // ModificationEnd where the one-frame Created/Updated/Deleted tags are still alive.
-                // Each count walks every matching chunk, and the only thing they feed is a verbose
-                // line - so they are not paid at all unless someone is reading it.
+                // Peak lifecycle tags, only paid when the verbose line is being read.
                 if (SyncLog.IsEnabled(LogTopic.Nets))
                 {
                     _peakCreated = System.Math.Max(_peakCreated, _createdEdges.CalculateEntityCount());
@@ -338,12 +308,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                         .Fact("admission cap", MixedNetInboxAdmissionCap));
                     return;
                 }
-                // Remote Temp work intentionally waits while a local interactive tool is active.
-                // Keep a larger, still-hard-bounded road inbox so a long local drawing gesture does
-                // not immediately shed a partner's reliable ordered course stream.
+                // Remote work waits while a local tool is active: a larger bounded inbox.
                 SyncInbox.Push(_sink, command, NetInboxCap);
-                // Network thread: log on RECEIPT so a missing realize can be told apart from a missing
-                // send. The body is the encoded Bézier; we don't decode here (cheap + thread-safe).
             }
         }
     }

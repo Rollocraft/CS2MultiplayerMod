@@ -7,10 +7,8 @@ namespace CS2MultiplayerMod.Game
     public sealed partial class MultiplayerService
     {
         /// <summary>
-        /// Chat send from the hub panel. The session never echoes our own line back
-        /// (the host only relays, a client only uploads), so the local copy is added
-        /// here - sanitized exactly like the wire copy the other players will see.
-        /// "/sync" stays a command and gets its feedback from the host's broadcast notice.
+        /// Chat from the hub. The session never echoes our own line, so the local copy is added here,
+        /// sanitized like the wire copy. "/sync" stays a command.
         /// </summary>
         public void SendChatFromUi(string text)
         {
@@ -27,11 +25,7 @@ namespace CS2MultiplayerMod.Game
             _session.SendChat(text);
         }
 
-        /// <summary>
-        /// The in-game chat panel's font has no glyphs for common typographic
-        /// punctuation (em/en dashes, ellipsis, curly quotes render as boxes), so
-        /// every displayed line is mapped to plain ASCII equivalents first.
-        /// </summary>
+        /// <summary>The chat font lacks dashes, ellipsis and curly quotes; map them to ASCII.</summary>
         private static string NormalizeForChatFont(string text)
         {
             if (string.IsNullOrEmpty(text)) return text;
@@ -136,6 +130,5 @@ namespace CS2MultiplayerMod.Game
             }
             sb.Append('"');
         }
-
     }
 }

@@ -38,15 +38,14 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 SweepId = _captureSweepId,
                 PageIndex = _capturePageIndex,
             };
-            var identities = new HashSet<PropertyRentIdentity>();
+            var identities = new HashSet<PropertyIdentity>();
             int estimatedBytes = AddPriorityEntries(snapshot, identities, 9);
 
             int index = _captureCursor;
             while (index < _hostSweepEntities.Length &&
                    snapshot.Entries.Count < CompanyStatsSnapshot.MaxEntries)
             {
-                CompanyStatsEntry entry;
-                if (!TryCaptureEntry(_hostSweepEntities[index], out entry))
+                if (!TryCaptureEntry(_hostSweepEntities[index], out CompanyStatsEntry entry))
                 {
                     _captureSkips++;
                     index++;
@@ -61,8 +60,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 int entryBytes = CompanyStatsSnapshot.EstimateEncodedBytes(entry);
                 if (estimatedBytes + entryBytes > PageByteBudget)
                 {
-                    // Keep this baseline entity for the next page. Validation caps one employer's
-                    // roster so a single entry always fits an otherwise empty page.
+                    // Validation caps a roster so one entry always fits an empty page.
                     if (snapshot.Entries.Count > 0) break;
                     _captureSkips++;
                     index++;
@@ -124,10 +122,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             finally { properties.Dispose(); }
         }
 
-        /// <summary>
-        /// A city with no workplace building still has to close its sweep, or a client that
-        /// bulldozed its last shop would keep the previous roster cached forever.
-        /// </summary>
+        /// <summary>A city with no workplace still closes its sweep, so clients prune their cache.</summary>
         private bool WriteEmptySweep(NetworkWriter writer)
         {
             var empty = new CompanyStatsSnapshot
@@ -145,21 +140,17 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         }
 
         private int AddPriorityEntries(CompanyStatsSnapshot snapshot,
-            HashSet<PropertyRentIdentity> identities, int estimatedBytes)
+            HashSet<PropertyIdentity> identities, int estimatedBytes)
         {
             int added = 0;
             while (added < PriorityEntriesPerPage &&
                    snapshot.Entries.Count < CompanyStatsSnapshot.MaxEntries &&
                    _priorityOrder.Count > 0)
             {
-                PropertyRentIdentity identity;
-                if (!_priorityOrder.TryDequeue(out identity)) break;
-                Entity property;
-                if (!_priority.TryGetValue(identity, out property)) continue;
-                // Recapture at send time: the queued signal says only "this changed", and a stale
-                // copy could otherwise lose to a fresher baseline entry in the same page.
-                CompanyStatsEntry entry;
-                if (!TryCaptureEntry(property, out entry))
+                if (!_priorityOrder.TryDequeue(out PropertyIdentity identity)) break;
+                if (!_priority.TryGetValue(identity, out Entity property)) continue;
+                // Recapture at send time so a stale copy cannot lose to a fresher baseline entry.
+                if (!TryCaptureEntry(property, out CompanyStatsEntry entry))
                 {
                     _priority.Remove(identity);
                     continue;
@@ -170,10 +161,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     continue;
                 }
                 int entryBytes = CompanyStatsSnapshot.EstimateEncodedBytes(entry);
-                // Priority entries may consume most of a page, but always leave enough room for
-                // the baseline to advance. Keep the first entry that does not fit queued for the
-                // following page. Continuing here used to drain and silently discard the whole
-                // remaining priority queue once a dense employee roster filled the byte budget.
+                // Leave room for the baseline to advance; the first entry that does not fit waits for the next page.
                 if (estimatedBytes + entryBytes > PriorityByteBudget)
                 {
                     identities.Remove(entry.Identity);
@@ -189,11 +177,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         }
 
         /// <summary>
-        /// The rolling change detector. It walks at most
-        /// <see cref="MaxPropertiesObservedPerUpdate"/> buildings of one partition per update and
-        /// resumes where it stopped, so its cost does not grow with the city. A partition counts
-        /// as initialized only once the cursor has been all the way round it, so a fresh session
-        /// does not flag every building in the city as changed at once.
+        /// Rolling change detector: at most <see cref="MaxPropertiesObservedPerUpdate"/> buildings per
+        /// update, resuming where it stopped. A partition is initialized only after one full lap.
         /// </summary>
         private void ScanHostChanges(int partition)
         {
@@ -212,11 +197,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 {
                     if (cursor >= properties.Length) { cursor = 0; wrapped = true; }
                     Entity property = properties[cursor++];
-                    CompanyStatsEntry entry;
-                    if (!TryCaptureEntry(property, out entry)) continue;
+                    if (!TryCaptureEntry(property, out CompanyStatsEntry entry)) continue;
                     int hash = Hash(entry);
-                    int observed;
-                    if (!_hostObserved.TryGetValue(property, out observed))
+                    if (!_hostObserved.TryGetValue(property, out int observed))
                     {
                         _hostObserved[property] = hash;
                         if (initialized) Prioritize(property, entry.Identity);
@@ -238,18 +221,13 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             }
         }
 
-        private void Prioritize(Entity property, PropertyRentIdentity identity)
+        private void Prioritize(Entity property, PropertyIdentity identity)
         {
-            int dropped;
-            if (_propertyState.Prioritize(identity, property, MaxPriorityEntries, out dropped)) _priorityChanges++;
+            if (_propertyState.Prioritize(identity, property, MaxPriorityEntries, out int dropped)) _priorityChanges++;
             _priorityDrops += dropped;
         }
 
-        /// <summary>
-        /// Fast path for company move-in/out. PropertyProcessing emits the same RentersUpdated
-        /// event for business tenants as for households; using it avoids waiting for the workplace
-        /// property's 2,048-frame rolling change rotation.
-        /// </summary>
+        /// <summary>Fast path for move-in/out via RentersUpdated, instead of the 2,048-frame rotation.</summary>
         internal void CaptureTenancyChanges()
         {
             MultiplayerService service = Mod.Service;
@@ -266,11 +244,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     if (!IsLiveWorkplaceProperty(property)) continue;
                     if (service.Session.Role == SessionRole.Host)
                     {
-                        PropertyRentIdentity identity;
-                        if (!TryGetWorkplaceIdentity(property, out identity)) continue;
-                        // Recapture at page-send time, after company initialization has removed
-                        // Created. Capturing the event frame itself can misreport a new tenant as
-                        // vacancy while its native initialization is still in flight.
+                        if (!TryGetWorkplaceIdentity(property, out PropertyIdentity identity)) continue;
+                        // Recaptured at send time: on the event frame a new tenant can still look vacant.
                         Prioritize(property, identity);
                         _hostLifecycleSignals++;
                     }
@@ -288,10 +263,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             }
         }
 
-        /// <summary>
-        /// Employee is a dynamic buffer, so hiring and firing do not emit a renter event. Called
-        /// directly after FindJobSystem with only chunks whose buffer version changed.
-        /// </summary>
+        /// <summary>Employee is a buffer, so hiring emits no renter event. Runs after FindJobSystem.</summary>
         internal void CaptureEmployeeChanges(NativeArray<Entity> companies)
         {
             MultiplayerService service = Mod.Service;
@@ -312,26 +284,19 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 if (service.Session.Role == SessionRole.Host)
                 {
                     int hash = HashEmployeeBuffer(company);
-                    int previous;
-                    if (_hostEmployeeObserved.TryGetValue(company, out previous) &&
+                    if (_hostEmployeeObserved.TryGetValue(company, out int previous) &&
                         previous == hash) continue;
                     _hostEmployeeObserved[company] = hash;
-                    PropertyRentIdentity identity;
-                    if (!TryGetWorkplaceIdentity(property, out identity)) continue;
+                    if (!TryGetWorkplaceIdentity(property, out PropertyIdentity identity)) continue;
                     Prioritize(property, identity);
                     _hostLifecycleSignals++;
                 }
                 else if (_cache.ContainsKey(property))
                 {
-                    // Reconciling employees writes this very buffer, so the changed-version filter
-                    // that brought us here fires on the mod's own writes as readily as on local
-                    // job matching - and at chunk granularity, so one write re-arms its whole
-                    // chunk. Comparing against what this system last left the buffer at is what
-                    // separates a real local change from the echo of the previous boundary; the
-                    // repair count stood at 103,197 per 30 s against 1,560 cached buildings.
+                    // The changed filter also fires on our own writes, at chunk granularity; compare with what we
+                    // last left the buffer at.
                     int hash = HashEmployeeBuffer(company);
-                    int previous;
-                    if (_clientEmployeeObserved.TryGetValue(company, out previous) &&
+                    if (_clientEmployeeObserved.TryGetValue(company, out int previous) &&
                         previous == hash) continue;
                     _clientEmployeeObserved[company] = hash;
                     MarkStateDirty(property);
@@ -341,9 +306,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         }
 
         /// <summary>
-        /// Efficiency is the live input used by CompanySection's production-rate calculation for
-        /// processing industry and offices. A changed-version query supplies only touched chunks;
-        /// exact hashes below suppress both chunk neighbours and the echo of client corrections.
+        /// Efficiency feeds the panel's production rate for processing industry and offices. Exact hashes
+        /// suppress chunk neighbours and the echo of client corrections.
         /// </summary>
         internal void CaptureEfficiencyChanges(NativeArray<Entity> properties)
         {
@@ -364,20 +328,15 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 if (!IsLiveWorkplaceProperty(property) ||
                     !EntityManager.HasBuffer<Efficiency>(property)) continue;
                 int hash = HashEfficiencyBuffer(property);
-                int previous;
-                if (observed.TryGetValue(property, out previous) && previous == hash) continue;
+                if (observed.TryGetValue(property, out int previous) && previous == hash) continue;
                 observed[property] = hash;
 
-                // A changed-version query reports every existing chunk on its first observation.
-                // Record that baseline without turning a newly joined city's entire workplace
-                // set into priority traffic; the downloaded world and rolling pages are already
-                // its authoritative baseline. Later missing entries are genuinely new buildings.
+                // The first observation reports every chunk: record it as baseline, not priority traffic.
                 if (!initialized) continue;
 
                 if (host)
                 {
-                    PropertyRentIdentity identity;
-                    if (!TryGetWorkplaceIdentity(property, out identity)) continue;
+                    if (!TryGetWorkplaceIdentity(property, out PropertyIdentity identity)) continue;
                     Prioritize(property, identity);
                     _hostEfficiencySignals++;
                 }
@@ -393,11 +352,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         }
 
         /// <summary>
-        /// Extraction is the one production figure the panel reads straight off the company
-        /// instead of recalculating it, and the native extractor pass rewrites that field from
-        /// local area depletion and a random rounding draw - neither of which can align. Observed
-        /// immediately after that pass so the host ships its new number and the client puts the
-        /// host's back.
+        /// Extraction is read straight off the company and rewritten from local depletion and a random
+        /// draw, so the host ships its figure right after the extractor pass.
         /// </summary>
         internal void CaptureExtractorProduceChanges(NativeArray<Entity> companies)
         {
@@ -419,18 +375,14 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 {
                     int produce = EntityManager
                         .GetComponentData<CompanyStatisticData>(company).m_LastUpdateProduce;
-                    int previous;
-                    if (_hostExtractorProduce.TryGetValue(company, out previous) &&
+                    if (_hostExtractorProduce.TryGetValue(company, out int previous) &&
                         previous == produce) continue;
                     if (_hostExtractorProduce.Count > MaxObservedExtractorCompanies)
                         _hostExtractorProduce.Clear();
                     _hostExtractorProduce[company] = produce;
-                    // The draw behind this figure moves on every extraction pass, so an unbounded
-                    // signal would let a farming region own the whole priority queue. The rolling
-                    // change detector still carries whatever is skipped here.
+                    // Bounded so a farming region cannot own the priority queue; the rolling detector covers the rest.
                     if (signalled >= MaxExtractorSignalsPerBoundary) continue;
-                    PropertyRentIdentity identity;
-                    if (!TryGetWorkplaceIdentity(property, out identity)) continue;
+                    if (!TryGetWorkplaceIdentity(property, out PropertyIdentity identity)) continue;
                     Prioritize(property, identity);
                     signalled++;
                     _hostExtractorSignals++;
@@ -475,25 +427,21 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             }
         }
 
-        private bool TryGetWorkplaceIdentity(Entity property, out PropertyRentIdentity identity)
+        private bool TryGetWorkplaceIdentity(Entity property, out PropertyIdentity identity)
         {
-            identity = default(PropertyRentIdentity);
+            identity = default(PropertyIdentity);
             if (!IsLiveWorkplaceProperty(property)) return false;
             string prefabName = _prefabIndex.NameOf(
                 EntityManager.GetComponentData<PrefabRef>(property).m_Prefab);
             if (string.IsNullOrEmpty(prefabName)) return false;
             global::Game.Objects.Transform transform =
                 EntityManager.GetComponentData<global::Game.Objects.Transform>(property);
-            identity = new PropertyRentIdentity(prefabName, transform.m_Position.x,
+            identity = new PropertyIdentity(prefabName, transform.m_Position.x,
                 transform.m_Position.y, transform.m_Position.z);
             return true;
         }
 
-        /// <summary>
-        /// One building's complete statement: its identity, and either the business renting it or
-        /// nothing at all. A vacant entry is not a failure - it is the point of sweeping buildings
-        /// rather than businesses.
-        /// </summary>
+        /// <summary>A building's identity and its business, or none: vacancy is a valid statement.</summary>
         private bool TryCaptureEntry(Entity property, out CompanyStatsEntry entry)
         {
             entry = default(CompanyStatsEntry);
@@ -532,9 +480,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             {
                 string companyName = _prefabIndex.NameOf(
                     EntityManager.GetComponentData<PrefabRef>(company).m_Prefab);
-                // An unnameable business is not the same statement as an empty building: reporting
-                // it vacant would tell every client to close a shop that is trading fine. Fail the
-                // whole entry and let the next sweep try again.
+                // Unnameable is not vacant: fail the entry rather than tell clients to close the shop.
                 if (string.IsNullOrEmpty(companyName)) return false;
 
                 CompanyData companyData = EntityManager.GetComponentData<CompanyData>(company);
@@ -542,16 +488,14 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 if (string.IsNullOrEmpty(brandName) || companyData.m_RandomSeed.state == 0)
                     return false;
 
-                string customName;
-                if (!_nameSystem.TryGetCustomName(company, out customName))
+                if (!_nameSystem.TryGetCustomName(company, out string customName))
                     customName = string.Empty;
                 customName = WireGuard.SanitizeText(customName, WireGuard.MaxNameLength);
 
                 CompanyStatisticData data =
                     EntityManager.GetComponentData<CompanyStatisticData>(company);
-                bool hasEfficiency;
-                CompanyStatsEfficiency[] efficiencies;
-                if (!TryCaptureEfficiencies(property, out hasEfficiency, out efficiencies))
+                if (!TryCaptureEfficiencies(property, out bool hasEfficiency,
+                    out CompanyStatsEfficiency[] efficiencies))
                     return false;
                 entry.HasTenant = true;
                 entry.HasEfficiency = hasEfficiency;
@@ -627,8 +571,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 }
             }
 
-            // Never let a broken local prefab or transform reach Write, where a throw would
-            // suppress every other channel sharing this snapshot.
+            // A throw in Write would suppress every channel sharing the snapshot.
             return CompanyStatsSnapshot.IsValidEntry(entry);
         }
 
@@ -700,10 +643,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         }
 
         /// <summary>
-        /// Capture only regular residents, because occupancy is what gives those citizens a
-        /// cross-machine identity. A commuter/tourist or a temporarily inconsistent native graph
-        /// makes the roster partial: clients may add the residents listed here, but must not erase
-        /// an unmatched local worker on the strength of an incomplete statement.
+        /// Regular residents only (occupancy gives them identity). A partial roster lets clients add
+        /// workers but never remove an unmatched local one.
         /// </summary>
         private CompanyStatsEmployee[] CaptureEmployees(Entity company, out bool complete)
         {
@@ -772,19 +713,13 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             return _employeeScratch.Count == 0 ? null : _employeeScratch.ToArray();
         }
 
-        /// <summary>
-        /// Covers tenancy first, then the figures a player watches. Money drifts continuously by
-        /// design and the baseline sweep carries it anyway; what this hash is for is getting a
-        /// business opening or closing onto the wire in the next page rather than the next sweep.
-        /// </summary>
+        /// <summary>Tenancy and watched figures, so an opening or closing goes out on the next page.</summary>
         private static int Hash(CompanyStatsEntry entry)
         {
             unchecked
             {
                 int hash = (int)2166136261;
-                // Property level and construction state precede tenancy. Dense buildings depend
-                // on the prefab's property capacity, so completion must be priority traffic even
-                // when the business itself did not change.
+                // Level and construction state first: property capacity depends on the prefab.
                 hash = (hash ^ (entry.PrefabName == null
                     ? 0 : entry.PrefabName.GetHashCode())) * 16777619;
                 hash = (hash ^ entry.ConstructionSpeed) * 16777619;

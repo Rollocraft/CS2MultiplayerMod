@@ -1,19 +1,12 @@
 using System.Collections.Generic;
 using Colossal.Mathematics;
-using Game.Common;
-using Game.Net;
 using Game.Prefabs;
-using Game.Simulation;
-using Game.Tools;
-using Unity.Collections;
 using Unity.Entities;
 using Unity.Mathematics;
 using CS2MultiplayerMod.Game.Sync.Commands;
 
 namespace CS2MultiplayerMod.Game.Sync.Systems.Net
 {
-    // Matching the operation's mutations against local edges, so a delete or replace lands on the
-    // piece of network the sender meant.
     public partial class NetSyncSystem
     {
         private bool MatchMixedMutations(ref EdgePool edges,
@@ -28,8 +21,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
             var deleteMatchedEdges = new List<Entity>();
             var deleteMatchedCurves = new List<Bezier4x3>();
 
-            // Delete matching keeps the established union semantics: one coarser local edge may span
-            // several source deletion curves, but every endpoint and midpoint must be covered.
+            // Union semantics: one local edge may span several deleted curves, but all samples must be covered.
             for (int e = 0; e < edges.Entities.Length; e++)
             {
                 Entity edge = edges.Entities[e];
@@ -83,8 +75,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                     if (alreadyNew) continue;
                     if (!MixedBothEndsOnCurve(live, target.OldCurve)) continue;
 
-                    MixedMutationClaim claim;
-                    if (claims.TryGetValue(edge, out claim))
+                    if (claims.TryGetValue(edge, out MixedMutationClaim claim))
                     {
                         failure = claim.CommandId == NetDeleteCommand.Id
                             ? "one local edge is claimed by both delete and replacement members"
@@ -93,9 +84,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                         return false;
                     }
 
-                    float ta, td;
-                    MathUtils.Distance(target.OldCurve.xz, live.a.xz, out ta);
-                    MathUtils.Distance(target.OldCurve.xz, live.d.xz, out td);
+                    MathUtils.Distance(target.OldCurve.xz, live.a.xz, out float ta);
+                    MathUtils.Distance(target.OldCurve.xz, live.d.xz, out float td);
                     bool invert = (td < ta) != target.Flipped;
                     float lo = math.min(ta, td), hi = math.max(ta, td);
                     Bezier4x3 course = target.Flipped
@@ -119,8 +109,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                     matchedEntities, matchedCurves);
                 if (!oldCovered)
                 {
-                    // A replay that committed but whose completion callback has not yet been observed
-                    // may already expose the final geometry. Treat only full new-span coverage as done.
+                    // A committed replay may already show the final geometry; only full coverage counts as done.
                     if (MixedCurveCoveredByPrefab(target.NewCurve, target.NewPrefab, ref edges))
                         continue;
                     failure = "a road replacement target is not present in the local topology";

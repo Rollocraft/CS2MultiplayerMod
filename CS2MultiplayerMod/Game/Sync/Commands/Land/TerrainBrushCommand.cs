@@ -1,23 +1,14 @@
+using System;
 using CS2MultiplayerMod.Core.Protocol;
 using CS2MultiplayerMod.Core.Sync;
 
 namespace CS2MultiplayerMod.Game.Sync.Commands
 {
     /// <summary>
-    /// "A player applied these terraform brush samples." Terraforming is replicated as the stream
-    /// of applied brush samples the game itself produces: the terrain tool emits a
-    /// <c>CreationDefinition + BrushDefinition</c> line, <c>GenerateBrushesSystem</c> expands it into
-    /// one or more <c>Temp + Brush</c> samples, and the ApplyTool pass applies each and tags it
-    /// <c>Applied</c>. The receiver replays the samples through that same brush pipeline - see
-    /// <see cref="Systems.TerrainSyncSystem"/>.
-    ///
-    /// Two prefabs travel: the terraforming TOOL prefab (<c>Brush.m_Tool</c>) selects
-    /// shift/level/slope/soften and height/material/resource; the BRUSH prefab
-    /// (<c>PrefabRef.m_Prefab</c>) supplies the texture/archetype. Each sample carries the complete
-    /// applied <c>Brush</c> state, since level/slope need target+start and line subdivision assigns
-    /// opacity per sample - re-running subdivision on the receiver would drift. Consecutive samples
-    /// sharing a tool+brush are batched into one command; a world resync trues residual
-    /// GPU/float drift.
+    /// Applied terraform brush samples, replayed through the game's brush pipeline. The TOOL prefab
+    /// (<c>Brush.m_Tool</c>) selects the operation, the BRUSH prefab (<c>PrefabRef</c>) the texture.
+    /// Each sample carries its full applied <c>Brush</c>: re-running line subdivision would drift.
+    /// Samples sharing tool and brush are batched.
     /// </summary>
     public sealed class TerrainBrushCommand : ISimulationCommand
     {
@@ -29,10 +20,7 @@ namespace CS2MultiplayerMod.Game.Sync.Commands
         /// <summary>Bytes each sample occupies on the wire (14 floats).</summary>
         private const int BytesPerSample = 14 * 4;
 
-        /// <summary>
-        /// Hard cap on an encoded terrain command: a full <see cref="MaxSamples"/> batch plus two
-        /// max-length prefab names and the count, rounded up. Oversized bodies never enter the inbox.
-        /// </summary>
+        /// <summary>A full <see cref="MaxSamples"/> batch plus two max-length names, rounded up.</summary>
         public const int MaxEncodedBytes = 16 * 1024;
 
         /// <summary>One applied brush sample - the complete <c>Brush</c> state the receiver replays.</summary>
@@ -45,10 +33,53 @@ namespace CS2MultiplayerMod.Game.Sync.Commands
             public float Angle;
             public float Strength;
             public float Opacity;
-            // Height ApplyBrush multiplies strength by the applying frame's unscaled delta. Preserve
-            // the source delta so a receiver draining historical height samples does not scale them
-            // by its own unrelated frame time. Material/resource targets ignore this field.
+            // The source's frame delta for this sample (see ReceiverStrength); unused by material/resource.
             public float DeltaTime;
+        }
+
+        // The height pass steps by clamp(delta, MinApplyDelta, MaxApplyDelta); strengths below CurveKnee
+        // are bent by a steep power curve first.
+        private const float MinApplyDelta = 0.05f;
+        private const float MaxApplyDelta = 1f;
+        private const float CurveKnee = 0.002f;
+        private const float CurveExponent = 0.055f;
+
+        /// <summary>
+        /// The strength that moves this machine's ground as far as the source's pass did, given each
+        /// side's clamped delta; a raw delta ratio does not. <paramref name="doubledWhenNegative"/> is the
+        /// soften tool, which applies a negative strength at twice its magnitude.
+        /// </summary>
+        public static float ReceiverStrength(float strength, float sourceDelta, float receiverDelta,
+            bool doubledWhenNegative)
+        {
+            float source = ApplyDelta(sourceDelta);
+            float receiver = ApplyDelta(receiverDelta);
+            if (source == receiver || strength == 0f) return strength;
+
+            bool doubled = doubledWhenNegative && strength < 0f;
+            float applied = doubled ? -strength * 2f : strength;
+            float matched = InverseCurve(Curve(applied) * source / receiver);
+            return doubled ? -matched * 0.5f : matched;
+        }
+
+        private static float ApplyDelta(float delta)
+        {
+            if (float.IsNaN(delta)) return MinApplyDelta;
+            return Math.Min(MaxApplyDelta, Math.Max(MinApplyDelta, delta));
+        }
+
+        private static float Curve(float strength)
+        {
+            float magnitude = Math.Abs(strength);
+            if (magnitude >= CurveKnee) return strength;
+            return Math.Sign(strength) * CurveKnee * (float)Math.Pow(magnitude / CurveKnee, CurveExponent);
+        }
+
+        private static float InverseCurve(float applied)
+        {
+            float magnitude = Math.Abs(applied);
+            if (magnitude >= CurveKnee) return applied;
+            return Math.Sign(applied) * CurveKnee * (float)Math.Pow(magnitude / CurveKnee, 1.0 / CurveExponent);
         }
 
         public string ToolPrefabName;
@@ -106,8 +137,7 @@ namespace CS2MultiplayerMod.Game.Sync.Commands
                     Opacity = WireGuard.ReadFinite(reader),
                     DeltaTime = WireGuard.ReadFinite(reader),
                 };
-                // A brush the size of the map, absurd strength, or a zero/negative opacity is an
-                // attack or a cancelled preview, not an edit.
+                // A map-sized brush, absurd strength or non-positive opacity is hostile or a cancelled preview.
                 if (s.Size <= 0f || s.Size > 10000f || s.Strength < -1000f || s.Strength > 1000f)
                     throw new ProtocolException("Implausible brush parameters (size " + s.Size +
                                                 ", strength " + s.Strength + ").");

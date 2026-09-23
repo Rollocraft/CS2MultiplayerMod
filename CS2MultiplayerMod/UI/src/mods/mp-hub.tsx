@@ -1,7 +1,6 @@
+import { GROUP, parseArray, tryModule, useT } from "mods/ui-helpers";
 import { bindValue, trigger, useValue } from "cs2/api";
 import { AutoNavigationScope, BackConsumer, InputActionBarrier, NavigationDirection } from "cs2/input";
-import { useLocalization } from "cs2/l10n";
-import { getModule } from "cs2/modding";
 import { Button, Portal, Tooltip } from "cs2/ui";
 import {
     CONNECTION_DIRECT,
@@ -23,15 +22,13 @@ import {
 } from "react";
 import { useBackKey } from "mods/back-action";
 import { DisclaimerModal, disclaimerAccepted$ } from "mods/disclaimer";
+import { FormField, FormFieldProps } from "mods/form-field";
 import { HELP_PAGE, OpenHelpButton } from "mods/help-link";
 import { OtherModsBanner } from "mods/mods-banner";
 import { TransferProgress } from "mods/transfer-progress";
 import { VersionWarningBanner } from "mods/version-banner";
 
-// Binding group shared with MultiplayerUISystem (same group as the join dialog).
-const GROUP = "cs2mp";
-
-// Locale keys served by the mod's LocaleEN/LocaleDE sources (L10n.Key constants).
+// Keys from the mod's locales/<lang>.properties.
 const LOC = {
     multiplayer: "CS2MP.UI.Multiplayer",
     sessionSettings: "CS2MP.UI.SessionSettings",
@@ -86,11 +83,6 @@ const LOC = {
     password: "CS2MP.UI.Password",
     disconnect: "CS2MP.UI.Disconnect",
     closeSession: "CS2MP.UI.CloseSession",
-};
-
-const useT = () => {
-    const { translate } = useLocalization();
-    return (id: string, fallback: string) => translate(id, fallback) ?? fallback;
 };
 
 // All vanilla glyphs verified to exist in Cities2_Data\Content\Game\UI\Media\Glyphs.
@@ -161,52 +153,10 @@ interface PendingResync {
     automatic: boolean;
 }
 
-const parseChatLog = (json: string): ChatEntry[] => {
-    try {
-        const parsed = JSON.parse(json);
-        return Array.isArray(parsed) ? parsed : [];
-    } catch {
-        return [];
-    }
-};
-
-const parsePlayerList = (json: string): PlayerEntry[] => {
-    try {
-        const parsed = JSON.parse(json);
-        return Array.isArray(parsed) ? parsed : [];
-    } catch {
-        return [];
-    }
-};
-
-const parsePendingJoins = (json: string): PendingJoin[] => {
-    try {
-        const parsed = JSON.parse(json);
-        return Array.isArray(parsed) ? parsed : [];
-    } catch {
-        return [];
-    }
-};
-
-const parsePendingResyncs = (json: string): PendingResync[] => {
-    try {
-        const parsed = JSON.parse(json);
-        return Array.isArray(parsed) ? parsed : [];
-    } catch {
-        return [];
-    }
-};
-
 // Vanilla right-menu styling so the button is indistinguishable from the
 // Chirper/notification buttons below it. The module paths are vanilla-internal
 // and may move on a game update, hence the inline fallback look.
-const tryModule = (path: string, exportName: string): any => {
-    try {
-        return getModule(path, exportName);
-    } catch {
-        return null;
-    }
-};
+
 const tryClasses = (path: string): Record<string, string> | null =>
     tryModule(path, "classes");
 const rmButton = tryClasses("game-ui/game/components/right-menu/right-menu-button.module.scss");
@@ -222,7 +172,6 @@ const kindColors: Record<string, string> = {
     error: "#ff8a7a",
 };
 
-// rem behaves like resolution-independent pixels (the game scales root font size).
 // Once the user drags/resizes, geometry switches to measured px (see PanelGeometry).
 const styles: Record<string, CSSProperties> = {
     buttonWrap: {
@@ -817,52 +766,15 @@ const PanelBody = ({ top, middle, bottom }: {
 
 // ---- Form building blocks -----------------------------------------------------
 
-interface HubFieldProps {
-    label: string;
-    value: string;
-    secret?: boolean;
-    disabled?: boolean;
-    onChange: (value: string) => void;
-}
-
-// Text field with an InputActionBarrier while focused: in-game nearly every
-// letter is a shortcut (B = bulldozer, …), so typing must not reach the game.
-const HubField = ({ label, value, secret, disabled, onChange }: HubFieldProps) => {
-    const [draft, setDraft] = useState(value);
-    const [editing, setEditing] = useState(false);
-
-    useEffect(() => {
-        if (!editing) setDraft(value);
-    }, [value]);
-
-    return (
-        <div style={styles.row}>
-            <div style={styles.label}>{label}</div>
-            <InputActionBarrier disabled={!editing}>
-                <input
-                    type={secret ? "password" : "text"}
-                    style={disabled ? { ...styles.input, ...styles.inputDisabled } : styles.input}
-                    value={draft}
-                    disabled={disabled}
-                    spellCheck={false}
-                    autoComplete="off"
-                    onFocus={() => setEditing(true)}
-                    onBlur={() => {
-                        setEditing(false);
-                        if (draft !== value) onChange(draft);
-                    }}
-                    onMouseDown={(e) => e.stopPropagation()}
-                    onKeyDown={(e) => e.stopPropagation()}
-                    onChange={(e) => {
-                        const next = (e.target as HTMLInputElement).value;
-                        setDraft(next);
-                        onChange(next);
-                    }}
-                />
-            </InputActionBarrier>
-        </div>
-    );
-};
+// In game nearly every letter is a shortcut (B = bulldozer), so a focused field holds an
+// InputActionBarrier.
+const HubField = (props: FormFieldProps) => (
+    <FormField
+        {...props}
+        styles={styles}
+        wrap={(input, editing) => <InputActionBarrier disabled={!editing}>{input}</InputActionBarrier>}
+    />
+);
 
 const HubToggle = ({ label, value, disabled, onChange }: {
     label: string;
@@ -1694,9 +1606,9 @@ const ApprovalRequestModals = () => {
     const isHost = useValue(isHost$);
     const pendingJoinsJson = useValue(pendingJoins$);
     const pendingResyncsJson = useValue(pendingResyncs$);
-    const pendingJoins = useMemo(() => parsePendingJoins(pendingJoinsJson), [pendingJoinsJson]);
+    const pendingJoins = useMemo(() => parseArray<PendingJoin>(pendingJoinsJson), [pendingJoinsJson]);
     const pendingResyncs = useMemo(
-        () => parsePendingResyncs(pendingResyncsJson),
+        () => parseArray<PendingResync>(pendingResyncsJson),
         [pendingResyncsJson],
     );
 
@@ -1787,8 +1699,8 @@ export const MultiplayerRightMenuButton = () => {
     const inSession = useValue(inSession$);
     const statusKind = useValue(statusKind$);
     const accepted = useValue(disclaimerAccepted$);
-    const entries = useMemo(() => parseChatLog(chatJson), [chatJson]);
-    const players = useMemo(() => parsePlayerList(playerJson), [playerJson]);
+    const entries = useMemo(() => parseArray<ChatEntry>(chatJson), [chatJson]);
+    const players = useMemo(() => parseArray<PlayerEntry>(playerJson), [playerJson]);
 
     // Read marker: everything up to this id has been seen with the panel open.
     const [readSeenId, setReadSeenId] = useState(0);

@@ -21,10 +21,8 @@ namespace CS2MultiplayerMod
         HostSetupGroup, HostActionGroup, CompatibilityGroup)]
     public class Setting : ModSetting
     {
-        // The options UI exposes general/session state plus join and host setup.
-        // The Join tab shares its backing values with the start-screen dialog and
-        // doubles as the fallback join path when the dialog's UI module cannot
-        // load (e.g. another mod's broken .mjs aborts the UI-module load chain).
+        // The Join tab shares its values with the start-screen dialog and is the fallback join path when
+        // the UI module fails to load.
         public const string GeneralTab = "General";
         public const string JoinTab = "Join";
         public const string HostTab = "Host";
@@ -54,85 +52,40 @@ namespace CS2MultiplayerMod
         {
         }
 
-        /// <summary>
-        /// True when no playable world is loaded. Gates host-side actions only (hosting
-        /// streams the current city); joining works from anywhere, so it stays unaffected.
-        /// </summary>
-        public bool IsNotInGame()
-        {
-            return GameManager.instance == null || !GameManager.instance.gameMode.IsGame();
-        }
+        /// <summary>No playable world loaded. Gates hosting only; joining works anywhere.</summary>
+        public bool IsNotInGame() => GameManager.instance == null || !GameManager.instance.gameMode.IsGame();
 
-        public bool IsNotInSession()
-        {
-            return Mod.Service == null || Mod.Service.Session.Role == SessionRole.None;
-        }
+        public bool IsNotInSession() => Mod.Service == null || Mod.Service.Session.Role == SessionRole.None;
 
-        public bool IsInSession()
-        {
-            return !IsNotInSession();
-        }
+        public bool IsInSession() => !IsNotInSession();
 
-        public bool IsHosting()
-        {
-            return Mod.Service != null && Mod.Service.Session.Role == SessionRole.Host;
-        }
+        public bool IsHosting() => Mod.Service != null && Mod.Service.Session.Role == SessionRole.Host;
 
-        public bool IsNotHosting()
-        {
-            return !IsHosting();
-        }
+        public bool IsNotHosting() => !IsHosting();
 
-        /// <summary>
-        /// Also false while another mod is live: the options screen's Host button reaches
-        /// the service directly, so the rule has to hold here too and not only on the
-        /// multiplayer screens.
-        /// </summary>
+        /// <summary>Also true while another mod is live: the options screen's Host button reaches the service directly.</summary>
         public bool CannotStartHost()
         {
             return IsNotInGame() || !IsNotInSession() ||
                    (CS2MultiplayerMod.Game.ModsCheck.AnyOtherMods && !IgnoreModCompatibilityChecks);
         }
 
-        /// <summary>
-        /// Whether the relay is a choice on this machine. Copies of the game without Steam
-        /// (Microsoft Store / Game Pass) have no relay backend, so the picker is hidden and
-        /// everything behaves as if direct had been chosen.
-        /// </summary>
-        public bool RelayUnsupported()
-        {
-            return !RelayProvider.IsSupported;
-        }
+        /// <summary>No relay backend (Microsoft Store / Game Pass): the picker is hidden and direct is used.</summary>
+        public bool RelayUnsupported() => !RelayProvider.IsSupported;
 
         /// <summary>Relay hosting opens no port, so the port and LAN controls do not apply.</summary>
-        public bool IsRelayHosting()
-        {
-            return HostConnection != ConnectionDirect;
-        }
+        public bool IsRelayHosting() => HostConnection != ConnectionDirect;
 
-        public bool IsDirectHosting()
-        {
-            return !IsRelayHosting();
-        }
+        public bool IsDirectHosting() => !IsRelayHosting();
 
-        public bool HideAutoApproveSteamFriends()
-        {
-            return IsDirectHosting() || !RequireJoinApproval;
-        }
+        public bool HideAutoApproveSteamFriends() => IsDirectHosting() || !RequireJoinApproval;
 
         /// <summary>How this machine will be reached, resolved once at host/join time.</summary>
-        public TransportMode HostTransport()
-        {
-            return IsRelayHosting() ? TransportMode.SteamRelay : TransportMode.Direct;
-        }
+        public TransportMode HostTransport() => IsRelayHosting() ? TransportMode.SteamRelay : TransportMode.Direct;
 
         // ---- General tab ------------------------------------------------------
 
-        /// <summary>
-        /// The three numbers a report has to carry: the mod version, the wire protocol, and on a
-        /// locally built copy the stamp of that build - a release has none, so a published build
-        /// still reads as a plain version.
-        /// </summary>
+        /// <summary>Mod version, protocol, and on a local build its stamp.</summary>
         [SettingsUISection(GeneralTab, GeneralGroup)]
         public string ModVersion => Mod.VersionLine;
 
@@ -147,25 +100,21 @@ namespace CS2MultiplayerMod
         public string PlayerName { get; set; } = DefaultPlayerName;
 
         /// <summary>
-        /// Set once <see cref="ApplyPlatformNamePreset"/> has had its one chance to fill
-        /// <see cref="PlayerName"/> in. Persisted and hidden: without it a player who
-        /// deliberately calls themselves "Player" would be renamed on every start.
+        /// Set once <see cref="ApplyPlatformNamePreset"/> has run, so a player who chose "Player" is not
+        /// renamed each start.
         /// </summary>
         [SettingsUIHidden]
         public bool PlayerNamePresetApplied { get; set; } = false;
 
         /// <summary>
-        /// First run only: prefer the platform account's own display name over the plain
-        /// "Player" default, so a signed-in host is recognisable to the people joining.
-        /// Copies of the game with no platform backend (Microsoft Store / Game Pass) have
-        /// no name to read and keep the default.
+        /// First run: use the platform account name instead of "Player". Without a platform backend the
+        /// default stays.
         /// </summary>
         public void ApplyPlatformNamePreset()
         {
             if (PlayerNamePresetApplied) return;
 
-            // Anything the player chose themselves wins, and is recorded as the final
-            // answer so a later start never revisits this.
+            // The player's own choice wins and is final.
             string current = (PlayerName ?? "").Trim();
             if (current.Length > 0 && current != DefaultPlayerName)
             {
@@ -174,8 +123,7 @@ namespace CS2MultiplayerMod
                 return;
             }
 
-            // Empty means the platform cannot say (not signed in yet, or no backend at
-            // all). Leave the flag unset so a later start can still pick the name up.
+            // Empty: the platform cannot say yet; leave the flag for a later start.
             string platformName = RelayProvider.LocalPlayerName;
             if (string.IsNullOrEmpty(platformName.Trim())) return;
 
@@ -188,33 +136,19 @@ namespace CS2MultiplayerMod
         }
 
         /// <summary>
-        /// The mod's one logging choice.
-        ///
-        /// Off, the log still carries everything a report is read for: connects and disconnects,
-        /// world transfers, every resync and what triggered it, dropped commands, the mod and game
-        /// versions, which other mods are live, and every fault. On, it also carries the
-        /// per-action detail underneath those - which is what to send when asked for a full log.
-        ///
-        /// Safe to leave on: it makes the log longer, not the game slower. Detail lines sit behind
-        /// a field read and the flight log flushes them in batches. Narrowing the log to a single
-        /// subsystem is a developer switch and lives in code (Game/Diagnostics/LogTopics.cs) -
-        /// asking a player which subsystem broke is asking them to diagnose their own bug report.
+        /// The only logging choice. Off, the log still has connects, transfers, resyncs and their causes,
+        /// dropped commands, versions, live mods and every fault; on, it adds per-action detail. Cheap to
+        /// leave on. Per-subsystem narrowing is a developer switch in Game/Diagnostics/LogTopics.cs.
         /// </summary>
         [SettingsUISection(GeneralTab, GeneralGroup)]
         public bool VerboseLogging { get; set; } = false;
 
-        /// <summary>
-        /// The partner markers are the only thing this mod draws every rendered frame, so they are
-        /// the one part of it whose cost scales with screen resolution rather than with city size.
-        /// </summary>
+        /// <summary>The markers are drawn every frame, so their cost scales with resolution, not city size.</summary>
         [SettingsUISection(GeneralTab, GeneralGroup)]
         public bool ShowPartnerMarkers { get; set; } = true;
 
         /// <summary>
-        /// Set once the player accepts the in-game disclaimer gate (shown before the
-        /// first host/join). Persisted so it only appears once; intentionally hidden
-        /// from the options screen and left out of <see cref="SetDefaults"/> so that
-        /// resetting other settings does not re-prompt an existing user.
+        /// Disclaimer accepted; hidden and excluded from <see cref="SetDefaults"/> so a reset does not re-prompt.
         /// </summary>
         [SettingsUIHidden]
         public bool DisclaimerAccepted { get; set; } = false;
@@ -228,24 +162,18 @@ namespace CS2MultiplayerMod
         }
 
         // ---- Host tab -----------------------------------------------------------
-        // Setup stays editable in the main menu so the Host Game flow can use the
-        // chosen values as soon as its selected city finishes loading. Only the
-        // direct Host Session action still requires an already loaded city.
+        // Editable in the main menu so Host Game can use it once its city loads; Host Session needs a city.
 
-        /// <summary>
-        /// Relay hosting needs no reachable port: Steam carries the traffic and players
-        /// join with the code below. Direct hosting is the original path and still needs
-        /// a forwarded port (or a LAN).
-        /// </summary>
+        /// <summary>Relay needs no reachable port (players use the join code); direct needs a forwarded port or LAN.</summary>
         [SettingsUIDropdown(typeof(Setting), nameof(GetHostConnectionValues))]
         [SettingsUISection(HostTab, HostSetupGroup)]
         [SettingsUIDisableByCondition(typeof(Setting), nameof(IsInSession))]
         [SettingsUIHideByCondition(typeof(Setting), nameof(RelayUnsupported))]
         public string HostConnection
         {
-            // Reads as direct where there is no relay backend, so the options screen, the
-            // UI bindings and HostTransport() all agree without each having to check.
-            get { return RelayProvider.IsSupported ? _hostConnection : ConnectionDirect; }
+            // Direct where there is no relay backend, so every reader agrees.
+            get             // Direct where there is no relay backend, so every reader agrees.
+            => RelayProvider.IsSupported ? _hostConnection : ConnectionDirect;
             set
             {
                 if (IsInSession()) return;
@@ -288,7 +216,7 @@ namespace CS2MultiplayerMod
         [SettingsUIDisableByCondition(typeof(Setting), nameof(IsHosting))]
         public string HostPort
         {
-            get { return _hostPort; }
+            get => _hostPort;
             set
             {
                 if (IsHosting()) return;
@@ -301,7 +229,7 @@ namespace CS2MultiplayerMod
         [SettingsUIDisableByCondition(typeof(Setting), nameof(IsInSession))]
         public string HostPassword
         {
-            get { return _hostPassword; }
+            get => _hostPassword;
             set
             {
                 if (IsInSession()) return;
@@ -361,17 +289,9 @@ namespace CS2MultiplayerMod
         public string MaxPlayers { get; set; } = "8";
 
         /// <summary>
-        /// Host-side switch for the simulation half of the session, announced to every client
-        /// in the handshake so both sides agree for its whole life. Player edits - roads,
-        /// zoning, placed buildings, terrain, services, money, time - are unaffected either way.
-        ///
-        /// Off, each city runs its own zoning simulation: the buildings that grow, who lives and
-        /// works in them and the demand bars are decided locally and differ between players. That
-        /// is the cost; the gain is that none of the per-building capture and correction work
-        /// runs at all, which is the part of the mod whose cost scales with population.
-        ///
-        /// Persisted here but shown only in the in-game session settings: it is the host's
-        /// answer for one session, not a per-player option.
+        /// Host switch for the simulation half of the session, announced in the handshake. Player edits are
+        /// unaffected. Off, each city grows, houses, employs and shows demand locally, and none of the
+        /// population-scaled correction work runs. Shown only in the in-game session settings.
         /// </summary>
         [SettingsUIHidden]
         public bool SimulationSync { get; set; } = true;
@@ -389,11 +309,7 @@ namespace CS2MultiplayerMod
             set { if (Mod.Service != null) Mod.Service.HostFromSettings(this); }
         }
 
-        /// <summary>
-        /// Push the host's world to all clients now - the manual drift safety-net, same as the
-        /// in-game hub's "Sync World". Duplicated here so it stays reachable if the hub's UI
-        /// module fails to load. Host-only.
-        /// </summary>
+        /// <summary>Host only: push the world to all clients, as the hub's "Sync World"; reachable if the hub fails to load.</summary>
         [SettingsUIButton]
         [SettingsUIHideByCondition(typeof(Setting), nameof(IsNotHosting))]
         [SettingsUISection(HostTab, HostActionGroup)]
@@ -403,10 +319,8 @@ namespace CS2MultiplayerMod
         }
 
         // ---- Join tab -----------------------------------------------------------
-        // Shared backing values: the start-screen dialog writes the same properties
-        // through the cs2mp bindings, so dialog and options screen always agree.
-        // Joining needs no loaded city (the world comes from the host), so these
-        // stay visible in the main menu and are only disabled mid-session.
+        // Shared with the start-screen dialog through the cs2mp bindings; visible in the main menu, disabled
+        // mid-session.
 
         [SettingsUITextInput]
         [SettingsUIHideByCondition(typeof(Setting), nameof(JoinIsRelay))]
@@ -414,25 +328,12 @@ namespace CS2MultiplayerMod
         [SettingsUIDisableByCondition(typeof(Setting), nameof(IsInSession))]
         public string ServerAddress { get; set; } = "127.0.0.1";
 
-        /// <summary>
-        /// A join code addresses the host through the relay, so no address or port is
-        /// involved. Chosen explicitly rather than guessed from what was typed: the
-        /// joining player should see the same choice the host made.
-        /// </summary>
-        public bool JoinIsRelay()
-        {
-            return JoinConnection != ConnectionDirect;
-        }
+        /// <summary>Chosen explicitly, not guessed from the text, so the joiner sees the host's choice.</summary>
+        public bool JoinIsRelay() => JoinConnection != ConnectionDirect;
 
-        public bool JoinIsDirect()
-        {
-            return !JoinIsRelay();
-        }
+        public bool JoinIsDirect() => !JoinIsRelay();
 
-        public TransportMode JoinTransport()
-        {
-            return JoinIsRelay() ? TransportMode.SteamRelay : TransportMode.Direct;
-        }
+        public TransportMode JoinTransport() => JoinIsRelay() ? TransportMode.SteamRelay : TransportMode.Direct;
 
         [SettingsUIDropdown(typeof(Setting), nameof(GetHostConnectionValues))]
         [SettingsUISection(JoinTab, JoinSetupGroup)]
@@ -440,7 +341,7 @@ namespace CS2MultiplayerMod
         [SettingsUIHideByCondition(typeof(Setting), nameof(RelayUnsupported))]
         public string JoinConnection
         {
-            get { return RelayProvider.IsSupported ? _joinConnection : ConnectionDirect; }
+            get => RelayProvider.IsSupported ? _joinConnection : ConnectionDirect;
             set
             {
                 if (IsInSession()) return;
@@ -448,10 +349,7 @@ namespace CS2MultiplayerMod
             }
         }
 
-        /// <summary>
-        /// The host's join code. Kept apart from <see cref="ServerAddress"/> so switching
-        /// between relay and direct does not overwrite whichever one is not in use.
-        /// </summary>
+        /// <summary>Kept apart from <see cref="ServerAddress"/> so switching mode loses neither.</summary>
         [SettingsUITextInput]
         [SettingsUIHideByCondition(typeof(Setting), nameof(JoinIsDirect))]
         [SettingsUISection(JoinTab, JoinSetupGroup)]
@@ -500,10 +398,8 @@ namespace CS2MultiplayerMod
         // ---- Advanced tab -------------------------------------------------------
 
         /// <summary>
-        /// Expert escape hatch for mod-specific compatibility checks. This permits other
-        /// active mods locally and lets a host admit a different CS2 Multiplayer Mod build.
-        /// Wire-protocol, game-version and DLC checks remain mandatory because bypassing
-        /// those can make the peers unable to interpret one another's data at all.
+        /// Expert override for mod-specific checks: permits other live mods and admits a different build of
+        /// this mod. Protocol, game-version and DLC checks stay mandatory.
         /// </summary>
         [SettingsUISection(AdvancedTab, CompatibilityGroup)]
         [SettingsUIDisableByCondition(typeof(Setting), nameof(IsInSession))]
@@ -516,8 +412,7 @@ namespace CS2MultiplayerMod
             ShowPartnerMarkers = true;
             IgnoreModCompatibilityChecks = false;
             PlayerName = DefaultPlayerName;
-            // Resetting the name asks for the default name again, which on a signed-in
-            // copy of the game is the account name, not the literal "Player".
+            // On a signed-in copy the default name is the account name.
             PlayerNamePresetApplied = false;
             ServerAddress = "127.0.0.1";
             HostConnection = ConnectionRelay;

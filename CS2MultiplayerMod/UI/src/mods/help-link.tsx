@@ -1,9 +1,8 @@
+import { GROUP } from "mods/ui-helpers";
 import { trigger } from "cs2/api";
 import { useLocalization } from "cs2/l10n";
 import { Button } from "cs2/ui";
 import { CSSProperties } from "react";
-
-const GROUP = "cs2mp";
 
 export const HELP_PAGE = {
     errors: "errors-and-warnings.md",

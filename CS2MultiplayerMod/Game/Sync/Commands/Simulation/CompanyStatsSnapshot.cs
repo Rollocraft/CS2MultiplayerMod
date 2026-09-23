@@ -6,16 +6,13 @@ using CS2MultiplayerMod.Core.Protocol;
 namespace CS2MultiplayerMod.Game.Sync.Commands
 {
     /// <summary>
-    /// One bounded page of host-authoritative workplace state. Entries are keyed by the rented
-    /// building, so a vacant entry is an absolute statement and a missing local company can be
-    /// recreated through the game's normal rent transaction.
+    /// One page of host workplace state, keyed by the rented building: a vacant entry is absolute, and a
+    /// missing company is recreated through the normal rent transaction.
     /// </summary>
     public sealed class CompanyStatsSnapshot
     {
-        // Dense offices carry hundreds of real employee identities. At the former 48 KiB/64-entry
-        // ceiling a large city's change queue grew faster than one 1 Hz page could drain, while
-        // one-tenant low-density shops happened to keep up. StateSnapshot allows 256 KiB; retain
-        // envelope headroom and bound both allocation count and spatial resolution work here.
+        // Dense offices carry hundreds of employees; the page must drain a large city's changes at 1 Hz
+        // within StateSnapshot's 256 KiB.
         public const int MaxEntries = 256;
         public const int MaxPagesPerSweep = 4096;
         public const int MaxEncodedBytes = 240 * 1024;
@@ -23,7 +20,7 @@ namespace CS2MultiplayerMod.Game.Sync.Commands
         public const int MaxResourceSlots = 64;
         public const int MaxTradeCostSlots = 64;
         public const int MaxEmployeeSlots = 512;
-        // Game.Buildings.EfficiencyFactor.Count in the supported Game.dll.
+        // Game.Buildings.EfficiencyFactor.Count in the supported game build.
         public const int MaxEfficiencySlots = 32;
 
         private const int FlagHasTenant = 1 << 0;
@@ -67,7 +64,7 @@ namespace CS2MultiplayerMod.Game.Sync.Commands
             writer.WriteBool(EndOfSweep);
             writer.WriteShort((short)Entries.Count);
 
-            var identities = new HashSet<PropertyRentIdentity>();
+            var identities = new HashSet<PropertyIdentity>();
             for (int i = 0; i < Entries.Count; i++)
             {
                 CompanyStatsEntry entry = Entries[i];
@@ -199,10 +196,9 @@ namespace CS2MultiplayerMod.Game.Sync.Commands
             if (snapshot.PageIndex < 0 || snapshot.PageIndex >= MaxPagesPerSweep)
                 throw new ProtocolException("Company-stats page index is outside its cap.");
 
-            // A vacant record is a name, three coordinates, construction state and a 16-bit
-            // flag block.
+            // Smallest vacant record: name, coordinates, construction state, flags.
             int count = WireGuard.ReadCount(reader, 18, MaxEntries);
-            var identities = new HashSet<PropertyRentIdentity>();
+            var identities = new HashSet<PropertyIdentity>();
             for (int i = 0; i < count; i++)
             {
                 var entry = new CompanyStatsEntry
@@ -357,10 +353,7 @@ namespace CS2MultiplayerMod.Game.Sync.Commands
             }
         }
 
-        /// <summary>
-        /// Exact encoded size of an entry. Capture uses it before appending variable employee
-        /// rosters, preventing one large employer from wedging a bounded page.
-        /// </summary>
+        /// <summary>Exact encoded size, checked before appending so one large roster cannot wedge a page.</summary>
         public static int EstimateEncodedBytes(CompanyStatsEntry entry)
         {
             int size = EncodedStringBytes(entry.PrefabName) + 12 + 1 + 2;
@@ -535,8 +528,7 @@ namespace CS2MultiplayerMod.Game.Sync.Commands
             !float.IsNaN(value) && !float.IsInfinity(value) &&
             value >= -MaxStatValue && value <= MaxStatValue;
 
-        // Game.dll uses float.MaxValue as the legitimate "no available transfer route" sentinel
-        // in TradeSystem. Other company floats stay tightly bounded.
+        // The game uses float.MaxValue as "no transfer route"; other floats stay tightly bounded.
         private static bool IsValidTradeCost(float value) =>
             value == float.MaxValue || IsValidFiniteScalar(value);
 
@@ -549,12 +541,7 @@ namespace CS2MultiplayerMod.Game.Sync.Commands
             return true;
         }
 
-        private static bool ReadStrictBool(NetworkReader reader)
-        {
-            byte value = reader.ReadByte();
-            if (value > 1) throw new ProtocolException("Invalid company-stats page flag.");
-            return value != 0;
-        }
+        private static bool ReadStrictBool(NetworkReader reader) => WireGuard.ReadStrictBool(reader, "company-stats page flag");
 
         private static void Validate(CompanyStatsEntry entry)
         {
@@ -586,10 +573,7 @@ namespace CS2MultiplayerMod.Game.Sync.Commands
         public long LastTransferRequestTime;
     }
 
-    /// <summary>
-    /// A host resident assigned to this workplace. CitizenId is resolved through the residential
-    /// occupancy identity map; it is never interpreted as a local entity handle.
-    /// </summary>
+    /// <summary>A host resident employed here; CitizenId goes through the occupancy identity map.</summary>
     public struct CompanyStatsEmployee
     {
         public ulong CitizenId;
@@ -598,10 +582,7 @@ namespace CS2MultiplayerMod.Game.Sync.Commands
         public byte Shift;
     }
 
-    /// <summary>
-    /// One factor from the workplace building's real Efficiency buffer. CompanySection derives
-    /// non-extractor production directly from the product of these factors.
-    /// </summary>
+    /// <summary>One Efficiency factor; non-extractor production is their product.</summary>
     public struct CompanyStatsEfficiency
     {
         public byte Factor;
@@ -614,10 +595,7 @@ namespace CS2MultiplayerMod.Game.Sync.Commands
         public float AnchorX;
         public float AnchorY;
         public float AnchorZ;
-        /// <summary>
-        /// Zero means the host's building is complete. A non-zero value means the host still has
-        /// an UnderConstruction component; zero-speed sites are encoded as one by capture.
-        /// </summary>
+        /// <summary>Zero: complete. Otherwise the host's construction speed (zero-speed sites send one).</summary>
         public byte ConstructionSpeed;
         public bool HasTenant;
         public string CompanyPrefabName;
@@ -673,14 +651,13 @@ namespace CS2MultiplayerMod.Game.Sync.Commands
         public CompanyStatsTradeCost[] TradeCosts;
 
         /// <summary>
-        /// Complete means every host employee was a regular resident and is represented here. If
-        /// false, the receiver adds the resolvable residents but preserves unmatched local workers
-        /// rather than deleting a commuter or tourist it cannot identify safely.
+        /// Every host employee is a listed resident. If false, unmatched local workers are kept rather than
+        /// removing a commuter or tourist.
         /// </summary>
         public bool EmployeeRosterComplete;
         public CompanyStatsEmployee[] Employees;
 
-        public PropertyRentIdentity Identity =>
-            new PropertyRentIdentity(PrefabName, AnchorX, AnchorY, AnchorZ);
+        public PropertyIdentity Identity =>
+            new PropertyIdentity(PrefabName, AnchorX, AnchorY, AnchorZ);
     }
 }

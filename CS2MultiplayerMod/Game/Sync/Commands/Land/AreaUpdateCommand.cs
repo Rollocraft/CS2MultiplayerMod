@@ -4,9 +4,8 @@ using CS2MultiplayerMod.Core.Sync;
 namespace CS2MultiplayerMod.Game.Sync.Commands
 {
     /// <summary>
-    /// "A player redrew this district/surface polygon." The anchor is the OLD centroid
-    /// (which still matches the receiver's not-yet-edited polygon); the payload is the
-    /// complete new node ring - see <see cref="AreaSyncSystem"/>.
+    /// A redrawn polygon. The anchor is the OLD centroid, which still matches the receiver's copy; the
+    /// payload is the complete new ring.
     /// </summary>
     public sealed class AreaUpdateCommand : ISimulationCommand
     {

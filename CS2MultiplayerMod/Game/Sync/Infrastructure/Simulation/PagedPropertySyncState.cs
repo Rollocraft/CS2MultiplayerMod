@@ -19,34 +19,110 @@ namespace CS2MultiplayerMod.Game.Sync.Infrastructure
         public const long StatsIntervalMs = 30000;
     }
 
-    internal class PendingPropertyState<T>
+    internal class PendingPropertyTiming
     {
-        public T Entry;
         public uint SweepId;
         public long ExpiresMs;
         public long NextAttemptMs;
     }
 
-    /// <summary>Owns the common bounded property page, cache, retry and observation state.
-    /// Domain payloads and structural realization remain with their single writer.</summary>
+    internal class PendingPropertyState<T> : PendingPropertyTiming
+    {
+        public T Entry;
+    }
+
+    /// <summary>Shared page, cache, retry and observation state of the property sync systems.</summary>
     internal sealed class PagedPropertySyncState<TPage, TCache, TPending, THost, TPriority>
+        where TPending : PendingPropertyTiming
     {
         public readonly ConcurrentQueue<TPage> Incoming = new ConcurrentQueue<TPage>();
         public readonly Dictionary<Entity, TCache> Cache = new Dictionary<Entity, TCache>();
-        public readonly Dictionary<PropertyRentIdentity, TPending> Pending =
-            new Dictionary<PropertyRentIdentity, TPending>();
-        public readonly ConcurrentQueue<PropertyRentIdentity> PendingOrder =
-            new ConcurrentQueue<PropertyRentIdentity>();
+        public readonly Dictionary<PropertyIdentity, TPending> Pending =
+            new Dictionary<PropertyIdentity, TPending>();
+        public readonly ConcurrentQueue<PropertyIdentity> PendingOrder =
+            new ConcurrentQueue<PropertyIdentity>();
         public readonly Dictionary<Entity, THost> HostObserved = new Dictionary<Entity, THost>();
-        public readonly Dictionary<PropertyRentIdentity, TPriority> Priority =
-            new Dictionary<PropertyRentIdentity, TPriority>();
-        public readonly ConcurrentQueue<PropertyRentIdentity> PriorityOrder =
-            new ConcurrentQueue<PropertyRentIdentity>();
+        public readonly Dictionary<PropertyIdentity, TPriority> Priority =
+            new Dictionary<PropertyIdentity, TPriority>();
+        public readonly ConcurrentQueue<PropertyIdentity> PriorityOrder =
+            new ConcurrentQueue<PropertyIdentity>();
         public readonly PropertyPartitions CachedPartitions = new PropertyPartitions();
         public readonly PropertyPartitions HostPartitions = new PropertyPartitions();
         public long NextPendingPumpMs;
+        public uint SweepId;
+        public int NextPage;
+        public bool SweepIntact;
 
-        public bool Prioritize(PropertyRentIdentity identity, TPriority value, int capacity,
+        /// <summary>
+        /// Track page order within the host's sweep. With <paramref name="rejectOlder"/> a page of an
+        /// older sweep returns false and leaves the tracking untouched.
+        /// </summary>
+        public bool NotePage(uint sweepId, int pageIndex, bool rejectOlder = false)
+        {
+            if (sweepId != SweepId)
+            {
+                if (rejectOlder && SweepId != 0 && unchecked((int)(sweepId - SweepId)) <= 0) return false;
+                SweepId = sweepId;
+                NextPage = 0;
+                SweepIntact = pageIndex == 0;
+            }
+            if (pageIndex != NextPage) SweepIntact = false;
+            if (pageIndex >= NextPage) NextPage = pageIndex + 1;
+            return true;
+        }
+
+        /// <summary>Only a sweep that arrived without a gap may prune: a missing page says nothing about its buildings.</summary>
+        public bool CompletesSweep(uint sweepId, int pageIndex) =>
+            SweepIntact && sweepId == SweepId && pageIndex + 1 == NextPage;
+
+        public void ResetSweep()
+        {
+            SweepId = 0;
+            NextPage = 0;
+            SweepIntact = false;
+        }
+
+        public void ClearPending()
+        {
+            Pending.Clear();
+            while (PendingOrder.TryDequeue(out _)) { }
+            NextPendingPumpMs = 0;
+        }
+
+        public int DropIncoming()
+        {
+            if (Incoming.IsEmpty) return 0;
+            int dropped = 0;
+            lock (Incoming)
+                while (Incoming.TryDequeue(out _)) dropped++;
+            return dropped;
+        }
+
+        public bool RetryDue(long now) => Pending.Count > 0 && now >= NextPendingPumpMs;
+
+        public void ScheduleRetry(long at)
+        {
+            if (NextPendingPumpMs == 0 || at < NextPendingPumpMs) NextPendingPumpMs = at;
+        }
+
+        /// <summary>Hold an unresolved entry for retry. False when the pending bound is full.</summary>
+        public bool Hold(PropertyIdentity identity, TPending pending, uint sweepId, long now,
+            long timeoutMs)
+        {
+            if (Pending.Count >= PropertySyncLimits.MaxPendingIdentities) return false;
+            pending.SweepId = sweepId;
+            pending.ExpiresMs = now + timeoutMs;
+            pending.NextAttemptMs = now + PropertySyncLimits.ResolveRetryMs;
+            Pending[identity] = pending;
+            PendingOrder.Enqueue(identity);
+            ScheduleRetry(pending.NextAttemptMs);
+            return true;
+        }
+
+        public void RetryPending(long now, int budget, Func<TPending, bool> apply, Action expired) =>
+            PropertyRetryPump.Pump(Pending, PendingOrder, now, budget, apply, expired);
+
+        public bool Prioritize(PropertyIdentity identity, TPriority value, int capacity,
             out int dropped)
         {
             dropped = 0;
@@ -56,7 +132,7 @@ namespace CS2MultiplayerMod.Game.Sync.Infrastructure
                 return false;
             }
             while (Priority.Count >= capacity &&
-                   PriorityOrder.TryDequeue(out PropertyRentIdentity oldest))
+                   PriorityOrder.TryDequeue(out PropertyIdentity oldest))
                 if (Priority.Remove(oldest)) dropped++;
             if (Priority.Count >= capacity) { dropped++; return false; }
             Priority[identity] = value;
@@ -112,28 +188,40 @@ namespace CS2MultiplayerMod.Game.Sync.Infrastructure
         }
     }
 
+    /// <summary>A bounded ordered list whose membership set also suppresses duplicates.</summary>
+    internal static class BoundedUniquePropertyList
+    {
+        public static void Enqueue<T>(List<T> items, HashSet<T> members, T item, int capacity)
+        {
+            if (!members.Add(item)) return;
+            items.Add(item);
+            if (items.Count <= capacity) return;
+            members.Remove(items[0]);
+            items.RemoveAt(0);
+        }
+    }
+
     internal static class PropertyRetryPump
     {
-        public static void Pump<T>(Dictionary<PropertyRentIdentity, T> pending,
-            ConcurrentQueue<PropertyRentIdentity> order, long now, int budget,
-            Func<T, long> expiry, Func<T, long> retryAt, Action<T, long> setRetry,
-            Func<T, bool> apply, Action expired)
+        public static void Pump<T>(Dictionary<PropertyIdentity, T> pending,
+            ConcurrentQueue<PropertyIdentity> order, long now, int budget,
+            Func<T, bool> apply, Action expired) where T : PendingPropertyTiming
         {
             // Inspect each identity at most once, including small not-yet-due queues.
             int count = Math.Min(budget, order.Count);
-            while (count-- > 0 && order.TryDequeue(out PropertyRentIdentity identity))
+            while (count-- > 0 && order.TryDequeue(out PropertyIdentity identity))
             {
                 if (!pending.TryGetValue(identity, out T value)) continue;
-                if (expiry(value) <= now)
+                if (value.ExpiresMs <= now)
                 {
                     pending.Remove(identity);
                     expired();
                 }
-                else if (retryAt(value) > now) order.Enqueue(identity);
+                else if (value.NextAttemptMs > now) order.Enqueue(identity);
                 else if (apply(value)) pending.Remove(identity);
                 else
                 {
-                    setRetry(value, now + PropertySyncLimits.ResolveRetryMs);
+                    value.NextAttemptMs = now + PropertySyncLimits.ResolveRetryMs;
                     order.Enqueue(identity);
                 }
             }

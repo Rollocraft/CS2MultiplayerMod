@@ -1,35 +1,23 @@
 using System;
 using System.Collections.Generic;
-using System.Diagnostics;
 using CS2MultiplayerMod.Game.Sync.Commands;
-using Game.Agents;
-using Game.Buildings;
 using Game.Citizens;
 using Game.Common;
-using Game.Companies;
-using Game.Economy;
 using Game.Prefabs;
-using Game.Simulation;
-using Game.Vehicles;
 using Unity.Collections;
 using Unity.Entities;
-using Unity.Jobs;
-using Unity.Mathematics;
 
 namespace CS2MultiplayerMod.Game.Sync.Systems
 {
-    // Matching the households and citizens a client already had before it joined against the
-    // host's roster, so a peer that loaded the same save adopts its own families rather than
-    // creating a second copy of each. Identity here is a hash of the things both peers agree
-    // on - prefab, seeded randomness, name indices - not an id, because there is not one yet.
+    // Matching a client's pre-join households to the host roster by what both peers agree on
+    // (prefab, seeded randomness, name indices), so it adopts its own families instead of cloning.
     public partial class ResidentialOccupancySyncSystem
     {
         private Entity FindBootstrapHousehold(OccupancyHousehold wanted)
         {
             EnsureBootstrapIdentityIndex();
-            List<Entity> globalCandidates;
             if (!_bootstrapHouseholdIndex.TryGetValue(HouseholdBootstrapKey(wanted),
-                out globalCandidates)) return Entity.Null;
+                out List<Entity> globalCandidates)) return Entity.Null;
             Entity match = Entity.Null;
             for (int i = 0; i < globalCandidates.Count; i++)
             {
@@ -37,8 +25,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 if (_claimedHouseholds.Contains(candidate) || candidate == Entity.Null ||
                     !EntityManager.Exists(candidate) || EntityManager.HasComponent<Deleted>(candidate))
                     continue;
-                ulong alreadyBound;
-                if (TryGetBoundHouseholdId(candidate, out alreadyBound)) continue;
+                if (TryGetBoundHouseholdId(candidate, out ulong alreadyBound)) continue;
                 if (!HouseholdBootstrapMatches(candidate, wanted)) continue;
                 if (match != Entity.Null && match != candidate) return Entity.Null;
                 match = candidate;
@@ -73,8 +60,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         private static void AddBootstrapCandidate(Dictionary<int, List<Entity>> index, int key,
             Entity entity)
         {
-            List<Entity> candidates;
-            if (!index.TryGetValue(key, out candidates))
+            if (!index.TryGetValue(key, out List<Entity> candidates))
             {
                 candidates = new List<Entity>();
                 index[key] = candidates;
@@ -82,8 +68,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             candidates.Add(entity);
         }
 
-        // The bootstrap index is built over every household in the city in one pass, so the key
-        // builders share one scratch buffer rather than allocating a member array per family.
+        // Built over the whole city in one pass: one shared scratch buffer.
         private int HouseholdBootstrapKey(Entity household)
         {
             if (household == Entity.Null || !EntityManager.Exists(household) ||

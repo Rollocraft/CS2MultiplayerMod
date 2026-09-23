@@ -19,9 +19,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
     {
         private void CaptureDeletedObjects(MultiplayerSession session, long now)
         {
-            // A native object-tool transaction already contains every explicit delete in the
-            // object/sub-net/area graph, and the receiver's generator reproduces its implicit
-            // clear/split side effects. Do not turn that transaction output into a second command.
+            // A native object transaction already carries its deletes; the receiver regenerates them.
             BuildSyncSystem buildSync = World.GetExistingSystemManaged<BuildSyncSystem>();
             if ((buildSync != null && ObjectBrushCapture.SuppressDeletes(
                     buildSync.NativeLifecycleCapturedThisFrame,
@@ -31,9 +29,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
             CollectToolDeleteOriginals();
             SendObjectDeletes(session, now, _deletedObjects, ownedUpgrades: false);
-            // Removing a single upgrade is not a bulldoze: the building's properties panel tags that
-            // one owned entity Deleted. The query above excludes Owner (a root delete already carries
-            // its owned graph), so a standalone upgrade removal was never captured at all.
+            // A single upgrade removed from the properties panel: the root query above excludes Owner.
             SendObjectDeletes(session, now, _deletedOwnedUpgrades, ownedUpgrades: true);
         }
 
@@ -53,14 +49,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     string name = _prefabSystem.GetPrefabName(prefab);
                     if (string.IsNullOrEmpty(name)) continue;
 
-                    // Each city grows and retires its own growables; BuildSync refuses to place
-                    // them for the same reason, and a world resync is what reconciles the two.
-                    // Sending these produced a delete the peer could never match (its lot holds a
-                    // different building, or none), and when one did match it tore down a building
-                    // the peer's own simulation considered healthy. A player's bulldoze normally
-                    // still travels, because the growable it removed stands on every peer - unless
-                    // this session grows its buildings separately, where it is as unmatchable as
-                    // the simulation's own removal.
+                    // Each city grows and retires its own growables, so a simulation removal cannot match on the
+                    // peer. A player's bulldoze travels, unless growables are not synced this session.
                     bool playerRemoved = _toolDeleteOriginals.Contains(entity) &&
                                          Mod.Service != null && Mod.Service.SimulationSyncEnabled;
                     if (!ownedUpgrades && IsSimulationOwnedLifecycle(prefab) && !playerRemoved)
@@ -91,9 +81,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         }
 
         /// <summary>
-        /// Records the entities a tool is removing this frame. Read at ModificationEnd, where the
-        /// apply pass has already tagged the victim <see cref="global::Game.Common.Deleted"/> while
-        /// its <see cref="Temp"/> is still standing (cleanup runs later).
+        /// Entities a tool removes this frame: at ModificationEnd the victim is Deleted while its
+        /// <see cref="Temp"/> still stands.
         /// </summary>
         private void CollectToolDeleteOriginals()
         {
@@ -116,11 +105,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             }
         }
 
-        /// <summary>
-        /// True for objects the simulation creates and retires on its own. Mirrors
-        /// BuildSyncSystem's placement rule so creation and removal stay symmetric: neither
-        /// direction of a growable's lifecycle travels on the wire.
-        /// </summary>
+        /// <summary>Simulation-owned lifecycle; mirrors BuildSync's placement rule.</summary>
         private bool IsSimulationOwnedLifecycle(Entity prefab)
         {
             if (prefab == Entity.Null || !EntityManager.Exists(prefab)) return true;
@@ -130,11 +115,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         }
 
         /// <summary>
-        /// True when this owned upgrade is being removed on its own, rather than disappearing with its
-        /// host. A host delete already replicates as one root command whose realization walks the
-        /// owned graph, so re-sending the children would fight that. Requiring
-        /// <see cref="ServiceUpgradeData"/> also keeps simulation-owned lot content (a storage yard's
-        /// container piles, which despawn constantly) off the wire.
+        /// An owned upgrade removed on its own, not with its host (a host delete already carries its
+        /// graph). <see cref="ServiceUpgradeData"/> keeps simulation lot content off the wire.
         /// </summary>
         private bool IsStandaloneUpgradeRemoval(Entity entity, Entity prefab)
         {
@@ -148,38 +130,25 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
         private void CaptureDeletedEdges(MultiplayerSession session, long now)
         {
-            // Asset-stamp intersections and other object prefabs apply their whole owned network in
-            // one native graph. A follow-up edge delete can otherwise tear down the freshly connected
-            // receiver graph after its atomic commit. The same holds for an upgrade or relocation
-            // whose footprint clears the host building's existing driveways: the receiver derives
-            // those removals from the same action.
+            // Stamps, upgrades and relocations clear their own networks natively on the receiver; a
+            // follow-up edge delete would tear down the freshly committed graph.
             BuildSyncSystem buildSync = World.GetExistingSystemManaged<BuildSyncSystem>();
             if ((buildSync != null && (buildSync.NativeLifecycleCapturedThisFrame ||
                                        buildSync.LocalObjectLifecycleAppliedThisFrame)) ||
                 (_netSync != null && _netSync.DidCommitObjectGraphThisFrame)) return;
             if (_deletedEdges.IsEmptyIgnoreFilter) return;
 
-            // Snapshot this frame's Created edges so we can distinguish a mid-span SPLIT from a real
-            // bulldoze. A split deletes the original edge and creates two halves on its centreline;
-            // replicating that delete would tear down the receiver's still-whole edge before its own
-            // local split runs, leaving the new road disconnected ("not accessible"). So below we skip
-            // deleting an edge whose same-prefab Created halves lie on its centreline in 3D AND cover
-            // its whole span — the receiver reproduces the split locally from the drawn-edge command.
-            // Height-mismatching pieces (span REBUILT at another elevation) or a coverage gap (part
-            // of the span CONSUMED, e.g. by a roundabout placed on top) are no split: that delete IS
-            // sent, and NetSyncSystem sends the kept pieces one frame behind it.
+            // A mid-span split deletes the original and creates two covering halves; the receiver splits
+            // locally, so that delete stays local. A height mismatch (rebuild) or coverage gap (consumed
+            // span) is not a split and is sent.
             NativeArray<Entity> createdEnts = _createdEdges.ToEntityArray(Allocator.Temp);
             NativeArray<Curve> createdCurves = _createdEdges.ToComponentDataArray<Curve>(Allocator.Temp);
             var createdPrefabs = new NativeArray<Entity>(createdEnts.Length, Allocator.Temp);
             for (int i = 0; i < createdEnts.Length; i++)
                 createdPrefabs[i] = EntityManager.GetComponentData<PrefabRef>(createdEnts[i]).m_Prefab;
 
-            // This frame's geometry-changed survivors, for the node-reduction test below. When a
-            // bulldoze frees a node between two collinear same-prefab edges, the game merges them:
-            // one neighbour is committed with the JOINED curve (Updated, covers the other's span),
-            // the other is Deleted. Replicating that victim's delete would rip half the through-road
-            // out of a receiver whose own reduction hasn't run yet (its own commit of the bulldoze
-            // reproduces the merge natively) — the "street half-deleted / stub left behind" bug.
+            // Node reduction: a freed node merges two collinear edges, one Updated over the other's span and
+            // the other Deleted. The receiver's own commit reproduces it, so the victim's delete stays local.
             NativeArray<Entity> updatedEnts = _updatedEdges.ToEntityArray(Allocator.Temp);
             NativeArray<Curve> updatedCurves = _updatedEdges.ToComponentDataArray<Curve>(Allocator.Temp);
             var updatedPrefabs = new NativeArray<Entity>(updatedEnts.Length, Allocator.Temp);
@@ -197,18 +166,13 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
                     Bezier4x3 b = EntityManager.GetComponentData<Curve>(entities[i]).m_Bezier;
 
-                    // A committing Temp transaction named this exact edge as an original immediately
-                    // before Apply. Its deletion is already represented by that placement/delete/
-                    // replace command, so it must not become a second bulldozer command. Geometry
-                    // matching below remains the fallback for uncaptured and simulation-driven work.
+                    // Already represented by the committing transaction that named it as an original.
                     if (_netSync != null && _netSync.ConsumeCommittedNetSideEffect(entities[i], now))
                     {
                         continue;
                     }
 
-                    // A node-reduction victim, not a bulldoze — a same-prefab neighbour was extended
-                    // over this edge's span this same frame. The receiver's own commit reproduces the
-                    // merge, so this delete stays local.
+                    // Node-reduction victim: the receiver's own commit reproduces the merge.
                     if (IsReductionVictim(b, prefab, updatedPrefabs, updatedCurves))
                     {
                         continue;
@@ -248,10 +212,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             }
         }
 
-        /// <summary>
-        /// True when <paramref name="deleted"/> died to node reduction: same-prefab Updated edge
-        /// now covers its 3D span (game joined two edges, this is leftover).
-        /// </summary>
+        /// <summary>A same-prefab Updated edge now covers <paramref name="deleted"/>'s 3D span.</summary>
         private static bool IsReductionVictim(Bezier4x3 deleted, Entity prefab,
             NativeArray<Entity> updatedPrefabs, NativeArray<Curve> updatedCurves)
         {
@@ -264,10 +225,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         }
 
         /// <summary>
-        /// True when <paramref name="deleted"/> is being split (not bulldozed/rebuilt/consumed):
-        /// same-prefab Created edges match XZ and height AND jointly cover the whole span. A height
-        /// mismatch (rebuild at new elevation) or a coverage gap (span partially consumed, e.g. by
-        /// a roundabout placed on top) means the delete must replicate.
+        /// Same-prefab Created edges match <paramref name="deleted"/> in XZ and height and cover its whole
+        /// span. A height mismatch or coverage gap means the delete must replicate.
         /// </summary>
         private static bool IsBeingSplit(Bezier4x3 deleted, Entity prefab,
             NativeArray<Entity> createdPrefabs, NativeArray<Curve> createdCurves)
@@ -283,6 +242,5 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             }
             return SplitMatch.CoverWholeSpan(pieces, deleted);
         }
-
     }
 }

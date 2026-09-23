@@ -2,7 +2,6 @@ using CS2MultiplayerMod.Core.Sync;
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
-using CS2MultiplayerMod.Core.Diagnostics;
 using CS2MultiplayerMod.Core.Protocol;
 using CS2MultiplayerMod.Core.Session;
 using CS2MultiplayerMod.Game.Diagnostics;
@@ -15,41 +14,20 @@ using Game.Companies;
 using Game.Prefabs;
 using Game.Simulation;
 using Game.Tools;
-using Unity.Collections;
 using Unity.Entities;
 
 namespace CS2MultiplayerMod.Game.Sync.Systems
 {
     /// <summary>
-    /// Makes the host the only author of commercial, industrial and office business: which
-    /// building each business occupies, the money-facing figures behind its panel, and the goods
-    /// it is holding.
-    ///
-    /// The host captures accounting on CompanyEconomyStatisticSystem's partition schedule.
-    /// Clients hold that calculator and use the transmitted figures, avoiding both duplicate
-    /// accounting and subsequent corrections of its results. Other local company systems still
-    /// handle resource orders and transport, so their shared fields retain the repair boundary.
-    ///
-    /// Clients also hold tenant creation and property search. The host's absolute per-building
-    /// roster is realized through the native rent-action queue, as residential occupancy does
-    /// for households. Authority.cs restores the held systems when simulation sync is disabled.
-    ///
-    /// <para><b>What this costs.</b> In the steady state a matching building costs one dictionary
-    /// lookup and a field comparison, and nothing structural happens at all. Structural work -
-    /// creating or closing a business, which is also what makes a building change how it looks -
-    /// is what a frame actually feels, so it is budgeted per update and gated behind a settle
-    /// window that keeps a page arriving mid-move-in from causing churn.</para>
-    ///
-    /// Employment is resolved through <see cref="ResidentialOccupancySyncSystem"/>'s citizen
-    /// identity map. A host worker is attached to the corresponding real local citizen, so the
-    /// native Worker component continues to produce commutes and pedestrians; no display-only
-    /// employee entities are fabricated.
+    /// Makes the host the only author of commercial, industrial and office business: tenancy, panel
+    /// figures and held goods. Clients hold the accounting calculator, tenant creation and property
+    /// search; the host's per-building roster is realized through the native rent-action queue.
+    /// Structural work is budgeted per update and gated behind a settle window. Employees resolve
+    /// through <see cref="ResidentialOccupancySyncSystem"/>'s citizen map onto real local citizens.
     /// </summary>
-    public partial class CompanyStatsSyncSystem : GameSystemBase
+    public partial class CompanyStatsSyncSystem : GameSystemBase,
+        Channels.IPagedPropertyRuntime<CompanyStatsSnapshot>
     {
-        // The paging, bounded cache, partition walk, retry and priority mechanics the three
-        // property domains share. Only the payloads and the realization policy below are local;
-        // the fields underneath are named views onto this state, not separate containers.
         private readonly PagedPropertySyncState<CompanyStatsSnapshot, CachedEntry, PendingEntry, int, Entity>
             _propertyState = new PagedPropertySyncState<CompanyStatsSnapshot, CachedEntry, PendingEntry, int, Entity>();
         private const int UpdatePartitions = PropertySyncLimits.UpdatePartitions;
@@ -58,9 +36,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         private readonly SimulationScanCadence _tenancyScanCadence = new SimulationScanCadence();
 
         /// <summary>
-        /// Matches <c>CompanyEconomyStatisticSystem.kUpdatesPerDay</c>. Both the interval and the
-        /// partition index are derived exactly as that system derives them; changing one without
-        /// the other reintroduces the drift this feature exists to remove.
+        /// Matches <c>CompanyEconomyStatisticSystem.kUpdatesPerDay</c>; interval and partition must be
+        /// derived exactly as that system does.
         /// </summary>
         private const int CompanyUpdatesPerDay = 128;
         private const int CompanyUpdateInterval = 262144 / (CompanyUpdatesPerDay * UpdatePartitions);
@@ -72,62 +49,30 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         private const int MaxIncomingPages = PropertySyncLimits.MaxIncomingPages;
         private const int MaxPumpPages = PropertySyncLimits.MaxPumpPages;
         private const int MaxCachedProperties = PropertySyncLimits.MaxCachedProperties;
-        private const int MaxPendingIdentities = PropertySyncLimits.MaxPendingIdentities;
         private const int MaxPendingRetriesPerUpdate = 192;
         private const long ResolveRetryMs = PropertySyncLimits.ResolveRetryMs;
         private const long ResolveTimeoutMs = 120000;
         private const int MaxPriorityEntries = PropertySyncLimits.MaxPriorityEntries;
-        // A busy dense district changes far more than 32 company records per second. Bytes, not
-        // the old low-density entry count, are the meaningful bound because employee rosters make
-        // entry sizes vary by orders of magnitude.
+        // Bounded by bytes: employee rosters make entry sizes vary by orders of magnitude.
         private const int PriorityEntriesPerPage = 224;
         private const int PageByteBudget = CompanyStatsSnapshot.MaxEncodedBytes - 512;
         private const int PriorityByteBudget = PageByteBudget * 7 / 8;
 
-        /// <summary>
-        /// Buildings the rolling change detector examines per update on the host. The baseline
-        /// sweep sends every workplace regardless; this ceiling only stops the detector's cost
-        /// from growing with the city, as on the occupancy and rent observers.
-        /// </summary>
         private const int MaxPropertiesObservedPerUpdate = PropertySyncLimits.MaxPropertiesObservedPerUpdate;
 
-        /// <summary>
-        /// Cached buildings the tenancy pass re-examines per update once its dirty queue is empty.
-        /// This is the slow repair path for drift the host never reported; a real change arrives
-        /// on a page and is handled immediately through the dirty queue instead.
-        /// </summary>
+        /// <summary>Slow repair walk once the dirty queue is empty; real changes arrive on pages.</summary>
         private const int MaxTenancyWalkedPerUpdate = 64;
         private const int MaxTenancyDirtyPerBoundary = 128;
 
-        /// <summary>
-        /// Arrived pages are applied on a 16-frame boundary rather than waiting for the target
-        /// company's 2,048-frame statistics rotation. Dirty entries are immediate; the rolling
-        /// walk is a defence against a native writer changing state without a new host page.
-        /// </summary>
-        /// <summary>
-        /// Immediate re-attempts allowed after an incomplete apply, before the building falls back
-        /// to the rolling walk. See <see cref="RetryStateDirty"/>.
-        /// </summary>
+        /// <summary>Re-attempts after an incomplete apply; see <see cref="RetryStateDirty"/>.</summary>
         private const int MaxStateRetries = 3;
 
-        /// <summary>
-        /// Companies retire and their entity handles are reused, so this table is dropped whole
-        /// rather than pruned. Losing it costs one extra repair pass per company, nothing more.
-        /// </summary>
+        /// <summary>Entity handles are reused, so this table is dropped whole rather than pruned.</summary>
         private const int MaxObservedEmployeeBuffers = 16384;
 
-        /// <summary>
-        /// Efficiency is a small per-building buffer. Remembering its last exact hash prevents
-        /// changed-version chunk false positives and our own correction writes from re-arming the
-        /// client forever, while retaining the CPU reduction made for Employee above.
-        /// </summary>
+        /// <summary>Last exact hash per building, so chunk false positives and our own writes do not re-arm.</summary>
         private const int MaxObservedEfficiencyBuffers = 131072;
 
-        /// <summary>
-        /// Extractor businesses are a small subset of the economy, and their last-known produce is
-        /// one int each. The table only exists to keep the host from re-queuing a company whose
-        /// figure did not actually move.
-        /// </summary>
         private const int MaxObservedExtractorCompanies = 16384;
         private const int MaxExtractorSignalsPerBoundary = 64;
 
@@ -135,18 +80,13 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         private const int MaxStateWalkedPerBoundary = 64;
         private const int MaxEfficiencyDirtyPerBoundary = 512;
 
-        /// <summary>
-        /// Structural ceilings. Creating or closing a business moves entities between chunks and
-        /// changes how its building draws, so these are the numbers that decide whether a busy
-        /// economy is felt as a hitch. Anything over the budget waits for the next update.
-        /// </summary>
+        /// <summary>Structural ceilings: creating or closing a business is what a frame feels.</summary>
         private const int MaxCompaniesCreatedPerUpdate = 6;
         private const int MaxCompaniesRetiredPerUpdate = 6;
 
         /// <summary>
-        /// Frames a building is left alone after a tenancy action. The move-in it asked for is
-        /// still sitting in the native rent-action queue, and acting again before that drains
-        /// would create a second business or undo the first.
+        /// Frames a building is left alone after a tenancy action, while its move-in is still queued;
+        /// acting again would create a second business or undo the first.
         /// </summary>
         private const uint SettleFrames = 4 * 16;
 
@@ -159,8 +99,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
         /// <summary>Resolved workplace building -> what the host says about it.</summary>
         private Dictionary<Entity, CachedEntry> _cache => _propertyState.Cache;
-        private Dictionary<PropertyRentIdentity, PendingEntry> _pending => _propertyState.Pending;
-        private ConcurrentQueue<PropertyRentIdentity> _pendingOrder => _propertyState.PendingOrder;
+        private Dictionary<PropertyIdentity, PendingEntry> _pending => _propertyState.Pending;
         private readonly List<Entity> _cacheScratch = new List<Entity>();
 
         private readonly List<Entity> _dirty = new List<Entity>();
@@ -169,12 +108,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         private readonly HashSet<Entity> _stateDirtyMembers = new HashSet<Entity>();
         private readonly Dictionary<Entity, int> _stateRetries = new Dictionary<Entity, int>();
 
-        /// <summary>
-        /// What this system last left a company's employee buffer at. Reconciling employees writes
-        /// that buffer, which bumps the chunk version the client's own changed-Employee query
-        /// filters on - so without this the mod's own writes marked the building dirty again on the
-        /// next boundary, forever.
-        /// </summary>
+        /// <summary>What we last left each employee buffer at, so our own writes do not re-dirty it.</summary>
         private readonly Dictionary<Entity, int> _clientEmployeeObserved =
             new Dictionary<Entity, int>();
         private readonly Dictionary<Entity, int> _hostEfficiencyObserved =
@@ -202,8 +136,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             new Dictionary<Entity, int>();
         private bool[] _hostPartitionInitialized => _propertyState.HostPartitions.Initialized;
         private int[] _hostPartitionCursor => _propertyState.HostPartitions.Cursor;
-        private Dictionary<PropertyRentIdentity, Entity> _priority => _propertyState.Priority;
-        private ConcurrentQueue<PropertyRentIdentity> _priorityOrder => _propertyState.PriorityOrder;
+        private Dictionary<PropertyIdentity, Entity> _priority => _propertyState.Priority;
+        private ConcurrentQueue<PropertyIdentity> _priorityOrder => _propertyState.PriorityOrder;
 
         private readonly List<CompanyStatsResource> _resourceScratch =
             new List<CompanyStatsResource>();
@@ -220,8 +154,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         private readonly List<Entity> _employeeEntityScratch = new List<Entity>();
         private readonly List<Entity> _employeeRemovalScratch = new List<Entity>();
 
-        // Reused every update: the partition sorted into its three zones so each can be timed and
-        // counted on its own.
+        // The partition split by zone so each is timed separately.
         private readonly List<Entity> _commercialBucket = new List<Entity>();
         private readonly List<Entity> _industrialBucket = new List<Entity>();
         private readonly List<Entity> _officeBucket = new List<Entity>();
@@ -247,16 +180,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         private int _captureCursor;
         private uint _captureSweepId = 1;
         private int _capturePageIndex;
-        private uint _clientSweepId;
-        private int _clientNextPage;
-        private bool _clientSweepIntact;
         private bool _syncWasReady;
-        private long _nextPendingPumpMs
-        {
-            get => _propertyState.NextPendingPumpMs;
-            set => _propertyState.NextPendingPumpMs = value;
-        }
-
         private long _lastStatsMs;
         private long _sentBytes;
         private int _sentPages, _sentEntries, _priorityChanges, _priorityDrops, _captureSkips;
@@ -277,7 +201,6 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
         private sealed class PendingEntry : PendingPropertyState<CompanyStatsEntry>
         { }
-
 
         private struct ResolvedEmployee
         {
@@ -301,8 +224,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             _occupancy = World.GetOrCreateSystemManaged<ResidentialOccupancySyncSystem>();
             _nameSystem = World.GetOrCreateSystemManaged<global::Game.UI.NameSystem>();
 
-            // Buildings a business can rent. The host sweeps these rather than its companies,
-            // because "nobody rents this one" is the statement a client cannot work out alone.
+            // The host sweeps buildings, not companies: vacancy is what a client cannot work out alone.
             _properties = GetEntityQuery(new EntityQueryDesc
             {
                 All = SyncQuery.ReadOnly<Building, Renter, PrefabRef,
@@ -312,8 +234,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 None = SyncQuery.ReadOnly<Temp, Deleted>(),
             });
 
-            // Deliberately the same shape as CompanyEconomyStatisticSystem's own query, so the
-            // correction pass sees exactly the companies that system writes - no more, no fewer.
+            // Same shape as CompanyEconomyStatisticSystem's query: exactly the companies it writes.
             _companies = GetEntityQuery(new EntityQueryDesc
             {
                 All = SyncQuery.ReadOnly<CompanyData, global::Game.Economy.Resources,
@@ -327,8 +248,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 None = SyncQuery.ReadOnly<Deleted, Temp>(),
             });
 
-            // PropertySeeker is enableable, so this only contains companies whose local behaviour
-            // has actively asked to find a building. The host owns that decision.
+            // Enableable: only companies actively seeking a building. The host owns that decision.
             _companySeekers = GetEntityQuery(new EntityQueryDesc
             {
                 All = SyncQuery.ReadOnly<CompanyData, global::Game.Agents.PropertySeeker>(),
@@ -355,11 +275,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 MultiplayerService service = Mod.Service;
                 if (service == null || !service.SimulationSyncReady)
                 {
-                    // A world-sync barrier closes the gate before installing a replacement
-                    // world. Keep client authority held across that gap: briefly re-enabling the
-                    // spawners is enough for them to open businesses this peer's own way before
-                    // the first new page arrives. ApplyLocalAuthority still releases the hold
-                    // when the session is running without simulation sync at all.
+                    // Keep client authority across a world-sync barrier, or the spawners open businesses in the gap.
                     if (service != null && service.Session.Role == SessionRole.Client)
                         ApplyLocalAuthority(service.Session);
                     else
@@ -373,23 +289,20 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 MultiplayerSession session = service.Session;
                 ApplyLocalAuthority(session);
 
-                // Derived exactly as CompanyEconomyStatisticSystem derives it, one line above its
-                // own job schedule. This is the partition whose figures were just recomputed.
+                // Derived exactly as CompanyEconomyStatisticSystem does: the partition it just recomputed.
                 uint updateFrame = SimulationUtils.GetUpdateFrame(
                     _simulationSystem.frameIndex, CompanyUpdatesPerDay, UpdatePartitions);
 
                 if (session.Role == SessionRole.Host)
                 {
-                    DropIncomingPages();
-                    int partition;
+                    _droppedPages += _propertyState.DropIncoming();
                     if (_hostScanCadence.TryTakePartition(_simulationSystem.selectedSpeed,
-                            UpdatePartitions, out partition))
+                            UpdatePartitions, out int partition))
                         ScanHostChanges(partition);
                 }
                 else
                 {
-                    // Normally CityState's every-frame pump has already resolved arrived pages.
-                    // Pump once more as a harmless fallback before this partition is corrected.
+                    // Fallback; the city-state pump normally resolved these already.
                     PumpIncoming();
                     ApplyFigures(updateFrame);
                 }
@@ -397,11 +310,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             }
         }
 
-        /// <summary>
-        /// Kept engaged from the city-state pump as well as from <see cref="OnUpdate"/>. The
-        /// GameSimulation phase stops ticking the moment a player pauses, so a client that left a
-        /// session while paused would otherwise keep the spawners held forever.
-        /// </summary>
+        /// <summary>Also called from the pump: GameSimulation stops while paused.</summary>
         internal void MaintainAuthority()
         {
             MultiplayerService service = Mod.Service;
@@ -418,6 +327,12 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             if (snapshot != null) _droppedPages += _propertyState.Enqueue(snapshot);
         }
 
+        // Authority is maintained from the pump too: it also runs while paused.
+        bool Channels.IPagedPropertyRuntime<CompanyStatsSnapshot>.Capture(NetworkWriter writer) => Capture(writer);
+        void Channels.IPagedPropertyRuntime<CompanyStatsSnapshot>.Enqueue(CompanyStatsSnapshot snapshot) => Enqueue(snapshot);
+        void Channels.IPagedPropertyRuntime<CompanyStatsSnapshot>.Pump() { MaintainAuthority(); PumpIncoming(); }
+        void Channels.IPagedPropertyRuntime<CompanyStatsSnapshot>.ResetPending() => ResetPending();
+
         internal void ResetPending()
         {
             DrainForWorldChange();
@@ -433,12 +348,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             lock (_incoming) SyncInbox.Clear(_incoming);
             _cache.Clear();
             _cacheScratch.Clear();
-            _pending.Clear();
-            PropertyRentIdentity discardedPending;
-            while (_pendingOrder.TryDequeue(out discardedPending)) { }
+            _propertyState.ClearPending();
             _priority.Clear();
-            PropertyRentIdentity discardedPriority;
-            while (_priorityOrder.TryDequeue(out discardedPriority)) { }
+            while (_priorityOrder.TryDequeue(out PropertyIdentity discardedPriority)) { }
             _hostObserved.Clear();
             _hostScanCadence.Reset();
             _stateScanCadence.Reset();
@@ -490,28 +402,11 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             _captureCursor = 0;
             _capturePageIndex = 0;
             _captureSweepId = 1;
-            _clientSweepId = 0;
-            _clientNextPage = 0;
-            _clientSweepIntact = false;
-            _nextPendingPumpMs = 0;
+            _propertyState.ResetSweep();
             _prefabIndex = new PrefabIndex(_prefabSystem, _prefabs);
         }
 
-        private void DropIncomingPages()
-        {
-            if (_incoming.IsEmpty) return;
-            lock (_incoming)
-            {
-                CompanyStatsSnapshot ignored;
-                while (_incoming.TryDequeue(out ignored)) _droppedPages++;
-            }
-        }
-
-        /// <summary>
-        /// A building a business can rent. Warehouses and extractor properties are part of the
-        /// native industrial property search and must not disappear from this channel merely
-        /// because they carry StorageProperty or Owner in addition to their workplace marker.
-        /// </summary>
+        /// <summary>Rentable by a business, including warehouses and extractor properties.</summary>
         private bool IsLiveWorkplaceProperty(Entity property) =>
             property != Entity.Null && EntityManager.Exists(property) &&
             EntityManager.HasComponent<Building>(property) &&
@@ -526,10 +421,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             !EntityManager.HasComponent<Temp>(property) &&
             !EntityManager.HasComponent<Deleted>(property);
 
-        /// <summary>
-        /// The business renting a building, or null. Households share the renter buffer in a mixed
-        /// building and are channel 21's business, never this one's.
-        /// </summary>
+        /// <summary>The business renting a building, or null; households in a mixed building are channel 21's.</summary>
         private Entity FindTenant(Entity property)
         {
             if (!EntityManager.HasBuffer<Renter>(property)) return Entity.Null;
@@ -552,8 +444,6 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             if (now - _lastStatsMs < StatsIntervalMs) return;
             _lastStatsMs = now;
 
-            // The shared lines go to whichever of the three zone topics is on, so a player who
-            // only turned on "industrial" still sees the channel's own health.
             if (session.Role == SessionRole.Host)
                 WriteToWorkplaceTopics("pages=" + _sentPages + ", entries=" + _sentEntries +
                                        ", bytes=" + _sentBytes + ", changed=" + _priorityChanges +
@@ -604,9 +494,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             Array.Clear(_zoneClosed, 0, _zoneClosed.Length);
         }
 
-        /// <summary>One channel serves three zones, so its shared health line goes to each of the
-        /// zone topics the player has actually asked for - and is built only once, and only if at
-        /// least one of them is on.</summary>
+        /// <summary>The shared health line goes to each enabled zone topic, built at most once.</summary>
         private void WriteToWorkplaceTopics(string body)
         {
             bool commercial = SyncLog.IsZoneEnabled(SyncZone.Commercial);

@@ -1,5 +1,4 @@
 using System.Collections.Generic;
-using Colossal.Mathematics;
 using CS2MultiplayerMod.Core.Diagnostics;
 using CS2MultiplayerMod.Game.Diagnostics;
 using Game.Common;
@@ -10,18 +9,12 @@ using Unity.Entities;
 
 namespace CS2MultiplayerMod.Game.Sync.Systems.Net
 {
-    // Commit orchestration for NetSyncSystem. A remote net operation includes the objects and areas
-    // its native generation updates as side effects; the complete local preview graph is temporarily
-    // Disabled so an unrelated tool can remain selected without either transaction consuming the
-    // other one's entities.
-    // Validating an armed object transaction: every temp's prefab, original, attachment, area and
-    // owned buffers must point at something still live or at another member of the same batch.
+    // Validating an armed object transaction: every reference must be live or inside the batch.
     public partial class NetSyncSystem
     {
         /// <summary>
-        /// Validate the exact union consumed by the object, net, and area apply passes. The checks
-        /// intentionally run on the main thread immediately before scheduling those jobs because
-        /// their observed runtime behaviour assumes owner/original/buffer references are live.
+        /// The exact union the object, net and area passes consume, checked on the main thread just before
+        /// scheduling: those passes assume every reference is live.
         /// </summary>
         private bool ValidateArmedObjectTransaction(out string reason)
         {
@@ -171,14 +164,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
         }
 
         /// <summary>
-        /// A lane Temp naming an original reaches the apply pass's lane update, which adds the
-        /// apply-updated component set to that original with no existence test - and its delete and
-        /// replace branches only null-check it. A destroyed original therefore becomes a command
-        /// buffer entry that faults when the tool barrier plays it back, with the process ending
-        /// inside the playback rather than at the system that recorded it.
-        ///
-        /// Nodes, edges, objects and areas were already checked here. Lanes were not, and they are
-        /// the bulk of every large batch - 573 of 732 members in one observed fatal commit.
+        /// The lane update adds components to a lane's original with no existence test, so a destroyed
+        /// original faults during barrier playback. Lanes are most of a large batch.
         /// </summary>
         private bool ValidateLaneOriginal(Temp temp, out string reason)
         {

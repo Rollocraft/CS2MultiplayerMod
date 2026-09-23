@@ -6,22 +6,9 @@ using CS2MultiplayerMod.Core.Protocol;
 namespace CS2MultiplayerMod.Game.Sync.Commands
 {
     /// <summary>
-    /// One bounded page of the host's residential occupancy: for each property it names, the
-    /// complete set of households living there and the people in them.
-    ///
-    /// Every page is an absolute statement about the properties it carries, never a delta. Losing
-    /// one delays those properties until the next rolling sweep touches them again; it can never
-    /// make a later page unsafe to apply, and no page is ever a reason to reload the world.
-    ///
-    /// Prefab names repeat heavily inside a page (one house model, one household archetype and two
-    /// citizen models can cover a whole street), so names are interned in a page-local table and
-    /// referenced by index.
+    /// One page of host residential occupancy: every household and person in each named property. Pages
+    /// are absolute, never a reason to reload the world; names are interned per page.
     /// </summary>
-    // The page's limits, its contents, and the codec that puts it on the wire.
-    //
-    // Everything a page must satisfy before it is trusted - and the page-local name table the codec
-    // interns through - is in OccupancySnapshotValidation.cs. The records themselves are in
-    // OccupancyRecords.cs.
     public sealed partial class ResidentialOccupancySnapshot
     {
         public const int MaxNames = 512;
@@ -37,23 +24,16 @@ namespace CS2MultiplayerMod.Game.Sync.Commands
         public const int MaxDeparturesPerPage = 256;
         public const int MaxCitizenDeparturesPerPage = 256;
         public const int MaxPagesPerSweep = short.MaxValue;
-        // StateSnapshot has a 256 KiB transport cap. Leave envelope/headroom while allowing one
-        // dense residential tower to remain an atomic absolute roster.
+        // Under StateSnapshot's 256 KiB, so one dense tower stays one atomic roster.
         public const int MaxEncodedBytes = 240 * 1024;
 
-        /// <summary>
-        /// Random name slots carried per household and per citizen. A household uses one (the
-        /// family surname) and a citizen one (their first name); the cap leaves room for prefabs
-        /// that declare more without making a malformed page expensive.
-        /// </summary>
+        /// <summary>Name slots per household (surname) and citizen (first name), with room for more.</summary>
         public const int MaxNameIndices = 4;
 
         /// <summary>Far above any plausible in-game rent, still short of overflowing the economy.</summary>
         public const int MaxRent = 100000000;
 
-        /// <summary>
-        /// Same idea for a household's savings, cash, and signed daily economy totals.
-        /// </summary>
+        /// <summary>Bound for a household's savings, cash and signed daily totals.</summary>
         public const int MaxMoney = 1000000000;
 
         /// <summary>Bound for fulfilled electricity, fresh-water and sewage quantities.</summary>
@@ -67,16 +47,12 @@ namespace CS2MultiplayerMod.Game.Sync.Commands
         public bool EndOfSweep;
 
         /// <summary>
-        /// True only on an end page whose baseline visited every host property without a capture
-        /// skip. A client may prune properties absent from that complete baseline; household and
-        /// citizen absence is never inferred across rolling pages and uses explicit tombstones.
+        /// End page of a sweep that visited every host property without a skip; only then may a client prune
+        /// absent properties. Household and citizen absence always needs a tombstone.
         /// </summary>
         public bool SweepComplete;
 
-        /// <summary>
-        /// Highest host roster revision issued when this page was closed. It gives an empty,
-        /// complete sweep a non-zero ordering point for confirmed departures.
-        /// </summary>
+        /// <summary>Highest roster revision at close; orders departures in an empty complete sweep.</summary>
         public ulong RevisionWatermark;
 
         public readonly List<OccupancyDeparture> Departures = new List<OccupancyDeparture>();
@@ -101,11 +77,9 @@ namespace CS2MultiplayerMod.Game.Sync.Commands
             if (Properties.Count > MaxProperties)
                 throw new ProtocolException("Occupancy page exceeds its property cap.");
 
-            // Validate the entire absolute page before touching the caller's writer. A channel
-            // shares its capture tick with the other city-state channels, so a late duplicate or
-            // aggregate-cap failure must not leave a truncated occupancy payload behind.
+            // Validate the whole page before touching the shared writer, so no truncated payload is left.
             var names = new NameTable();
-            var identities = new HashSet<PropertyRentIdentity>();
+            var identities = new HashSet<PropertyIdentity>();
             var householdIds = new HashSet<ulong>();
             var citizenIds = new HashSet<ulong>();
             long encodedBytes = 24L + Departures.Count * 17L +
@@ -327,10 +301,9 @@ namespace CS2MultiplayerMod.Game.Sync.Commands
                 snapshot.CitizenDepartures.Add(departure);
             }
 
-            // 38 bytes is the smallest a property with no households can encode to: identity,
-            // construction state, the fee-driving utility quantities, and household count.
+            // Smallest property: identity, construction state, utility quantities, household count.
             int propertyCount = WireGuard.ReadCount(reader, 38, MaxProperties);
-            var identities = new HashSet<PropertyRentIdentity>();
+            var identities = new HashSet<PropertyIdentity>();
             var householdIds = new HashSet<ulong>();
             var citizenIds = new HashSet<ulong>();
             int households = 0, citizens = 0, pets = 0, vehicles = 0;

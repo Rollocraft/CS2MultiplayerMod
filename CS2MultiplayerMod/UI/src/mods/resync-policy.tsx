@@ -1,7 +1,6 @@
-import { getModule } from "cs2/modding";
+import { tryModule, useT } from "mods/ui-helpers";
 import { Button, Dropdown, DropdownToggle } from "cs2/ui";
 import { CSSProperties } from "react";
-import { useT } from "mods/connection-picker";
 
 export const RESYNC_ALLOW = "allow";
 export const RESYNC_APPROVAL = "approval";
@@ -12,14 +11,6 @@ export const RESYNC_LOC = {
     allow: "CS2MP.UI.ResyncAllow",
     approval: "CS2MP.UI.ResyncApproval",
     hostOnly: "CS2MP.UI.ResyncHostOnly",
-};
-
-const tryModule = (path: string, exportName: string): any => {
-    try {
-        return getModule(path, exportName);
-    } catch {
-        return null;
-    }
 };
 
 const dropdownTheme: Record<string, string> | undefined =

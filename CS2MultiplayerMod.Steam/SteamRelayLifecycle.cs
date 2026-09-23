@@ -1,15 +1,12 @@
 using System;
 using System.Collections.Concurrent;
-using System.Collections.Generic;
-using System.Runtime.InteropServices;
 using System.Threading;
 using CS2MultiplayerMod.Core.Diagnostics;
 using Steamworks;
 
 namespace CS2MultiplayerMod.Core.Networking.Steam
 {
-    // Disconnecting and shutting down - including the flush-then-close path a clean leave uses -
-    // and the per-peer Endpoint that holds one connection's buffers and rate state.
+    // Disconnect and shutdown (including flush-then-close) and the per-peer Endpoint.
     public sealed partial class SteamRelayTransport
     {
         // ---- teardown -------------------------------------------------------------
@@ -21,7 +18,7 @@ namespace CS2MultiplayerMod.Core.Networking.Steam
             {
                 if (!_byId.TryGetValue(connection.Value, out endpoint)) return;
             }
-            Close(endpoint, "disconnected by host", linger: false);
+            Close(endpoint, LocalCloseReason, linger: false);
         }
 
         public void DisconnectAfterFlush(ConnectionId connection)
@@ -31,10 +28,12 @@ namespace CS2MultiplayerMod.Core.Networking.Steam
             {
                 if (!_byId.TryGetValue(connection.Value, out endpoint)) return;
             }
-            // Linger hands the queued bytes to Steam's own drain, which is what carries a
-            // rejection reason out before the connection goes.
-            Close(endpoint, "disconnected by host", linger: true);
+            // Linger lets Steam drain the queue, carrying a rejection reason out.
+            Close(endpoint, LocalCloseReason, linger: true);
         }
+
+        // Steam hands this text to the other side as the close reason.
+        private string LocalCloseReason => _isHost ? "disconnected by host" : "disconnected by client";
 
         public string GetRemoteAddress(ConnectionId connection)
         {
@@ -46,10 +45,19 @@ namespace CS2MultiplayerMod.Core.Networking.Steam
             return endpoint.RemoteAddress;
         }
 
+        public long LastInboundActivityMs(ConnectionId connection)
+        {
+            Endpoint endpoint;
+            lock (_gate)
+            {
+                if (!_byId.TryGetValue(connection.Value, out endpoint)) return long.MinValue;
+            }
+            return endpoint.LastInboundMs;
+        }
+
         /// <summary>
-        /// Steam authenticated the remote identity as part of the relay connection, so this
-        /// relationship check is safe to use for host approval rules. A missing endpoint or
-        /// unavailable friends API is never treated as trusted.
+        /// Steam authenticated the remote identity, so this is safe for approval rules. A missing endpoint or
+        /// friends API is never trusted.
         /// </summary>
         public bool IsPlatformFriend(ConnectionId connection)
         {
@@ -70,14 +78,8 @@ namespace CS2MultiplayerMod.Core.Networking.Steam
             }
         }
 
-        /// <summary>
-        /// Empty: the relay authenticates and encrypts every connection itself, so there
-        /// is no certificate for the password proof to bind to.
-        /// </summary>
-        public byte[] GetChannelBinding(ConnectionId connection)
-        {
-            return Array.Empty<byte>();
-        }
+        /// <summary>Empty: the relay encrypts itself, so there is no certificate to bind.</summary>
+        public byte[] GetChannelBinding(ConnectionId connection) => Array.Empty<byte>();
 
         public void Shutdown()
         {
@@ -137,9 +139,7 @@ namespace CS2MultiplayerMod.Core.Networking.Steam
                 catch (Exception) { /* already gone */ }
             }
 
-            // Steam services its sockets on its own thread, so its share drains while we
-            // wait here - but the outbox only moves when we pump it, and nothing else will
-            // during teardown. Bounded because this runs on the game thread.
+            // Steam drains its share on its own thread, but the outbox moves only when pumped. Bounded: game thread.
             var deadline = System.Diagnostics.Stopwatch.StartNew();
             while (PendingSendBytes > 0 && deadline.ElapsedMilliseconds < timeoutMs)
             {
@@ -164,20 +164,13 @@ namespace CS2MultiplayerMod.Core.Networking.Steam
                 catch (Exception) { /* already gone */ }
             }
 
-            // The maps are empty now, so this only tears down the listen socket, the poll
-            // group and the callback.
+            // Maps are empty: this tears down the listen socket, poll group and callback.
             Shutdown();
         }
 
-        public void Dispose()
-        {
-            Shutdown();
-        }
+        public void Dispose() => Shutdown();
 
-        /// <summary>
-        /// One relay connection: the frames still waiting for room in Steam's send buffer,
-        /// and the partial payload currently arriving.
-        /// </summary>
+        /// <summary>One connection's pending frames and the partial payload arriving.</summary>
         private sealed class Endpoint
         {
             public readonly ConnectionId Id;
@@ -195,9 +188,8 @@ namespace CS2MultiplayerMod.Core.Networking.Steam
             public int SendRate;
 
             /// <summary>
-            /// Highest rate this path has carried without complaint. Starts at the ceiling
-            /// because nothing is known yet, which is what makes the first climb a search;
-            /// it survives idle periods so later transfers start from the answer.
+            /// Highest rate carried without complaint. Starts at the ceiling so the first climb is a search, and
+            /// survives idle periods.
             /// </summary>
             public int SafeRate = SendRateCeilingBytesPerSecond;
 
@@ -210,6 +202,9 @@ namespace CS2MultiplayerMod.Core.Networking.Steam
             /// <summary>Best ping seen on this connection - the baseline congestion is measured against.</summary>
             public int PingFloorMs = int.MaxValue;
 
+            /// <summary><see cref="MonotonicClock"/> reading of the last inbound traffic; game thread only.</summary>
+            public long LastInboundMs = long.MinValue;
+
             private readonly RelaySendFeedback _delivery = new RelaySendFeedback();
             private long _acceptedBytes;
             private readonly System.Diagnostics.Stopwatch _bulk = new System.Diagnostics.Stopwatch();
@@ -220,26 +215,18 @@ namespace CS2MultiplayerMod.Core.Networking.Steam
             private long _queuedBytes;
 
             /// <summary>Bytes accepted from the session that Steam has not taken yet.</summary>
-            public long QueuedBytes
-            {
-                get { return Interlocked.Read(ref _queuedBytes); }
-            }
+            public long QueuedBytes => Interlocked.Read(ref _queuedBytes);
 
             public Endpoint(ConnectionId id, HSteamNetConnection handle, ulong steamId)
             {
                 Id = id;
                 Handle = handle;
                 SteamId = steamId;
-                // The session uses this for ban tracking and logging only. A Steam ID is a
-                // steadier key for that than an address behind the relay.
+                // Bans and logs only; a Steam ID is steadier than an address behind the relay.
                 RemoteAddress = "steam:" + steamId;
             }
 
-            /// <summary>
-            /// Bytes the peer acknowledged since the last call. This is the only honest
-            /// throughput number: Steam's send rate is what we told it to push, not what
-            /// arrived.
-            /// </summary>
+            /// <summary>Bytes acknowledged since the last call; Steam's send rate is only what we asked for.</summary>
             public long MeasureGoodput(long outstanding, long intervalMs)
             {
                 long moved = _delivery.Sample(Interlocked.Read(ref _acceptedBytes), outstanding);
@@ -253,11 +240,7 @@ namespace CS2MultiplayerMod.Core.Networking.Steam
                 if (!_bulk.IsRunning) { _bulkMoved = 0; _bulk.Restart(); }
             }
 
-            /// <summary>
-            /// Close out a finished bulk transfer and describe what it cost, or null when
-            /// none was running. This average is the number to compare against the uplink
-            /// when judging whether a world sync was as fast as the connection allows.
-            /// </summary>
+            /// <summary>Closes a finished bulk transfer with its average rate, or null when none ran.</summary>
             public string FinishBulk()
             {
                 if (!_bulk.IsRunning) return null;
@@ -279,16 +262,12 @@ namespace CS2MultiplayerMod.Core.Networking.Steam
                 Interlocked.Add(ref _acceptedBytes, frame.Length);
             }
 
-            public bool TryPeek(out byte[] frame)
-            {
-                return _outbox.TryPeek(out frame);
-            }
+            public bool TryPeek(out byte[] frame) => _outbox.TryPeek(out frame);
 
             /// <summary>Drop the head frame once Steam has actually accepted it.</summary>
             public void Commit(int frameLength)
             {
-                byte[] sent;
-                if (_outbox.TryDequeue(out sent))
+                if (_outbox.TryDequeue(out byte[] sent))
                     Interlocked.Add(ref _queuedBytes, -frameLength);
             }
         }

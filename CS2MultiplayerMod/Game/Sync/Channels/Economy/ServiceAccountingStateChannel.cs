@@ -15,9 +15,8 @@ using Unity.Jobs;
 namespace CS2MultiplayerMod.Game.Sync.Channels
 {
     /// <summary>
-    /// Host-authoritative fee results and service upkeep aggregates. Fee slider values remain in
-    /// the editable channel 8; this channel carries the simulation-owned counts, income/expense
-    /// results and per-service records that the economy and service-detail panels actually read.
+    /// Host fee results and service upkeep aggregates the economy panels read; the fee sliders stay in
+    /// editable channel 8.
     /// </summary>
     internal sealed class ServiceAccountingStateChannel : IStateChannel, IPumpedStateChannel
     {
@@ -142,10 +141,8 @@ namespace CS2MultiplayerMod.Game.Sync.Channels
                 snapshot.Services.Sort((left, right) =>
                     string.CompareOrdinal(left.PrefabName, right.PrefabName));
 
-                JobHandle incomeDeps;
-                JobHandle expenseDeps;
-                NativeArray<int> incomes = _budgets.GetIncomeArray(out incomeDeps);
-                NativeArray<int> expenses = _budgets.GetExpenseArray(out expenseDeps);
+                NativeArray<int> incomes = _budgets.GetIncomeArray(out JobHandle incomeDeps);
+                NativeArray<int> expenses = _budgets.GetExpenseArray(out JobHandle expenseDeps);
                 JobHandle.CombineDependencies(incomeDeps, expenseDeps).Complete();
                 for (int i = 0; i < ServiceAccountingSnapshot.FeeIncomeSources.Length; i++)
                 {
@@ -212,9 +209,8 @@ namespace CS2MultiplayerMod.Game.Sync.Channels
                 {
                     Entity entity = entities[i];
                     string name = PrefabIndex.SafeName(_prefabs, entity);
-                    ServiceAccountingService wanted;
                     if (string.IsNullOrEmpty(name) || !localNames.Add(name) ||
-                        !wantedByName.TryGetValue(name, out wanted))
+                        !wantedByName.TryGetValue(name, out ServiceAccountingService wanted))
                         throw new ProtocolException(
                             "Service-accounting prefab table differs from this game build.");
 

@@ -10,11 +10,8 @@ using CS2MultiplayerMod.Game.Sync.Infrastructure;
 namespace CS2MultiplayerMod.Game.Sync.Channels
 {
     /// <summary>
-    /// Replicates the city-wide policy list (the <see cref="Policy"/> buffer on the city
-    /// entity). Policies are identified by prefab name; flags + slider adjustment travel
-    /// along. Player-editable - any player may toggle policies; the host arbitrates.
-    /// District and transport-line policies are a follow-up (needs a cross-machine
-    /// district identity first).
+    /// The city-wide <see cref="Policy"/> buffer, by prefab name with flags and adjustment. Editable;
+    /// the host arbitrates.
     /// </summary>
     public sealed class CityPolicyStateChannel : IStateChannel
     {
@@ -114,8 +111,7 @@ namespace CS2MultiplayerMod.Game.Sync.Channels
 
         private Entity ResolvePolicyPrefab(EntityManager em, string name)
         {
-            Entity entity;
-            if (_policyByName.TryGetValue(name, out entity)) return entity;
+            if (_policyByName.TryGetValue(name, out Entity entity)) return entity;
 
             if (!_policyQueryReady)
             {

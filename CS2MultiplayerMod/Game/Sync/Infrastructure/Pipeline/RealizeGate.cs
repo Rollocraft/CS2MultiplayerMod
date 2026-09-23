@@ -1,35 +1,32 @@
 namespace CS2MultiplayerMod.Game.Sync.Infrastructure
 {
-    /// <summary>
-    /// One frame-scoped fact that several systems need and none of them can see for themselves:
-    /// whether remote world-building work is currently held back.
-    ///
-    /// <see cref="Systems.SyncRealizeSystem"/> already decides this each frame - terrain is behind,
-    /// or the net pipeline still has placements queued - and holds roads, zoning and zone-grown
-    /// buildings until it clears. Systems that merely WAIT on those things are not themselves
-    /// gated, so they keep running and keep counting down retry windows for targets that cannot
-    /// possibly arrive yet. When the window then expires they report a target that "did not
-    /// resolve" and ask for a full world reload, over a building the mod was still holding back.
-    ///
-    /// Reading a flag is what those systems need rather than a reference to the pipeline, hence a
-    /// static: they are constructed independently and are not wired to each other.
-    /// </summary>
-    internal static class RealizeGate
+    /// <summary>Realized by <see cref="Systems.SyncRealizeSystem"/> in ToolUpdate; reads its own holds from <see cref="RealizeGate"/>.</summary>
+    internal interface IRealizeStage
     {
-        /// <summary>
-        /// True while roads, zoning and zone-grown buildings cannot be applied. Written once per
-        /// frame by the realize pipeline, read by anything that waits on one of them.
-        /// </summary>
-        public static bool WorldBuildingHeld;
-
-        /// <summary>Clear on a world reload or a session end - nothing is held in a world that is gone.</summary>
-        public static void Reset() => WorldBuildingHeld = false;
+        void RealizePending();
     }
 
     /// <summary>
-    /// Measures how long a system has been unable to make progress, so a retry window can be spent
-    /// on attempts rather than on wall-clock seconds. Call <see cref="Observe"/> once per frame and
-    /// add the result to every pending deadline.
+    /// Per-frame holds written only by <see cref="Systems.SyncRealizeSystem"/>. Static because the
+    /// systems that wait on them are not wired to the pipeline.
+    /// </summary>
+    internal static class RealizeGate
+    {
+        /// <summary>Remote terrain still queued: nothing new is placed at a sender-sampled height.</summary>
+        public static bool TerrainBacklog;
+
+        /// <summary>A placement is waiting on its road (or recovery froze net edits): bulldoze/replace wait.</summary>
+        public static bool NetMutationHeld;
+
+        /// <summary>Roads, zoning and zone-grown buildings are held. Implies <see cref="TerrainBacklog"/>.</summary>
+        public static bool WorldBuildingHeld;
+
+        public static void Reset() => TerrainBacklog = NetMutationHeld = WorldBuildingHeld = false;
+    }
+
+    /// <summary>
+    /// Time a system could not make progress, so retry windows count attempts rather than wall-clock
+    /// time. Observe once per frame and add the result to pending deadlines.
     /// </summary>
     internal sealed class HeldTime
     {
@@ -38,11 +35,7 @@ namespace CS2MultiplayerMod.Game.Sync.Infrastructure
         private long _lastMs;
         private bool _initialized;
 
-        /// <summary>
-        /// Time to add to pending deadlines this frame: the gap since the previous call when
-        /// <paramref name="held"/>, and zero otherwise. Returns zero on the first call, so a system
-        /// that starts mid-session never back-dates its first window.
-        /// </summary>
+        /// <summary>The gap since the last call while held, else zero; zero on the first call.</summary>
         public long Observe(long nowMs, bool held)
         {
             long before = _clock.NowMs;

@@ -1,14 +1,6 @@
 using System.Collections.Generic;
-using Colossal.Collections;
 using Colossal.Mathematics;
-using Game.Common;
-using Game.Net;
-using Game.Simulation;
-using Game.Tools;
-using Unity.Collections;
 using Unity.Entities;
-using Unity.Jobs;
-using Unity.Mathematics;
 using CS2MultiplayerMod.Core.Diagnostics;
 using CS2MultiplayerMod.Core.Protocol.Messages;
 using CS2MultiplayerMod.Core.Session;
@@ -17,9 +9,7 @@ using CS2MultiplayerMod.Game.Sync.Infrastructure;
 using CS2MultiplayerMod.Game.Sync.Commands;
 namespace CS2MultiplayerMod.Game.Sync.Systems.Net
 {
-    // Assembling one source Apply out of the messages that carry it. One gesture may emit several
-    // courses, and applying only a prefix of them deforms the rest, so a partial operation is put
-    // back rather than realized.
+    // Assembling one source Apply from its messages; a partial operation is put back, not realized.
     public partial class NetSyncSystem
     {
         private void PruneCompletedNetOperations(long now)
@@ -28,9 +18,6 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
             _armedNetOperations.Prune(now);
         }
 
-        /// <summary>
-        /// Re-queue <paramref name="work"/>[<paramref name="from"/>..] ahead of the shared inbox.
-        /// </summary>
         private void RequeueFrom(List<SimulationCommandMessage> work, int from)
         {
             if (from < work.Count)
@@ -52,21 +39,15 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
         }
 
         /// <summary>
-        /// Record that a resolved endpoint will split <paramref name="target"/>, and report whether
-        /// that claim is consistent with the source operation.
-        ///
-        /// Several courses of one operation may legitimately tap the SAME source edge: CourseSplitSystem
-        /// receives them together and cuts that edge once into all of its pieces. Two courses that named
-        /// DIFFERENT source edges but land on the same local edge are a different matter - this machine
-        /// never received the split that separated them. Committing both would hand the apply pass two
-        /// Temps sharing one original, which it dereferences without a liveness check.
+        /// Records that an endpoint splits <paramref name="target"/>. Courses naming the same source edge
+        /// may share it; different source edges landing on one local edge mean a missing split, and would
+        /// give the apply pass two Temps sharing one original.
         /// </summary>
         private bool TryClaimSplitTarget(NetEndpointIntent intent, Entity target, int kind)
         {
             if (kind != KindSplit || target == Entity.Null) return true;
             Bezier4x3 source = TargetCurveOf(intent);
-            Bezier4x3 claimed;
-            if (!_batchSplitClaims.TryGetValue(target, out claimed))
+            if (!_batchSplitClaims.TryGetValue(target, out Bezier4x3 claimed))
             {
                 _batchSplitClaims[target] = source;
                 return true;
@@ -75,10 +56,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
         }
 
         /// <summary>
-        /// Pull one complete source operation from the ordered command streams. Messages belonging
-        /// to later operations may be encountered while waiting for an interleaved course; they are
-        /// returned to the simulation-thread prefix in their original order. An incomplete operation
-        /// waits briefly and is then dropped as a whole, never realized as broken geometry.
+        /// Pulls one complete operation; later messages met on the way return to the prefix in order. An
+        /// incomplete operation waits briefly, then is dropped whole.
         /// </summary>
         private bool TryTakeCompleteOperation(MultiplayerSession session, long now,
             out List<SimulationCommandMessage> operation, out bool nativeOperation,
@@ -98,8 +77,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
 
             for (int scan = 0; scan < MaxScan && (expected == 0 || received < expected); scan++)
             {
-                SimulationCommandMessage message;
-                if (!TryTakeNextPlacementMessage(out message)) break;
+                if (!TryTakeNextPlacementMessage(out SimulationCommandMessage message)) break;
                 if (message.OriginPlayerId == session.LocalPlayerId) continue;
 
                 if (message.CommandId == NetToolOperationCommand.Id)
@@ -123,9 +101,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                         return true;
                     }
 
-                    // It arrived after the first fragment of an older placement operation. Keep it
-                    // in the ordered prefix while scanning for that older operation's remaining
-                    // fragments; it will be the next operation realized, never overtaken.
+                    // Arrived after an older operation's first fragment: stays behind it in order.
                     scanned.Add(message);
                     continue;
                 }
@@ -136,14 +112,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                     continue;
                 }
 
-                NetPlacementCommand command;
-                try { command = NetPlacementCommand.Decode(message.Body); }
-                catch (System.Exception ex)
-                {
-                    SyncLog.Warn(LogTopic.Nets, "NetSync: dropping malformed command: " +
-                        ex.Message);
+                if (!CommandDecode.TryDecode(message, NetPlacementCommand.Decode, LogTopic.Nets,
+                        "NetSync", out NetPlacementCommand command))
                     continue;
-                }
 
                 scanned.Add(message);
                 if (expected == 0)
@@ -179,8 +150,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
 
             if (received != expected)
             {
-                long deadline;
-                if (!_operationAssemblyDeadlines.TryGetValue(key, out deadline))
+                if (!_operationAssemblyDeadlines.TryGetValue(key, out long deadline))
                 {
                     deadline = now + OperationAssemblyWindowMs;
                     _operationAssemblyDeadlines[key] = deadline;
@@ -233,8 +203,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                 hasGeometryOnlyCourse |= !decodedCourses[i].HasNativeCourse;
             }
 
-            // Preserve later operations in their original receive order. Extra messages carrying
-            // the completed key are duplicates or inconsistent fragments and are discarded.
+            // Later operations keep receive order; duplicates of the completed key are discarded.
             var deferred = new List<SimulationCommandMessage>();
             for (int i = 0; i < scanned.Count; i++)
             {
@@ -252,9 +221,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
             }
             RequeueAtFront(deferred);
 
-            // Current senders only group exact native definitions. Geometry-only capture represents
-            // one final edge per command. Rejecting mixed or grouped fallback input prevents a peer
-            // from smuggling a partially native operation into per-course fallback realization.
+            // Mixed or grouped fallback input would smuggle a partial native operation through.
             if ((hasNativeCourse && hasGeometryOnlyCourse) || (expected > 1 && !nativeOperation))
             {
                 SyncLog.Trace(LogTopic.Nets, "net incompatible multi-course op dropped=" +
@@ -275,7 +242,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
 
         private bool TryTakeNextPlacementMessage(out SimulationCommandMessage message)
         {
-            if (DeferForTerrain)
+            // Pre-terraform ground gives the wrong height; only new courses wait.
+            if (RealizeGate.TerrainBacklog)
             {
                 message = default(SimulationCommandMessage);
                 return false;
@@ -296,30 +264,16 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
         }
 
         /// <summary>
-        /// Re-queue an operation that is waiting for a target it cannot see yet, WITHOUT parking
-        /// the rest of the pipeline behind it.
-        ///
-        /// The queue is strictly ordered, so the previous behaviour - putting it straight back at
-        /// the front - stopped every later operation, from every player, for the whole retry
-        /// window. That is worse than a delay: in the sessions this came from, the deferred
-        /// placement spent ten seconds in front of a queue while the world it was searching went on
-        /// changing, and then asked for a full world reload because what it was looking for was no
-        /// longer there.
-        ///
-        /// Causal order was only ever meaningful per sender, so only ANOTHER sender's work may
-        /// overtake. Everything the same sender queued behind this operation stays behind it.
+        /// Requeues a stalled operation without blocking the pipeline. Order only matters per sender, so
+        /// only another sender's work may overtake it.
         /// </summary>
         private void RequeueStalledOperation(List<SimulationCommandMessage> messages)
         {
             if (messages == null || messages.Count == 0) return;
             int origin = messages[0].OriginPlayerId;
 
-            // Admit what has arrived so the reorder sees the whole ready set rather than whatever a
-            // previous scan happened to leave behind. Realization stays gated where it always was
-            // (see TryTakeNextPlacementMessage); only where the messages sit changes, and the same
-            // inbox cap bounds it.
-            SimulationCommandMessage admitted;
-            while (_remoteDeferred.Count < NetInboxCap && _incoming.TryDequeue(out admitted))
+            // Admit everything arrived so the reorder sees the whole ready set; the inbox cap still bounds it.
+            while (_remoteDeferred.Count < NetInboxCap && _incoming.TryDequeue(out SimulationCommandMessage admitted))
                 _remoteDeferred.Add(admitted);
 
             int insertAt = 0;

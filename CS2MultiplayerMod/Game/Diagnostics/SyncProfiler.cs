@@ -6,9 +6,8 @@ using System.Text;
 namespace CS2MultiplayerMod.Game.Diagnostics
 {
     /// <summary>
-    /// The part of the city a scope's work belongs to. Attributing time this way is the only way
-    /// to answer "what is commercial sync costing me?" - a scope name alone cannot, because one
-    /// channel serves three zones and one zone is served by several channels.
+    /// The city zone a scope's work belongs to: one channel serves several zones and a zone several
+    /// channels.
     /// </summary>
     public enum SyncZone
     {
@@ -20,17 +19,8 @@ namespace CS2MultiplayerMod.Game.Diagnostics
     }
 
     /// <summary>
-    /// How much of the main thread the mod's own systems used, by scope.
-    ///
-    /// A performance complaint about a large city is otherwise unanswerable: the game is already
-    /// slow at that size, so a frame-time histogram cannot say which side of the line a
-    /// millisecond came from, and reading the code only produces candidates. This measures the
-    /// mod's share directly and names the scope that spent it.
-    ///
-    /// Scopes are placed at system and pass level, never inside a per-entity loop. Two timestamp
-    /// reads per scope at a few hundred entries a second is far below the noise floor of what it
-    /// measures, so this stays on rather than hiding behind a setting nobody enables before the
-    /// session that went wrong.
+    /// Main-thread time spent by the mod's own systems, per scope. Scopes sit at system and pass level,
+    /// never per entity, so this stays always on.
     /// </summary>
     public static class SyncProfiler
     {
@@ -58,10 +48,7 @@ namespace CS2MultiplayerMod.Game.Diagnostics
             { null, "residential", "commercial", "industrial", "office" };
         private static readonly long[] ZoneTicks = new long[5];
 
-        /// <summary>
-        /// Accumulates into one scope for as long as it is alive. Always use it with
-        /// <c>using</c>: an early return inside a measured pass must still close the scope.
-        /// </summary>
+        /// <summary>Always with <c>using</c>, so an early return closes the scope.</summary>
         public struct Scope : IDisposable
         {
             private readonly Sample _sample;
@@ -84,21 +71,15 @@ namespace CS2MultiplayerMod.Game.Diagnostics
         }
 
         /// <summary>
-        /// Nesting is allowed, but an inner scope's time is also counted in its outer one, so the
-        /// reported total is not a sum of the listed scopes. Prefer siblings over nesting.
+        /// Nested scopes count in their outer scope too, so the total is not the sum; prefer siblings.
         /// </summary>
         public static Scope Measure(string name) => Measure(name, SyncZone.None);
 
-        /// <summary>
-        /// As <see cref="Measure(string)"/>, but the time also lands in a zone total. Use this
-        /// wherever a pass is known to be about one kind of building; the zone line is what makes
-        /// "residential is fine, commercial is the problem" a fact rather than a guess.
-        /// </summary>
+        /// <summary>As <see cref="Measure(string)"/>, also adding to a zone total.</summary>
         public static Scope Measure(string name, SyncZone zone)
         {
             if (string.IsNullOrEmpty(name)) return default(Scope);
-            Sample sample;
-            if (!Samples.TryGetValue(name, out sample))
+            if (!Samples.TryGetValue(name, out Sample sample))
             {
                 if (Samples.Count >= MaxScopes) return default(Scope);
                 sample = new Sample { Name = name, Zone = zone };
@@ -120,9 +101,8 @@ namespace CS2MultiplayerMod.Game.Diagnostics
         }
 
         /// <summary>
-        /// The window's report, or null when nothing was measured. <paramref name="windowMs"/> is
-        /// the wall time the window covered, which turns the total into the only number that
-        /// actually settles an argument: the share of the main thread the mod took.
+        /// The window's report, or null when nothing was measured; <paramref name="windowMs"/> turns the total
+        /// into a main-thread share.
         /// </summary>
         public static string Report(long windowMs)
         {
@@ -172,12 +152,7 @@ namespace CS2MultiplayerMod.Game.Diagnostics
             return text.ToString();
         }
 
-        /// <summary>
-        /// The by-zone line, appended only when something was actually attributed. Unattributed
-        /// scopes are deliberately not folded in anywhere: a zone total that quietly included
-        /// "everything else" would be the kind of number that ends an investigation in the wrong
-        /// place.
-        /// </summary>
+        /// <summary>The by-zone line; unattributed time is never folded into a zone.</summary>
         private static void AppendZones(StringBuilder text, long windowMs)
         {
             long attributed = 0;

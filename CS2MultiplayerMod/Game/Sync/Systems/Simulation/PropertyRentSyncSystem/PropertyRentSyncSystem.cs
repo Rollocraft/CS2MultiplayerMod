@@ -1,45 +1,26 @@
-using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
-using CS2MultiplayerMod.Core.Diagnostics;
 using CS2MultiplayerMod.Core.Session;
-using CS2MultiplayerMod.Game.Diagnostics;
 using CS2MultiplayerMod.Game.Sync.Commands;
 using CS2MultiplayerMod.Game.Sync.Infrastructure;
 using Game;
 using Game.Buildings;
 using Game.Common;
-using Game.Objects;
 using Game.Prefabs;
 using Game.Simulation;
 using Game.Tools;
-using Unity.Collections;
 using Unity.Entities;
-using Unity.Mathematics;
 
 namespace CS2MultiplayerMod.Game.Sync.Systems
 {
     /// <summary>
-    /// Keeps the numeric asking rent calculated by the host on properties that already exist
-    /// locally, plus rents for non-household tenants. ResidentialOccupancySyncSystem owns each
-    /// identified household's actual PropertyRenter value; keeping that single-writer boundary
-    /// prevents a property-wide fallback from overwriting different household contracts during
-    /// turnover.
-    ///
-    /// Vanilla recalculates one of sixteen UpdateFrame partitions in RentAdjustSystem. This system
-    /// is ordered after that calculation and earlier in the phase than PropertyRenterSystem, and
-    /// runs at the same interval, so only the partition vanilla just touched is walked. It corrects
-    /// asking rent and company rent that later systems consume. Household lifecycle and household
-    /// rent use the identity-aware occupancy channel.
+    /// Keeps the host's asking rent and non-household rents. Household rent is owned by
+    /// ResidentialOccupancySyncSystem. Runs after RentAdjustSystem and before PropertyRenterSystem at
+    /// the same interval, so only the partition vanilla just recalculated is walked.
     /// </summary>
-    // State, lifecycle and the per-update cycle. The host's side - sweeping partitions and writing
-    // a page - is in Capture.cs; the client's - resolving a page's properties and applying the
-    // rents - is in Realize.cs.
-    public partial class PropertyRentSyncSystem : GameSystemBase
+    public partial class PropertyRentSyncSystem : GameSystemBase,
+        Channels.IPagedPropertyRuntime<PropertyRentSnapshot>
     {
-        // The paging, bounded cache, partition walk, retry and priority mechanics the three
-        // property domains share. Only the payloads and the realization policy below are local;
-        // the fields underneath are named views onto this state, not separate containers.
         private readonly PagedPropertySyncState<PropertyRentSnapshot, CachedProperty, PendingProperty, HostObservedRent, PropertyRentEntry>
             _propertyState = new PagedPropertySyncState<PropertyRentSnapshot, CachedProperty, PendingProperty, HostObservedRent, PropertyRentEntry>();
         private const int UpdatePartitions = PropertySyncLimits.UpdatePartitions;
@@ -50,7 +31,6 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         private const int MaxIncomingPages = PropertySyncLimits.MaxIncomingPages;
         private const int MaxPumpPages = PropertySyncLimits.MaxPumpPages;
         private const int MaxCachedProperties = PropertySyncLimits.MaxCachedProperties;
-        private const int MaxPendingIdentities = PropertySyncLimits.MaxPendingIdentities;
         private const int MaxPendingRetriesPerUpdate = 192;
         private const long ResolveRetryMs = PropertySyncLimits.ResolveRetryMs;
         private const long ResolveTimeoutMs = 120000;
@@ -62,25 +42,18 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         private Dictionary<Entity, CachedProperty> _cache => _propertyState.Cache;
         private List<Entity>[] _cacheBuckets => _propertyState.CachedPartitions.Buckets;
         private HashSet<Entity>[] _cacheBucketMembers => _propertyState.CachedPartitions.Members;
-        private Dictionary<PropertyRentIdentity, PendingProperty> _pending => _propertyState.Pending;
-        private ConcurrentQueue<PropertyRentIdentity> _pendingOrder => _propertyState.PendingOrder;
+        private Dictionary<PropertyIdentity, PendingProperty> _pending => _propertyState.Pending;
         private readonly List<Entity> _cacheScratch = new List<Entity>();
 
-        // Host-side change priority. The rolling baseline is always sent; these entries merely
-        // shorten the time from a newly changed rent to the next page that carries it.
+        // Host-side priority: shortens the latency of a changed rent.
         private Dictionary<Entity, HostObservedRent> _hostObserved => _propertyState.HostObserved;
         private List<Entity>[] _hostObservedBuckets => _propertyState.HostPartitions.Buckets;
         private bool[] _hostBucketInitialized => _propertyState.HostPartitions.Initialized;
         private int[] _hostBucketCursor => _propertyState.HostPartitions.Cursor;
 
-        /// <summary>
-        /// Properties the rolling rent observer examines per update. See the same ceiling in
-        /// <see cref="ResidentialOccupancySyncSystem"/>: the observer only shortens latency, and a
-        /// city large enough to hit this simply takes longer to come all the way round.
-        /// </summary>
         private const int MaxPropertiesObservedPerUpdate = PropertySyncLimits.MaxPropertiesObservedPerUpdate;
-        private Dictionary<PropertyRentIdentity, PropertyRentEntry> _priority => _propertyState.Priority;
-        private ConcurrentQueue<PropertyRentIdentity> _priorityOrder => _propertyState.PriorityOrder;
+        private Dictionary<PropertyIdentity, PropertyRentEntry> _priority => _propertyState.Priority;
+        private ConcurrentQueue<PropertyIdentity> _priorityOrder => _propertyState.PriorityOrder;
 
         private EntityQuery _properties;
         private EntityQuery _prefabs;
@@ -94,18 +67,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         private int _captureCursor;
         private uint _captureSweepId = 1;
         private int _capturePageIndex;
-        private uint _clientSweepId;
-        private int _clientNextPage;
-        private bool _clientSweepIntact;
         private long _lastSeededWorldInstallGeneration;
         private bool _clientBaselineWarned;
         private bool _syncWasReady;
-        private long _nextPendingPumpMs
-        {
-            get => _propertyState.NextPendingPumpMs;
-            set => _propertyState.NextPendingPumpMs = value;
-        }
-
         private long _lastStatsMs;
         private long _sentBytes;
         private int _sentPages;
@@ -128,7 +92,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
         private sealed class CachedProperty
         {
-            public PropertyRentIdentity Identity;
+            public PropertyIdentity Identity;
             public Entity Prefab;
             public int Rent;
             public int Bucket;
@@ -138,13 +102,11 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         private sealed class PendingProperty : PendingPropertyState<PropertyRentEntry>
         { }
 
-
         private sealed class HostObservedRent
         {
             public int Rent;
             public int Bucket;
         }
-
 
         public override int GetUpdateInterval(SystemUpdatePhase phase) =>
             phase == SystemUpdatePhase.GameSimulation ? RentUpdateInterval : 1;
@@ -194,59 +156,47 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 int bucket = (int)(updateFrame % UpdatePartitions);
                 if (session.Role == SessionRole.Host)
                 {
-                    DropIncomingPages();
+                    _droppedPages += _propertyState.DropIncoming();
                     ScanHostChanges(bucket);
                     ReportStats(session, service.NowMs);
                     return;
                 }
 
-                // Normally CityState's UIUpdate pump has already merged all pages into the managed
-                // cache. Pump once more here as a harmless fallback before this bucket is consumed.
+                // Fallback; the city-state pump normally merged these already.
                 PumpIncoming();
                 ApplyBucket(bucket);
-                // RentAdjust also rewrites household contracts. Channel 20 intentionally skips them,
-                // so restore each channel-21 identity at this same pre-payment boundary.
+                // RentAdjust also rewrites household contracts; restore channel 21's at this same boundary.
                 if (_occupancy != null) _occupancy.CorrectHouseholdRentsAfterRentAdjust(bucket);
                 ReportStats(session, service.NowMs);
             }
         }
 
-        /// <summary>
-        /// Resolve and cache a bounded number of absolute pages from CityState's every-frame pump.
-        /// This path performs only reads against ECS; the economic component writes remain solely
-        /// in <see cref="OnUpdate"/> at the RentAdjustSystem cadence/order.
-        /// </summary>
+        /// <summary>Resolves arrived pages. Read-only against ECS; writes stay in OnUpdate.</summary>
         internal void PumpIncoming()
         {
             MultiplayerService service = Mod.Service;
             if (service == null || !service.SimulationSyncReady) return;
             if (service.Session.Role == SessionRole.Host)
             {
-                DropIncomingPages();
+                _droppedPages += _propertyState.DropIncoming();
                 return;
             }
 
-            // The world transfer already contains the host's rents at its save cut. Seed those
-            // values before a local RentAdjust partition can replace them while the 96-entry/s
-            // rolling correction is still warming a large city.
+            // Seed the host rents from the world transfer before a local RentAdjust replaces them.
             long installGeneration = service.WorldInstallGeneration;
             if (installGeneration > _lastSeededWorldInstallGeneration &&
                 !SeedClientBaseline(installGeneration)) return;
 
             long now = service.NowMs;
-            bool retryDue = _pending.Count > 0 && now >= _nextPendingPumpMs;
+            bool retryDue = _propertyState.RetryDue(now);
             if (_incoming.IsEmpty && !retryDue) return;
 
             using (var scope = new PropertySearchScope(_objectSearch))
             {
-                ObjectSearch.Batch search = scope.Batch;
-                NativeList<Entity> candidates = scope.Candidates;
-                DrainIncoming(now, search, candidates, MaxPumpPages);
-                if (retryDue)
-                {
-                    RetryPending(now, search, candidates);
-                    _nextPendingPumpMs = now + ResolveRetryMs;
-                }
+                DrainIncoming(now, scope.Batch, scope.Candidates, MaxPumpPages);
+                if (!retryDue) return;
+                RetryPending(now, scope.Batch, scope.Candidates);
+                _propertyState.NextPendingPumpMs = now + ResolveRetryMs;
             }
         }
     }

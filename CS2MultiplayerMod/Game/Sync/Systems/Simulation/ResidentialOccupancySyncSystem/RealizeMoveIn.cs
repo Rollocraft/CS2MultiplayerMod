@@ -1,36 +1,22 @@
-using System;
-using System.Collections.Generic;
 using System.Diagnostics;
 using CS2MultiplayerMod.Core.Diagnostics;
 using CS2MultiplayerMod.Core.Session;
 using CS2MultiplayerMod.Game.Diagnostics;
 using CS2MultiplayerMod.Game.Sync.Commands;
-using Game.Agents;
 using Game.Buildings;
 using Game.Citizens;
 using Game.Common;
-using Game.Companies;
-using Game.Economy;
-using Game.Prefabs;
-using Game.Simulation;
 using Game.Vehicles;
-using Unity.Collections;
 using Unity.Entities;
-using Unity.Jobs;
 using Unity.Mathematics;
 
 namespace CS2MultiplayerMod.Game.Sync.Systems
 {
-    // Finishing a move-in. A household created for a property is not housed until the game's
-    // own rent action completes, so the ones in flight are tracked, counted once realized, and
-    // cleaned up if the move never happened.
     public partial class ResidentialOccupancySyncSystem
     {
         /// <summary>
-        /// Hand the move-in to the game's own renter pipeline instead of writing the link by hand.
-        /// It is the code that clears the old property, adds PropertyRenter, appends to the renter
-        /// list, drops HomelessHousehold and raises RentersUpdated — all in the order the rest of
-        /// the simulation expects.
+        /// Moves in through the game's renter pipeline, which clears the old property, adds PropertyRenter,
+        /// drops HomelessHousehold and raises RentersUpdated in order.
         /// </summary>
         private bool CanEnqueueRentAction() =>
             _propertyProcessing != null && _propertyProcessing.Enabled;
@@ -38,8 +24,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         private void TrackPendingMoveIn(OccupancyHousehold wanted, Entity household,
             Entity property, ulong revision, bool createdLocally)
         {
-            PendingMoveIn pending;
-            if (_pendingMoveIns.TryGetValue(wanted.HouseholdId, out pending))
+            if (_pendingMoveIns.TryGetValue(wanted.HouseholdId, out PendingMoveIn pending))
             {
                 if (revision < pending.Revision) return;
                 pending.Household = household;
@@ -67,9 +52,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         }
 
         /// <summary>
-        /// Runs immediately after PropertyProcessingSystem. A queued move-in is complete only when
-        /// both native renter directions agree; at that point its host rent is installed before the
-        /// later payment pass can consume the locally selected default.
+        /// After PropertyProcessingSystem: once both renter directions agree, install the host rent
+        /// before the payment pass reads the local default.
         /// </summary>
         internal void FinalizeMoveIns()
         {
@@ -80,18 +64,15 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             int remaining = math.min(MaxMoveInFinalizationsPerUpdate, _pendingMoveInOrder.Count);
             while (remaining-- > 0 && _pendingMoveInOrder.TryDequeue(out ulong householdId))
             {
-                PendingMoveIn pending;
-                if (!_pendingMoveIns.TryGetValue(householdId, out pending)) continue;
-                Entity mapped;
-                bool mappingValid = TryResolveHousehold(householdId, out mapped) &&
+                if (!_pendingMoveIns.TryGetValue(householdId, out PendingMoveIn pending)) continue;
+                bool mappingValid = TryResolveHousehold(householdId, out Entity mapped) &&
                                     mapped == pending.Household;
                 if (!IsHouseholdDesiredHere(householdId, pending.Property) ||
                     !mappingValid || !IsLiveProperty(pending.Property))
                 {
                     _pendingMoveIns.Remove(householdId);
-                    PropertyRentIdentity desiredIdentity;
                     if (pending.CreatedLocally && mappingValid &&
-                        !TryGetDesiredPropertyIdentity(householdId, out desiredIdentity))
+                        !TryGetDesiredPropertyIdentity(householdId, out PropertyIdentity desiredIdentity))
                     {
                         if (!CleanupCancelledCreatedHousehold(pending.Household))
                         {
@@ -101,8 +82,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     }
                     else
                     {
-                        Entity destination;
-                        if (TryGetDesiredProperty(householdId, out destination))
+                        if (TryGetDesiredProperty(householdId, out Entity destination))
                             MarkDirty(destination);
                     }
                     continue;
@@ -113,15 +93,12 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     continue;
                 }
 
-                OccupancyHousehold newest;
-                ulong newestRevision;
-                if (TryGetCachedHousehold(pending.Property, householdId, out newest,
-                    out newestRevision) && newestRevision >= pending.Revision)
+                if (TryGetCachedHousehold(pending.Property, householdId, out OccupancyHousehold newest,
+                    out ulong newestRevision) && newestRevision >= pending.Revision)
                 {
                     pending.Rent = newest.Rent;
                     pending.Revision = newestRevision;
-                    CachedProperty cached;
-                    if (_cache.TryGetValue(pending.Property, out cached))
+                    if (_cache.TryGetValue(pending.Property, out CachedProperty cached))
                         NotePlacedHousehold(cached, newest, pending.Household);
                 }
                 CancelUnauthorizedDeparture(pending.Household);
@@ -140,11 +117,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             }
         }
 
-        /// <summary>
-        /// Every person and vehicle the host listed for this family is linked here now, so it no
-        /// longer counts as arriving: a car it buys later has to leave from the house rather than
-        /// from the outside connection it came in by.
-        /// </summary>
+        /// <summary>Everyone listed is linked, so later car trips leave from the house.</summary>
         private void NotePlacedHousehold(CachedProperty property, OccupancyHousehold household,
             Entity localHousehold)
         {
@@ -160,14 +133,12 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 wantedVehicles);
         }
 
-        // Reached only once every exact citizen identity is linked, so a missing family member
-        // shows up as RECEIVED-without-PLACED in a host/client log comparison.
+        // Reached only once every citizen is linked: a missing member shows as RECEIVED without PLACED.
         [Conditional(DevTrace.Symbol)]
         private void TracePlacedHousehold(CachedProperty property, OccupancyHousehold household,
             int localPeople, int wantedPeople, int localVehicles, int wantedVehicles)
         {
-            PropertyRentIdentity previous;
-            if (_tracePlacedHouseholds.TryGetValue(household.HouseholdId, out previous) &&
+            if (_tracePlacedHouseholds.TryGetValue(household.HouseholdId, out PropertyIdentity previous) &&
                 previous.Equals(property.Identity)) return;
             _tracePlacedHouseholds[household.HouseholdId] = property.Identity;
             SyncLog.Detail(LogTopic.Residential, "PLACED house='" + property.Identity.PrefabName +
@@ -200,8 +171,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             int matched = 0;
             for (int i = 0; i < wanted.Citizens.Length; i++)
             {
-                Entity citizen;
-                if (TryResolveCitizen(wanted.Citizens[i].CitizenId, out citizen) &&
+                if (TryResolveCitizen(wanted.Citizens[i].CitizenId, out Entity citizen) &&
                     CitizenBelongsToHousehold(citizen, household)) matched++;
             }
             return matched;
@@ -231,8 +201,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         {
             household = default(OccupancyHousehold);
             revision = 0;
-            CachedProperty cached;
-            if (!_cache.TryGetValue(property, out cached) || cached.Households == null) return false;
+            if (!_cache.TryGetValue(property, out CachedProperty cached) || cached.Households == null) return false;
             for (int i = 0; i < cached.Households.Length; i++)
             {
                 if (cached.Households[i].HouseholdId != householdId ||
@@ -266,13 +235,11 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 {
                     Entity citizen = _memberScratch[i];
                     if (citizen == Entity.Null || !EntityManager.Exists(citizen)) continue;
-                    ulong citizenId, desiredHouseholdId;
-                    if (TryGetBoundCitizenId(citizen, out citizenId) &&
-                        TryGetDesiredHouseholdId(citizenId, out desiredHouseholdId))
+                    if (TryGetBoundCitizenId(citizen, out ulong citizenId) &&
+                        TryGetDesiredHouseholdId(citizenId, out ulong desiredHouseholdId))
                     {
-                        Entity destinationHousehold, destinationProperty;
-                        if (TryResolveHousehold(desiredHouseholdId, out destinationHousehold) &&
-                            TryGetDesiredProperty(desiredHouseholdId, out destinationProperty) &&
+                        if (TryResolveHousehold(desiredHouseholdId, out Entity destinationHousehold) &&
+                            TryGetDesiredProperty(desiredHouseholdId, out Entity destinationProperty) &&
                             destinationHousehold != household)
                         {
                             MoveCitizenToHousehold(citizen, destinationHousehold);
@@ -296,9 +263,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     return false;
                 }
             }
-            // Keep the shell's native two-way rent link intact while any active resident still
-            // waits for a resolvable destination. Once everyone is detached, the shell can no
-            // longer strand a person and its slot is safe to release.
+            // Keep the shell's rent link while any resident still waits for a destination.
             if (rentedProperty != Entity.Null && EntityManager.Exists(rentedProperty))
                 RemoveRenterReference(rentedProperty, household);
             if (EntityManager.HasBuffer<HouseholdAnimal>(household))

@@ -1,11 +1,7 @@
 using CS2MultiplayerMod.Core.Sync;
-using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
-using CS2MultiplayerMod.Core.Diagnostics;
-using CS2MultiplayerMod.Core.Protocol;
 using CS2MultiplayerMod.Core.Session;
-using CS2MultiplayerMod.Game.Diagnostics;
 using CS2MultiplayerMod.Game.Sync.Commands;
 using CS2MultiplayerMod.Game.Sync.Infrastructure;
 using Game;
@@ -14,79 +10,46 @@ using Game.Common;
 using Game.Prefabs;
 using Game.Simulation;
 using Game.Tools;
-using Unity.Collections;
 using Unity.Entities;
 
 namespace CS2MultiplayerMod.Game.Sync.Systems
 {
     /// <summary>
-    /// Makes the host the only author of who lives in a residential building.
-    ///
-    /// Every page the host sends is an absolute, revisioned roster for the properties it names: the
-    /// households in the building, the people in them, their money, daily economy and rent. A
-    /// client resolves each property by the same portable identity the rest of the mod uses
-    /// (prefab name plus world anchor) and then makes its own building match.
-    ///
-    /// Host entity handles travel only as opaque, world-epoch-scoped identity keys. They are never
-    /// resolved as local entity handles. This lets a family move between properties, or be replaced
-    /// by another family at the same renter-buffer position, without mutating one local entity into
-    /// a different remote person. Absolute pages remain idempotent, and monotonic revisions make
-    /// delayed priority pages harmless.
-    ///
-    /// The client stops authoring occupancy while this runs — see Authority.cs.
+    /// Makes the host the only author of who lives in residential buildings. Pages are absolute,
+    /// revisioned rosters resolved by prefab name plus anchor. Host entity handles travel only as
+    /// opaque session-scoped keys, never as local handles. Authority.cs lists what a client stops doing.
     /// </summary>
-    // The budgets, state and cached records the whole system works from, and its per-update cycle.
-    //
-    // The rest is split by side: Capture*.cs is what a host sends, Realize*.cs is what a client
-    // does with it, Identity.cs is how the two agree on which property is which, and Authority.cs
-    // is what a client stops doing while the host owns occupancy. The lifecycle boundary, page
-    // plumbing and stats are in Cycle.cs.
-    public partial class ResidentialOccupancySyncSystem : GameSystemBase
+    public partial class ResidentialOccupancySyncSystem : GameSystemBase,
+        Channels.IPagedPropertyRuntime<ResidentialOccupancySnapshot>
     {
-        // The paging, bounded cache, partition walk, retry and priority mechanics the three
-        // property domains share. Only the payloads and the realization policy below are local;
-        // the fields underneath are named views onto this state, not separate containers.
         private readonly PagedPropertySyncState<ResidentialOccupancySnapshot, CachedProperty, PendingProperty, HostObserved, Entity>
             _propertyState = new PagedPropertySyncState<ResidentialOccupancySnapshot, CachedProperty, PendingProperty, HostObserved, Entity>();
         private const int UpdatePartitions = PropertySyncLimits.UpdatePartitions;
 
         /// <summary>
-        /// Simulation frames between updates. Must be a power of two: the game gates a system's
-        /// update with <c>frameIndex &amp; (interval - 1)</c>. Dirty work keeps this cadence.
-        /// Background partitions use a separate speed-normalized rotation.
+        /// Must be a power of two: the game gates updates with <c>frameIndex &amp; (interval - 1)</c>.
         /// </summary>
         private const int UpdateIntervalFrames = 64;
         private readonly SimulationScanCadence _hostScanCadence = new SimulationScanCadence();
         private readonly SimulationScanCadence _repairScanCadence = new SimulationScanCadence();
 
-        // Remote growables are created at the transmitted XZ exactly. A generous four-metre
-        // fallback can claim the neighbouring half-lot while the intended building is still in
-        // the creation pipeline, allowing alternating roster pages to overwrite one local house.
-        // Half a metre still absorbs float noise without crossing a zone-cell boundary.
+        // Remote growables are placed at the exact XZ; a wider radius can claim the neighbouring half-lot.
         private const float AnchorMatchDistance = 0.5f;
         private const float AnchorSearchRadius = 8f;
         private const float AmbiguousDistanceEpsilon = 0.01f;
 
         /// <summary>
-        /// Soft byte budget for one page. Pages go out at the city-state cadence (~1 Hz), so this
-        /// is also roughly the per-client bandwidth this feature costs.
+        /// Soft byte budget per page (~1 Hz). A dense property travels whole, so this uses most of the
+        /// codec's 240 KiB allowance.
         /// </summary>
-        // One occupancy page is emitted per city-state snapshot. Four KiB could not keep up with
-        // A dense property is atomic: all of its households and citizens have to travel together.
-        // The former 16 KiB target therefore sent only three or four towers per second and the
-        // changed-property queue grew without bound. Use most of the already validated 240 KiB
-        // codec allowance; the remaining headroom is for lifecycle records and size estimation
-        // conservatism, and the client still applies structural changes through separate budgets.
         private const int PageByteBudget = 224 * 1024;
 
         private const int MaxIncomingPages = PropertySyncLimits.MaxIncomingPages;
         private const int MaxPumpPages = PropertySyncLimits.MaxPumpPages;
         private const int MaxCachedProperties = PropertySyncLimits.MaxCachedProperties;
-        private const int MaxPendingIdentities = PropertySyncLimits.MaxPendingIdentities;
         private const int MaxPendingMoveIns = 4096;
         private const int MaxStagedTransfers = 4096;
-        // A lifecycle wave must survive long enough to rotate across the wire without evicting its
-        // first records. This is deliberately city-scale rather than a normal-frame estimate.
+        // City-scale, so a lifecycle wave rotates across the wire before its first records expire.
         private const int MaxTrackedDepartures = 131072;
         private const int MaxTrackedHouseholdChecksPerUpdate = 1024;
         private const int MaxTrackedCitizenChecksPerUpdate = 2048;
@@ -98,31 +61,18 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         private const int MaxPriorityProperties = 4096;
         private const int PriorityPropertiesPerPage = 64;
 
-        // Properties examined by the rolling change detector in one update, and cached properties
-        // reconciled by the rolling client partition in one update. Both walks used to cover a
-        // whole sixteenth of the city per update, so their cost grew with the city until a
-        // quarter-million residents turned each one into a visible hitch every second. A ceiling
-        // keeps them flat: a very large city takes proportionally longer to complete one rotation.
-        // Nothing urgent rides on that rotation - a move-in or move-out reaches the wire through
-        // the RentersUpdated event in the same frame it happens, and a page that changes a
-        // property reconciles it immediately through the dirty queue.
-        private const int MaxPropertiesObservedPerUpdate = PropertySyncLimits.MaxPropertiesObservedPerUpdate;
+        // Rolling walk ceilings (host detector and client repair), so cost stays flat with city size.
+        // Urgent changes do not wait on them: renter events and the dirty queue act at once.
+        private const int MaxPropertiesObservedPerUpdate = 128;
         private const int MaxCachedPropertiesWalkedPerUpdate = 256;
-        // Retained lifecycle records rotate across pages rather than consuming the whole soft
-        // page budget. Leave enough guaranteed room to drain several just-occupied properties per
-        // snapshot while still advancing the baseline by at least one property.
-        // In the reported dense city more than 27k household and 41k citizen tombstones were
-        // retained. At 24/48 records per second a household record could expire before completing
-        // one rotation. Eight KiB carries both maximum batches and closes every lifecycle edge
-        // several times inside the retention window.
+        // Departure records rotate within a reserved slice of each page, leaving room for the baseline.
         private const int HostDeparturesPerPage =
             ResidentialOccupancySnapshot.MaxDeparturesPerPage;
         private const int HostCitizenDeparturesPerPage =
             ResidentialOccupancySnapshot.MaxCitizenDeparturesPerPage;
         private const int PriorityByteBudget = PageByteBudget * 3 / 4;
 
-        // Per-update work ceilings. Structural changes are the expensive part, so they are capped
-        // well below the page rate; anything left over is picked up by the next update.
+        // Structural work is capped well below the page rate.
         private const int MaxPropertiesAppliedPerUpdate = 96;
         private const int MaxHouseholdsCreatedPerUpdate = 12;
         private const int MaxCitizensCreatedPerUpdate = 48;
@@ -139,8 +89,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         private int[] _cacheBucketCursor => _propertyState.CachedPartitions.Cursor;
         private readonly List<Entity> _dirty = new List<Entity>();
         private readonly HashSet<Entity> _dirtyMembers = new HashSet<Entity>();
-        private Dictionary<PropertyRentIdentity, PendingProperty> _pending => _propertyState.Pending;
-        private ConcurrentQueue<PropertyRentIdentity> _pendingOrder => _propertyState.PendingOrder;
+        private Dictionary<PropertyIdentity, PendingProperty> _pending => _propertyState.Pending;
         private readonly Dictionary<ulong, PendingMoveIn> _pendingMoveIns =
             new Dictionary<ulong, PendingMoveIn>();
         private readonly ConcurrentQueue<ulong> _pendingMoveInOrder = new ConcurrentQueue<ulong>();
@@ -157,20 +106,19 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         private readonly List<Entity> _authorizedMoveAwayScratch = new List<Entity>();
         private readonly HashSet<Entity> _lifecyclePropertyScratch = new HashSet<Entity>();
 
-        // Host-side change detection. The rolling baseline is always sent; these entries only
-        // shorten the time from an occupancy change to the page that carries it.
+        // Host-side priority: shortens the latency of a change.
         private Dictionary<Entity, HostObserved> _hostObserved => _propertyState.HostObserved;
         private List<Entity>[] _hostObservedBuckets => _propertyState.HostPartitions.Buckets;
         private bool[] _hostBucketInitialized => _propertyState.HostPartitions.Initialized;
         private int[] _hostBucketCursor => _propertyState.HostPartitions.Cursor;
         private readonly Dictionary<Entity, int> _traceSentRosterHashes =
             new Dictionary<Entity, int>();
-        private readonly Dictionary<PropertyRentIdentity, int> _traceReceivedRosterHashes =
-            new Dictionary<PropertyRentIdentity, int>();
-        private readonly Dictionary<ulong, PropertyRentIdentity> _tracePlacedHouseholds =
-            new Dictionary<ulong, PropertyRentIdentity>();
-        private Dictionary<PropertyRentIdentity, Entity> _priority => _propertyState.Priority;
-        private ConcurrentQueue<PropertyRentIdentity> _priorityOrder => _propertyState.PriorityOrder;
+        private readonly Dictionary<PropertyIdentity, int> _traceReceivedRosterHashes =
+            new Dictionary<PropertyIdentity, int>();
+        private readonly Dictionary<ulong, PropertyIdentity> _tracePlacedHouseholds =
+            new Dictionary<ulong, PropertyIdentity>();
+        private Dictionary<PropertyIdentity, Entity> _priority => _propertyState.Priority;
+        private ConcurrentQueue<PropertyIdentity> _priorityOrder => _propertyState.PriorityOrder;
         private readonly Dictionary<ulong, HostDeparture> _hostDepartures =
             new Dictionary<ulong, HostDeparture>();
         private readonly ConcurrentQueue<ulong> _hostDepartureOrder = new ConcurrentQueue<ulong>();
@@ -215,16 +163,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         private ulong _hostCaptureRevision = 1;
         private bool _captureSweepHadSkips;
         private bool _captureBaselineNeedsEmptyPage;
-        private uint _clientSweepId;
-        private int _clientNextPage;
-        private bool _clientSweepIntact;
         private bool _syncWasReady;
-        private long _nextPendingPumpMs
-        {
-            get => _propertyState.NextPendingPumpMs;
-            set => _propertyState.NextPendingPumpMs = value;
-        }
-
         private long _lastStatsMs;
         private long _sentBytes;
         private int _sentPages;
@@ -235,6 +174,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         private int _observedProperties;
         private int _probeSkipped;
         private int _reconcileSkipped;
+        private int _unchangedProperties;
         private int _receivedPages;
         private int _droppedPages;
         private int _resolved;
@@ -273,9 +213,10 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
         private sealed class CachedProperty
         {
-            public PropertyRentIdentity Identity;
+            public PropertyIdentity Identity;
             public Entity Prefab;
             public ulong Revision;
+            public OccupancyProperty LastReceived;
             public byte ConstructionSpeed;
             public bool HasElectricityConsumer;
             public int ElectricityFulfilledConsumption;
@@ -292,7 +233,6 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         {
             public OccupancyProperty Property { get => Entry; set => Entry = value; }
  }
-
 
         private sealed class PendingMoveIn
         {
@@ -317,11 +257,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             public int Hash;
             public int Bucket;
 
-            /// <summary>
-            /// Set when a renter event queued this property: the stored hash describes a roster
-            /// that no longer exists, and the next rolling pass must re-baseline it without
-            /// treating the difference as a second, independent change.
-            /// </summary>
+            /// <summary>A renter event queued this property; re-baseline without counting a second change.</summary>
             public bool Stale;
         }
 
@@ -332,14 +268,12 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             public bool Unhoused;
         }
 
-        // A struct: a city of a quarter of a million residents keeps one of these per person, and
-        // a boxed object each would be a large permanently live heap graph for the GC to walk.
+        // A struct: one per resident, so no boxed heap graph for the GC.
         private struct HostCitizenObservation
         {
             public Entity Entity;
             public ulong HouseholdId;
         }
-
 
         public override int GetUpdateInterval(SystemUpdatePhase phase) =>
             phase == SystemUpdatePhase.GameSimulation ? UpdateIntervalFrames : 1;
@@ -383,10 +317,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     global::Game.Citizens.HouseholdMember, PrefabRef>(),
                 None = SyncQuery.ReadOnly<Deleted, Temp>(),
             });
-            // Households nothing can ever house again on a client. Tourists and commuters are a
-            // different simulation with their own lifecycle and are never ours to retire; a
-            // household still carrying CurrentBuilding is mid-arrival and has not asked for a home
-            // yet.
+            // Homeless households on a client. Tourists and commuters are not ours; CurrentBuilding means
+            // still arriving.
             _unreachableHouseholds = GetEntityQuery(new EntityQueryDesc
             {
                 All = SyncQuery.ReadOnly<global::Game.Citizens.Household, PrefabRef>(),
@@ -402,8 +334,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 None = SyncQuery.ReadOnly<Deleted, Temp, global::Game.Citizens.TouristHousehold,
                     global::Game.Citizens.CommuterHousehold>(),
             });
-            // PropertySeeker is enableable, so this query only contains households whose local
-            // behaviour has actively asked to find a property. The host owns that decision.
+            // Enableable: only households actively seeking a home. The host owns that decision.
             _clientPropertySeekers = GetEntityQuery(new EntityQueryDesc
             {
                 All = SyncQuery.ReadOnly<global::Game.Citizens.Household,
@@ -411,9 +342,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 None = SyncQuery.ReadOnly<Deleted, Temp, global::Game.Citizens.TouristHousehold,
                     global::Game.Citizens.CommuterHousehold>(),
             });
-            // PropertyProcessingSystem emits this exact event whenever a renter is added to or
-            // removed from a property. A dedicated every-frame boundary consumes the signal so a
-            // second family does not have to wait for the slow rolling property scan.
+            // Raised on every renter add/remove; consumed by a dedicated every-frame boundary.
             _renterUpdates = GetEntityQuery(
                 ComponentType.ReadOnly<global::Game.Common.Event>(),
                 ComponentType.ReadOnly<RentersUpdated>());
@@ -433,11 +362,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             MultiplayerService service = Mod.Service;
             if (service == null || !service.SimulationSyncReady)
             {
-                // A world-sync barrier closes the gate before installing a replacement world.
-                // Keep client authority held throughout that gap; briefly re-enabling the
-                // lifecycle systems is enough for them to create or evict a family before the
-                // first new roster arrives. ApplyLocalAuthority still releases the hold when the
-                // session is running without simulation sync at all.
+                // Keep client authority across a world-sync barrier, or lifecycle systems act in the gap.
                 if (service != null && service.Session.Role == SessionRole.Client)
                     ApplyLocalAuthority(service.Session);
                 else
@@ -456,10 +381,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
             if (session.Role == SessionRole.Host)
             {
-                DropIncomingPages();
-                int bucket;
+                _droppedPages += _propertyState.DropIncoming();
                 if (_hostScanCadence.TryTakePartition(_simulationSystem.selectedSpeed,
-                        UpdatePartitions, out bucket))
+                        UpdatePartitions, out int bucket))
                 {
                     using (Diagnostics.SyncProfiler.Measure("Occupancy.HostHouseholds", Diagnostics.SyncZone.Residential))
                         ScanTrackedHostHouseholds(service.NowMs);

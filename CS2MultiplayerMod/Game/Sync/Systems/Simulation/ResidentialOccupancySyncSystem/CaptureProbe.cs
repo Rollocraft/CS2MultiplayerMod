@@ -11,45 +11,21 @@ using Unity.Entities;
 
 namespace CS2MultiplayerMod.Game.Sync.Systems
 {
-    // Answering "has anything in this building changed?" without first building the answer to
-    // "what is in this building?".
-    //
-    // The rolling sweep used to run the full wire capture on every property it looked at, hash the
-    // result and drop the object on the floor. One capture allocates a list and an array for the
-    // household roster, another pair per citizen roster, one per pet roster, one per vehicle
-    // roster plus an ordinal sort, an int[] per household and per person for the name draws, and
-    // two hash sets inside the shared validator - then reads the transform, both utility
-    // consumers, the resource buffer and the tax record, none of which the hash looks at. Measured
-    // at 0,32 ms per building, which is 38 ms per update once a partition holds a few hundred
-    // houses.
-    //
-    // Fold observed fields in place without allocating. A change queues the property's
-    // identity; the page builder performs the full validated capture at send time, including
-    // household/citizen departure tracking. Never serialize a roster merely to discard it.
-    // Probe hashes are compared only with other probe hashes, not with wire snapshots.
-    //
-    // Reads stay on EntityManager rather than a ComponentLookup. Every EntityManager read
-    // completes the write dependency for the type it touches first; a lookup acquired outside
-    // OnCreate does not, and these components are written by native jobs that can still be in
-    // flight. The allocations were the cost here, not the accessor.
+    // Change detection without building the capture: fold observed fields in place, allocation-free.
+    // A change queues the identity and the page builder captures at send time. Probe hashes are only
+    // compared with probe hashes. Reads stay on EntityManager, which completes pending native writes;
+    // a ComponentLookup acquired outside OnCreate does not.
     public partial class ResidentialOccupancySyncSystem
     {
         private readonly HashSet<ulong> _probeHouseholdIds = new HashSet<ulong>();
         private readonly HashSet<ulong> _probeCitizenIds = new HashSet<ulong>();
 
-        /// <summary>
-        /// False means "draw no conclusion from this property on this pass" - a transient or
-        /// incomplete read, exactly what a failed capture always meant. The caller skips it and the
-        /// baseline sweep still carries it, so a false negative costs latency, never correctness.
-        /// </summary>
+        /// <summary>False means "no conclusion this pass"; the baseline sweep still carries the property.</summary>
         private bool TryHashProperty(Entity property, out int hash)
         {
             hash = 0;
 
-            // Liveness is deliberately not re-tested. Every entity reaching this method came out
-            // of _properties, whose description already requires Building, ResidentialProperty,
-            // Renter, PrefabRef, Transform and UpdateFrame and excludes Temp, Deleted and Owner -
-            // the ten component reads IsLiveProperty repeats cannot come out any other way.
+            // Liveness is guaranteed by the _properties query shape.
             Entity prefab = EntityManager.GetComponentData<PrefabRef>(property).m_Prefab;
             if (prefab == Entity.Null || !EntityManager.Exists(prefab) ||
                 !EntityManager.HasComponent<BuildingPropertyData>(prefab)) return false;
@@ -76,8 +52,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 for (int i = 0; i < renters.Length; i++)
                 {
                     Entity renter = renters[i].m_Renter;
-                    // Companies rent the commercial half of a mixed building; only households are
-                    // ours. A stale one-way Renter entry is not an occupant either.
+                    // Only households occupy; companies and stale one-way entries do not.
                     if (renter == Entity.Null || !EntityManager.Exists(renter) ||
                         !EntityManager.HasComponent<Household>(renter) ||
                         EntityManager.HasComponent<Deleted>(renter) ||
@@ -97,8 +72,6 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     householdCount++;
                 }
 
-                // The capture folds the roster length before the households; the probe folds it
-                // after, because it only learns the count by walking. Detection is the same.
                 folded = (folded ^ householdCount) * 16777619;
                 hash = folded;
                 return true;
@@ -120,9 +93,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             {
                 folded = HashId(folded, householdId);
                 folded = (folded ^ prefabName.GetHashCode()) * 16777619;
-                // Only the bits a receiver actually installs. HouseholdFlags.MovedIn is owned by
-                // arrival on every peer and deliberately never imported, so folding it in reports
-                // a change nobody would act on.
+                // Only bits a receiver installs; MovedIn is local on every peer.
                 folded = (folded ^ ((byte)data.m_Flags & HouseholdFlagMask)) * 16777619;
                 folded = (folded ^ (departing ? 1 : 0)) * 16777619;
                 folded = (folded ^ Clamp(rented.m_Rent, 0,
@@ -165,10 +136,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 }
                 folded = (folded ^ petCount) * 16777619;
 
-                // Capture sorts the vehicle names ordinally before hashing them, purely so a
-                // reordered buffer does not read as a change. Summing a mixed per-name hash gives
-                // the same order independence without the list and the sort, and unlike an XOR a
-                // pair of identical names does not cancel itself out.
+                // Order-independent sum of mixed hashes: no sort, and identical names do not cancel.
                 int vehicleCount = 0;
                 int vehicleFold = 0;
                 if (EntityManager.HasBuffer<OwnedVehicle>(household))
@@ -234,12 +202,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             {
                 folded = HashId(folded, citizenId);
                 folded = (folded ^ prefabName.GetHashCode()) * 16777619;
-                // The mask is the whole point. A receiver merges only HostOwnedCitizenFlags and
-                // preserves the rest of the word, because the rest is local behaviour:
-                // LookingForPartner, BicycleUser, ValidCitizen, Homeless and MovingAwayReachOC all
-                // flip while a person goes about their day. Folding the unmasked word made every
-                // building with a dozen residents look changed on every single pass, which is what
-                // kept the priority queue holding the entire city and made this probe skip nothing.
+                // Only host-owned bits: the rest flips during a citizen's day and would flag every building.
                 folded = (folded ^ ((short)data.m_State & HostOwnedCitizenFlags)) * 16777619;
                 folded = (folded ^ data.m_PseudoRandom) * 16777619;
                 folded = (folded ^ data.m_BirthDay) * 16777619;

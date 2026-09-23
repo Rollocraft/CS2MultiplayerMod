@@ -1,7 +1,5 @@
 using System.Collections.Generic;
-using Colossal.Mathematics;
 using Game.Common;
-using Game.Net;
 using Game.Prefabs;
 using Game.Tools;
 using Unity.Collections;
@@ -14,15 +12,8 @@ using CS2MultiplayerMod.Game.Sync.Infrastructure;
 
 namespace CS2MultiplayerMod.Game.Sync.Systems
 {
-    // Capturing what this peer's own object tool did, so the other side can reproduce it. The
-    // game never tells a mod "the player placed this"; it is inferred from the definitions the
-    // tool emits and the state it is left in afterwards, which is why so much here is matching
-    // and remembering rather than reading.
-    //
-    // This file holds the shared state and the observe-and-capture entry point. The rest is split
-    // across the sibling NativeCapture*.cs files: operation bookkeeping, publishing a committed
-    // graph, specialized areas, tool input, player-placed spawnables, definitions, and the
-    // portable references that name an entity to a peer that does not share our ids.
+    // Capturing the local object tool's action, inferred from the definitions it emits and the state
+    // it leaves; the rest lives in the NativeCapture*.cs siblings.
     public partial class BuildSyncSystem
     {
         private sealed class RecentLocalObjectOperation
@@ -61,9 +52,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             new List<RecentLocalObjectOperation>(MaxRecentLocalObjectOperations);
         private readonly List<PlayerPlacedSpawnableCreation> _playerPlacedSpawnableCreations =
             new List<PlayerPlacedSpawnableCreation>(8);
-        // Sampled before ToolOutputSystem runs. A one-shot stamp can switch active tools while its
-        // rootless definition graph is being emitted, so the graph itself cannot tell us which
-        // AssetStampPrefab owns the construction cost/contract.
+        // Sampled before ToolOutputSystem: a one-shot stamp can switch tools while its rootless graph is emitted.
         private string _selectedAssetStampPrefabName;
         private long _nextLocalObjectOperationId = 1;
         private bool _nativeLifecycleCapturedThisFrame;
@@ -72,27 +61,20 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         private Entity _pendingSpecializedArea;
         private bool _completeSpecializedAreaThisFrame;
 
-        /// <summary>
-        /// True through ModificationEnd when this frame's object-tool Apply was already published
-        /// from native definitions. Legacy final-entity capture systems use it to avoid sending a
-        /// second, reduced representation of the same placement, extension, or relocation.
-        /// </summary>
+        /// <summary>This frame's Apply was published natively; legacy final-entity capture stays silent.</summary>
         public bool NativeLifecycleCapturedThisFrame => _nativeLifecycleCapturedThisFrame;
 
         /// <summary>
-        /// True while the object half of a specialized-industry placement is held for its area tool to
-        /// finish the polygon. The compact upgrade command cannot describe that polygon, so it must
-        /// not publish a stand-in while the complete transaction is still being assembled.
+        /// A specialized placement's object half is held for its polygon; the compact upgrade command must
+        /// not stand in for it.
         /// </summary>
         internal bool HasPendingSpecializedAreaCapture =>
             _pendingSpecializedObjectOperation != null ||
             (_areaToolSystem != null && _areaToolSystem.recreate != Entity.Null);
 
         /// <summary>
-        /// Observe the object/area tool hand-off after the output barrier. Ordinary object graphs
-        /// are captured once from the standing definitions on Apply. Network-owned object graphs
-        /// are the exception: retain their small, exact preview batch in the recent-root set so a
-        /// one-shot network prefab remains recoverable even if it switches tools while applying.
+        /// After the output barrier. Object graphs are captured on Apply; network-owned ones keep their exact
+        /// preview batch in case the prefab switches tools while applying.
         /// </summary>
         public void ObserveLocalObjectToolOutput(NativeArray<Entity> definitions)
         {
@@ -103,29 +85,19 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             if (!(active is global::Game.Tools.NetToolSystem) ||
                 !NativeObjectGraph.HasNewTopLevelObjectRoot(EntityManager, definitions)) return;
 
-            // Owner-linked courses are not independent net placements. Capture the heterogeneous
-            // object/net/area graph together, exactly like an intersection asset transaction. The
-            // operation is retained by RememberRecentLocalObjectOperation; do not leave it as the
-            // current object-tool cache where a later, unrelated lifecycle tool could claim it.
+            // Owner-linked courses travel with their object graph; the recent set retains it, not the tool cache.
             CaptureObjectToolOperation(definitions);
             _cachedLocalObjectOperation = null;
         }
 
-        /// <summary>
-        /// Advance the specialized-industry object/area hand-off after tool output. The expensive
-        /// definition encoding deliberately does not happen here: regenerated hover previews pass
-        /// this point many times per second.
-        /// </summary>
+        /// <summary>Advances the specialized-industry handoff; no encoding on hover frames.</summary>
         private void ObserveLocalObjectToolStateAfterOutput()
         {
             global::Game.Tools.ToolBaseSystem active = _toolSystem != null ? _toolSystem.activeTool : null;
             Entity recreate = _areaToolSystem != null ? _areaToolSystem.recreate : Entity.Null;
 
-            // Specialized-industry placement is one native action split across two tools. The
-            // object tool first commits the main building and hands its owned lot to the area tool;
-            // only after the polygon closes does the area tool return to the object tool. Preserve
-            // the standing object definition through that handoff, then publish it with the final
-            // extractor/storage polygon as one atomic operation.
+            // Specialized industry: the object tool commits the building and hands its lot to the area tool;
+            // the object definition is held through that handoff and published with the polygon.
             bool areaHandoff = recreate != Entity.Null &&
                                (active is AreaToolSystem || active is ObjectToolSystem);
             if (areaHandoff)
@@ -147,10 +119,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     }
                     else
                     {
-                        // On the completion frame AreaToolSystem switches activeTool back to the
-                        // object tool, while ToolSystem.applyMode still belongs to the area tool
-                        // that produced this output batch. The committed live area is captured at
-                        // ModificationEnd; the final click does not emit a new definition batch.
+                        // On completion activeTool is already the object tool while applyMode is the area tool's; the live
+                        // area is captured at ModificationEnd.
                         if (active is ObjectToolSystem &&
                             _toolSystem.applyMode == ApplyMode.Apply)
                             _completeSpecializedAreaThisFrame = true;
@@ -160,15 +130,12 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
                 if (active is AreaToolSystem)
                 {
-                    // The recreate area can become visible one output frame before its owner path
-                    // is fully linked. Keep the object operation and retry the correlation instead
-                    // of discarding the only complete capture and recovering the whole world later.
+                    // The area can appear a frame before its owner path links; retry rather than lose the capture.
                     return;
                 }
             }
 
-            // The area tool is gone without a completed polygon: the placement stands with the
-            // lot it was born with, so the held object graph is the whole local change.
+            // No polygon completed: the held graph is the whole local change.
             if (_pendingSpecializedObjectOperation != null)
                 FinishSpecializedAreaCaptureWithoutPolygon();
         }
@@ -176,11 +143,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         private static bool IsObjectLifecycleTool(global::Game.Tools.ToolBaseSystem tool) =>
             tool is ObjectToolSystem || tool is UpgradeToolSystem;
 
-        /// <summary>
-        /// Cheap flag-only scan: true when this output batch relocates an existing object (the move
-        /// tool). Reads one component per definition and returns on the first Relocate, so it stays
-        /// far below the cost of the full owner-path capture it lets us skip.
-        /// </summary>
+        /// <summary>A move-tool batch; returns on the first Relocate.</summary>
         private bool BatchIsRelocate(NativeArray<Entity> definitions)
         {
             for (int i = 0; i < definitions.Length; i++)
@@ -195,23 +158,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         }
 
         /// <summary>
-        /// Cheap component-only scan: true when this batch adds a service upgrade / extension to a
-        /// pre-existing (live) building — the deliberate "add a tower" action UpgradeSyncSystem
-        /// replicates atomically.
-        ///
-        /// Two shapes must both be present, and together they separate this action from every
-        /// neighbouring one without touching the world:
-        /// <list type="bullet">
-        /// <item>a new upgrade/extension object: its prefab carries <see cref="ServiceUpgradeData"/>
-        /// or <see cref="BuildingExtensionData"/>, it has an <see cref="OwnerDefinition"/> (the way
-        /// the tools name the host building — <c>CreationDefinition.m_Owner</c> stays null for the
-        /// object being placed, so testing that field never matched), and it has no original;</item>
-        /// <item>the host building's own modify definition: no prefab, <see cref="CreationFlags.Upgrade"/>,
-        /// and an original that is already a live object. A brand-new building emits no such
-        /// definition (there is nothing live to modify), so a placement is never diverted.</item>
-        /// </list>
-        /// Upgrades whose lot is drawn by the player (extractor/storage areas) are excluded: only the
-        /// native two-tool transaction can carry that polygon.
+        /// A service upgrade added to a live building: a new upgrade/extension object with an
+        /// <see cref="OwnerDefinition"/> and no original, plus the host's prefab-less Upgrade definition on
+        /// a live original (a new building has none). Player-drawn lots are excluded.
         /// </summary>
         private bool BatchIsServiceUpgradeOnLiveBuilding(NativeArray<Entity> definitions)
         {
@@ -254,11 +203,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                    !EntityManager.HasComponent<Created>(entity);
         }
 
-        /// <summary>
-        /// True when an upgrade's owned elements can be rebuilt on the peer from its prefab alone.
-        /// An extractor/storage sub-area is drawn by the player through a second tool, so its polygon
-        /// exists nowhere in the prefab and only the native transaction can carry it.
-        /// </summary>
+        /// <summary>The owned elements rebuild from the prefab alone; drawn extractor/storage lots do not.</summary>
         internal bool UpgradeOwnedGraphIsPrefabDeterministic(Entity prefab)
         {
             if (!EntityManager.HasBuffer<SubArea>(prefab)) return true;
@@ -280,18 +225,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
         private void CaptureObjectToolOperation(NativeArray<Entity> definitions)
         {
-            // A relocation or an upgrade of a live building is not shipped as definitions at all.
-            // Capturing one walks that building's full owned-element buffers once for every one of
-            // its (often 100+) sub-elements and scores every object definition against the whole
-            // city's object set - every frame the preview stands, which is the FPS collapse while
-            // moving and while positioning an extension. Replaying one then required resolving all
-            // those references on the receiver, which cannot succeed when the two machines have a
-            // road subdivided differently.
-            //
-            // Both instead travel as the compact inputs their tool had (MoveSyncSystem,
-            // UpgradeSyncSystem) and the receiver re-runs the game's own generator over them.
-            // Upgrades whose lot the player draws are the exception: no compact form can carry that
-            // polygon, so BatchIsServiceUpgradeOnLiveBuilding deliberately does not claim them.
+            // Relocations and upgrades travel as their tool's compact inputs (MoveSync, UpgradeSync) and are
+            // regenerated on the receiver; capturing their full graph each preview frame was the FPS cost and
+            // cannot resolve across differently subdivided roads. Drawn-lot upgrades are the exception.
             if (BatchIsRelocate(definitions) || BatchIsServiceUpgradeOnLiveBuilding(definitions))
             {
                 _cachedLocalObjectOperation = null;
@@ -303,10 +239,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             int rootScore = -1;
             bool hasStampingNet = false;
             bool hasFixedElementCut = false;
-            // Root scoring asks whether a definition's owner names a live building, which searches the
-            // object domain. Capture is read-only, so one snapshot serves the whole batch: without it
-            // a 116-definition building preview walked the city's ~270k objects once per definition,
-            // every frame the preview stood.
+            // One read-only snapshot serves the whole batch's owner lookups.
             BeginPortableResolve();
             try
             {
@@ -316,23 +249,17 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     if (!EntityManager.Exists(entity) ||
                         !EntityManager.HasComponent<CreationDefinition>(entity)) continue;
 
-                    // The brush display has no world-edit shape. Its placement/delete
-                    // definitions follow separately and must still travel as one operation.
+                    // The brush display has no world-edit shape.
                     if (ObjectBrushCapture.IsVisualDefinition(EntityManager, entity)) continue;
 
-                    ObjectToolDefinitionIntent definition;
-                    if (!TryCaptureObjectToolDefinition(entity, out definition))
+                    if (!TryCaptureObjectToolDefinition(entity, out ObjectToolDefinitionIntent definition))
                     {
-                        // Never publish a partial native action. The final-entity legacy path remains
-                        // available for unsupported tool output, but this cache is all-or-nothing.
+                        // All-or-nothing; unsupported output uses the final-entity path.
                         _cachedLocalObjectOperation = null;
                         return;
                     }
 
-                    // Owned subobjects carry OwnerDefinition, while the top-level object does not.
-                    // Prefer that structural distinction first, then a newly-created object over an
-                    // update definition for an existing owner (the usual attached-upgrade ordering).
-                    // Scored once per definition, never re-scoring the incumbent.
+                    // Prefer a definition without OwnerDefinition, then a new object over an owner update.
                     if (definition.Kind == ObjectToolDefinitionKind.Object)
                     {
                         int score = ObjectOperationRootScore(definition);
@@ -361,11 +288,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
             if (captured.Count == 0)
             {
-                // ObjectToolSystem emits no definitions while an unchanged preview is standing and
-                // reports ApplyMode.None. ToolOutputSystem leaves the existing Temp graph intact in
-                // that case, so an empty barrier batch means "unchanged", not "no preview". Erasing
-                // the cache here made stamp capture depend on clicking in the same frame as cursor
-                // movement. Clear only when the tool is actively clearing/applying its output.
+                // An empty batch with ApplyMode.None means the preview is unchanged, not gone.
                 if (_toolSystem == null || _toolSystem.applyMode != ApplyMode.None)
                     _cachedLocalObjectOperation = null;
                 return;
@@ -390,8 +313,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                         "asset stamp definitions lacked selected prefab");
                     return;
                 }
-                // Any ObjectDefinitions in this output are independently placed stamp subobjects,
-                // not a persistent owner for the subnet graph.
+                // These are independently placed stamp sub-objects, not an owner.
                 root = ObjectToolOperationCommand.AssetStampRootIndex;
             }
 
@@ -403,13 +325,10 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             };
             AttachPlacementInput(operation);
 
-            // A net built from repeating fixed elements - a dam - reaches the standing graph already
-            // divided into those elements, one course each. Publishing that division makes the peer
-            // divide every piece a second time, so each module becomes a whole miniature dam.
-            // Prefer the undivided graph the output barrier saw a frame earlier: the receiver then
-            // divides it exactly once, as a local apply does.
-            ObjectToolOperationCommand undivided;
-            if (hasFixedElementCut && TryFindUndividedFixedNetOperation(operation, out undivided))
+            // A dam arrives already divided into fixed elements; send the undivided graph from a frame earlier
+            // so the receiver divides once.
+            if (hasFixedElementCut &&
+                TryFindUndividedFixedNetOperation(operation, out ObjectToolOperationCommand undivided))
             {
                 AttachPlacementInput(undivided);
                 _cachedLocalObjectOperation = undivided;

@@ -13,12 +13,8 @@ namespace CS2MultiplayerMod.Core.Networking
     }
 
     /// <summary>
-    /// A single transport occurrence, produced on background I/O threads and
-    /// consumed on the game thread via <see cref="ITransport.Poll"/>.
-    ///
-    /// This indirection is the heart of the threading model: no game state is ever
-    /// touched from an I/O thread. Events are queued and drained on the simulation
-    /// thread where it is safe to mutate ECS data.
+    /// A transport occurrence, produced on I/O threads and consumed on the game thread via
+    /// <see cref="ITransport.Poll"/>; no game state is touched from an I/O thread.
     /// </summary>
     public readonly struct TransportEvent
     {
@@ -31,21 +27,32 @@ namespace CS2MultiplayerMod.Core.Networking
         /// <summary>Optional human-readable reason, e.g. a disconnect cause. May be null.</summary>
         public readonly string Detail;
 
-        private TransportEvent(TransportEventType type, ConnectionId connection, byte[] payload, string detail)
+        /// <summary>
+        /// Stamped on the I/O thread at arrival: budgets measure the wire, not a stalled frame.
+        /// </summary>
+        public readonly long ReceivedAtMs;
+
+        private TransportEvent(TransportEventType type, ConnectionId connection, byte[] payload,
+            string detail, long receivedAtMs)
         {
             Type = type;
             Connection = connection;
             Payload = payload;
             Detail = detail;
+            ReceivedAtMs = receivedAtMs;
         }
 
         public static TransportEvent Connected(ConnectionId connection) =>
-            new TransportEvent(TransportEventType.Connected, connection, null, null);
+            new TransportEvent(TransportEventType.Connected, connection, null, null, MonotonicClock.NowMs);
 
         public static TransportEvent Disconnected(ConnectionId connection, string detail) =>
-            new TransportEvent(TransportEventType.Disconnected, connection, null, detail);
+            new TransportEvent(TransportEventType.Disconnected, connection, null, detail, MonotonicClock.NowMs);
 
         public static TransportEvent Data(ConnectionId connection, byte[] payload) =>
-            new TransportEvent(TransportEventType.Data, connection, payload, null);
+            new TransportEvent(TransportEventType.Data, connection, payload, null, MonotonicClock.NowMs);
+
+        /// <summary>For a transport whose underlying stack supplies the arrival time.</summary>
+        public static TransportEvent Data(ConnectionId connection, byte[] payload, long receivedAtMs) =>
+            new TransportEvent(TransportEventType.Data, connection, payload, null, receivedAtMs);
     }
 }

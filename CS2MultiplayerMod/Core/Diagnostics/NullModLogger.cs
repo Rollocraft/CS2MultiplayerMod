@@ -9,7 +9,7 @@ namespace CS2MultiplayerMod.Core.Diagnostics
 
         private NullModLogger() { }
 
-        public bool IsEnabled(LogTopic topic) { return false; }
+        public bool IsEnabled(LogTopic topic) => false;
         public void Detail(LogTopic topic, string message) { }
         public void Trace(LogTopic topic, string message) { }
         public void Event(LogTopic topic, string message) { }

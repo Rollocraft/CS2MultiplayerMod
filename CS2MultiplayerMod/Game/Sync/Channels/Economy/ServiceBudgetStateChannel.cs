@@ -9,12 +9,9 @@ using CS2MultiplayerMod.Game.Sync.Infrastructure;
 namespace CS2MultiplayerMod.Game.Sync.Channels
 {
     /// <summary>
-    /// Replicates the per-service budget sliders (police/fire/health/education/... funding %).
-    /// They live in the <see cref="ServiceBudgetData"/> buffer on a singleton and are set
-    /// through <see cref="CityServiceBudgetSystem.SetServiceBudget"/>. Keyed by service
-    /// prefab name (the prefab entity differs per machine). Player-editable - any player may
-    /// move a slider; the host arbitrates. Entries are sorted by name so the editable-state
-    /// diff in <see cref="CityStateSyncSystem"/> compares a stable, order-independent payload.
+    /// Per-service budget sliders, set through <see cref="CityServiceBudgetSystem.SetServiceBudget"/> and
+    /// keyed by service prefab name. Editable; sorted by name so the diff in
+    /// <see cref="CityStateSyncSystem"/> is order-independent.
     /// </summary>
     public sealed class ServiceBudgetStateChannel : IStateChannel
     {
@@ -85,8 +82,7 @@ namespace CS2MultiplayerMod.Game.Sync.Channels
 
         private Entity ResolveService(EntityManager em, string name)
         {
-            Entity entity;
-            if (_serviceByName.TryGetValue(name, out entity)) return entity;
+            if (_serviceByName.TryGetValue(name, out Entity entity)) return entity;
 
             // Cheap path: the budget buffer already references the service prefab entities.
             DynamicBuffer<ServiceBudgetData> budgets = em.GetBuffer<ServiceBudgetData>(_query.GetSingletonEntity(), true);
@@ -97,9 +93,7 @@ namespace CS2MultiplayerMod.Game.Sync.Channels
             }
             if (_serviceByName.TryGetValue(name, out entity)) return entity;
 
-            // Fallback: a service the receiver has never adjusted is not in the buffer yet.
-            // Restrict lookup to actual service prefabs: prefab names are not globally unique,
-            // and CityServiceBudgetSystem rejects an entity that is not one of its services.
+            // A never-adjusted service is not in the buffer; look up real service prefabs only.
             if (!_prefabQueryReady)
             {
                 _prefabQuery = em.CreateEntityQuery(

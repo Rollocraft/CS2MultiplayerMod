@@ -11,10 +11,7 @@ namespace CS2MultiplayerMod.Core.Session
     {
         private void HandleHeartbeat(ConnectionId connection, Peer peer, Heartbeat heartbeat, long nowUnixMs)
         {
-            // An echo returns a timestamp WE sent, so now − echo is a true round-trip on
-            // our own clock — the peer's clock never enters the math (the two machines'
-            // clocks are unrelated: each side passes its own monotonic ms). Echoes are
-            // not echoed back, so a ping costs exactly one reply.
+            // Round-trip on our own clock; echoes are not echoed back.
             if (heartbeat.EchoOfMs > 0)
             {
                 long rtt = nowUnixMs - heartbeat.EchoOfMs;
@@ -39,6 +36,23 @@ namespace CS2MultiplayerMod.Core.Session
                 SendTo(ConnectionId.Server, beat);
         }
 
+        /// <summary>
+        /// Host only: names the command rate that ran past budget, from the pump so a burst that stops is
+        /// still reported. Nobody is disconnected for it.
+        /// </summary>
+        private void ReportCommandOverruns(long nowUnixMs)
+        {
+            if (Role != SessionRole.Host) return;
+            foreach (var pair in _peers)
+            {
+                Peer peer = pair.Value;
+                if (!peer.Handshaked) continue;
+                string overrun = peer.RateLimiter.TakeCommandOverrun(nowUnixMs);
+                if (overrun != null)
+                    _log.Warn(LogTopic.Transport, "Command rate from " + peer + ": " + overrun);
+            }
+        }
+
         private void ReapTimedOutPeers(long nowUnixMs)
         {
             List<Peer> dead = null;         // dropped silently at the socket
@@ -48,14 +62,25 @@ namespace CS2MultiplayerMod.Core.Session
                 Peer peer = pair.Value;
                 if (peer.Handshaked)
                 {
-                    if (nowUnixMs - peer.LastSeenUnixMs > PeerTimeoutMs)
-                        (dead ?? (dead = new List<Peer>())).Add(peer);
+                    long silentMs = nowUnixMs - peer.LastSeenUnixMs;
+                    if (silentMs <= PeerTimeoutMs) continue;
+
+                    if (silentMs <= StalledPeerTimeoutMs && InboundStillArriving(peer.Connection))
+                    {
+                        if (peer.StallReportedForSeenMs != peer.LastSeenUnixMs)
+                        {
+                            peer.StallReportedForSeenMs = peer.LastSeenUnixMs;
+                            _log.Warn(LogTopic.Session, "No complete message from " + peer + " for " +
+                                (silentMs / 1000) + " s, but its traffic is still arriving; keeping the " +
+                                "connection for up to " + (StalledPeerTimeoutMs / 1000) + " s.");
+                        }
+                        continue;
+                    }
+                    (dead ?? (dead = new List<Peer>())).Add(peer);
                 }
                 else if (peer.AwaitingApproval)
                 {
-                    // The host never accepted or declined in time — auto-decline so the
-                    // socket is freed and the waiting player is told why, instead of both
-                    // sides hanging on an absent host.
+                    // No host decision in time: auto-decline and tell the player.
                     if (nowUnixMs - peer.ConnectedAtUnixMs > JoinApprovalTimeoutMs)
                         (unanswered ?? (unanswered = new List<Peer>())).Add(peer);
                 }
@@ -67,8 +92,12 @@ namespace CS2MultiplayerMod.Core.Session
             if (dead != null)
                 foreach (Peer peer in dead)
                 {
+                    string why = peer.Handshaked
+                        ? "timed out: no complete message for " + ((nowUnixMs - peer.LastSeenUnixMs) / 1000) + " s"
+                        : "handshake not completed within " + (HandshakeTimeoutMs / 1000) + " s";
                     _log.Warn(LogTopic.Session,
-                        (peer.Handshaked ? "Peer timed out: " : "Handshake timed out: ") + peer);
+                        (peer.Handshaked ? "Peer timed out: " : "Handshake timed out: ") + peer + " (" + why + ").");
+                    _localCloseReasons[peer.Connection.Value] = why;
                     _transport.Disconnect(peer.Connection);
                     // The transport will also raise Disconnected; removal/notify happens there.
                 }
@@ -79,10 +108,14 @@ namespace CS2MultiplayerMod.Core.Session
                     Reject(peer.Connection, "The host did not respond to your join request in time.");
         }
 
-        /// <summary>
-        /// Send a chat line. On the host it is relayed to all clients. "/sync" is a
-        /// command, not a line: it asks the host for a fresh world stream instead.
-        /// </summary>
+        private bool InboundStillArriving(ConnectionId connection)
+        {
+            if (_transport is not IInboundActivity activity) return false;
+            long last = activity.LastInboundActivityMs(connection);
+            return last != long.MinValue && MonotonicClock.NowMs - last <= PeerTimeoutMs;
+        }
+
+        /// <summary>Sends a chat line (the host relays it); "/sync" requests a world stream instead.</summary>
         public void SendChat(string text)
         {
             if (Status != SessionStatus.Connected || string.IsNullOrEmpty(text)) return;
@@ -100,16 +133,14 @@ namespace CS2MultiplayerMod.Core.Session
 
         private void HandleChat(ConnectionId from, Peer peer, ChatMessage chat, long nowUnixMs)
         {
-            // A "/sync" line from a client (e.g. an older build that sends it as raw
-            // chat) is treated as the command it means.
+            // A raw "/sync" chat line from a client is treated as the command.
             if (Role == SessionRole.Host && IsSyncCommand(chat.Text))
             {
                 HandleResyncRequest(from, peer, nowUnixMs);
                 return;
             }
 
-            // Whatever arrives is displayed and logged — so control characters, fake
-            // newlines and kilometer-long lines are stripped before anything sees them.
+            // Displayed and logged: strip control characters and cap the length.
             chat.Text = WireGuard.SanitizeText(chat.Text, WireGuard.MaxChatLength);
 
             // Never trust the sender's claimed name — display the one we authenticated.
@@ -130,9 +161,8 @@ namespace CS2MultiplayerMod.Core.Session
             text != null && text.Trim().Equals("/sync", StringComparison.OrdinalIgnoreCase);
 
         /// <summary>
-        /// Player-initiated drift correction. A client asks the host to stream it the
-        /// current world; on the host it refreshes every client. The actual save+stream
-        /// is done by the observer (the game layer owns savegames).
+        /// Player drift correction: a client asks for the world, the host refreshes every client. The
+        /// observer (game layer) does the save and stream.
         /// </summary>
         public void RequestWorldSync() => RequestWorldSync(ManualSyncReason, false);
 
@@ -176,10 +206,8 @@ namespace CS2MultiplayerMod.Core.Session
         /// <summary>What a request carries when the player asked for it themselves.</summary>
         internal const string ManualSyncReason = "requested by the player";
 
-        private void HandleResyncRequest(ConnectionId from, Peer peer, long nowUnixMs)
-        {
+        private void HandleResyncRequest(ConnectionId from, Peer peer, long nowUnixMs) =>
             HandleResyncRequest(from, peer, nowUnixMs, ManualSyncReason, false);
-        }
 
         private void HandleResyncRequest(ConnectionId from, Peer peer, long nowUnixMs, string reason,
             bool automatic)
@@ -229,8 +257,7 @@ namespace CS2MultiplayerMod.Core.Session
         private bool AcceptClientResyncRequest(ConnectionId from, Peer peer, long nowUnixMs,
             string reason, bool automatic)
         {
-            // Rate limit: a misbehaving client spamming /sync would otherwise keep the
-            // host in a permanent save+stream loop. (Per-peer budgets run on top.)
+            // Stops /sync spam from looping the host; per-peer budgets run on top.
             if (nowUnixMs - _lastResyncAcceptedUnixMs < ResyncRequestCooldownMs)
             {
                 _log.Warn(LogTopic.Session, "Ignoring world sync request from " +
@@ -243,9 +270,7 @@ namespace CS2MultiplayerMod.Core.Session
             // The requester's identity comes from OUR peer table, never from the wire.
             string name = peer != null && peer.Name != null ? peer.Name : from.ToString();
 
-            // Why the other machine gave up belongs in THIS log too. Without it the host's log
-            // reads "someone asked for a sync" for both a player pressing the button and a client
-            // pipeline that could not apply an edit - the two cases that need telling apart most.
+            // The host log must tell a player's button from a client pipeline that gave up.
             _log.Event(LogTopic.Session, (automatic ? "Automatic world recovery requested by the mod on " :
                 "World sync requested by ") + name + ": " + reason + ".");
 
@@ -268,8 +293,7 @@ namespace CS2MultiplayerMod.Core.Session
 
             string reason = peer.PendingResyncReason;
             bool automatic = peer.PendingResyncAutomatic;
-            // Several clients can be waiting at once. If another approved sync just began,
-            // keep this card queued rather than making it disappear without doing anything.
+            // Another approved sync just began: keep this card queued.
             if (AcceptClientResyncRequest(peer.Connection, peer, nowUnixMs, reason, automatic))
                 ClearPendingResync(peer);
             return true;
@@ -305,10 +329,7 @@ namespace CS2MultiplayerMod.Core.Session
             peer.PendingResyncAutomatic = false;
         }
 
-        /// <summary>
-        /// Submit a simulation command for synchronization. The host applies it locally
-        /// and relays to clients; a client forwards it to the host, which then relays.
-        /// </summary>
+        /// <summary>The host applies and relays; a client forwards to the host.</summary>
         public void SendCommand(long tick, ushort commandId, byte[] body)
         {
             if (Status != SessionStatus.Connected || _worldSyncSuspended) return;
@@ -327,21 +348,17 @@ namespace CS2MultiplayerMod.Core.Session
 
         private void HandleCommand(ConnectionId from, Peer peer, SimulationCommandMessage command)
         {
-            // Commands crossing the snapshot cut are deliberately rejected. Every participant
-            // installs the host snapshot before Resume, so applying only a suffix on one side would
-            // recreate the very drift this transaction is meant to repair.
+            // Rejected across the snapshot cut: applying a suffix on one side recreates the drift.
             if (_worldSyncSuspended) return;
 
-            // Only command ids the game layer registered are legitimate; anything else
-            // is a peer probing the surface.
+            // Unregistered ids are probing.
             if (_allowedCommandIds.Count > 0 && !_allowedCommandIds.Contains(command.CommandId))
             {
                 Punt(from, peer, "unauthorized command id " + command.CommandId, "SimulationCommand");
                 return;
             }
 
-            // The origin id drives every echo-skip; stamp it from OUR peer table so a
-            // client cannot impersonate another player (or the host) on the wire.
+            // Stamp the origin from our peer table so nobody can impersonate another player.
             if (Role == SessionRole.Host && peer != null)
                 command.OriginPlayerId = peer.PlayerId;
 
@@ -350,10 +367,7 @@ namespace CS2MultiplayerMod.Core.Session
                 BroadcastToAll(command, from); // relay to the other clients
         }
 
-        /// <summary>
-        /// Broadcast an authoritative state slice to all clients. Host-only: replicated
-        /// state flows one way, from the authority outward. A client call is ignored.
-        /// </summary>
+        /// <summary>Host only: broadcasts a state slice; ignored on a client.</summary>
         public void SendState(byte channelId, byte[] data)
         {
             if (Role != SessionRole.Host || Status != SessionStatus.Connected || _worldSyncSuspended) return;
@@ -362,8 +376,7 @@ namespace CS2MultiplayerMod.Core.Session
 
         private void HandleState(ConnectionId from, Peer peer, StateSnapshotMessage snapshot)
         {
-            // Only clients apply replicated state; a client pushing "authoritative"
-            // state at the host is impersonating the authority.
+            // A client sending state is impersonating the authority.
             if (Role == SessionRole.Host)
             {
                 Punt(from, peer, "client sent a host-only state snapshot", "StateSnapshot");
@@ -374,9 +387,8 @@ namespace CS2MultiplayerMod.Core.Session
         }
 
         /// <summary>
-        /// Client -> host: submit an edit of a player-editable state channel (taxes, policies, ...).
-        /// Body uses channel's snapshot encoding; host applies it in next broadcast. Host-side edits
-        /// need no message - host's capture already picks them up.
+        /// Client -> host edit in the channel's snapshot encoding. Host edits need no message: capture
+        /// picks them up.
         /// </summary>
         public void SendStateEdit(byte channelId, byte[] data)
         {
@@ -400,8 +412,7 @@ namespace CS2MultiplayerMod.Core.Session
         {
             if (Status != SessionStatus.Connected || _worldSyncSuspended) return;
 
-            // Presence is refreshed at 10 Hz. Skip samples under backpressure instead of
-            // adding stale hover traffic behind city updates on the reliable stream.
+            // 10 Hz presence: skip under backpressure rather than queue stale hovers behind city updates.
             if (_transport == null || _transport.PendingSendBytes > 16 * 1024) return;
             var message = new PlayerStateMessage(LocalPlayerId, x, y, z, eyeX, eyeY, eyeZ, yaw, hover);
             if (Role == SessionRole.Host)
@@ -421,6 +432,5 @@ namespace CS2MultiplayerMod.Core.Session
             if (Role == SessionRole.Host && _transport != null && _transport.PendingSendBytes <= 16 * 1024)
                 BroadcastToAll(state, from); // fan a client's position out to the others
         }
-
     }
 }

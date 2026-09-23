@@ -5,12 +5,8 @@ using CS2MultiplayerMod.Core.Sync.ModSync;
 namespace CS2MultiplayerMod.Game.Sync.ModSync
 {
     /// <summary>
-    /// The session's type table joined to this machine's own types.
-    ///
-    /// The host publishes the order; every machine binds its local types to it. A type the host
-    /// named and this machine cannot produce is recorded rather than skipped quietly: same mod,
-    /// different layout is the case a matching version number does not catch, and the player would
-    /// otherwise see one feature of one mod silently not travelling.
+    /// The host's type order bound to local types. A type this machine cannot produce is recorded:
+    /// same mod with a different layout is what a version match does not catch.
     /// </summary>
     internal sealed class ModTypeBinding : IModTypeLookup
     {
@@ -29,22 +25,17 @@ namespace CS2MultiplayerMod.Game.Sync.ModSync
             for (int i = 0; i < table.Count; i++) _indexByKey[table.ByIndex(i).Key] = i;
         }
 
-        public int Count { get { return _table.Count; } }
+        public int Count => _table.Count;
 
-        public ModTypeTable Table { get { return _table; } }
+        public ModTypeTable Table => _table;
 
-        public ModTypeDescriptor ByIndex(int index) { return _table.ByIndex(index); }
+        public ModTypeDescriptor ByIndex(int index) => _table.ByIndex(index);
 
         /// <summary>The way to read this type here, or null when this machine could not bind it.</summary>
-        public ModTypeAccessor AccessorFor(int index)
-        {
-            return index >= 0 && index < _accessors.Length ? _accessors[index] : null;
-        }
+        public ModTypeAccessor AccessorFor(int index) =>
+            index >= 0 && index < _accessors.Length ? _accessors[index] : null;
 
-        public bool TryIndexOf(string key, out int index)
-        {
-            return _indexByKey.TryGetValue(key, out index);
-        }
+        public bool TryIndexOf(string key, out int index) => _indexByKey.TryGetValue(key, out index);
 
         /// <summary>The host's own binding: the table is this machine's catalogue, in its order.</summary>
         public static ModTypeBinding ForHost(ModComponentCatalog catalog)
@@ -58,18 +49,14 @@ namespace CS2MultiplayerMod.Game.Sync.ModSync
             return binding;
         }
 
-        /// <summary>
-        /// A receiving machine's binding: the host's order, filled in with local types wherever the
-        /// key and the layout both agree.
-        /// </summary>
+        /// <summary>The host's order, filled with local types where key and layout agree.</summary>
         public static ModTypeBinding ForClient(ModComponentCatalog catalog, ModTypeTable table)
         {
             var binding = new ModTypeBinding(table);
             for (int i = 0; i < table.Count; i++)
             {
                 ModTypeDescriptor wanted = table.ByIndex(i);
-                ModCatalogEntry local;
-                if (!catalog.TryGet(wanted.Key, out local))
+                if (!catalog.TryGet(wanted.Key, out ModCatalogEntry local))
                 {
                     binding.Missing.Add(wanted.DisplayName + " - not present here");
                     continue;

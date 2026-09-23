@@ -5,10 +5,7 @@ using Unity.Entities;
 
 namespace CS2MultiplayerMod.Game.Sync.Infrastructure
 {
-    /// <summary>
-    /// Queues prefab unlocks at the frame boundary where the game's unlock pipeline can consume
-    /// them and cascade newly satisfied <see cref="UnlockRequirement"/> dependencies.
-    /// </summary>
+    /// <summary>Queues unlocks where the game's unlock pipeline consumes them and cascades requirements.</summary>
     internal sealed class DeferredPrefabUnlocker
     {
         private readonly EntityManager _entities;
@@ -26,10 +23,7 @@ namespace CS2MultiplayerMod.Game.Sync.Infrastructure
                 ComponentType.ReadWrite<Unlock>());
         }
 
-        /// <summary>
-        /// Queue one still-locked prefab. A prefab already waiting at the barrier is not queued
-        /// twice, so callers may safely associate a one-time charge with a successful return.
-        /// </summary>
+        /// <summary>Never queues a prefab twice, so a one-time charge can follow a true return.</summary>
         public bool TryQueue(Entity prefab)
         {
             if (!IsLocked(prefab))

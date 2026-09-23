@@ -1,11 +1,5 @@
-using System;
-using System.Collections.Concurrent;
 using System.Collections.Generic;
-using Colossal.Entities;
-using CS2MultiplayerMod.Core.Diagnostics;
-using CS2MultiplayerMod.Core.Protocol.Messages;
 using CS2MultiplayerMod.Core.Session;
-using CS2MultiplayerMod.Game.Diagnostics;
 using CS2MultiplayerMod.Game.Sync.Commands;
 using CS2MultiplayerMod.Game.Sync.Infrastructure;
 using Game;
@@ -16,7 +10,6 @@ using Game.Prefabs;
 using Game.Rendering;
 using Game.Tools;
 using Game.UI.InGame;
-using Game.Vehicles;
 using Unity.Collections;
 using Unity.Entities;
 using Unity.Mathematics;
@@ -24,15 +17,10 @@ using Unity.Mathematics;
 namespace CS2MultiplayerMod.Game.Sync.Systems
 {
     /// <summary>
-    /// Replicates the persistent state edited by the visual-customization section:
-    /// per-entity custom mesh colors, the historical-building flag, and the savegame's
-    /// global color-preset palette. These edits mutate existing components directly,
-    /// so placement/update detectors cannot observe them.
+    /// Replicates visual customization: per-entity mesh colors, the historical flag and the global
+    /// color palette. These write components directly, so placement detectors cannot see them.
     /// </summary>
-    // The system's state and per-frame cycle. Capturing what this player recoloured is in
-    // VisualCustomizationCapture.cs, applying what a peer sent in VisualCustomizationApply.cs,
-    // and reading or matching an entity's appearance in VisualCustomizationState.cs.
-    public partial class VisualCustomizationSyncSystem : GameSystemBase
+    public partial class VisualCustomizationSyncSystem : CommandSyncSystem
     {
         private const long RetryWindowMs = 10000;
         private const long RetryIntervalMs = 250;
@@ -41,9 +29,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         private const int MaxRetryTargets = 4096;
         private const float MatchToleranceSq = 4f;
 
-        // The color picker rewrites CustomMeshColor on every UI frame it is dragged, so the
-        // resulting-state detector sees one change per frame. Only the value a drag settles on
-        // is worth replicating; a drag that never pauses still reports once per max hold.
+        // The picker writes every UI frame while dragged; send the settled value (or once per max hold).
         private const long ColorSettleMs = 1000;
         private const long ColorMaxHoldMs = 3000;
         private const int MaxPendingColorTargets = 8192;
@@ -70,11 +56,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             public long LastChangeMs;
         }
 
-        /// <summary>
-        /// Per-frame snapshot of the match candidates, bucketed by prefab. Without it the
-        /// spatial fallback walks - and re-reads components from - every colorable object in
-        /// the city once per target, for every command and every queued retry.
-        /// </summary>
+        /// <summary>Per-frame match candidates bucketed by prefab, so retries do not walk the city.</summary>
         private sealed class CandidateCache
         {
             public sealed class Bucket
@@ -93,8 +75,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
             public Bucket For(Entity prefab, EntityQuery query, EntityManager entityManager)
             {
-                Bucket bucket;
-                if (_byPrefab.TryGetValue(prefab, out bucket)) return bucket;
+                if (_byPrefab.TryGetValue(prefab, out Bucket bucket)) return bucket;
 
                 if (!_loaded)
                 {
@@ -179,8 +160,6 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             };
         }
 
-        private readonly ConcurrentQueue<SimulationCommandMessage> _incoming =
-            new ConcurrentQueue<SimulationCommandMessage>();
         private readonly Dictionary<Entity, VisualState> _known =
             new Dictionary<Entity, VisualState>();
         private readonly Dictionary<Entity, long> _suppressColorBatch =
@@ -198,7 +177,6 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         private EndFrameBarrier _endFrameBarrier;
         private EntityQuery _batchColorQuery;
         private EntityQuery _targetQuery;
-        private CommandObserver _observer;
 
         private Entity _lastSelected;
         private VisualState _lastSelectedState;
@@ -245,22 +223,11 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 Options = EntityQueryOptions.IgnoreComponentEnabledState,
             });
 
-            _observer = SyncObserverBinding.Bind(
-                () => new CommandObserver(
-                        _incoming, VisualCustomizationCommand.Id, ColorPaletteCommand.Id)
-                    {
-                        MaxBodyBytes = VisualCustomizationCommand.MaxEncodedBytes,
-                    },
-                DrainQueue);
+            ListenFor(new[] { VisualCustomizationCommand.Id, ColorPaletteCommand.Id },
+                VisualCustomizationCommand.MaxEncodedBytes);
         }
 
-        protected override void OnDestroy()
-        {
-            SyncObserverBinding.Unbind(_observer, DrainQueue);
-            base.OnDestroy();
-        }
-
-        private void DrainQueue()
+        protected override void DrainQueue()
         {
             SyncInbox.Clear(_incoming);
             ResetTracking();
@@ -309,9 +276,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     List<VisualCustomizationCommand> localVisual = TakeSettledVisualChanges(now);
                     ColorPaletteCommand localPalette = TakeSettledPaletteChange(now);
 
-                    // A UI edit and an incoming edit can land in the same UI frame. The host
-                    // relays the incoming command first and the local command second, so preserve
-                    // that same final order locally.
+                    // The host relays the incoming command before the local one; keep that order here.
                     if (localVisual != null)
                     {
                         for (int i = 0; i < localVisual.Count; i++)

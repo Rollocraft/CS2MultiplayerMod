@@ -21,9 +21,8 @@ namespace CS2MultiplayerMod.Game.Sync.Commands
     }
 
     /// <summary>
-    /// Portable form of one native course endpoint. Entity ids are deliberately absent: nodes and
-    /// edges are identified on the receiver by a source-world anchor, an optional prefab name and,
-    /// for an edge, its source curve. The remaining fields are copied into the receiver's CoursePos.
+    /// A portable course endpoint: no entity ids, a source anchor, optional prefab and, for an edge,
+    /// its curve. The rest is copied into the receiver's CoursePos.
     /// </summary>
     public struct NetEndpointIntent
     {
@@ -45,8 +44,7 @@ namespace CS2MultiplayerMod.Game.Sync.Commands
         public float OwnerX, OwnerY, OwnerZ;
         public float OwnerRotX, OwnerRotY, OwnerRotZ, OwnerRotW;
 
-        // Source target-edge curve. It disambiguates close parallel carriageways and crossings;
-        // the anchor still permits a receiver whose equivalent road is subdivided differently.
+        // Separates close parallel carriageways; the anchor still allows different subdivision.
         public float TargetAx, TargetAy, TargetAz;
         public float TargetBx, TargetBy, TargetBz;
         public float TargetCx, TargetCy, TargetCz;
@@ -54,10 +52,8 @@ namespace CS2MultiplayerMod.Game.Sync.Commands
     }
 
     /// <summary>
-    /// "A player committed this native net course." In addition to its final cubic curve, a captured
-    /// command carries the placement intent the network generator consumed: exact endpoint mode,
-    /// portable target identity, elevation, course flags and creation state. Courses emitted by one
-    /// tool apply share <see cref="OperationId"/> and carry an index/count for correlation.
+    /// A committed course plus the generator's inputs: endpoint mode, target identity, elevation,
+    /// course flags and creation state. Courses of one Apply share <see cref="OperationId"/>.
     /// </summary>
     public sealed class NetPlacementCommand : ISimulationCommand
     {
@@ -66,11 +62,8 @@ namespace CS2MultiplayerMod.Game.Sync.Commands
         public const int MaxCoursesPerOperation = 1024;
 
         /// <summary>
-        /// Shortest course that carries geometry rather than being a cursor marker. Capture and
-        /// realize must use the SAME value: a course the sender drops is a link the receiver never
-        /// hears about, and coincident course endpoints only become one node on an exact position
-        /// match - so a dropped link leaves two ends a fraction of a metre apart, looking continuous
-        /// and being two disconnected nets.
+        /// Shorter courses are cursor markers. Capture and realize must agree: endpoints merge only on an
+        /// exact position, so a dropped link leaves two disconnected nets that look continuous.
         /// </summary>
         public const float MinCourseLength = 0.1f;
 
@@ -90,19 +83,12 @@ namespace CS2MultiplayerMod.Game.Sync.Commands
         public float Bx, By, Bz;
         public float Cx, Cy, Cz;
         public float Dx, Dy, Dz;
-        // Native generator length can differ from the final curve's measured arc length.
-        // Preserve it independently, including for trimmed and height-adjusted courses.
+        // Generator length, which can differ from the curve's arc length.
         public float Length;
 
         public int RandomSeed;
         public uint CreationFlags;
-        /// <summary>
-        /// The receiver must reproduce the deck between the two endpoints instead of re-deriving it.
-        /// Set by capture when the span crosses water: the generator rebuilds a course's whole
-        /// vertical profile from the LOCAL terrain and water every few metres, and water is live
-        /// simulation state that is never replicated. A pinned course carries endpoint heights the
-        /// source measured and is committed with its clamp band collapsed onto them.
-        /// </summary>
+        /// <summary>Commit a straight deck between the source's endpoint heights instead of local terrain/water.</summary>
         public bool PinProfile;
         public float CourseElevationLeft, CourseElevationRight;
         public int FixedIndex;
@@ -128,9 +114,7 @@ namespace CS2MultiplayerMod.Game.Sync.Commands
 
             if (!HasNativeCourse)
             {
-                // Elevation travels even without captured intent. An endpoint that arrives as 0 is
-                // committed as a ground net and the generator snaps its curve end to the terrain -
-                // which over water is the lakebed, not the surface the span was drawn above.
+                // Elevation always travels: an endpoint at 0 is ground-snapped, which over water is the lakebed.
                 w.WriteFloat(Start.ElevationLeft);
                 w.WriteFloat(Start.ElevationRight);
                 w.WriteFloat(End.ElevationLeft);
@@ -281,8 +265,7 @@ namespace CS2MultiplayerMod.Game.Sync.Commands
             endpoint.ElevationLeft = ReadBounded(r, -100000f, 100000f, "endpoint elevation");
             endpoint.ElevationRight = ReadBounded(r, -100000f, 100000f, "endpoint elevation");
             endpoint.CourseDelta = ReadBounded(r, -2f, 3f, "course delta");
-            // Not 0..1: a node-snapped endpoint carries the control point's extended curve
-            // parameter, which runs past 1 by however far the snap sat beyond the curve's end.
+            // Not 0..1: a node-snapped endpoint carries an extended curve parameter.
             endpoint.SplitPosition = ReadBounded(r, -WireGuard.MaxSplitPosition,
                 WireGuard.MaxSplitPosition, "split position");
             endpoint.Flags = unchecked((uint)r.ReadInt());

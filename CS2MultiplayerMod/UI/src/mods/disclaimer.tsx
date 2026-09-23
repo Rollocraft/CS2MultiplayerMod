@@ -1,14 +1,11 @@
+import { GROUP, useT } from "mods/ui-helpers";
 import { bindValue, trigger, useValue } from "cs2/api";
 import { AutoNavigationScope, BackConsumer, InputActionBarrier, NavigationDirection } from "cs2/input";
-import { useLocalization } from "cs2/l10n";
 import { Button, Portal } from "cs2/ui";
 import { CSSProperties } from "react";
 import { useBackKey } from "mods/back-action";
 
-// Binding group shared with MultiplayerUISystem on the C# side.
-const GROUP = "cs2mp";
-
-// Locale keys served by the mod's LocaleEN/LocaleDE sources (L10n.Key constants).
+// Keys from the mod's locales/<lang>.properties.
 const LOC = {
     title: "CS2MP.UI.DisclaimerTitle",
     body: "CS2MP.UI.DisclaimerBody",
@@ -16,16 +13,10 @@ const LOC = {
     decline: "CS2MP.UI.DisclaimerDecline",
 };
 
-const useT = () => {
-    const { translate } = useLocalization();
-    return (id: string, fallback: string) => translate(id, fallback) ?? fallback;
-};
-
 // True once the player has accepted the gate. Persisted in Setting, so it stays
 // true across restarts and the modal only ever shows once.
 export const disclaimerAccepted$ = bindValue<boolean>(GROUP, "disclaimerAccepted", false);
 
-// rem behaves like resolution-independent pixels (the game scales root font size).
 const styles: Record<string, CSSProperties> = {
     overlay: {
         position: "fixed",

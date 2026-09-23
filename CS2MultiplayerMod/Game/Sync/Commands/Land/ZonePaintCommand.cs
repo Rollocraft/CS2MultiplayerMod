@@ -1,16 +1,12 @@
-using System;
 using CS2MultiplayerMod.Core.Protocol;
 using CS2MultiplayerMod.Core.Sync;
 
 namespace CS2MultiplayerMod.Game.Sync.Commands
 {
     /// <summary>
-    /// "The player edited these cells." Unselected cells carry geometry only. The source block geometry
-    /// gives every cell a portable world-space centre, so receivers can map cells onto their
-    /// own generated block layout rather than assuming buffer indexes are identical. Zone
-    /// types are carried as prefab names via a small per-message string table because
-    /// <c>ZoneType.m_Index</c> is a per-machine value. Cell bytes index into that table;
-    /// 0xFF means unzoned. See <see cref="ZoneSyncSystem"/>.
+    /// Edited cells; unselected cells carry geometry only. World-space cell centres let receivers map
+    /// onto their own block layout. Zone types travel as a per-message name table (0xFF = unzoned)
+    /// because <c>ZoneType.m_Index</c> is per machine.
     /// </summary>
     public sealed class ZonePaintCommand : ISimulationCommand
     {
@@ -19,8 +15,7 @@ namespace CS2MultiplayerMod.Game.Sync.Commands
         public const int MaxCells = 1024;
         public const int MaxEncodedBytes = 96 * 1024;
 
-        // Portable subset of Game.Zones.CellFlags. These describe source-cell semantics for
-        // target selection; the receiver never copies them into its locally generated state.
+        // Portable CellFlags subset for target selection; never copied into local state.
         public const byte StateVisible = 1 << 0;
         public const byte StateRoadside = 1 << 1;
         public const byte StateRoadLeft = 1 << 2;

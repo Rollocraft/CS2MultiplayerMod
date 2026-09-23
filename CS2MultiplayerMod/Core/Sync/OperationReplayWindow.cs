@@ -4,15 +4,14 @@ using System.Collections.Generic;
 namespace CS2MultiplayerMod.Core.Sync
 {
     /// <summary>
-    /// Bounded-by-time idempotence window for reliable operation replays. Keys are remembered only
-    /// after commit/drain; an operation that failed before commit therefore remains retryable.
+    /// Time-bounded idempotence for operation replays; keys are remembered only after commit, so a
+    /// failed operation stays retryable.
     /// </summary>
     public sealed class OperationReplayWindow<TKey>
     {
         private readonly Dictionary<TKey, long> _completed;
         private readonly List<TKey> _expired = new List<TKey>();
-        // A conservative lower bound: renewing/removing the earliest key can leave
-        // this earlier than necessary, but can never delay expiry of another key.
+        // A lower bound: may be early, never delays another key's expiry.
         private long _nextExpiry = long.MaxValue;
 
         public OperationReplayWindow() : this(null) { }
@@ -26,8 +25,7 @@ namespace CS2MultiplayerMod.Core.Sync
 
         public bool Contains(TKey key, long now)
         {
-            long expires;
-            if (!_completed.TryGetValue(key, out expires)) return false;
+            if (!_completed.TryGetValue(key, out long expires)) return false;
             if (expires > now) return true;
             _completed.Remove(key);
             return false;

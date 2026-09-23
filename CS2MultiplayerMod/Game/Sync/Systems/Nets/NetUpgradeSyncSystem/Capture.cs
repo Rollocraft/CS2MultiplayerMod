@@ -1,12 +1,6 @@
-using System.Collections.Concurrent;
-using System.Collections.Generic;
-using System.Text;
 using Colossal.Mathematics;
-using Game;
-using Game.Common;
 using Game.Net;
 using Game.Prefabs;
-using Game.Tools;
 using Unity.Collections;
 using Unity.Entities;
 using Unity.Mathematics;
@@ -16,13 +10,9 @@ using CS2MultiplayerMod.Game.Diagnostics;
 using CS2MultiplayerMod.Game.Sync.Commands;
 namespace CS2MultiplayerMod.Game.Sync.Systems
 {
-    // Noticing an in-place composition change. There is no event for one, so each upgraded and
-    // bare edge and node is compared against what it looked like last update, and a difference
-    // becomes a command.
+    // No event exists for a composition change, so edges and nodes are compared with last update.
     public partial class NetUpgradeSyncSystem
     {
-        // ---------------------------------------------------------------- capture
-
         private void CaptureEdgeUpgrades(MultiplayerSession session)
         {
             if (_upgradedEdges.IsEmptyIgnoreFilter) return;
@@ -47,12 +37,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                         SubRepSig = SubRepSig(subs),
                     };
 
-                    // Roads get Updated for many reasons (neighbour edits, traffic) - only
-                    // an actual composition change for this segment is worth broadcasting.
-                    // The cache is also written on apply, which suppresses the echo.
+                    // Only a real composition change; the apply-side cache write suppresses the echo.
                     string key = EdgeKey(b.a, b.d);
-                    SeenState last;
-                    if (_lastSeen.TryGetValue(key, out last) && last.Equals(current)) continue;
+                    if (_lastSeen.TryGetValue(key, out SeenState last) && last.Equals(current)) continue;
                     _lastSeen[key] = current;
 
                     var command = new NetUpgradeCommand
@@ -86,8 +73,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     Entity entity = entities[i];
                     Bezier4x3 b = EntityManager.GetComponentData<Curve>(entity).m_Bezier;
                     string key = EdgeKey(b.a, b.d);
-                    SeenState last;
-                    if (!_lastSeen.TryGetValue(key, out last) || last.IsCleared) continue;
+                    if (!_lastSeen.TryGetValue(key, out SeenState last) || last.IsCleared) continue;
 
                     string name = _prefabSystem.GetPrefabName(EntityManager.GetComponentData<PrefabRef>(entity).m_Prefab);
                     if (string.IsNullOrEmpty(name) || name.StartsWith("Invisible")) continue;
@@ -134,8 +120,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     };
 
                     string key = NodeKey(pos);
-                    SeenState last;
-                    if (_lastSeen.TryGetValue(key, out last) && last.Equals(current)) continue;
+                    if (_lastSeen.TryGetValue(key, out SeenState last) && last.Equals(current)) continue;
                     _lastSeen[key] = current;
 
                     var command = new NetUpgradeCommand
@@ -169,8 +154,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     Entity entity = entities[i];
                     float3 pos = EntityManager.GetComponentData<Node>(entity).m_Position;
                     string key = NodeKey(pos);
-                    SeenState last;
-                    if (!_lastSeen.TryGetValue(key, out last) || last.IsCleared) continue;
+                    if (!_lastSeen.TryGetValue(key, out SeenState last) || last.IsCleared) continue;
 
                     string name = _prefabSystem.GetPrefabName(EntityManager.GetComponentData<PrefabRef>(entity).m_Prefab);
                     if (string.IsNullOrEmpty(name) || name.StartsWith("Invisible")) continue;

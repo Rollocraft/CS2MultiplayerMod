@@ -1,10 +1,6 @@
 using System.Collections.Generic;
-using Colossal.Mathematics;
-using Game.Common;
-using Game.Net;
 using Game.Prefabs;
 using Game.Tools;
-using Unity.Collections;
 using Unity.Entities;
 using Unity.Mathematics;
 using CS2MultiplayerMod.Core.Diagnostics;
@@ -15,26 +11,17 @@ using CS2MultiplayerMod.Game.Sync.Infrastructure;
 
 namespace CS2MultiplayerMod.Game.Sync.Systems
 {
-    // Realizing one remote operation - asset stamp, object placement, or the placement input
-    // behind it - and normalising the creation flags a peer may have sent.
     public partial class BuildSyncSystem
     {
         /// <summary>
-        /// Rebuild a remote stamp by running the game's own definition generator over the inputs
-        /// its tool had. The generator derives every shared endpoint from the prefab's own averaged
-        /// node table, so the intersection's internal junctions are bit-identical here by
-        /// construction - which is the only way the node generator will merge them.
+        /// Rebuilds a stamp through the game's generator, so its internal junctions are bit-identical and
+        /// merge.
         /// </summary>
         private NativeObjectResult TryRealizeAssetStamp(SimulationCommandMessage message, long now)
         {
-            AssetStampCommand command;
-            try { command = AssetStampCommand.Decode(message.Body); }
-            catch (System.Exception ex)
-            {
-                SyncLog.Warn(LogTopic.Buildings,
-                    "BuildSync: dropping malformed asset-stamp command: " + ex.Message);
+            if (!CommandDecode.TryDecode(message, AssetStampCommand.Decode, LogTopic.Buildings,
+                    "BuildSync", out AssetStampCommand command, "asset-stamp command"))
                 return NativeObjectResult.Rejected;
-            }
 
             var key = new NativeObjectOperationKey
             {
@@ -48,14 +35,12 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 return NativeObjectResult.Completed;
             }
 
-            Entity prefab;
             if (!_prefabIndex.TryResolve(command.PrefabName,
                     candidate => EntityManager.Exists(candidate) &&
                                  EntityManager.HasComponent<AssetStampData>(candidate),
-                    out prefab))
+                    out Entity prefab))
             {
-                // A peer with content we lack. Nothing local will make this resolve, so do not hold
-                // the ordered queue for it.
+                // Content we lack: do not hold the ordered queue for it.
                 RecordRefused(command.PrefabName);
                 SyncLog.Warn(LogTopic.Buildings, "BuildSync: asset stamp '" + command.PrefabName +
                     "' is unavailable here; skipping.");
@@ -82,8 +67,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 case NativeDeriveResult.Busy:
                     return NativeObjectResult.Retry;
                 case NativeDeriveResult.Unsupported:
-                    // This build cannot reach the generator, and a stamp has no reduced form that
-                    // preserves its topology. A world reload is the only complete fallback.
+                    // No generator and no reduced form preserves a stamp's topology: reload.
                     SyncLog.Warn(LogTopic.Buildings,
                         "BuildSync: the game's definition generator is not reachable; " +
                         "the remote stamp '" + prefabName +
@@ -128,28 +112,17 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
         private NativeObjectResult TryRealizeNativeObject(SimulationCommandMessage message, long now)
         {
-            ObjectToolOperationCommand command;
-            try { command = ObjectToolOperationCommand.Decode(message.Body); }
-            catch (System.Exception ex)
-            {
-                // A malformed command from a peer is a protocol/peer problem, not local world
-                // corruption. The decode guard already protected us; drop it, do not resync.
-                SyncLog.Warn(LogTopic.Buildings,
-                    "BuildSync: dropping malformed native object operation: " + ex.Message);
+            if (!CommandDecode.TryDecode(message, ObjectToolOperationCommand.Decode, LogTopic.Buildings,
+                    "BuildSync", out ObjectToolOperationCommand command, "native object operation"))
                 return NativeObjectResult.Rejected;
-            }
 
-            // Permanent is local definition execution policy, not portable operation intent. New
-            // senders remove it during capture; normalize again here so an older or hostile peer
-            // cannot bypass the isolated Temp/apply/drain transaction or turn a resolvable command
-            // into an impossible ten-second retry.
+            // Permanent is local execution policy; strip it so a peer cannot bypass the isolated transaction.
             int normalizedPermanentFlags = NormalizeRemoteObjectCreationFlags(command);
             if (normalizedPermanentFlags > 0)
                 SyncLog.Trace(LogTopic.Buildings, "object operation normalized permanent flags=" +
                     normalizedPermanentFlags);
 
-            string unsafePrefab;
-            if (TryFindUnsafeSimulationReference(command, out unsafePrefab))
+            if (TryFindUnsafeSimulationReference(command, out string unsafePrefab))
             {
                 RecordRefused(unsafePrefab);
                 SyncLog.Trace(LogTopic.Buildings,
@@ -169,22 +142,19 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 return NativeObjectResult.Completed;
             }
 
-            NativeObjectResult placementResult;
-            if (TryRealizePlacementInput(message, command, key, now, out placementResult))
+            if (TryRealizePlacementInput(message, command, key, now, out NativeObjectResult placementResult))
                 return placementResult;
 
             ResolvedObjectDefinition[] resolved;
-            string reason;
             bool equivalentExists;
             bool independentObjectBatch;
             int resolveStartTick = System.Environment.TickCount;
             BeginPortableResolve();
             try
             {
-                if (!TryResolveObjectOperation(command, out resolved, out reason))
+                if (!TryResolveObjectOperation(command, out resolved, out string reason))
                 {
-                    // One line per attempt would be hundreds while an operation waits out its retry
-                    // window; the reason only changes when the world does.
+                    // Log only when the reason changes.
                     if (reason != _lastUnresolvedObjectReason)
                     {
                         _lastUnresolvedObjectReason = reason;
@@ -195,9 +165,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 }
                 _lastUnresolvedObjectReason = null;
                 independentObjectBatch = IsIndependentObjectBatch(command, resolved);
-                // A brush has several independent roots. Testing only RootIndex would suppress
-                // the entire stroke when that one tree was already present; the direct path does
-                // duplicate detection per placement instead.
+                // A brush has several roots; duplicates are checked per placement instead.
                 equivalentExists = !independentObjectBatch &&
                                    EquivalentObjectOperationAlreadyExists(command, resolved);
             }
@@ -228,8 +196,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             }
             catch (System.Exception ex)
             {
-                // The partial definitions are torn down here, so nothing inconsistent was committed.
-                // The operation nevertheless exists on the sender, so repair the known divergence.
+                // Nothing inconsistent was committed, but the sender has the operation: repair the divergence.
                 DestroyDefinitions(created);
                 SyncLog.Warn(LogTopic.Buildings,
                     "BuildSync: native object definitions could not be generated; " +
@@ -254,15 +221,10 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 DestroyDefinitions(created);
                 return NativeObjectResult.Retry;
             }
-            // Register the remote root before the owner-description pass. The root itself is born
-            // during this armed transaction, but its generated children can need that expectation
-            // while their one-frame OwnerDefinition is still present.
+            // Before the owner-description pass, which its children may need.
             TrackCommittedRemoteBuildings(command, resolved);
             RememberPlayerPlacedSpawnables(command, now);
 
-            // Per-phase cost of one native operation. A big relocation is inherently a large
-            // transaction; these numbers say which phase is actually spiking rather than leaving it
-            // to guesswork.
             SyncLog.Trace(LogTopic.Buildings, "object definitions generated op=" +
                 command.OperationId + " defs=" + created.Count + " resolveMS=" +
                 (isolateStartTick - resolveStartTick) + " isolateMS=" +
@@ -272,11 +234,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         }
 
         /// <summary>
-        /// The distinct owners this batch describes by prefab and transform instead of by entity.
-        /// Native generation leaves such a sub-element's owner unset for a later spatial pass to
-        /// fill in; retaining the descriptions lets the commit validator repair a link that pass
-        /// missed. A batch normally describes exactly one owner - all of one placement's sub-nets,
-        /// sub-areas and sub-objects name the same root.
+        /// Owners the batch describes by prefab and transform, kept so the validator can repair a missed
+        /// link. Normally exactly one.
         /// </summary>
         private List<Net.NetSyncSystem.ArmedOwnerDefinition> CollectOwnerDefinitions(
             ObjectToolOperationCommand command, ResolvedObjectDefinition[] resolved)
@@ -306,12 +265,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         }
 
         /// <summary>
-        /// Re-run an ordinary rooted placement from the object tool's inputs. A finished service
-        /// building batch can contain road-alignment and driveway definitions which identify the
-        /// sender's exact edge subdivision. Resolving those definitions one-for-one is impossible
-        /// when the receiver has an equivalent road split into different entities; regenerating the
-        /// batch from the snapped local edge avoids that accidental dependency. Composite
-        /// specialized industries retain their complete captured graph below.
+        /// Regenerates a rooted placement from the tool's inputs and the snapped local edge, instead of
+        /// resolving the sender's road-alignment definitions one-for-one. Specialized industries keep their
+        /// captured graph.
         /// </summary>
         private bool TryRealizePlacementInput(SimulationCommandMessage message,
             ObjectToolOperationCommand command, NativeObjectOperationKey key, long now,
@@ -320,11 +276,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             result = NativeObjectResult.Rejected;
             if (!command.HasPlacementInput) return false;
 
-            // A specialized-industry preview carries attachment selection, lot-surface and access
-            // definitions which are not recoverable from its single placement control point. The
-            // compact generator consequently produces only the placeholder and area. Replay the
-            // complete captured graph below so the visible building and its owned topology commit
-            // as the same transaction.
+            // Specialized industry needs its captured graph: one control point cannot reproduce it.
             if (IsSpecializedIndustryPlacement(command))
             {
                 SyncLog.Trace(LogTopic.Buildings,
@@ -334,10 +286,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             }
 
             ObjectToolDefinitionIntent root = command.Definitions[command.RootIndex];
-            Entity prefab;
             if (!_prefabIndex.TryResolve(root.PrefabName,
                     candidate => ValidateDefinitionPrefab(ObjectToolDefinitionKind.Object, candidate),
-                    out prefab))
+                    out Entity prefab))
             {
                 _lastUnresolvedObjectReason = "placement prefab '" + root.PrefabName +
                                               "' is unavailable or incompatible";
@@ -400,8 +351,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                         "building placement generator unavailable; using exact graph fallback");
                     return false;
                 case NativeDeriveResult.Failed:
-                    // The complete captured graph is still present in the command. A transient
-                    // local generator rejection must not discard the building before trying it.
+                    // Fall back to the captured graph on a transient generator rejection.
                     SyncLog.Trace(LogTopic.Buildings,
                         "building placement regeneration failed; using exact graph fallback");
                     return false;

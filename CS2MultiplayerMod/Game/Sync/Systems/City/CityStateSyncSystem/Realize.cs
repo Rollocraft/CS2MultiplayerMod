@@ -12,11 +12,10 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         private void ApplyIncomingEdits()
         {
             bool any = false;
-            StateEditMessage edit;
-            while (_incomingEdits.TryDequeue(out edit))
+            while (_incomingEdits.TryDequeue(out StateEditMessage edit))
             {
-                IStateChannel channel;
-                if (!_channels.TryGetValue(edit.ChannelId, out channel) || !_editable.Contains(edit.ChannelId))
+                if (!_channels.TryGetValue(edit.ChannelId, out IStateChannel channel) ||
+                    !_editable.Contains(edit.ChannelId))
                 {
                     SyncLog.Warn(LogTopic.City, "CityState: ignoring edit on non-editable channel " +
                         edit.ChannelId + " from player " + edit.OriginPlayerId + ".");
@@ -32,8 +31,6 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 }
                 catch (System.Exception ex)
                 {
-                    // Wire data must never take the host down — malformed or hostile
-                    // edits are dropped, not crashed on.
                     SyncLog.Warn(LogTopic.City, "CityState: dropping bad edit on channel " +
                         edit.ChannelId + ": " + ex.Message);
                 }
@@ -45,21 +42,16 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
         private void ApplyIncoming()
         {
-            // A snapshot is absolute state, so of everything queued for one channel only the
-            // newest can matter. Applying them all in the frame that drains them turned any
-            // hitch into a spiral: the queue that built up during a long frame made the next
-            // frame longer still, which is how one stutter became a stall.
+            // Only the newest snapshot per channel matters; applying every queued one turned a hitch into a stall.
             _newestSnapshot.Clear();
             _newestOrder.Clear();
             int queued = 0;
             int orderedAttempts = 0;
             int orderedDequeuedFromIncoming = 0;
-            StateSnapshotMessage deferred;
             while (!_orderedInvalidated && orderedAttempts < OrderedApplyPerFrame &&
-                   _orderedDeferred.TryDequeue(out deferred))
+                   _orderedDeferred.TryDequeue(out StateSnapshotMessage deferred))
                 ApplyOrdered(deferred, ref orderedAttempts);
-            StateSnapshotMessage snapshot;
-            while (_incoming.TryDequeue(out snapshot))
+            while (_incoming.TryDequeue(out StateSnapshotMessage snapshot))
             {
                 queued++;
                 if (!_channels.ContainsKey(snapshot.ChannelId)) continue;
@@ -85,8 +77,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     continue;
                 }
 
-                // Every snapshot of an editable channel is still inspected, superseded or not:
-                // one of them may be the host echoing our own edit back, which is what retires it.
+                // Every editable snapshot is inspected: one may be the echo that retires our edit.
                 if (_editable.Contains(snapshot.ChannelId) && !ShouldApplyEditable(snapshot)) continue;
 
                 if (!_newestSnapshot.ContainsKey(snapshot.ChannelId))
@@ -149,8 +140,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             {
                 for (int i = 0; i < _pumped.Count; i++)
                 {
-                    // Only the read-only property channels may share the pass; anything that can
-                    // move entities drops the cached snapshots on both sides of its pump.
+                    // Only read-only property channels share the pass; others drop the cached snapshots.
                     bool propertyChannel = _pumped[i] is IPropertyStateChannel;
                     if (!propertyChannel) _propertySpatialPass.Invalidate();
                     try { _pumped[i].Pump(EntityManager); }
@@ -165,13 +155,12 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         }
 
         /// <summary>
-        /// Editable channels honor in-flight edits: matching snapshot confirms it;
-        /// different snapshot held off until edit window expires, then wins.
+        /// A matching snapshot confirms an in-flight edit; a different one waits until the edit window
+        /// expires, then wins.
         /// </summary>
         private bool ShouldApplyEditable(StateSnapshotMessage snapshot)
         {
-            PendingEdit pending;
-            if (_pendingEdits.TryGetValue(snapshot.ChannelId, out pending))
+            if (_pendingEdits.TryGetValue(snapshot.ChannelId, out PendingEdit pending))
             {
                 if (BytesEqual(snapshot.Data, pending.Payload))
                 {
@@ -199,6 +188,5 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 if (a[i] != b[i]) return false;
             return true;
         }
-
     }
 }

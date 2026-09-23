@@ -1,28 +1,16 @@
 using CS2MultiplayerMod.Game.Sync.Infrastructure;
-using System;
-using System.Collections.Generic;
 using System.Diagnostics;
 using CS2MultiplayerMod.Core.Diagnostics;
 using CS2MultiplayerMod.Game.Diagnostics;
 using CS2MultiplayerMod.Game.Sync.Commands;
-using Game.Agents;
-using Game.Buildings;
-using Game.Citizens;
 using Game.Common;
-using Game.Companies;
-using Game.Economy;
 using Game.Prefabs;
-using Game.Simulation;
 using Game.Vehicles;
-using Unity.Collections;
 using Unity.Entities;
-using Unity.Jobs;
 using Unity.Mathematics;
 
 namespace CS2MultiplayerMod.Game.Sync.Systems
 {
-    // A household's owned vehicles, and the name indices a citizen or household is drawn with.
-    // Both are created from the host's roster and traced when a prefab cannot be resolved.
     public partial class ResidentialOccupancySyncSystem
     {
         private void ApplyOwnedVehicles(Entity household, Entity property,
@@ -54,8 +42,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     string name = _prefabIndex.NameOf(
                         EntityManager.GetComponentData<PrefabRef>(vehicle).m_Prefab);
                     if (string.IsNullOrEmpty(name)) continue;
-                    int count;
-                    _localVehiclePrefabCounts.TryGetValue(name, out count);
+                    _localVehiclePrefabCounts.TryGetValue(name, out int count);
                     _localVehiclePrefabCounts[name] = count + 1;
                 }
             }
@@ -66,12 +53,10 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             for (int i = 0; i < desired.Length; i++)
             {
                 string prefabName = desired[i];
-                int matched;
-                _matchedVehiclePrefabCounts.TryGetValue(prefabName, out matched);
+                _matchedVehiclePrefabCounts.TryGetValue(prefabName, out int matched);
                 matched++;
                 _matchedVehiclePrefabCounts[prefabName] = matched;
-                int local;
-                _localVehiclePrefabCounts.TryGetValue(prefabName, out local);
+                _localVehiclePrefabCounts.TryGetValue(prefabName, out int local);
                 if (local >= matched) continue;
 
                 if (_budget.VehiclesCreated >= MaxVehiclesCreatedPerUpdate)
@@ -104,11 +89,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             ScheduleReapply(property);
         }
 
-        /// <summary>
-        /// Cars that already belong to a newly arriving family must exist before its citizens run
-        /// their first behaviour pass. That gives the native trip planner an owned car to reserve
-        /// for the journey from the outside connection to the new home.
-        /// </summary>
+        /// <summary>Owned cars exist before the first behaviour pass, so the arrival trip can use one.</summary>
         private void CreateInitialOwnedVehicles(Entity household, Entity property, Entity source,
             OccupancyHousehold wanted)
         {
@@ -165,19 +146,13 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 SafePrefabName(property) + "' (from '" + SafePrefabName(source) + "').");
         }
 
-        /// <summary>
-        /// A family's surname and a person's first name are stored as indices into localized name
-        /// lists, drawn on each machine from its own clock. Nothing else about the household says
-        /// what it is called, so these have to be copied for two players to be talking about the
-        /// same family.
-        /// </summary>
+        /// <summary>Surname and first-name indices, drawn per machine from its own clock.</summary>
         private void ApplyNameIndices(Entity entity, int[] wanted)
         {
             if (wanted.Length == 0 ||
                 !EntityManager.HasBuffer<RandomLocalizationIndex>(entity)) return;
             var indices = new BufferEdit<RandomLocalizationIndex>(EntityManager, entity);
-            // The local buffer is sized from this peer's own prefab, and the host's name lists are
-            // the same content. Write the slots both sides have and leave any extra alone.
+            // Write the slots both sides have.
             int count = math.min(indices.Length, wanted.Length);
             bool changed = false;
             for (int i = 0; i < count; i++)

@@ -3,7 +3,6 @@ using Unity.Entities;
 using Game;
 using Game.City;
 using Game.Prefabs;
-using Game.Simulation;
 using CS2MultiplayerMod.Core.Diagnostics;
 using CS2MultiplayerMod.Game.Diagnostics;
 using CS2MultiplayerMod.Game.Sync.Channels;
@@ -11,11 +10,8 @@ using CS2MultiplayerMod.Game.Sync.Channels;
 namespace CS2MultiplayerMod.Game.Sync.Systems
 {
     /// <summary>
-    /// The native milestone popup is driven by <see cref="MilestoneReachedEvent"/>, but
-    /// <see cref="DevTreeSystem"/> also awards development points for that event. Remote popup
-    /// events are presentation-only because channel 5 already installs the host's absolute point
-    /// total. Remove only the points produced by our marked events immediately after the native
-    /// consumer runs.
+    /// Remote popup events are presentation only: channel 5 already installs the host's point total,
+    /// so the points <see cref="DevTreeSystem"/> awards for our marked events are removed afterwards.
     /// </summary>
     public partial class RemoteMilestoneRewardCorrectionSystem : GameSystemBase
     {

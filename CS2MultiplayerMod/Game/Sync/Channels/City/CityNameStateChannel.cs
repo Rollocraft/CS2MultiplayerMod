@@ -6,10 +6,8 @@ using CS2MultiplayerMod.Game.Sync.Infrastructure;
 namespace CS2MultiplayerMod.Game.Sync.Channels
 {
     /// <summary>
-    /// Replicates the city's own name. Unlike every other name in the game this one is not on an
-    /// entity - it is city configuration - so it travels as city state rather than through
-    /// <see cref="Systems.NameSyncSystem"/>. Editable: any player may rename the city, the host
-    /// applies the edit and re-broadcasts it.
+    /// The city's own name: city configuration rather than an entity, so it travels as editable city
+    /// state instead of through <see cref="Systems.NameSyncSystem"/>.
     /// </summary>
     public sealed class CityNameStateChannel : IStateChannel
     {

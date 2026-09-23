@@ -1,5 +1,3 @@
-using System.Collections.Concurrent;
-using Game;
 using Game.Buildings;
 using Game.Common;
 using Game.Objects;
@@ -17,15 +15,12 @@ using CS2MultiplayerMod.Game.Sync.Commands;
 namespace CS2MultiplayerMod.Game.Sync.Systems
 {
     /// <summary>
-    /// Replicates service-building upgrades (<see cref="ServiceUpgrade"/>, <see cref="Extension"/>):
-    /// complete spatial upgrades are owned by the atomic object-lifecycle transaction; this legacy
-    /// command remains only for upgrades with no owned geometry. Host charges via
-    /// <see cref="ConstructionCharger"/>.
+    /// Replicates service-building upgrades as the tool's inputs; the receiver regenerates the
+    /// transaction. Drawn-lot upgrades travel through the native object transaction. The host charges
+    /// through <see cref="ConstructionCharger"/>.
     /// </summary>
-    public partial class UpgradeSyncSystem : GameSystemBase
+    public partial class UpgradeSyncSystem : CommandSyncSystem, IRealizeStage
     {
-        private readonly ConcurrentQueue<SimulationCommandMessage> _incoming =
-            new ConcurrentQueue<SimulationCommandMessage>();
         private readonly ReplicationGuard _guard = new ReplicationGuard();
 
         /// <summary>An upgrade can outrun the building it attaches to; hold it until the owner exists.</summary>
@@ -43,7 +38,6 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         private EntityQuery _createdUpgrades;
         private EntityQuery _liveUpgrades;
         private EntityQuery _liveOwners;
-        private CommandObserver _observer;
 
         protected override void OnCreate()
         {
@@ -53,8 +47,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             _prefabIndex = new PrefabIndex(_prefabSystem, GetEntityQuery(ComponentType.ReadOnly<PrefabData>()));
             _buildSync = World.GetOrCreateSystemManaged<BuildSyncSystem>();
 
-            // Owned sub-objects created this frame that are genuine service upgrades —
-            // Any{} keeps out the decorative props the game also parents to buildings.
+            // Owned sub-objects that are real upgrades; Any excludes decorative props.
             _createdUpgrades = GetEntityQuery(new EntityQueryDesc
             {
                 All = SyncQuery.ReadOnly<Created, PrefabRef, Transform, Owner>(),
@@ -76,17 +69,10 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 None = SyncQuery.ReadOnly<Temp, Owner, Deleted>(),
             });
 
-            _observer = SyncObserverBinding.Bind(
-                () => new CommandObserver(_incoming, UpgradePlacementCommand.Id), DrainQueue);
+            ListenFor(new[] { UpgradePlacementCommand.Id });
         }
 
-        protected override void OnDestroy()
-        {
-            SyncObserverBinding.Unbind(_observer, DrainQueue);
-            base.OnDestroy();
-        }
-
-        private void DrainQueue()
+        protected override void DrainQueue()
         {
             SyncInbox.Clear(_incoming);
             _ownerRetry.Clear();
@@ -141,32 +127,21 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     string name = _prefabSystem.GetPrefabName(prefab);
                     if (string.IsNullOrEmpty(name)) continue;
 
-                    // Both tool entry points for an upgrade require ServiceUpgradeData on the prefab
-                    // (UpgradeToolSystem.TrySetPrefab and the object tool's Upgrade mode), so anything
-                    // without it was not placed by a player - a storage yard's container piles, for
-                    // instance, are content the simulation spawns into the lot and would otherwise be
-                    // published as upgrades, frame after frame, until the inbox overflowed.
+                    // Both upgrade tools require ServiceUpgradeData; anything else is simulation lot content.
                     if (!EntityManager.HasComponent<ServiceUpgradeData>(prefab)) continue;
 
-                    // An extractor/storage lot is drawn by the player, so this command cannot describe
-                    // it; the receiver would rebuild the extension around a prefab-default polygon.
-                    // Those travel as the complete native two-tool transaction instead.
+                    // A drawn lot cannot be described here; it travels as the native two-tool transaction.
                     if (!_buildSync.UpgradeOwnedGraphIsPrefabDeterministic(prefab)) continue;
 
                     Transform transform = EntityManager.GetComponentData<Transform>(entity);
                     if (_guard.Consume(UpgradeKey(name, transform.m_Position), now)) continue;
 
-                    // The owner travels as prefab + position so the receiver can find its
-                    // own building entity.
                     Entity owner = EntityManager.GetComponentData<Owner>(entity).m_Owner;
                     if (!EntityManager.HasComponent<PrefabRef>(owner) ||
                         !EntityManager.HasComponent<Transform>(owner)) continue;
 
-                    // An owner Created THIS frame is a brand-new building whose integral sub-objects
-                    // (a helipad's airspace, a fire station's parking) auto-spawn WITH it — not a
-                    // player-applied upgrade. Replicating them re-runs the spawn on the receiver
-                    // (which already made its own with the building) and echoes a duplicate. Only a
-                    // sub-object attached to a PRE-EXISTING building is a real upgrade.
+                    // A new building's integral sub-objects spawn with it; only an addition to an existing building
+                    // is an upgrade.
                     if (EntityManager.HasComponent<Created>(owner)) continue;
                     string ownerName = _prefabSystem.GetPrefabName(EntityManager.GetComponentData<PrefabRef>(owner).m_Prefab);
                     if (string.IsNullOrEmpty(ownerName)) continue;
@@ -175,12 +150,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                         ? EntityManager.GetComponentData<PseudoRandomSeed>(entity).m_Seed
                         : (int)(math.hash(transform.m_Position) & 0xffffu);
 
-                    // Owner + prefab + transform + the placing tool's seed is exactly the input set
-                    // the game's own definition generator takes, so the receiver re-runs that
-                    // generator against its own geometry. Shipping the sender's finished 130-250
-                    // definition batch instead meant resolving every one of its entity references
-                    // here, which is both slow and impossible whenever the two machines have a road
-                    // subdivided differently.
+                    // Owner, prefab, transform and tool seed are the generator's inputs; the receiver re-runs it.
                     var command = new UpgradePlacementCommand
                     {
                         PrefabName = name,
@@ -219,14 +189,13 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 }
             }
 
-            SimulationCommandMessage message;
-            while (_incoming.TryDequeue(out message))
+            while (_incoming.TryDequeue(out SimulationCommandMessage message))
             {
                 if (message.OriginPlayerId == session.LocalPlayerId) continue;
 
-                UpgradePlacementCommand command;
-                try { command = UpgradePlacementCommand.Decode(message.Body); }
-                catch (System.Exception ex) { SyncLog.Warn(LogTopic.Buildings, "UpgradeSync: dropping malformed command: " + ex.Message); continue; }
+                if (!CommandDecode.TryDecode(message, UpgradePlacementCommand.Decode, LogTopic.Buildings,
+                        "UpgradeSync", out UpgradePlacementCommand command))
+                    continue;
 
                 if (TryRealize(command, message.OriginPlayerId, now)) continue;
 
@@ -241,25 +210,18 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             _ownerRetry.Add((command, origin, now + OwnerRetryWindowMs));
         }
 
-        /// <summary>
-        /// Attempt one upgrade; false when its owner building is not (yet) local, so the caller can
-        /// retry. An unknown prefab is a hard drop (returns true — nothing to wait for).
-        /// </summary>
+        /// <summary>False while the owner is not local yet; an unknown prefab is dropped (true).</summary>
         private bool TryRealize(UpgradePlacementCommand command, int origin, long now)
         {
-            Entity prefab, ownerPrefab;
-            if (!_prefabIndex.TryResolve(command.PrefabName, out prefab) ||
-                !_prefabIndex.TryResolve(command.OwnerPrefabName, out ownerPrefab))
+            if (!_prefabIndex.TryResolve(command.PrefabName, out Entity prefab) ||
+                !_prefabIndex.TryResolve(command.OwnerPrefabName, out Entity ownerPrefab))
             {
                 SyncLog.Warn(LogTopic.Buildings, "UpgradeSync realize: unknown prefab '" +
                     command.PrefabName + "'/'" + command.OwnerPrefabName + "'; skipping.");
                 return true;
             }
 
-            // Only a player-placeable service upgrade may be built through this channel: both tool
-            // entry points require ServiceUpgradeData, so anything else is simulation-owned content
-            // (a storage yard's container piles) or an outright forgery, and would be created here
-            // without the links it needs. One test refuses the whole class.
+            // Only player-placeable upgrades; anything else is simulation content or a forgery.
             if (!EntityManager.HasComponent<ServiceUpgradeData>(prefab))
             {
                 SyncLog.Warn(LogTopic.Buildings, "UpgradeSync realize: '" + command.PrefabName +
@@ -274,16 +236,11 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             var position = new float3(command.PosX, command.PosY, command.PosZ);
             var rotation = new quaternion(command.RotX, command.RotY, command.RotZ, command.RotW);
 
-            // Reliable retries and reconnect boundaries must not duplicate an already-realized
-            // extension. Ownership is part of the identity because two nearby service buildings can
-            // legitimately use the same upgrade prefab.
+            // Idempotent across retries; the owner is part of the identity.
             if (FindUpgrade(prefab, position, owner) != Entity.Null) return true;
 
-            // Preferred path: let the game generate the transaction. It produces the host building's
-            // re-commit, the road it attaches to, re-commits of the host's existing sub-nets with
-            // their end nodes preserved, the removal of host sub-nets the new footprint covers, and
-            // the lot-surface snapping that makes the extension's own paths meet the street. None of
-            // that is reproducible by creating the extension alone.
+            // Preferred: the game's generator produces the host re-commit, road attachment, sub-net re-commits
+            // and removals, and lot snapping, none of which creating the extension alone reproduces.
             UpgradePlacementCommand retained = command;
             int retainedOrigin = origin;
             BuildSyncSystem.NativeDeriveResult derived = _buildSync.TryDeriveObjectTransaction(
@@ -358,10 +315,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         }
 
         /// <summary>
-        /// Create the top-level service extension with a direct, already-live owner, then rebuild the
-        /// extension's own owned graph (connection sub-nets, lot sub-areas) from its prefab — the same
-        /// deterministic recipe a building placement uses, so the peer gets the complete extension in
-        /// one atomic realize instead of resolving the sender's 100+ entity batch.
+        /// Fallback: the extension with a live owner, plus its owned graph from the prefab.
         /// </summary>
         private void RealizeUpgrade(Entity prefab, Entity owner, float3 position, quaternion rotation,
             Transform ownerTransform, int randomSeed)
@@ -374,9 +328,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 m_RandomSeed = randomSeed,
                 m_Flags = CreationFlags.Permanent,
             });
-            // World transform travels on the wire; the local one (relative to the owner)
-            // is derived here. m_ParentMesh = -1 means "attached to the building itself,
-            // not one of its sub-meshes" — flagged for in-game tuning.
+            // The wire carries the world transform; derive the owner-relative one. -1: attached to the building.
             quaternion inverseOwner = math.inverse(ownerTransform.m_Rotation);
             EntityManager.AddComponentData(definition, new ObjectDefinition
             {
@@ -393,13 +345,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             EntityManager.AddComponent<Updated>(definition);
             EntityManager.AddComponent<Deleted>(definition);
 
-            // The extension's own connection nets / lot areas, owned by the extension (which is in
-            // turn owned by the building). RealizeOwnedSubElements is a no-op for extensions with no
-            // owned buffers and validates every sub-prefab's game data before emitting, so a missing
-            // component is skipped with a warning rather than crashing the native generators.
-            // lotOwner = the host building: an extension's paths are laid on the host's lot surface,
-            // not at their prefab-local height. That is what the tools do (they pass the building
-            // being upgraded as the lot entity) and it is what makes those paths meet the street.
+            // The extension's owned nets and areas, laid on the host's lot surface as the tools do.
             var random = new Unity.Mathematics.Random((uint)math.max(1, randomSeed));
             _buildSync.RealizeOwnedSubElements(prefab, new OwnerDefinition
             {
@@ -412,17 +358,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         }
 
         /// <summary>
-        /// Re-derive what the tools re-commit as part of the same transaction. Placing an upgrade
-        /// locally does more than add the extension: the host building is re-committed (its
-        /// definition carries <see cref="CreationFlags.Upgrade"/>, so the apply pass tags the
-        /// building <see cref="Updated"/>), and the road it connects to is re-committed together
-        /// with every edge meeting at that road's end nodes.
-        ///
-        /// Those re-commits are what makes the building's paths re-derive their junction with the
-        /// street. Creating only the extension leaves the host and the road untouched, so the new
-        /// connector is built while the street keeps its old derivation - paths that sit beside the
-        /// road without joining it. Tagging is enough here: the systems that own that derivation
-        /// (road connection, sub-net references, composition) all key on Updated.
+        /// Tags what the tools re-commit with an upgrade: the host building and its road with every edge at
+        /// that road's ends, so the new paths re-derive their junction with the street.
         /// </summary>
         private void RederiveHostConnections(Entity owner)
         {
@@ -434,8 +371,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 EntityManager.HasComponent<Deleted>(roadEdge) ||
                 !EntityManager.HasComponent<global::Game.Net.Edge>(roadEdge)) return;
 
-            // Tagging each end node also tags every edge meeting there, which is the same reach the
-            // tools use when the placed object is a building that may not sit on road area.
+            // Tagging an end node also tags every edge meeting there.
             global::Game.Net.Edge ends =
                 EntityManager.GetComponentData<global::Game.Net.Edge>(roadEdge);
             NetAttachment.TagParentUpdated(EntityManager, roadEdge);
@@ -475,6 +411,5 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
         private static string UpgradeKey(string prefabName, float3 position) =>
             "upg|" + ReplicationGuard.Key(prefabName, position);
-
     }
 }

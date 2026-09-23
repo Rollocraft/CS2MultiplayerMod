@@ -10,15 +10,9 @@ using Unity.Entities;
 namespace CS2MultiplayerMod.Game
 {
     /// <summary>
-    /// Puts the main-menu Multiplayer button back when the mod finishes loading after the
-    /// main menu is already on screen. That is what a player gets on the launch that
-    /// installs a mod update: the mod list resolves tens of seconds after the menu is up.
-    ///
-    /// The button is an extension of the game's menu button column, so it only becomes
-    /// visible the next time that column renders - and an idle menu never renders again on
-    /// its own. Re-announcing the mod's UI module location is the game's own path for a
-    /// module that arrives while the interface is running: it re-runs every mod's
-    /// registration and rebuilds the interface around the result.
+    /// Restores the main-menu Multiplayer button when the mod loads after the menu is drawn (usually the
+    /// launch that installs an update). An idle menu never re-renders its button column, so the UI module
+    /// location is re-announced, which re-runs every mod's registration.
     /// </summary>
     internal sealed class MenuUiRecovery
     {
@@ -28,18 +22,13 @@ namespace CS2MultiplayerMod.Game
         /// <summary>Grace after the module reports in before the button counts as missing.</summary>
         private const float SettleSeconds = 5f;
 
-        /// <summary>
-        /// Grace when the module never reported in at all. Longer, because a slow machine
-        /// can take a while to reach the mod in the interface's module load chain.
-        /// </summary>
+        /// <summary>Grace when the module never reported in; slow machines reach it late.</summary>
         private const float MissingModuleSeconds = 45f;
 
         private const float RetrySeconds = 10f;
 
         /// <summary>
-        /// The re-add has to reach the interface in a later frame than the removal: both
-        /// edits hit the same location set, so a pair inside one frame arrives as a single
-        /// unchanged value and the interface never re-reads the module.
+        /// The re-add must land a frame after the removal, or the two cancel into an unchanged value.
         /// </summary>
         private const float ReAddSeconds = 0.5f;
 
@@ -61,8 +50,7 @@ namespace CS2MultiplayerMod.Game
         {
             float now = UnityEngine.Time.realtimeSinceStartup;
 
-            // Nothing else may run while a removal is outstanding: leaving it that way
-            // takes the mod's own interface down for the rest of the session.
+            // An outstanding removal would take the mod's interface down for the session.
             if (_reAddPending)
             {
                 _reAddFrames++;
@@ -74,16 +62,14 @@ namespace CS2MultiplayerMod.Game
             if (float.IsNaN(_firstUpdateAt)) _firstUpdateAt = now;
             if (buttonSeen || _attempts >= MaxAttempts) return;
 
-            // Count from the module reporting in, or from this system's first frame when
-            // it never did - a module whose registration never ran needs the same retry.
+            // From the module reporting in, or from our first frame if it never did.
             float since = moduleReady ? moduleReadyAt : _firstUpdateAt;
             float grace = moduleReady ? SettleSeconds : MissingModuleSeconds;
             if (float.IsNaN(since) || now - since < grace) return;
             if (now - _lastAttemptAt < RetrySeconds) return;
             if (!MenuIsIdle(world)) return;
 
-            // Only worth a retry when the game does know about the module: with no asset
-            // there is nothing to re-announce and the .mjs is genuinely absent.
+            // No asset means the .mjs is genuinely absent; nothing to re-announce.
             if (CouiPath() == null) return;
 
             _lastAttemptAt = now;
@@ -100,10 +86,7 @@ namespace CS2MultiplayerMod.Game
                 "Rebuilding the menu interface (attempt " + _attempts + " of " + MaxAttempts + ").");
         }
 
-        /// <summary>
-        /// Only an idle main menu with no session running: the re-announce restarts every
-        /// mod's UI registration, so it must not land on a screen a player is working in.
-        /// </summary>
+        /// <summary>Idle main menu, no session: the re-announce restarts every mod's UI registration.</summary>
         private static bool MenuIsIdle(World world)
         {
             GameManager manager = GameManager.instance;

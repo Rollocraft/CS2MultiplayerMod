@@ -4,12 +4,9 @@ using CS2MultiplayerMod.Core.Sync;
 namespace CS2MultiplayerMod.Game.Sync.Commands
 {
     /// <summary>
-    /// One event in a zone-grown building's life: it appeared, it changed level, its condition
-    /// changed, or it went away. Zoned buildings are chosen from a per-machine random stream, so
-    /// nothing about them can be re-derived by a peer - the choice itself has to travel.
-    ///
-    /// All four events share one command id so they arrive in the order the host produced them:
-    /// a remove that overtook its own spawn would leave a building standing forever.
+    /// A zone-grown building's spawn, level change, state change or removal; the choice is a per-machine
+    /// random draw, so it travels. One command id keeps them ordered: a remove that overtook its spawn
+    /// would leave the building forever.
     /// </summary>
     public sealed class GrowableLifecycleCommand : ISimulationCommand
     {
@@ -38,39 +35,28 @@ namespace CS2MultiplayerMod.Game.Sync.Commands
 
         public byte Op;
 
-        /// <summary>
-        /// Host-assigned, monotonic. The receiver's idempotence window is keyed on this, so a
-        /// redelivered command is recognised without having to compare its contents.
-        /// </summary>
+        /// <summary>Host-assigned and monotonic; keys the receiver's idempotence window.</summary>
         public uint Sequence;
 
         /// <summary>
-        /// Spawn and level carry the prefab to become; remove and state carry the prefab standing
-        /// there now, which is what disambiguates two buildings sharing a lot corner.
+        /// Spawn and level: the prefab to become. Remove and state: the prefab standing there, which separates
+        /// buildings sharing a lot corner.
         /// </summary>
         public string PrefabName;
 
-        /// <summary>
-        /// World position of the building's own transform. Lot and block indices are rebuilt from
-        /// each machine's own road geometry and are not portable; the position is.
-        /// </summary>
+        /// <summary>The building's transform position; lot and block indices are not portable.</summary>
         public float AnchorX, AnchorY, AnchorZ;
 
         public float RotX, RotY, RotZ, RotW;
 
-        /// <summary>
-        /// Seeds the created building's <c>PseudoRandomSeed</c>, which is what picks the visual
-        /// variant. Without it the same prefab renders as a different house on each machine.
-        /// </summary>
+        /// <summary>Seeds <c>PseudoRandomSeed</c>, which picks the visual variant.</summary>
         public ushort RandomSeed;
 
         public byte Flags;
 
         /// <summary>
-        /// Exact native construction clock. Speed is a per-machine random draw, so carrying only
-        /// <see cref="FlagUnderConstruction"/> makes roughly half the clients finish after the
-        /// host and half before it. State updates also carry these fields so a lost/late spawn
-        /// still converges and host completion is authoritative.
+        /// Exact construction clock: speed is a per-machine draw. State updates carry it too, so a lost spawn
+        /// converges and host completion is authoritative.
         /// </summary>
         public byte ConstructionProgress;
         public byte ConstructionSpeed;
@@ -115,8 +101,7 @@ namespace CS2MultiplayerMod.Game.Sync.Commands
             AnchorY = WireGuard.ReadCoordinate(reader);
             AnchorZ = WireGuard.ReadCoordinate(reader);
 
-            // A spawn and a level change name the prefab to build; without one there is nothing
-            // to create, and a nameless remove would match any building near the anchor.
+            // Spawn and level need a prefab; a nameless remove would match any nearby building.
             if ((Op == OpSpawn || Op == OpLevel) && string.IsNullOrEmpty(PrefabName))
                 throw new ProtocolException("Growable " +
                     (Op == OpSpawn ? "spawn" : "level change") + " carries no prefab.");

@@ -1,7 +1,5 @@
 using System.Collections.Generic;
-using Colossal.Mathematics;
 using Game.Common;
-using Game.Net;
 using Game.Prefabs;
 using Game.Tools;
 using Unity.Collections;
@@ -13,15 +11,12 @@ using CS2MultiplayerMod.Game.Sync.Commands;
 
 namespace CS2MultiplayerMod.Game.Sync.Systems
 {
-    // Publishing an operation once the game has actually committed its object graph, by matching
-    // the entities that appeared against an operation we remember emitting. A miss is described
-    // in detail rather than dropped, because a silent one is a building the other peer never gets.
+    // Publishing once the object graph committed, by matching new entities to a remembered operation.
     public partial class BuildSyncSystem
     {
         /// <summary>
-        /// Correlate any newly-applied object, including an owned service extension, with the exact
-        /// object-tool graph that produced it. This runs before the reduced top-level and upgrade
-        /// capture paths, so one successful match owns the whole native transaction.
+        /// Correlates any newly applied object, including an owned extension, with its preview graph; runs
+        /// before the reduced capture paths.
         /// </summary>
         private bool TryPublishCommittedObjectGraph(long now)
         {
@@ -44,11 +39,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             }
         }
 
-        /// <summary>
-        /// Bind a full preview graph to the root entity that demonstrably committed. Generated
-        /// objects preserve the definition's prefab, transform, and pseudo-random seed, providing
-        /// a stable identity after the transient tool Apply pulse has disappeared.
-        /// </summary>
+        /// <summary>The committed root's prefab, transform and seed identify its preview graph.</summary>
         private bool TryPublishMatchingRecentLocalObjectOperation(List<Entity> created, long now)
         {
             PruneRecentLocalObjectOperations(now);
@@ -74,8 +65,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 {
                     ObjectToolOperationCommand operation =
                         _recentLocalObjectOperations[i].Operation;
-                    ObjectToolDefinitionIntent root;
-                    if (!TryGetNewCommittedObjectRoot(operation, out root) ||
+                    if (!TryGetNewCommittedObjectRoot(operation, out ObjectToolDefinitionIntent root) ||
                         !CommittedRootMatches(root, prefabName, transform, randomSeed)) continue;
 
                     int definitionCount = operation.Definitions.Length;
@@ -115,11 +105,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             float3 expectedPosition = new float3(root.Object.PosX, root.Object.PosY,
                 root.Object.PosZ);
 
-            // Ordinary objects preserve the definition transform verbatim. Road-attached objects
-            // are different: the attachment pass snaps and rotates the committed root after the
-            // definition was sampled. Prefab + random seed still provide the operation identity;
-            // bounded horizontal/vertical checks prevent an unrelated attachment from claiming it
-            // after a seed reuse while still allowing terrain and elevated-road height correction.
+            // Attachment moves road-attached roots; prefab and seed identify, bounded offsets allow height fixes.
             if (HasAttachedCommitIntent(root))
                 return math.distancesq(expectedPosition.xz, transform.m_Position.xz) <=
                            AttachedCommittedRootMatchRadiusSq &&
@@ -169,10 +155,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             string matchingIdentity = string.Empty;
             if (_recentLocalObjectOperations.Count > 0)
             {
-                ObjectToolDefinitionIntent root;
                 if (TryGetNewCommittedObjectRoot(
                         _recentLocalObjectOperations[_recentLocalObjectOperations.Count - 1].Operation,
-                        out root))
+                        out ObjectToolDefinitionIntent root))
                     newest = root.PrefabName + "/" + unchecked((ushort)root.RandomSeed);
 
                 if (EntityManager.Exists(entity) &&

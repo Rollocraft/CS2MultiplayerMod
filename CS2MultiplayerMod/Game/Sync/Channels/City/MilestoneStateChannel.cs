@@ -12,17 +12,16 @@ using CS2MultiplayerMod.Game.Sync.Infrastructure;
 namespace CS2MultiplayerMod.Game.Sync.Channels
 {
     /// <summary>
-    /// Marks a client-side milestone event created only to drive the native popup. The native
-    /// development-tree system also consumes milestone events, so a correction system removes
-    /// the points it would otherwise award a second time.
+    /// Marks a milestone event created only for the native popup; a correction system removes the
+    /// dev-tree points the game would award for it.
     /// </summary>
     internal struct RemoteMilestonePopup : IComponentData
     {
     }
 
     /// <summary>
-    /// Replicates the achieved milestone level and loan limit, then repairs the prefab unlock
-    /// cascade that belongs to every reached milestone. One-time rewards stay host-authoritative.
+    /// Milestone level and loan limit, plus the unlock cascade of every reached milestone. One-time
+    /// rewards stay host-authoritative.
     /// </summary>
     public sealed class MilestoneStateChannel : IStateChannel, IPumpedStateChannel
     {
@@ -44,8 +43,7 @@ namespace CS2MultiplayerMod.Game.Sync.Channels
             _query = em.CreateEntityQuery(
                 ComponentType.ReadWrite<MilestoneLevel>(),
                 ComponentType.ReadWrite<Creditworthiness>());
-            // Match MilestoneSystem's catalogue query. MilestoneData is visible without the
-            // IncludePrefab option required by development-tree node queries.
+            // MilestoneSystem's catalogue query; MilestoneData needs no IncludePrefab.
             _milestones = em.CreateEntityQuery(ComponentType.ReadOnly<MilestoneData>());
             _unlocks = new DeferredPrefabUnlocker(em);
             _barrier = em.World.GetOrCreateSystemManaged<EndFrameBarrier>();
@@ -110,11 +108,8 @@ namespace CS2MultiplayerMod.Game.Sync.Channels
                                 level > _authoritativeLevel &&
                                 m.m_AchievedMilestone < level;
 
-            // A normal local milestone creates both Unlock and MilestoneReachedEvent. Applying
-            // the authoritative level directly skips the latter, so the client never receives
-            // the native popup. The first snapshot is only a baseline (joining an existing city
-            // must not replay its history); later increases get one deferred popup event. Queue
-            // before mutating the city so an event-scheduler failure remains retryable.
+            // Setting the level directly skips MilestoneReachedEvent, so later increases get one deferred
+            // popup; the first snapshot is a baseline. Queue before mutating so a failure stays retryable.
             if (notifyClient)
                 QueuePopup(level, milestoneEntities, milestoneData);
 
@@ -124,11 +119,7 @@ namespace CS2MultiplayerMod.Game.Sync.Channels
             _authoritativeLevel = level;
             _hasAuthoritativeLevel = true;
 
-            // Repair every achieved milestone, even when the number already matched. Older
-            // clients could receive the number without the prefab unlock event, and a later
-            // snapshot must be able to heal that partial state. Unlock does not replay cash or the
-            // loan reward. The separate marked popup event is compensated immediately after the
-            // native development-tree consumer, while the absolute loan value above is idempotent.
+            // Repair every reached milestone's unlocks, which never replays cash or loan rewards.
             int queued = ReconcileUnlocks(em, level, milestoneEntities, milestoneData);
             if (queued > 0)
             {

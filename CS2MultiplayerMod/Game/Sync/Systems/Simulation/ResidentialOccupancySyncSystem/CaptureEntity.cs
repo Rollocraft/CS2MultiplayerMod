@@ -1,7 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.Diagnostics;
-using System.Text;
 using CS2MultiplayerMod.Game.Diagnostics;
 using CS2MultiplayerMod.Game.Sync.Commands;
 using Game.Agents;
@@ -10,21 +8,15 @@ using Game.Citizens;
 using Game.Common;
 using Game.Economy;
 using Game.Prefabs;
-using Game.Simulation;
 using Game.Tools;
 using Game.Vehicles;
-using Unity.Collections;
 using Unity.Entities;
 
 namespace CS2MultiplayerMod.Game.Sync.Systems
 {
-    // Reading one property, household, citizen, owned vehicle or name draw out of the local world
-    // and into the form that travels on the wire.
     public partial class ResidentialOccupancySyncSystem
     {
-        // Capture runs on one property at a time and each result is copied into its own array
-        // before these are reused, so one scratch set per shape is enough for the whole sweep.
-        // None of the Core methods below re-enter one another.
+        // One scratch set per shape: results are copied out before reuse, and nothing re-enters.
         private readonly List<OccupancyHousehold> _captureHouseholds =
             new List<OccupancyHousehold>();
         private readonly List<Entity> _captureHouseholdEntities = new List<Entity>();
@@ -62,8 +54,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             for (int i = 0; i < renters.Length; i++)
             {
                 Entity renter = renters[i].m_Renter;
-                // Companies rent the commercial half of a mixed building. They are a different
-                // simulation with a different authority story; only households are ours.
+                // Companies in a mixed building are channel 22's.
                 if (renter == Entity.Null || !EntityManager.Exists(renter) ||
                     !EntityManager.HasComponent<Household>(renter) ||
                     EntityManager.HasComponent<Deleted>(renter) ||
@@ -71,11 +62,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     EntityManager.HasComponent<TouristHousehold>(renter) ||
                     EntityManager.HasComponent<CommuterHousehold>(renter)) continue;
 
-                // A stale one-way Renter entry is not an occupant. Conversely, a live household
-                // whose reverse PropertyRenter still names this property is an occupant even if an
-                // initialization/removal pass has temporarily hidden one of the components needed
-                // to serialize it. Fail the whole absolute property in that case; omitting the
-                // family would turn a transient read into a remote move-out.
+                // A stale one-way Renter entry is not an occupant; a live household whose PropertyRenter names
+                // this property is, even if a component is briefly missing. Then fail the whole property rather
+                // than omit the family, which would read as a move-out.
                 if (!EntityManager.HasComponent<PropertyRenter>(renter) ||
                     EntityManager.GetComponentData<PropertyRenter>(renter).m_Property != property)
                     continue;
@@ -84,8 +73,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     !EntityManager.HasBuffer<Resources>(renter)) return false;
                 if (households.Count >= ResidentialOccupancySnapshot.MaxHouseholdsPerProperty)
                     return false;
-                OccupancyHousehold household;
-                if (!TryCaptureHousehold(renter, out household)) return false;
+                if (!TryCaptureHousehold(renter, out OccupancyHousehold household)) return false;
                 households.Add(household);
                 householdEntities.Add(renter);
             }
@@ -95,8 +83,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             byte constructionSpeed = 0;
             if (EntityManager.HasComponent<global::Game.Objects.UnderConstruction>(property))
             {
-                // Zero means finished, so a site whose speed has not been drawn yet still reads as
-                // "building". One is as slow as the game ever goes.
+                // Zero means finished, so an undrawn speed still reads as building.
                 byte speed = EntityManager
                     .GetComponentData<global::Game.Objects.UnderConstruction>(property).m_Speed;
                 constructionSpeed = speed == 0 ? (byte)1 : speed;
@@ -128,9 +115,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     ResidentialOccupancySnapshot.MaxUtilityConsumption),
                 Households = households.ToArray(),
             };
-            // City-state capture is shared: never let a broken local asset name or transform reach
-            // Write, where a throw would suppress every other channel in the same snapshot. Host
-            // identity tracking is committed only after this complete property is valid too.
+            // A throw in Write would suppress every channel; identity tracking commits only after this.
             if (!ResidentialOccupancySnapshot.IsValidProperty(result)) return false;
 
             MultiplayerService service = Mod.Service;
@@ -197,10 +182,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     !EntityManager.HasComponent<HouseholdMember>(citizenEntity) ||
                     EntityManager.GetComponentData<HouseholdMember>(citizenEntity).m_Household != entity)
                     return false;
-                OccupancyCitizen citizen;
-                // An absolute roster must never turn a transient/incomplete read into a remote
-                // deletion. Retry the whole property on a later capture instead.
-                if (!TryCaptureCitizen(citizenEntity, out citizen)) return false;
+                // Never let an incomplete read become a remote deletion; retry the property later.
+                if (!TryCaptureCitizen(citizenEntity, out OccupancyCitizen citizen)) return false;
                 citizens[i] = citizen;
             }
 
@@ -226,8 +209,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 }
             }
 
-            string[] ownedVehicles;
-            if (!TryCaptureOwnedVehicles(entity, out ownedVehicles)) return false;
+            if (!TryCaptureOwnedVehicles(entity, out string[] ownedVehicles)) return false;
 
             bool hasTaxPayer = EntityManager.HasComponent<TaxPayer>(entity);
             TaxPayer taxPayer = hasTaxPayer
@@ -314,11 +296,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             return true;
         }
 
-        /// <summary>
-        /// The random name slots behind a family surname or a person's first name. Drawn per
-        /// machine, so they are the difference between "the same family" and "a family with the
-        /// same numbers".
-        /// </summary>
+        /// <summary>Random name slots, drawn per machine: what makes it the same family, not a lookalike.</summary>
         private int[] CaptureNameIndices(Entity entity)
         {
             if (!EntityManager.HasBuffer<RandomLocalizationIndex>(entity)) return EmptyNameIndices;

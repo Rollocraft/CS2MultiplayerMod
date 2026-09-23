@@ -1,20 +1,12 @@
 using System.Collections.Generic;
 using Colossal.Mathematics;
-using Game.Common;
-using Game.Net;
 using Game.Prefabs;
-using Game.Simulation;
-using Game.Tools;
-using Unity.Collections;
 using Unity.Entities;
 using Unity.Mathematics;
 using CS2MultiplayerMod.Game.Sync.Commands;
 
 namespace CS2MultiplayerMod.Game.Sync.Systems.Net
 {
-    // The curve arithmetic the matching leans on: whether a source curve is covered by the edges
-    // standing there now, which way an edge runs along it, and reading a curve back out of each
-    // kind of command.
     public partial class NetSyncSystem
     {
         private static Dictionary<int, List<MixedDeleteAction>> GroupMixedDeletes(
@@ -23,8 +15,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
             var result = new Dictionary<int, List<MixedDeleteAction>>();
             for (int i = 0; i < actions.Count; i++)
             {
-                List<MixedDeleteAction> list;
-                if (!result.TryGetValue(actions[i].ItemIndex, out list))
+                if (!result.TryGetValue(actions[i].ItemIndex, out List<MixedDeleteAction> list))
                 {
                     list = new List<MixedDeleteAction>();
                     result[actions[i].ItemIndex] = list;
@@ -40,8 +31,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
             var result = new Dictionary<int, List<MixedReplaceAction>>();
             for (int i = 0; i < actions.Count; i++)
             {
-                List<MixedReplaceAction> list;
-                if (!result.TryGetValue(actions[i].ItemIndex, out list))
+                if (!result.TryGetValue(actions[i].ItemIndex, out List<MixedReplaceAction> list))
                 {
                     list = new List<MixedReplaceAction>();
                     result[actions[i].ItemIndex] = list;
@@ -57,8 +47,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
             for (int i = 0; i < targets.Count; i++)
             {
                 if (targets[i].Prefab != prefab) continue;
-                float t;
-                if (MathUtils.Distance(targets[i].Curve.xz, point.xz, out t) >
+                if (MathUtils.Distance(targets[i].Curve.xz, point.xz, out float t) >
                     MixedMutationTolXZ) continue;
                 if (math.abs(MathUtils.Position(targets[i].Curve, t).y - point.y) <=
                     MixedMutationTolY) return i;
@@ -113,23 +102,19 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
 
         private static bool MixedPointOnCurve(float3 point, Bezier4x3 curve)
         {
-            float t;
-            if (MathUtils.Distance(curve.xz, point.xz, out t) > MixedMutationTolXZ)
+            if (MathUtils.Distance(curve.xz, point.xz, out float t) > MixedMutationTolXZ)
                 return false;
             return math.abs(MathUtils.Position(curve, t).y - point.y) <= MixedMutationTolY;
         }
 
-        private static bool MixedBothEndsOnCurve(Bezier4x3 edge, Bezier4x3 source)
-        {
-            return MixedPointOnCurve(edge.a, source) && MixedPointOnCurve(edge.d, source);
-        }
+        private static bool MixedBothEndsOnCurve(Bezier4x3 edge, Bezier4x3 source) =>
+            MixedPointOnCurve(edge.a, source) && MixedPointOnCurve(edge.d, source);
 
         private static bool MixedRunsForwardOnCurve(Bezier4x3 edge, Bezier4x3 source)
         {
             if (!MixedBothEndsOnCurve(edge, source)) return false;
-            float startT, endT;
-            MathUtils.Distance(source.xz, edge.a.xz, out startT);
-            MathUtils.Distance(source.xz, edge.d.xz, out endT);
+            MathUtils.Distance(source.xz, edge.a.xz, out float startT);
+            MathUtils.Distance(source.xz, edge.d.xz, out float endT);
             return endT >= startT;
         }
 

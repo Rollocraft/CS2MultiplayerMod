@@ -16,10 +16,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
     public partial class RouteSyncSystem
     {
         /// <summary>
-        /// Treat routes already present when gameplay synchronization opens as world state, not as
-        /// local edits. A route whose graph is still initializing remains in the baseline set until
-        /// a complete snapshot can be read, preventing a freshly loaded world from echoing all of
-        /// its lines back as new commands.
+        /// Routes present when sync opens are world state, not local edits. Initializing routes stay in
+        /// the baseline until readable, so a loaded world does not echo its lines back.
         /// </summary>
         private void BaselineLiveRoutes()
         {
@@ -33,8 +31,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             {
                 for (int i = 0; i < entities.Length; i++)
                 {
-                    RouteSnapshot snapshot;
-                    if (TryCaptureSnapshot(entities[i], out snapshot))
+                    if (TryCaptureSnapshot(entities[i], out RouteSnapshot snapshot))
                         _knownRoutes[entities[i]] = snapshot;
                     else
                         _baselinePendingRoutes.Add(entities[i]);
@@ -53,8 +50,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         private bool TryCaptureSnapshot(Entity route, out RouteSnapshot snapshot)
         {
             snapshot = default(RouteSnapshot);
-            RouteWaypointIntent[] waypoints;
-            if (!TryCaptureWaypoints(route, out waypoints)) return false;
+            if (!TryCaptureWaypoints(route, out RouteWaypointIntent[] waypoints)) return false;
 
             Route routeData = EntityManager.GetComponentData<Route>(route);
             snapshot = new RouteSnapshot
@@ -69,9 +65,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 EntityManager.GetComponentData<PrefabRef>(route).m_Prefab;
             if (!EntityManager.HasComponent<TransportLineData>(prefab)) return true;
 
-            // The route tool only commits a public transport line once its loop closes, and the
-            // line number is assigned a frame later - either missing means the graph is still
-            // settling. Waypoints without a stop are legitimate: they only shape the path.
+            // A line commits once its loop closes and gets its number a frame later. Stopless waypoints only
+            // shape the path.
             if (!snapshot.IsComplete || snapshot.RouteNumber <= 0) return false;
             for (int i = 0; i < waypoints.Length; i++)
                 if (!string.IsNullOrEmpty(waypoints[i].StopPrefabName))
@@ -79,11 +74,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             return false;
         }
 
-        /// <summary>
-        /// Captures the route's owned waypoint entities and their optional Connected stop. A
-        /// transiently invalid reference makes the whole snapshot unavailable; publishing only part
-        /// of a route would be worse than retrying on the next scan.
-        /// </summary>
+        /// <summary>Owned waypoints and their stops; any invalid reference makes the snapshot unavailable.</summary>
         private bool TryCaptureWaypoints(Entity route, out RouteWaypointIntent[] result)
         {
             result = null;
@@ -110,8 +101,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     Z = position.z,
                 };
 
-                // No connection component at all means a path-shaping waypoint; a connection that
-                // was cleared (its stop bulldozed) leaves the same empty intent behind.
+                // No connection, or one whose stop was bulldozed: a path-shaping waypoint.
                 if (EntityManager.HasComponent<Connected>(waypointEntity))
                 {
                     Entity stop =
@@ -142,10 +132,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             value.StopY = stopTransform.m_Position.y;
             value.StopZ = stopTransform.m_Position.z;
 
-            // The owner only disambiguates identical platforms of one station. A stop that has none,
-            // or whose chain cannot be walked, still has a usable prefab-and-position identity.
-            Entity topOwner;
-            if (!TryFindTopOwner(stop, out topOwner) || topOwner == Entity.Null ||
+            // The owner only disambiguates identical platforms of one station.
+            if (!TryFindTopOwner(stop, out Entity topOwner) || topOwner == Entity.Null ||
                 !EntityManager.HasComponent<PrefabRef>(topOwner) ||
                 !EntityManager.HasComponent<global::Game.Objects.Transform>(topOwner))
                 return true;
@@ -191,8 +179,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                         EntityManager.GetComponentData<PrefabRef>(entity).m_Prefab);
                     if (string.IsNullOrEmpty(name)) continue;
 
-                    RouteSnapshot snapshot;
-                    if (!TryCaptureSnapshot(entity, out snapshot))
+                    if (!TryCaptureSnapshot(entity, out RouteSnapshot snapshot))
                     {
                         if (!_baselinePendingRoutes.Contains(entity))
                             _needsCreateCapture.Add(entity);
@@ -205,8 +192,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                         _knownRoutes[entity] = snapshot;
                         continue;
                     }
-                    RouteSnapshot known;
-                    if (_knownRoutes.TryGetValue(entity, out known) &&
+                    if (_knownRoutes.TryGetValue(entity, out RouteSnapshot known) &&
                         SnapshotsEqual(known, snapshot))
                     {
                         _needsCreateCapture.Remove(entity);
@@ -329,8 +315,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         private bool TryGetDeleteFallback(Entity entity, out float3 first,
             out int routeNumber)
         {
-            RouteSnapshot snapshot;
-            if (_knownRoutes.TryGetValue(entity, out snapshot) &&
+            if (_knownRoutes.TryGetValue(entity, out RouteSnapshot snapshot) &&
                 snapshot.Waypoints != null && snapshot.Waypoints.Length != 0)
             {
                 first = WaypointPosition(snapshot.Waypoints[0]);
@@ -373,10 +358,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         }
 
         /// <summary>
-        /// Compares a source-world intent with a receiver-world snapshot. Connected objects can
-        /// differ slightly in position after independent terrain/object realization, so this uses
-        /// the same bounded tolerances as stop resolution while retaining exact prefab identity.
-        /// The owner is only a disambiguator: it is compared when both sides recorded one.
+        /// Compares a source intent with a local snapshot using the stop tolerances and exact prefab;
+        /// owners are compared only when both sides have one.
         /// </summary>
         private static bool WaypointsMatchIntent(RouteWaypointIntent[] local,
             RouteWaypointIntent[] intent)
@@ -435,10 +418,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         private static float3 OwnerPosition(RouteWaypointIntent waypoint) =>
             new float3(waypoint.OwnerX, waypoint.OwnerY, waypoint.OwnerZ);
 
-        /// <summary>
-        /// Content comparison catches edits that do not reliably surface as Created/Deleted:
-        /// waypoint/stop changes, recolors, completion changes, and line renumbering.
-        /// </summary>
+        /// <summary>Content comparison: edits that do not surface as Created/Deleted.</summary>
         private void ScanForEdits(MultiplayerSession session, long now)
         {
             if (now - _lastEditScanMs < EditScanIntervalMs) return;
@@ -459,11 +439,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 for (int i = 0; i < entities.Length; i++)
                 {
                     Entity entity = entities[i];
-                    RouteSnapshot snapshot;
-                    if (!TryCaptureSnapshot(entity, out snapshot))
+                    if (!TryCaptureSnapshot(entity, out RouteSnapshot snapshot))
                     {
-                        RouteSnapshot retained;
-                        if (_knownRoutes.TryGetValue(entity, out retained))
+                        if (_knownRoutes.TryGetValue(entity, out RouteSnapshot retained))
                             _nextRoutes[entity] = retained;
                         continue;
                     }
@@ -472,8 +450,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                         _pendingUpdateCommit.Route == entity &&
                         IsExpectedPendingUpdateState(snapshot, _pendingUpdateCommit))
                     {
-                        RouteSnapshot retained;
-                        if (_knownRoutes.TryGetValue(entity, out retained))
+                        if (_knownRoutes.TryGetValue(entity, out RouteSnapshot retained))
                             _nextRoutes[entity] = retained;
                         continue;
                     }
@@ -485,9 +462,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                         continue;
                     }
 
-                    // A route that became readable only now is new to this world only if we are not
-                    // already tracking it: a line realized from a remote command is finalized into
-                    // the known set, and republishing it would echo it back to its author.
+                    // A remotely realized line is already known; republishing it would echo it back.
                     if (_needsCreateCapture.Remove(entity) && !_knownRoutes.ContainsKey(entity))
                     {
                         string delayedName = _prefabSystem.GetPrefabName(
@@ -496,8 +471,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                             PublishCreate(session, entity, delayedName, snapshot, now);
                     }
 
-                    RouteSnapshot old;
-                    bool had = _knownRoutes.TryGetValue(entity, out old);
+                    bool had = _knownRoutes.TryGetValue(entity, out RouteSnapshot old);
                     _nextRoutes[entity] = snapshot;
                     if (!had || SnapshotsEqual(old, snapshot)) continue;
 

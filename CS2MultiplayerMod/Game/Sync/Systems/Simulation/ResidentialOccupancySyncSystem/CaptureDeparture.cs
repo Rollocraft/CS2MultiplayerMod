@@ -1,25 +1,15 @@
-using System;
 using System.Collections.Generic;
-using System.Diagnostics;
-using System.Text;
 using CS2MultiplayerMod.Game.Sync.Commands;
 using CS2MultiplayerMod.Game.Sync.Infrastructure;
 using Game.Buildings;
 using Game.Citizens;
 using Game.Common;
-using Game.Economy;
-using Game.Prefabs;
-using Game.Simulation;
-using Game.Tools;
-using Game.Vehicles;
 using Unity.Collections;
 using Unity.Entities;
 
 namespace CS2MultiplayerMod.Game.Sync.Systems
 {
-    // Noticing that a household or citizen the host was tracking has gone, and recording it so the
-    // client retires its own copy. A departure has to be stated explicitly: an absolute roster
-    // only says who is there, never who left.
+    // Departures must be stated explicitly: an absolute roster only says who is there.
     public partial class ResidentialOccupancySyncSystem
     {
         private void AddDepartureRecords(ResidentialOccupancySnapshot snapshot, PageBudget budget,
@@ -29,10 +19,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             while (examined-- > 0 &&
                    snapshot.Departures.Count < HostDeparturesPerPage)
             {
-                ulong householdId;
-                if (!_hostDepartureOrder.TryDequeue(out householdId)) break;
-                HostDeparture departure;
-                if (!_hostDepartures.TryGetValue(householdId, out departure))
+                if (!_hostDepartureOrder.TryDequeue(out ulong householdId)) break;
+                if (!_hostDepartures.TryGetValue(householdId, out HostDeparture departure))
                 {
                     _hostDepartureOrderMembers.Remove(householdId);
                     continue;
@@ -63,10 +51,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             while (examined-- > 0 &&
                    snapshot.CitizenDepartures.Count < HostCitizenDeparturesPerPage)
             {
-                ulong citizenId;
-                if (!_hostCitizenDepartureOrder.TryDequeue(out citizenId)) break;
-                HostDeparture departure;
-                if (!_hostCitizenDepartures.TryGetValue(citizenId, out departure))
+                if (!_hostCitizenDepartureOrder.TryDequeue(out ulong citizenId)) break;
+                if (!_hostCitizenDepartures.TryGetValue(citizenId, out HostDeparture departure))
                 {
                     _hostCitizenDepartureOrderMembers.Remove(citizenId);
                     continue;
@@ -96,8 +82,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         private void RecordHostDeparture(ulong householdId, ulong revision, long now,
             bool unhoused)
         {
-            HostDeparture existing;
-            if (_hostDepartures.TryGetValue(householdId, out existing))
+            if (_hostDepartures.TryGetValue(householdId, out HostDeparture existing))
             {
                 if (revision > existing.Revision)
                 {
@@ -132,8 +117,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         private void RecordHostCitizenDeparture(ulong citizenId, ulong revision, long now)
         {
             if (citizenId == 0 || revision == 0) return;
-            HostDeparture existing;
-            if (_hostCitizenDepartures.TryGetValue(citizenId, out existing))
+            if (_hostCitizenDepartures.TryGetValue(citizenId, out HostDeparture existing))
             {
                 if (revision > existing.Revision) existing.Revision = revision;
                 existing.ExpiresMs = now + DepartureRetentionMs;
@@ -156,9 +140,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         }
 
         /// <summary>
-        /// Moving-away households are few and may lose their renter link before their property's
-        /// rotating change bucket is sampled. Scan that explicit lifecycle component directly and
-        /// retain its tombstone across many outbound pages.
+        /// Scans MovingAway directly: a household can lose its renter link before its property's bucket
+        /// is sampled. Tombstones are retained across many pages.
         /// </summary>
         private void ScanHostDepartures(long now)
         {
@@ -172,15 +155,11 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     Entity household = households[i];
                     ulong householdId = PackHostEntityId(household);
                     if (householdId == 0) continue;
-                    HostDeparture known;
-                    bool tracked = _hostDepartures.TryGetValue(householdId, out known) &&
+                    bool tracked = _hostDepartures.TryGetValue(householdId, out HostDeparture known) &&
                                    !known.Unhoused;
 
-                    // The native move-away executor runs on a wider interval than this
-                    // every-frame boundary, so the same family sits in this query for a stretch of
-                    // frames. Once its members are tombstoned there is nothing left to harvest and
-                    // only the retention window still needs pushing forward; a member the family
-                    // gains afterwards is caught by the tracked-citizen scan.
+                    // The executor runs on a wider interval, so a family stays here for several frames; once
+                    // tombstoned only its retention window moves forward.
                     if (tracked && !_hostHouseholds.ContainsKey(householdId) &&
                         !_hostHouseholdCitizens.ContainsKey(householdId))
                     {
@@ -211,8 +190,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 _hostHouseholdOrder.Count);
             while (examined-- > 0 && _hostHouseholdOrder.TryDequeue(out ulong householdId))
             {
-                Entity household;
-                if (!_hostHouseholds.TryGetValue(householdId, out household))
+                if (!_hostHouseholds.TryGetValue(householdId, out Entity household))
                 {
                     _hostHouseholdOrderMembers.Remove(householdId);
                     continue;
@@ -224,9 +202,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     bool housed = HasCompleteHostRenterLink(household);
                     if (!housed)
                     {
-                        HostDeparture known;
                         ulong releaseRevision =
-                            _hostDepartures.TryGetValue(householdId, out known)
+                            _hostDepartures.TryGetValue(householdId, out HostDeparture known)
                                 ? known.Revision : NextHostRevision();
                         RecordHostDeparture(householdId, releaseRevision, now, true);
                     }
@@ -247,10 +224,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         {
             if (!EntityManager.HasComponent<PropertyRenter>(household)) return false;
             Entity property = EntityManager.GetComponentData<PropertyRenter>(household).m_Property;
-            // Many consecutive families share a tower. Index its renter list once in this
-            // read-only pass instead of searching it again for each family (quadratic work).
-            bool firstVisit;
-            HashSet<Entity> members = _hostRenterMembership.GetMembers(property, out firstVisit);
+            // Index a tower's renter list once, not per family.
+            HashSet<Entity> members = _hostRenterMembership.GetMembers(property, out bool firstVisit);
             if (firstVisit && IsLiveProperty(property))
             {
                 DynamicBuffer<Renter> renters = EntityManager.GetBuffer<Renter>(property, true);
@@ -272,18 +247,15 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 _hostHouseholdOrder.Enqueue(householdId);
             _hostHouseholds[householdId] = household;
 
-            HostDeparture departure;
             if (!captured.Departing &&
-                _hostDepartures.TryGetValue(householdId, out departure) &&
+                _hostDepartures.TryGetValue(householdId, out HostDeparture departure) &&
                 revision > departure.Revision)
                 _hostDepartures.Remove(householdId);
         }
 
         /// <summary>
-        /// A person can disappear from a surviving household without the household itself moving
-        /// away. Retain the last successfully captured local entity for each host id and inspect a
-        /// bounded slice every update, so even a short-lived Deleted tag becomes an eventual exact
-        /// tombstone after the entity handle ceases to exist.
+        /// A person can leave a surviving household. The last captured entity per host id is inspected
+        /// in bounded slices, so even a short-lived Deleted tag becomes a tombstone.
         /// </summary>
         private void ScanTrackedHostCitizens(long now)
         {
@@ -291,8 +263,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 _hostCitizenOrder.Count);
             while (examined-- > 0 && _hostCitizenOrder.TryDequeue(out ulong citizenId))
             {
-                HostCitizenObservation observed;
-                if (!_hostCitizens.TryGetValue(citizenId, out observed))
+                if (!_hostCitizens.TryGetValue(citizenId, out HostCitizenObservation observed))
                 {
                     _hostCitizenOrderMembers.Remove(citizenId);
                     continue;
@@ -316,8 +287,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             OccupancyHousehold captured, ulong revision, long now)
         {
             ulong householdId = captured.HouseholdId;
-            ulong[] previous;
-            if (_hostHouseholdCitizens.TryGetValue(householdId, out previous))
+            if (_hostHouseholdCitizens.TryGetValue(householdId, out ulong[] previous))
             {
                 for (int i = 0; i < previous.Length; i++)
                 {
@@ -331,15 +301,13 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     }
                     if (stillHere) continue;
 
-                    HostCitizenObservation observed;
-                    if (!_hostCitizens.TryGetValue(previousId, out observed)) continue;
+                    if (!_hostCitizens.TryGetValue(previousId, out HostCitizenObservation observed)) continue;
                     Entity citizen = observed.Entity;
                     if (citizen != Entity.Null && EntityManager.Exists(citizen) &&
                         EntityManager.HasComponent<Citizen>(citizen) &&
                         !EntityManager.HasComponent<Deleted>(citizen))
                     {
-                        // A live person absent here may be in a household split whose destination
-                        // page has not been captured yet. Do not infer a departure from absence.
+                        // A live person absent here may be in a household split whose destination is not captured yet.
                         continue;
                     }
                     RecordHostCitizenDeparture(previousId, revision, now);
@@ -349,9 +317,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
             DynamicBuffer<HouseholdCitizen> members =
                 EntityManager.GetBuffer<HouseholdCitizen>(household, true);
-            // A family's roster is re-observed on every pass and almost never differs. Writing back
-            // into the array already stored for this household keeps the common case free of an
-            // allocation; a household is only re-keyed when its member count actually changed.
+            // Reuse the stored array unless the member count changed: no allocation in the common case.
             int count = captured.Citizens.Length;
             bool reuse = previous != null && previous.Length == count;
             ulong[] current = reuse ? previous : new ulong[count];
@@ -359,16 +325,14 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             {
                 ulong citizenId = captured.Citizens[i].CitizenId;
                 current[i] = citizenId;
-                HostCitizenObservation observed;
-                if (!_hostCitizens.TryGetValue(citizenId, out observed) &&
+                if (!_hostCitizens.TryGetValue(citizenId, out HostCitizenObservation observed) &&
                     _hostCitizenOrderMembers.Add(citizenId))
                     _hostCitizenOrder.Enqueue(citizenId);
                 observed.Entity = members[i].m_Citizen;
                 observed.HouseholdId = householdId;
                 _hostCitizens[citizenId] = observed;
 
-                HostDeparture departure;
-                if (_hostCitizenDepartures.TryGetValue(citizenId, out departure) &&
+                if (_hostCitizenDepartures.TryGetValue(citizenId, out HostDeparture departure) &&
                     revision > departure.Revision)
                     _hostCitizenDepartures.Remove(citizenId);
             }
@@ -397,21 +361,17 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 }
             }
 
-            ulong[] previous;
-            if (!_hostHouseholdCitizens.TryGetValue(householdId, out previous)) return;
+            if (!_hostHouseholdCitizens.TryGetValue(householdId, out ulong[] previous)) return;
             for (int i = 0; i < previous.Length; i++)
             {
-                HostCitizenObservation observed;
-                if (_hostCitizens.TryGetValue(previous[i], out observed))
+                if (_hostCitizens.TryGetValue(previous[i], out HostCitizenObservation observed))
                 {
                     bool stillLive = observed.Entity != Entity.Null &&
                                      EntityManager.Exists(observed.Entity) &&
                                      EntityManager.HasComponent<Citizen>(observed.Entity) &&
                                      !EntityManager.HasComponent<Deleted>(observed.Entity);
-                    // A vanished shell is not proof that its live residents left the city: a
-                    // household split may have moved them before the destination was captured.
-                    // Consult the live reverse link, not the last captured household id: that
-                    // observation is intentionally stale until the destination property appears.
+                    // A vanished shell does not prove its residents left; a split may have moved them. Check the
+                    // live reverse link.
                     if (stillLive)
                     {
                         bool stillBelongsToDepartingHousehold = household != Entity.Null &&

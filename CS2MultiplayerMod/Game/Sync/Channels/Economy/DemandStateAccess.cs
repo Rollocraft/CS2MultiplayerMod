@@ -13,10 +13,8 @@ using CS2MultiplayerMod.Game.Diagnostics;
 namespace CS2MultiplayerMod.Game.Sync.Channels
 {
     /// <summary>
-    /// Complete externally observable state of the three vanilla zone-demand systems. Their public
-    /// API exposes arrays and lagged headline values but no setters, although those exact values are
-    /// serialized by Game.dll. The multiplayer client holds the local writers and installs this
-    /// host snapshot into the same native storage.
+    /// The full state of the three zone-demand systems. They expose no setters for the values the game
+    /// serializes, so the client holds the local writers and installs this snapshot into their storage.
     /// </summary>
     internal sealed class DemandStateSnapshot
     {
@@ -24,13 +22,8 @@ namespace CS2MultiplayerMod.Game.Sync.Channels
         private const int MaxArrayLength = 128;
 
         /// <summary>
-        /// Only the six building/company values the HUD bars read are clamped to 0..100 at runtime.
-        /// The residential household demand is capped at 200 and is a sum of signed factors, so it
-        /// also goes negative; the storage building demand is a fractional-power curve of an
-        /// unbounded accumulator; and the three company demands are never bounded at all. A 0..100
-        /// check therefore refused nearly every real snapshot and the channel silently delivered
-        /// nothing. This bound exists only to catch a framing desync - the array lengths below are
-        /// the structural guard, and a wrong scalar costs one second of a wrong bar.
+        /// Only a framing check: household demand reaches 200 and goes negative, storage and company demand
+        /// are unbounded. The array lengths are the structural guard.
         /// </summary>
         private const int DemandBound = 1000000;
 
@@ -154,9 +147,8 @@ namespace CS2MultiplayerMod.Game.Sync.Channels
     }
 
     /// <summary>
-    /// Narrow reflection seam over fields which Game.dll serializes but does not make writable.
-    /// Field names and array counts are validated before any mutation; protocol negotiation already
-    /// rejects a peer built for another game/mod wire layout.
+    /// Reflection over serialized but non-writable fields. Names and array counts are validated before
+    /// any write; protocol negotiation rejects other builds.
     /// </summary>
     internal static class DemandStateAccess
     {
@@ -242,8 +234,7 @@ namespace CS2MultiplayerMod.Game.Sync.Channels
             if (residential == null || commercial == null || industrial == null || snapshot == null)
                 throw new InvalidOperationException("Zone-demand systems are not available.");
 
-            // A demand job may have finished writing while a spawner/UI job still reads its arrays.
-            // Complete both sides before replacing native storage from the main thread.
+            // Complete writers and readers before replacing native storage.
             CompleteJob(residential, "m_WriteDependencies");
             CompleteJob(residential, "m_ReadDependencies");
             CompleteJob(commercial, "m_WriteDependencies");
@@ -251,10 +242,8 @@ namespace CS2MultiplayerMod.Game.Sync.Channels
             CompleteJob(industrial, "m_WriteDependencies");
             CompleteJob(industrial, "m_ReadDependencies");
 
-            // Headline values first. These six scalars are what CityInfoUISystem reads to ease the
-            // toolbar demand bars, and the client's demand systems are held on them. They cannot
-            // fail a version check, so they are written unconditionally - a mismatch in the factor
-            // arrays below must never leave the bars without a host value to follow.
+            // Headline values first and unconditionally: they drive the toolbar bars, which must always have a
+            // host value even if the factor arrays below mismatch.
             SetNativeValue(residential, "m_HouseholdDemand", snapshot.ResidentialCurrentHousehold);
             SetNativeValue(residential, "m_BuildingDemand", snapshot.ResidentialCurrentBuilding);
             SetField(residential, "m_LastHouseholdDemand", snapshot.ResidentialLastHousehold);
@@ -271,9 +260,7 @@ namespace CS2MultiplayerMod.Game.Sync.Channels
                 SetField(industrial, IndustrialLastFields[i], snapshot.IndustrialLast[i]);
             }
 
-            // Factor/resource arrays feed only the expandable "why" breakdown in the City Info
-            // panel. A length mismatch against this game build leaves that breakdown locally
-            // simulated; it must not abort the headline write or unwind the authority hold.
+            // Factor arrays only feed the City Info breakdown; a mismatch leaves it local.
             try
             {
                 ValidateArrayLengths(residential, ResidentialArrayFields, snapshot.ResidentialArrays);
@@ -314,7 +301,7 @@ namespace CS2MultiplayerMod.Game.Sync.Channels
         private static void ValidateArrayLengths(object system, string[] names, int[][] incoming)
         {
             if (incoming == null || incoming.Length != names.Length)
-                throw new ProtocolException("Zone-demand array group count differs from Game.dll.");
+                throw new ProtocolException("Zone-demand array group count differs from this game build.");
             for (int i = 0; i < names.Length; i++)
             {
                 NativeArray<int> local = GetArray(system, names[i]);
@@ -364,10 +351,9 @@ namespace CS2MultiplayerMod.Game.Sync.Channels
         private static FieldInfo GetField(Type type, string name)
         {
             string key = type.FullName + "|" + name;
-            FieldInfo field;
             lock (Fields)
             {
-                if (Fields.TryGetValue(key, out field)) return field;
+                if (Fields.TryGetValue(key, out FieldInfo field)) return field;
                 field = type.GetField(name, BindingFlags.Instance | BindingFlags.NonPublic);
                 if (field == null) throw new MissingFieldException(type.FullName, name);
                 Fields.Add(key, field);

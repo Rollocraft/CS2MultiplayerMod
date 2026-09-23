@@ -1,12 +1,5 @@
-using System;
-
 namespace CS2MultiplayerMod.Game.Sync.Commands
 {
-    // The portable vocabulary an object-tool operation is described in: the kinds of definition a
-    // tool emits, and the references that name an entity to a peer that shares none of our entity
-    // ids - a prefab, a kind, and the path of owners down from a top-level object.
-    //
-    // Separated from ObjectToolOperationCommand.cs, which is the command that carries them.
     /// <summary>The native definition payload carried by one object-tool transaction.</summary>
     public enum ObjectToolDefinitionKind : byte
     {
@@ -35,9 +28,8 @@ namespace CS2MultiplayerMod.Game.Sync.Commands
     }
 
     /// <summary>
-    /// One owner-relative identity step. The sender's buffer index records the exact source slot;
-    /// prefab, entity kind, and same-prefab ordinal provide stable receiver-side lookup when
-    /// unrelated buffer entries differ.
+    /// One owner-relative step: the source buffer index, with prefab, kind and same-prefab ordinal as
+    /// the fallback when unrelated entries differ.
     /// </summary>
     public struct PortableOwnerPathStep
     {
@@ -49,9 +41,8 @@ namespace CS2MultiplayerMod.Game.Sync.Commands
     }
 
     /// <summary>
-    /// Stable identity for an object, network element, or area. Entity indices never cross the
-    /// wire; owned network elements additionally carry the top-level owner's identity and layer
-    /// contract so a nearby incompatible connector cannot be selected.
+    /// Portable identity of an object, net element or area. Owned net elements add their owner and layer
+    /// contract so a nearby incompatible connector is not chosen.
     /// </summary>
     public struct PortableEntityRef
     {
@@ -123,11 +114,7 @@ namespace CS2MultiplayerMod.Game.Sync.Commands
         public PortableEntityRef Original;
         public PortableEntityRef Owner;
         public PortableEntityRef Attached;
-        /// <summary>
-        /// A prefab-local attachment target used by placeholder-building definitions. Unlike
-        /// <see cref="Attached"/>, this names a prefab entity from the same native placement graph,
-        /// not an already-existing simulation entity.
-        /// </summary>
+        /// <summary>A prefab in the same placement graph, not an existing entity like <see cref="Attached"/>.</summary>
         public string AttachedPrefabName;
         public uint CreationFlags;
         public int RandomSeed;

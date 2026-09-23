@@ -1,15 +1,11 @@
-using System.Collections.Concurrent;
 using System.Collections.Generic;
-using System.Text;
 using Colossal.Mathematics;
-using Game;
 using Game.Common;
 using Game.Net;
 using Game.Prefabs;
 using Game.Tools;
 using Unity.Collections;
 using Unity.Entities;
-using Unity.Mathematics;
 using CS2MultiplayerMod.Core.Diagnostics;
 using CS2MultiplayerMod.Core.Protocol.Messages;
 using CS2MultiplayerMod.Core.Session;
@@ -19,39 +15,13 @@ using CS2MultiplayerMod.Game.Sync.Commands;
 namespace CS2MultiplayerMod.Game.Sync.Systems
 {
     /// <summary>
-    /// Replicates in-place road composition changes - the whole "street tools" family:
-    /// edge upgrades (trees, grass, wide sidewalks, sound barriers, street lights,
-    /// crosswalks, tree-row styles) and node upgrades (traffic lights, all-way stops,
-    /// roundabouts). The upgraded entity survives the change, so neither placement nor
-    /// delete sync sees it.
-    ///
-    /// Observed runtime behaviour this must mirror:
-    ///   - an upgrade lands as an <see cref="Upgraded"/> component (plus, for edges, a
-    ///     <see cref="SubReplacement"/> buffer) on the ORIGINAL edge or node, tagged
-    ///     Updated - the entity is otherwise untouched;
-    ///   - node upgrades only ever carry the node-mask flags; committing one also strips
-    ///     the node's <see cref="TrafficLights"/> runtime component (re-initialized from
-    ///     the new composition) and re-updates the connected edges;
-    ///   - REMOVING the last upgrade removes the Upgraded component entirely (zero flags
-    ///     are never stored) - so capture must also watch Updated entities WITHOUT
-    ///     Upgraded and ship a clear when we knew the entity as upgraded.
-    ///
-    ///   capture: Updated edge/node whose flags+sub-replacements differ from what we last
-    ///            saw/sent for it -> broadcast a <see cref="NetUpgradeCommand"/> with the
-    ///            full resulting state (all-zero = cleared).
-    ///   realize: find the matching local edge (prefab + Bezier endpoints, either
-    ///            orientation - a backward match swaps left/right flags and sub-
-    ///            replacement sides, the game's own invert recipe) or node (position),
-    ///            write/remove Upgraded + SubReplacement, tag Updated so the game
-    ///            rebuilds the composition. Compare-before-write plus the last-seen
-    ///            cache kills echo loops.
-    ///
-    /// A just-built upgraded road can race its own placement command, so unmatched
-    /// upgrades are retried for a few seconds instead of dropped.
+    /// Replicates in-place composition changes (street tools): edge upgrades and node upgrades. An
+    /// upgrade lands as <see cref="Upgraded"/> (plus <see cref="SubReplacement"/> for edges) on the
+    /// original entity; node commits also strip <see cref="TrafficLights"/>; removing the last upgrade
+    /// removes the component, so bare Updated entities are watched too. Commands carry the full state;
+    /// a backward edge match mirrors the game's invert recipe. Unmatched upgrades retry briefly.
     /// </summary>
-    // State, lifecycle and the per-update cycle. Noticing what this player upgraded is in
-    // Capture.cs; applying what a peer sent is in Apply.cs.
-    public partial class NetUpgradeSyncSystem : GameSystemBase
+    public partial class NetUpgradeSyncSystem : CommandSyncSystem, IRealizeStage
     {
         private const long RetryWindowMs = 10000;
 
@@ -74,8 +44,6 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 (SubRepSig ?? "") == (other.SubRepSig ?? "");
         }
 
-        private readonly ConcurrentQueue<SimulationCommandMessage> _incoming =
-            new ConcurrentQueue<SimulationCommandMessage>();
         private readonly List<(NetUpgradeCommand command, long deadline)> _retry =
             new List<(NetUpgradeCommand, long)>();
         private readonly Dictionary<string, SeenState> _lastSeen =
@@ -89,7 +57,6 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         private EntityQuery _bareNodes;
         private EntityQuery _liveEdges;
         private EntityQuery _liveNodes;
-        private CommandObserver _observer;
         private bool _seeded;
 
         protected override void OnCreate()
@@ -99,18 +66,14 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             _prefabSystem = World.GetOrCreateSystemManaged<PrefabSystem>();
             _prefabIndex = new PrefabIndex(_prefabSystem, GetEntityQuery(ComponentType.ReadOnly<PrefabData>()));
 
-            // Created is intentionally NOT excluded: a road built with an upgrade already
-            // applied (e.g. "road with trees" from the start) must ship its flags too -
-            // the placement command alone rebuilds a plain edge on the other side.
+            // Created included: a road built already upgraded must ship its flags.
             _upgradedEdges = GetEntityQuery(new EntityQueryDesc
             {
                 All = SyncQuery.ReadOnly<Updated, Upgraded, Edge, Curve, PrefabRef>(),
                 None = SyncQuery.ReadOnly<Temp, Deleted, Owner>(),
             });
 
-            // Removal detection: the game strips Upgraded entirely when the last upgrade
-            // goes, so a cleared segment is an Updated edge with NO Upgraded. Only edges
-            // we knew as upgraded (last-seen cache) produce a command.
+            // Removal: an Updated edge without Upgraded, sent only if we knew it as upgraded.
             _bareEdges = GetEntityQuery(new EntityQueryDesc
             {
                 All = SyncQuery.ReadOnly<Updated, Edge, Curve, PrefabRef>(),
@@ -141,14 +104,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 None = SyncQuery.ReadOnly<Temp, Owner, Deleted>(),
             });
 
-            _observer = SyncObserverBinding.Bind(
-                () => new CommandObserver(_incoming, NetUpgradeCommand.Id));
-        }
-
-        protected override void OnDestroy()
-        {
-            SyncObserverBinding.Unbind(_observer);
-            base.OnDestroy();
+            ListenFor(new[] { NetUpgradeCommand.Id }, drainOnReload: false);
         }
 
         protected override void OnUpdate()
@@ -176,10 +132,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         }
 
         /// <summary>
-        /// Learn every upgrade that already exists when sync starts (both sides hold the
-        /// same downloaded world) without sending anything. Without this, removing a
-        /// pre-session upgrade would be invisible: the removal event leaves a bare entity,
-        /// and bare entities only ship a clear when the cache knew them as upgraded.
+        /// Learns pre-existing upgrades without sending, so removing one is still detected.
         /// </summary>
         private void SeedLastSeen()
         {
@@ -231,6 +184,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         /// <summary>Called by <see cref="SyncRealizeSystem"/> during ToolUpdate (see there for why).</summary>
         public void RealizePending()
         {
+            // An upgrade targets a road the held net pipeline may not have delivered yet.
+            if (RealizeGate.WorldBuildingHeld) return;
+
             MultiplayerService service = Mod.Service;
             if (service == null) return;
 
@@ -249,8 +205,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 _retry.Clear();
             }
 
-            SimulationCommandMessage message;
-            while (_incoming.TryDequeue(out message))
+            while (_incoming.TryDequeue(out SimulationCommandMessage message))
             {
                 if (message.OriginPlayerId == session.LocalPlayerId) continue;
                 try { (work ?? (work = new List<NetUpgradeCommand>())).Add(NetUpgradeCommand.Decode(message.Body)); }

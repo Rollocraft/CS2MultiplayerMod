@@ -5,9 +5,8 @@ using CS2MultiplayerMod.Game.Sync.Commands;
 namespace CS2MultiplayerMod.Game.Sync.Infrastructure
 {
     /// <summary>
-    /// Ordered lifecycle events with replaceable progress samples. Coalescing happens at ingress,
-    /// including while road realization is held, so repeated samples cannot fill a command FIFO.
-    /// Lifecycle events and changes of prefab/construction/status are ordering barriers.
+    /// Ordered lifecycle events with replaceable progress samples, coalesced at ingress so samples cannot
+    /// fill the FIFO. Lifecycle and state changes are ordering barriers.
     /// </summary>
     internal sealed class GrowableCommandInbox
     {
@@ -52,30 +51,22 @@ namespace CS2MultiplayerMod.Game.Sync.Infrastructure
             }
         }
 
-        public bool TryEnqueue(GrowableLifecycleCommand command)
-        {
-            return TryEnqueue(command, out _);
-        }
+        public bool TryEnqueue(GrowableLifecycleCommand command) => TryEnqueue(command, out _);
 
-        // A value in resetFrom distinguishes a broken sequence baseline from capacity
-        // exhaustion. The caller must request a snapshot before relying on the new stream.
+        // resetFrom set: a broken baseline, not capacity; the caller must request a snapshot.
         public bool TryEnqueue(GrowableLifecycleCommand command, out uint? resetFrom)
         {
             if (command == null) throw new ArgumentNullException(nameof(command));
             lock (_gate)
             {
                 resetFrom = null;
-                // This inbox receives one host's reliable ordered stream. Remember ingress,
-                // not just applied samples: a coalesced-away sequence must stay a duplicate
-                // even after its replacement has drained. Reset on each world barrier.
+                // Remember ingress so a coalesced-away sequence stays a duplicate; reset per world barrier.
                 if (_hasReceivedSequence)
                 {
                     int delta = unchecked((int)(command.Sequence - _lastReceivedSequence));
                     if (delta < -MaxDuplicateSequenceLag)
                     {
-                        // A large rewind can indicate a new producer baseline without a
-                        // matching world drain. Do not silently reject the entire new stream
-                        // until it catches up, or mix its work with the old queued suffix.
+                        // A large rewind may be a new producer baseline; do not mix it with the old queue.
                         resetFrom = _lastReceivedSequence;
                         Clear();
                         return false;
@@ -84,12 +75,10 @@ namespace CS2MultiplayerMod.Game.Sync.Infrastructure
                 }
                 bool state = command.Op == GrowableLifecycleCommand.OpState;
                 var key = new AnchorKey(command);
-                LinkedListNode<GrowableLifecycleCommand> previous;
-                if (state && _latest.TryGetValue(key, out previous))
+                if (state && _latest.TryGetValue(key, out LinkedListNode<GrowableLifecycleCommand> previous))
                 {
                     GrowableLifecycleCommand old = previous.Value;
-                    // Keep every semantic transition. Only condition/progress samples of the
-                    // same building state supersede one another, never a remove/spawn/level.
+                    // Only progress samples of the same state supersede each other.
                     if (old.PrefabName == command.PrefabName && old.Flags == command.Flags &&
                         old.StateFlags == command.StateFlags)
                     {
@@ -131,8 +120,8 @@ namespace CS2MultiplayerMod.Game.Sync.Infrastructure
                 {
                     _states--;
                     var key = new AnchorKey(command);
-                    LinkedListNode<GrowableLifecycleCommand> latest;
-                    if (_latest.TryGetValue(key, out latest) && latest == node) _latest.Remove(key);
+                    if (_latest.TryGetValue(key, out LinkedListNode<GrowableLifecycleCommand> latest) &&
+                        latest == node) _latest.Remove(key);
                 }
                 else _lifecycle--;
                 return true;

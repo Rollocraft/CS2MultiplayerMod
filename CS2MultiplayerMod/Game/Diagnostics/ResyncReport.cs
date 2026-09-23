@@ -7,78 +7,47 @@ namespace CS2MultiplayerMod.Game.Diagnostics
     public enum ResyncVerdict
     {
         /// <summary>
-        /// Not settled yet. A caller that can keep its work must KEEP it and retry: the mutating
-        /// net feeders are frozen for the length of the hold, so the retry runs against a world
-        /// that is no longer moving underneath it.
-        ///
-        /// Held is not "dismissed". Unless something calls <see cref="ResyncArbiter.Withdraw"/> to
-        /// say the fault cleared, the report settles by itself when its hold elapses - so a real
-        /// divergence still gets repaired, it just gets one honest chance not to be one first.
+        /// Not settled: KEEP the work and retry while the net feeders are frozen. Settles by itself when the
+        /// hold elapses unless <see cref="ResyncArbiter.Withdraw"/> is called.
         /// </summary>
         Held = 0,
 
         /// <summary>Settled: the evidence stands. The world will be reloaded.</summary>
         Settled,
 
-        /// <summary>
-        /// Settled by someone else already - a reload is in flight. The caller drops its work; the
-        /// incoming snapshot supersedes it either way.
-        /// </summary>
+        /// <summary>A reload is in flight: drop the work, the incoming snapshot supersedes it.</summary>
         AlreadyRecovering,
     }
 
     /// <summary>
-    /// What a resync request is actually claiming about the world.
-    ///
-    /// The distinction matters because only two of these are statements about the CITY. The other
-    /// two are statements about this machine's pipeline, and a pipeline that fell behind is not a
-    /// reason to throw away tens of megabytes of world and freeze both players for half a minute.
-    /// Field logs show that difference costing real sessions: an operation was rejected for a
-    /// "missing" road that the mod's own delete feeder had removed while the placement waited.
+    /// What a resync request claims. Only two kinds are statements about the city; the others are about
+    /// this machine's pipeline, which is not a reason to reload the world.
     /// </summary>
     public enum ResyncEvidence
     {
-        /// <summary>
-        /// A deadline, retry budget or drain window expired. Says nothing about the world - the
-        /// pipeline may simply have been blocked by something unrelated for the whole window.
-        /// Always needs corroboration.
-        /// </summary>
+        /// <summary>A deadline, budget or drain window expired; says nothing about the world. Needs corroboration.</summary>
         Timeout = 0,
 
         /// <summary>
-        /// Something the source named is not present locally and the pipeline looked for it.
-        /// Usually a real divergence, but the search runs against a world other feeders are still
-        /// mutating, so it also needs one corroboration under a quiesced pipeline.
+        /// Something the source named is absent locally. Needs one corroboration, as other feeders may still
+        /// be mutating the world.
         /// </summary>
         MissingTarget,
 
         /// <summary>
-        /// The local world contradicts the source's description in a way no amount of waiting can
-        /// repair - two source entities collapsed onto one local entity, a duplicate identity, a
-        /// graph that cannot be committed without dereferencing a stale original. Settles at once.
+        /// The local world contradicts the source beyond repair (two sources on one entity, duplicate
+        /// identity, a stale original in the commit). Settles at once.
         /// </summary>
         Contradiction,
 
-        /// <summary>
-        /// Part of the command stream was lost, shed or refused before it could be applied, so
-        /// this machine can no longer derive the source's state from what it received. Settles at
-        /// once: nothing local will ever supply the missing commands.
-        /// </summary>
+        /// <summary>Commands were lost, shed or refused. Settles at once.</summary>
         StreamLoss,
     }
 
     /// <summary>
-    /// The evidence behind one resync request.
-    ///
-    /// Historically every caller passed a bare phrase ("native net target did not resolve") and the
-    /// world reloaded. That is enough to grep for and not enough to fix anything: the log never
-    /// said which operation, which endpoint, what was actually standing there instead, how long the
-    /// pipeline had been blocked, or whether anything cheaper had been tried. A report carries all
-    /// of that, is written as an ungated event whether or not the reload follows, and is
-    /// what <see cref="ResyncArbiter"/> settles before any world is thrown away.
-    ///
-    /// Build one with <see cref="Create"/> and chain <see cref="Fact"/> calls; every setter returns
-    /// the report so a call site stays one statement.
+    /// The evidence behind a resync request: operation, endpoint, what stood there, how long the
+    /// pipeline was blocked, what was tried. Logged ungated and settled by <see cref="ResyncArbiter"/>.
+    /// Build with <see cref="Create"/> and chained <see cref="Fact"/> calls.
     /// </summary>
     public sealed class ResyncReport
     {
@@ -105,17 +74,12 @@ namespace CS2MultiplayerMod.Game.Diagnostics
         public ResyncEvidence Evidence { get; private set; }
 
         /// <summary>
-        /// What the request is about, stable across repeats - typically the operation identity.
-        /// Two submissions with the same subject and reason are the SAME fault observed twice,
-        /// which is what lets a held report settle; two different subjects are two faults.
+        /// Stable across repeats (usually the operation identity): same subject and reason is the same
+        /// fault seen twice.
         /// </summary>
         public string Subject { get; private set; }
 
-        /// <summary>
-        /// What the pipeline already tried before asking for a reload, in the caller's own words
-        /// ("retried for 10 s", "replayed 3x"). Printed as its own line: a reader's first question
-        /// about any automatic world reload is whether anything cheaper was attempted.
-        /// </summary>
+        /// <summary>What was tried before asking for a reload ("retried for 10 s"), printed on its own line.</summary>
         public string Attempted { get; private set; }
 
         /// <summary>Set by the arbiter when the report is first submitted.</summary>
@@ -124,16 +88,12 @@ namespace CS2MultiplayerMod.Game.Diagnostics
         /// <summary>How many times this exact fault has been submitted, including the first.</summary>
         public int Observations { get; internal set; }
 
-        public static ResyncReport Create(string reason, string subsystem, ResyncEvidence evidence)
-        {
-            return new ResyncReport(reason, subsystem, evidence);
-        }
+        public static ResyncReport Create(string reason, string subsystem, ResyncEvidence evidence) =>
+            new ResyncReport(reason, subsystem, evidence);
 
         /// <summary>A bare legacy request: unclassified, and therefore never settled on sight.</summary>
-        public static ResyncReport FromReason(string reason)
-        {
-            return new ResyncReport(reason, "sync", ResyncEvidence.Timeout);
-        }
+        public static ResyncReport FromReason(string reason) =>
+            new ResyncReport(reason, "sync", ResyncEvidence.Timeout);
 
         public ResyncReport About(string subject)
         {
@@ -157,23 +117,20 @@ namespace CS2MultiplayerMod.Game.Diagnostics
             return this;
         }
 
-        public ResyncReport Fact(string name, long value)
-        {
-            return Fact(name, value.ToString(System.Globalization.CultureInfo.InvariantCulture));
-        }
+        public ResyncReport Fact(string name, long value) =>
+            Fact(name, value.ToString(System.Globalization.CultureInfo.InvariantCulture));
 
         public ResyncReport Fact(string name, bool value) => Fact(name, value ? "yes" : "no");
 
-        /// <summary>
-        /// The report as the lines the log prints under its headline. Written in
-        /// sentences, because the reader is usually a player pasting a log into a bug report.
-        /// </summary>
+        /// <summary>The report as log lines, in sentences for players pasting logs.</summary>
         public List<string> Lines()
         {
-            var lines = new List<string>(_facts.Count + 4);
-            lines.Add("what happened: " + Reason);
-            lines.Add("where: " + Subsystem + " sync, " + Subject);
-            lines.Add("evidence: " + Describe(Evidence));
+            var lines = new List<string>(_facts.Count + 4)
+            {
+                "what happened: " + Reason,
+                "where: " + Subsystem + " sync, " + Subject,
+                "evidence: " + Describe(Evidence)
+            };
             if (!string.IsNullOrEmpty(Attempted)) lines.Add("already tried: " + Attempted);
             lines.AddRange(_facts);
             return lines;

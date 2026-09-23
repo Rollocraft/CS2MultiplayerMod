@@ -1,6 +1,4 @@
-using System.Collections.Concurrent;
 using System.Collections.Generic;
-using Game;
 using Game.Areas;
 using Game.Buildings;
 using Game.Common;
@@ -10,29 +8,22 @@ using Game.Routes;
 using Game.Tools;
 using Unity.Entities;
 using Unity.Mathematics;
-using CS2MultiplayerMod.Core.Diagnostics;
 using CS2MultiplayerMod.Core.Sync;
-using CS2MultiplayerMod.Core.Protocol.Messages;
 using CS2MultiplayerMod.Core.Session;
-using CS2MultiplayerMod.Game.Diagnostics;
 using CS2MultiplayerMod.Game.Sync.Infrastructure;
 using CS2MultiplayerMod.Game.Sync.Commands;
 namespace CS2MultiplayerMod.Game.Sync.Systems
 {
     /// <summary>
-    /// Replicates per-entity policies (district, transit, building) via 1 Hz scan:
-    /// detect <see cref="Policy"/> buffer changes, broadcast <see cref="EntityPolicyCommand"/>.
-    /// Realize by resolving target (prefab + anchor) and calling <c>PoliciesUISystem.SetPolicy</c>.
-    /// Echo guarded per-(target, policy).
+    /// Replicates district, transit and building policies by a 1 Hz scan of <see cref="Policy"/>
+    /// buffers, applied through <c>PoliciesUISystem.SetPolicy</c>.
     /// </summary>
-    public partial class PolicySyncSystem : GameSystemBase
+    public partial class PolicySyncSystem : CommandSyncSystem
     {
         private const long ScanIntervalMs = 1000;
         private const long TargetRetryWindowMs = 15000;
         private const int MaxPendingTargets = 256;
 
-        private readonly ConcurrentQueue<SimulationCommandMessage> _incoming =
-            new ConcurrentQueue<SimulationCommandMessage>();
         private readonly ReplicationGuard _guard = new ReplicationGuard();
         private readonly LatestTargetRetryQueue<string, (EntityPolicyCommand cmd, int origin)> _targetRetry =
             new LatestTargetRetryQueue<string, (EntityPolicyCommand, int)>(MaxPendingTargets, TargetRetryWindowMs);
@@ -44,7 +35,6 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         private EntityQuery _routes;
         private EntityQuery _buildings;
         private EntityQuery _ownedUpgrades;
-        private CommandObserver _observer;
 
         /// <summary>The panel that toggles an upgrade finds this policy by name; so do we.</summary>
         private const string OutOfServicePolicyName = "Out of Service";
@@ -88,17 +78,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 None = SyncQuery.ReadOnly<Temp, Deleted, Owner>(),
             });
 
-            // Disabling a service upgrade is not a component edit: the game routes it through the
-            // "Out of Service" policy on the upgrade entity itself. Those entities are owned by their
-            // host building, so the building query above (which excludes Owner, to keep a sub-building
-            // from answering for its parent) never saw them and the toggle never replicated. They are
-            // identified the same way a building is - prefab plus position - so they share the
-            // building target kind and need nothing new on the wire.
-            //
-            // Policy is deliberately NOT required here. An upgrade has no policy buffer until it is
-            // first toggled, and the buffer appears in the same moment as the change: requiring it
-            // meant the very first observation of the entity was already the changed state, so the
-            // diff had nothing to compare against and the toggle was never sent.
+            // Disabling an upgrade is its "Out of Service" policy on the owned upgrade entity, which the
+            // building query (no Owner) misses; it shares the building target kind. Policy is not required:
+            // the buffer only appears with the first toggle, which would otherwise have no baseline.
             _ownedUpgrades = GetEntityQuery(new EntityQueryDesc
             {
                 All = SyncQuery.ReadOnly<PrefabRef, global::Game.Objects.Transform, Owner>(),
@@ -106,17 +88,10 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 None = SyncQuery.ReadOnly<Temp, Deleted>(),
             });
 
-            _observer = SyncObserverBinding.Bind(
-                () => new CommandObserver(_incoming, EntityPolicyCommand.Id), DrainQueue);
+            ListenFor(new[] { EntityPolicyCommand.Id });
         }
 
-        protected override void OnDestroy()
-        {
-            SyncObserverBinding.Unbind(_observer, DrainQueue);
-            base.OnDestroy();
-        }
-
-        private void DrainQueue()
+        protected override void DrainQueue()
         {
             _known.Clear();
             _next.Clear();
@@ -150,17 +125,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             }
         }
 
-        // ---- Detect ------------------------------------------------------------
-
-
-
-
-
         // ---- Realize -----------------------------------------------------------
-
-
-
-
 
         private static string KindName(byte kind) =>
             kind == EntityPolicyCommand.KindDistrict ? "district" :
@@ -168,6 +133,5 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
         private static string PolicyKey(string policyName, string targetName, float3 anchor) =>
             "pol|" + policyName + "|" + ReplicationGuard.Key(targetName, anchor);
-
     }
 }

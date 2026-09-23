@@ -5,7 +5,6 @@ using CS2MultiplayerMod.Core.Networking;
 using CS2MultiplayerMod.Core.Session;
 using CS2MultiplayerMod.Core.Protocol.Messages;
 using CS2MultiplayerMod.Game.Diagnostics;
-using CS2MultiplayerMod.Localization;
 using CS2MultiplayerMod.Game.Sync.Infrastructure;
 using Unity.Entities;
 
@@ -30,18 +29,6 @@ namespace CS2MultiplayerMod.Game
             return peers;
         }
 
-        private static string PhaseText(ClientWorldPhase phase)
-        {
-            switch (phase)
-            {
-                case ClientWorldPhase.Connecting: return L10n.T(L10n.Key.StateConnecting);
-                case ClientWorldPhase.WaitingForMap: return L10n.T(L10n.Key.PhaseWaitingForMap);
-                case ClientWorldPhase.LoadingMap: return L10n.T(L10n.Key.PhaseLoadingMap);
-                case ClientWorldPhase.WaitingForResume: return L10n.T(L10n.Key.PhaseFinishingSetup);
-                default: return phase.ToString();
-            }
-        }
-
         /// <summary>Called once per simulation tick by the ECS system.</summary>
         public void Update(World world)
         {
@@ -51,9 +38,8 @@ namespace CS2MultiplayerMod.Game
             PumpDeferredReceivedMap();
             RefreshPendingJoinsJson();
             RefreshPendingResyncsJson();
-            Diagnostics.ResyncReport queuedReport;
             if (_session.Status == SessionStatus.Connected &&
-                SyncInbox.TryTakeResyncRequest(out queuedReport))
+                SyncInbox.TryTakeResyncRequest(out ResyncReport queuedReport))
                 RequestAutomaticWorldRecovery(queuedReport);
             PumpMaturedResyncReports();
             PumpMapReRequest();
@@ -64,9 +50,8 @@ namespace CS2MultiplayerMod.Game
         }
 
         /// <summary>
-        /// Drive the LoadingMap -> InSession transition by watching the game's own
-        /// loading flag (there is no reliable public load-completed callback): once the
-        /// load we kicked off has been observed running and then stops, the world is in.
+        /// LoadingMap -> InSession by the game's loading flag (no reliable load-completed callback): once
+        /// our load was seen running and then stops, the world is in.
         /// </summary>
         private void PumpWorldPhase()
         {
@@ -90,8 +75,7 @@ namespace CS2MultiplayerMod.Game
 
             if (NowMs - _phaseChangedMs > MapLoadTimeoutMs)
             {
-                // The load never started (failed staging, asset index miss, …). Recover
-                // to a defined state instead of idling half-connected forever.
+                // The load never started; recover instead of idling half-connected.
                 SetPhase(ClientWorldPhase.WaitingForMap);
                 if (_worldSyncBarrierActive && _activeWorldSyncEpoch > 0)
                     _session.SendWorldSyncStage(_activeWorldSyncEpoch, WorldSyncStage.Failed);
@@ -109,9 +93,8 @@ namespace CS2MultiplayerMod.Game
             if (phase != ClientWorldPhase.LoadingMap) _sawLoading = false;
             _log.Detail(LogTopic.Session, "World phase: " + phase);
 
-            // A joined client plays in the host's (transient) world: autosaving it would
-            // pile copies of the host's city into the local Saves folder and can collide
-            // with a resync load mid-write (idea from CS2M's save handling).
+            // Autosaving the host's transient world piles copies into Saves and can collide with a resync
+            // load (idea from CS2M).
             if (phase == ClientWorldPhase.InSession) SuppressAutosave();
             else if (phase == ClientWorldPhase.None) RestoreAutosave();
         }
@@ -153,10 +136,8 @@ namespace CS2MultiplayerMod.Game
         }
 
         /// <summary>
-        /// Refuses the action when any mod other than this one is live, and records the
-        /// reason as a fault so the status screen and the error overlay explain it. Enforced
-        /// here rather than only in the UI because the options screen's Host button and the
-        /// hub reach these entry points directly. True when the caller must stop.
+        /// Refuses while another mod is live and records the fault. Enforced here because the options
+        /// screen and hub reach these entry points directly. True when the caller must stop.
         /// </summary>
         private bool RefuseForOtherMods(string action)
         {
@@ -178,10 +159,7 @@ namespace CS2MultiplayerMod.Game
             return true;
         }
 
-        /// <summary>
-        /// This build for the host and join lines: the version a player quotes, plus the shorter
-        /// string the peers actually compare when a hotfix suffix makes the two differ.
-        /// </summary>
+        /// <summary>The full version, plus the compared release part when they differ.</summary>
         private static string ModVersionText(MultiplayerConfig config)
         {
             return " mod=" + Mod.Version +
@@ -189,11 +167,7 @@ namespace CS2MultiplayerMod.Game
                        ? "" : " compat=" + config.ModVersion);
         }
 
-        /// <summary>
-        /// What else was running when this session started, for the host and join lines. Only this
-        /// machine's own mods: the check is local and nothing about them crosses the wire, so a
-        /// desync report is read from both players' logs side by side.
-        /// </summary>
+        /// <summary>This machine's other mods, for the log; nothing about them crosses the wire.</summary>
         private static string LocalModsText(Setting settings)
         {
             bool bypassed = settings != null && settings.IgnoreModCompatibilityChecks;
@@ -245,11 +219,7 @@ namespace CS2MultiplayerMod.Game
             _session.Join(config);
         }
 
-        /// <summary>
-        /// Ask the UI to confirm a deliberate disconnect. Automatic cleanup paths call
-        /// <see cref="Disconnect"/> directly because the game is already leaving or the
-        /// mod has been disabled and cannot wait for a dialog.
-        /// </summary>
+        /// <summary>Asks the UI to confirm; automatic paths call <see cref="Disconnect"/> directly.</summary>
         public void RequestDisconnect()
         {
             if (_session.Role == SessionRole.None) return;
@@ -259,10 +229,7 @@ namespace CS2MultiplayerMod.Game
                 (_session.Role == SessionRole.Host ? "closing the hosted session." : "disconnecting from the session."));
         }
 
-        public void CancelDisconnectRequest()
-        {
-            _disconnectConfirmationRequested = false;
-        }
+        public void CancelDisconnectRequest() => _disconnectConfirmationRequested = false;
 
         public void ConfirmDisconnect()
         {
@@ -278,28 +245,19 @@ namespace CS2MultiplayerMod.Game
                 QueueClientMainMenu("You disconnected from the multiplayer session.");
 
             ResetWorldSyncState(restoreSpeed: true);
-            // A host that stops hosting owes its clients a reason: without the notice they
-            // only ever see the socket drop, which reads as a network failure.
+            // Without the notice clients only see a socket drop.
             _session.StopWithNotice("The host ended this multiplayer session.");
             SetPhase(ClientWorldPhase.None);
 
-            // Do not delete a save which is still loading or is the currently open client
-            // world. The lifecycle pump removes it after MainMenu has completed.
+            // Never delete a save that is loading or open; the lifecycle pump removes it later.
             if (_clientHostWorldActive || _clientMainMenuPending)
                 _transientCleanupPending = true;
             else
                 JoinMapLoader.DeleteTransient(_log);
         }
 
-        /// <summary>
-        /// Forget the last fault. A closed error screen has to stay closed: the UI
-        /// re-reads the status on every mount, so leaving the fault remembered brings the
-        /// same error back the next time the player opens multiplayer.
-        /// </summary>
-        public void DismissFault()
-        {
-            _lastFault = null;
-        }
+        /// <summary>The UI re-reads status on every mount, so a remembered fault would reappear.</summary>
+        public void DismissFault() => _lastFault = null;
 
         public void Shutdown()
         {
@@ -319,20 +277,16 @@ namespace CS2MultiplayerMod.Game
 
         private MultiplayerConfig BuildConfig(Setting settings, bool hosting)
         {
-            // Both sides pick their connection explicitly, so a player joining a relay
-            // host sees the same choice the host made rather than having it inferred.
+            // Both sides pick their connection explicitly.
             TransportMode transport = hosting ? settings.HostTransport() : settings.JoinTransport();
             bool relay = transport == TransportMode.SteamRelay;
             string target = (settings.ServerAddress ?? "").Trim();
             string joinCode = (settings.JoinCodeInput ?? "").Trim();
 
             string portText = hosting ? settings.HostPort : settings.JoinPort;
-            int port;
-            if (!int.TryParse((portText ?? "").Trim(), out port) || port <= 0 || port > 65535)
+            if (!int.TryParse((portText ?? "").Trim(), out int port) || port <= 0 || port > 65535)
             {
-                // Never fall back silently: hosting on a different port than the user
-                // thinks they configured is exactly the kind of failure nobody can debug.
-                // Relay sessions carry no port at all, so there is nothing to warn about.
+                // Never silently host on another port. Relay sessions have no port.
                 if (!relay)
                     _log.Warn(LogTopic.Session, "Invalid " + (hosting ? "host" : "join") + " port '" +
                         portText + "' - using default " + DefaultPort +
@@ -340,8 +294,8 @@ namespace CS2MultiplayerMod.Game
                 port = DefaultPort;
             }
 
-            int maxPlayers;
-            if (!int.TryParse((settings.MaxPlayers ?? "").Trim(), out maxPlayers) || maxPlayers < 2 || maxPlayers > 32)
+            if (!int.TryParse((settings.MaxPlayers ?? "").Trim(), out int maxPlayers) || maxPlayers < 2 ||
+                maxPlayers > 32)
             {
                 if (hosting)
                     _log.Warn(LogTopic.Session, "Invalid max players '" + settings.MaxPlayers +
@@ -349,9 +303,7 @@ namespace CS2MultiplayerMod.Game
                 maxPlayers = DefaultMaxPlayers;
             }
 
-            // The release part, not the full version: see Mod.CompatibilityVersion. The host and
-            // join lines print both whenever they differ, so a refused join can be matched to the
-            // build that sent it.
+            // The release part (see Mod.CompatibilityVersion); host and join lines print both.
             string modVersion = Mod.CompatibilityVersion;
             string gameVersion;
             try { gameVersion = UnityEngine.Application.version; }
@@ -360,15 +312,12 @@ namespace CS2MultiplayerMod.Game
             string[] dlcs = DlcCheck.OwnedSyncRelevantDlcs(_log);
             Diagnostics.FlightRecorder.RecordLoadedContent(dlcs);
 
-            // Encryption is permanently off in-game: the game's Mono runtime cannot
-            // create the TLS certificate (CertificateRequest is missing and the attempt
-            // crashed the host silently). Authentication is unaffected - the password
-            // challenge-response never sends the password itself.
+            // Encryption stays off: the game's Mono runtime cannot create the TLS certificate. The password
+            // challenge-response never sends the password.
             return new MultiplayerConfig(
                 settings.PlayerName, target, port,
                 hosting ? settings.HostPassword : settings.JoinPassword,
-                // A relay session is not reachable from the network at all, so the LAN-only
-                // exposure control has nothing to restrict.
+                // A relay session is not network-reachable; LAN-only has nothing to restrict.
                 lanOnly: !relay && settings.LanOnly,
                 useEncryption: false, maxPlayers: maxPlayers,
                 modVersion: modVersion, gameVersion: gameVersion,
@@ -383,6 +332,5 @@ namespace CS2MultiplayerMod.Game
                     ? settings.SelectedClientResyncPolicy()
                     : Core.Session.ClientResyncPolicy.Allow);
         }
-
     }
 }

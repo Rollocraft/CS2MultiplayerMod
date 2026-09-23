@@ -6,10 +6,7 @@ using Unity.Entities;
 
 namespace CS2MultiplayerMod.Game.Sync.Infrastructure
 {
-    /// <summary>
-    /// A disabled preview must not hide the live network from another preview's EdgeIterator.
-    /// Keep visibility reversible until the isolated preview is resumed or cleared.
-    /// </summary>
+    /// <summary>A disabled preview must not hide the live network from another preview's EdgeIterator.</summary>
     internal sealed class NetPreviewVisibility
     {
         private readonly HashSet<Entity> _originals = new HashSet<Entity>();
@@ -29,8 +26,7 @@ namespace CS2MultiplayerMod.Game.Sync.Infrastructure
 
         public void Restore(EntityManager em, List<Entity> previews)
         {
-            // Only surviving previews can reclaim visibility. A local Apply may already have
-            // consumed a preview, or its original may have been replaced by the remote operation.
+            // Only surviving previews reclaim visibility.
             for (int i = 0; i < previews.Count; i++)
             {
                 Entity preview = previews[i];

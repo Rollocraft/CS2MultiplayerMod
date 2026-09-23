@@ -4,12 +4,8 @@ using CS2MultiplayerMod.Core.Protocol;
 namespace CS2MultiplayerMod.Core.Sync.ModSync
 {
     /// <summary>
-    /// The replicated types of a session, in the order the host published them.
-    ///
-    /// Types are named once and then referred to by index, because a name is the largest thing in
-    /// a transaction that never changes. The order is the host's: a client binds its own types to
-    /// the host's indices and answers for whatever it cannot bind, so a payload can never be read
-    /// against a different type than it was written from.
+    /// The session's replicated types in host order, referenced by index; clients bind to those indices
+    /// and report what they cannot bind.
     /// </summary>
     public sealed class ModTypeTable : IModTypeLookup
     {
@@ -20,27 +16,23 @@ namespace CS2MultiplayerMod.Core.Sync.ModSync
         private readonly Dictionary<string, int> _byKey =
             new Dictionary<string, int>(System.StringComparer.Ordinal);
 
-        public int Count { get { return _byIndex.Count; } }
+        public int Count => _byIndex.Count;
 
-        public ModTypeDescriptor ByIndex(int index) { return _byIndex[index]; }
+        public ModTypeDescriptor ByIndex(int index) => _byIndex[index];
 
-        public bool TryIndexOf(string key, out int index)
-        {
-            return _byKey.TryGetValue(key, out index);
-        }
+        public bool TryIndexOf(string key, out int index) => _byKey.TryGetValue(key, out index);
 
         /// <summary>Appends a type and returns its index, or the existing index if it is already in.</summary>
         public int Add(ModTypeDescriptor descriptor)
         {
-            int existing;
-            if (_byKey.TryGetValue(descriptor.Key, out existing)) return existing;
+            if (_byKey.TryGetValue(descriptor.Key, out int existing)) return existing;
             int index = _byIndex.Count;
             _byIndex.Add(descriptor);
             _byKey.Add(descriptor.Key, index);
             return index;
         }
 
-        public IEnumerable<ModTypeDescriptor> All { get { return _byIndex; } }
+        public IEnumerable<ModTypeDescriptor> All => _byIndex;
 
         public void Write(NetworkWriter writer)
         {
@@ -59,10 +51,8 @@ namespace CS2MultiplayerMod.Core.Sync.ModSync
             {
                 ModTypeDescriptor descriptor = ModTypeDescriptor.Read(reader);
 
-                // Indices are positional, so a duplicate key would silently shift every type after
-                // it by one on one side only.
-                int existing;
-                if (table._byKey.TryGetValue(descriptor.Key, out existing))
+                // A duplicate key would shift every later index on one side only.
+                if (table._byKey.TryGetValue(descriptor.Key, out int existing))
                     throw new ProtocolException("Mod type table repeats " + descriptor.DisplayName + ".");
                 table.Add(descriptor);
             }

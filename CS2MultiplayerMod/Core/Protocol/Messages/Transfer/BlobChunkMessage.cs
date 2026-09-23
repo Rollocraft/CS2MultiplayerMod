@@ -1,19 +1,13 @@
 namespace CS2MultiplayerMod.Core.Protocol.Messages
 {
     /// <summary>
-    /// One slice of a large named byte stream (a "blob"), e.g. a savegame for map sync.
-    /// Blobs are split into chunks because a whole save can be many megabytes; the
-    /// receiver reassembles them by <see cref="Channel"/> and is notified once
-    /// <see cref="Last"/> arrives. <see cref="TotalBytes"/> lets the receiver show
-    /// progress and pre-size its buffer.
+    /// One slice of a named blob (e.g. a savegame), reassembled by <see cref="Channel"/> until
+    /// <see cref="Last"/>; <see cref="TotalBytes"/> sizes the buffer and progress.
     /// </summary>
     public sealed class BlobChunkMessage : INetMessage
     {
         public string Channel;
-        /// <summary>
-        /// Identity of this transfer. World snapshots use their recovery epoch; zero is
-        /// reserved for ordinary, uncoordinated blobs.
-        /// </summary>
+        /// <summary>The recovery epoch for world snapshots; zero for uncoordinated blobs.</summary>
         public long TransferId;
         public int TotalBytes;
         public bool Last;

@@ -16,8 +16,7 @@ namespace CS2MultiplayerMod.Game
 {
     public sealed partial class MultiplayerService
     {
-        // Matches the native save-name field. AssetDataPath applies the game's filename
-        // escaping when the package is written, so friendly names can keep punctuation.
+        // The native save-name length; AssetDataPath escapes the filename.
         private const int ClientWorldSaveNameMaxLength = 85;
         private const string SaveStatusIdle = "idle";
         private const string SaveStatusSaving = "saving";
@@ -38,10 +37,7 @@ namespace CS2MultiplayerMod.Game
         /// <summary>The normalized name of the current or most recent copy request.</summary>
         public string ClientWorldSaveName => _clientWorldSaveName;
 
-        /// <summary>
-        /// True while the game is serializing the local copy. World replacement and a
-        /// disconnect-driven return to the menu wait for this task to finish.
-        /// </summary>
+        /// <summary>World replacement and a disconnect's return to the menu wait for this.</summary>
         public bool ClientWorldSaveInProgress =>
             _clientWorldSaveTask != null && !_clientWorldSaveTask.IsCompleted;
 
@@ -91,8 +87,7 @@ namespace CS2MultiplayerMod.Game
             {
                 if (ClientWorldSaveExists(saveName))
                 {
-                    // This purposefully does not overwrite: a multiplayer convenience
-                    // action must never destroy a player's existing single-player save.
+                    // Never overwrite a player's existing save.
                     _clientWorldSaveStatus = SaveStatusExists;
                     return;
                 }
@@ -130,8 +125,7 @@ namespace CS2MultiplayerMod.Game
             if (string.IsNullOrEmpty(saveName) || saveName.Length > ClientWorldSaveNameMaxLength)
                 return false;
 
-            // DeleteTransient identifies the fixed join package by this marker. Do not let
-            // a permanent copy borrow it and become eligible for session cleanup.
+            // The transient marker makes a save eligible for session cleanup.
             if (saveName.IndexOf(JoinMapLoader.TransientName,
                     StringComparison.OrdinalIgnoreCase) >= 0)
                 return false;
@@ -143,16 +137,14 @@ namespace CS2MultiplayerMod.Game
 
         private static bool ClientWorldSaveExists(string saveName)
         {
-            PackageAsset ignored;
             return AssetDatabase.user.Exists<PackageAsset>(
                 SaveHelpers.GetAssetDataPath<SaveGameMetadata>(AssetDatabase.user, saveName),
-                out ignored);
+                out PackageAsset ignored);
         }
 
         private async Task SaveClientWorld(World world, string saveName)
         {
-            // Recheck inside the serialized save/load task, closing the small interval
-            // between the UI request and execution without ever overwriting a save.
+            // Recheck inside the serialized save task.
             if (ClientWorldSaveExists(saveName))
             {
                 _clientWorldSaveFailureStatus = SaveStatusExists;

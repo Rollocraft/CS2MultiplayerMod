@@ -10,18 +10,12 @@ namespace CS2MultiplayerMod.Game
         private string _pendingJoinsSig = "";
 
         /// <summary>
-        /// Host-side joins waiting for manual approval, as a JSON array for the hub's
-        /// approval prompt: <c>[{"id":2,"name":"Alice"}, ...]</c>. Rebuilt only when the set
-        /// changes, so the per-frame UI binding usually compares an unchanged string. Always
-        /// "[]" on a client.
+        /// Joins awaiting host approval as JSON (<c>[{"id":2,"name":"Alice"}, ...]</c>), rebuilt on change.
+        /// Always "[]" on a client.
         /// </summary>
         public string PendingJoinsJson { get { lock (_chatLock) return _pendingJoinsJson; } }
 
-        /// <summary>
-        /// Scan the session's pending joins and refresh <see cref="PendingJoinsJson"/> if it
-        /// changed. Called every tick from <see cref="Update"/> (host-only work); a cheap
-        /// id/name signature keeps it from re-serializing while nothing changes.
-        /// </summary>
+        /// <summary>Refreshes <see cref="PendingJoinsJson"/> when the id/name signature changes.</summary>
         private void RefreshPendingJoinsJson()
         {
             if (_session.Role != SessionRole.Host)
@@ -33,8 +27,7 @@ namespace CS2MultiplayerMod.Game
 
             var pending = new List<Peer>();
             foreach (Peer peer in _session.PendingJoins) pending.Add(peer);
-            // Stable order (ascending id) so the signature and the rendered list do not
-            // flicker with the peer dictionary's iteration order.
+            // Stable order, independent of dictionary iteration.
             pending.Sort((a, b) => a.PlayerId.CompareTo(b.PlayerId));
 
             var sig = new System.Text.StringBuilder();

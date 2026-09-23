@@ -1,36 +1,23 @@
 using CS2MultiplayerMod.Game.Sync.Infrastructure;
 using System;
 using System.Collections.Generic;
-using System.Diagnostics;
 using CS2MultiplayerMod.Core.Diagnostics;
 using CS2MultiplayerMod.Game.Diagnostics;
 using CS2MultiplayerMod.Game.Sync.Commands;
-using Game.Agents;
 using Game.Buildings;
 using Game.Citizens;
 using Game.Common;
-using Game.Companies;
-using Game.Economy;
 using Game.Prefabs;
 using Game.Simulation;
-using Game.Vehicles;
-using Unity.Collections;
 using Unity.Entities;
-using Unity.Jobs;
-using Unity.Mathematics;
 
 namespace CS2MultiplayerMod.Game.Sync.Systems
 {
-    // Applying one property's roster: walk a bucket, check the cached page still describes the
-    // property in front of us, then bring its households, construction state and local
-    // occupants into line with what the host sent.
     public partial class ResidentialOccupancySyncSystem
     {
         /// <summary>
-        /// Reconciles a window of one cached partition per update and resumes where it stopped, so
-        /// the walk costs the same in a hamlet and in a metropolis. Membership is maintained as the
-        /// window is compacted rather than rebuilt from the whole list: <see cref="AddToCacheBucket"/>
-        /// is the only other writer, and it already refuses a duplicate.
+        /// Reconciles a window of one cached partition per update, resuming where it stopped. Membership
+        /// is maintained while compacting; <see cref="AddToCacheBucket"/> already refuses duplicates.
         /// </summary>
         private void ApplyBucket(int bucket)
         {
@@ -53,14 +40,12 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             for (int i = start; i < end; i++)
             {
                 Entity property = entities[i];
-                CachedProperty cached;
-                if (!_cache.TryGetValue(property, out cached))
+                if (!_cache.TryGetValue(property, out CachedProperty cached))
                 {
                     members.Remove(property);
                     continue;
                 }
-                // A stale entry can remain in its old bucket list after a local partition move.
-                // Do not delete the live cache the new bucket now owns.
+                // Stale entry left behind by a partition move; the live cache belongs to the new bucket.
                 if (cached.Bucket != bucket)
                 {
                     members.Remove(property);
@@ -90,20 +75,16 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 }
                 ApplyOne(property);
             }
-            // Reconciling can append to this same bucket, so drop exactly the gap the window left
-            // rather than everything past the write cursor.
+            // Reconciling can append to this bucket: drop only the window's gap.
             if (write < end) entities.RemoveRange(write, end - write);
             _cacheBucketCursor[bucket] = write >= entities.Count ? 0 : write;
         }
 
         private void ApplyOne(Entity property)
         {
-            // A property can be both freshly changed and in the partition this update walks.
-            // Reconciling it twice would create the same household twice, because the move-in it
-            // asked for the first time is still queued.
+            // Once per update: a second reconcile would create a household whose move-in is still queued.
             if (!_appliedThisUpdate.Add(property)) return;
-            CachedProperty cached;
-            if (!_cache.TryGetValue(property, out cached)) return;
+            if (!_cache.TryGetValue(property, out CachedProperty cached)) return;
             if (!MatchesCachedProperty(property, cached))
             {
                 RemoveCachedProperty(property);
@@ -117,8 +98,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             }
             catch (Exception ex)
             {
-                // One malformed property must not take the whole reconcile down. Drop its cache so
-                // the next page re-resolves it from scratch.
+                // One malformed property must not stop the reconcile; drop its cache to re-resolve it.
                 RemoveCachedProperty(property);
                 if (!_applyWarned)
                 {
@@ -135,9 +115,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             }
             else if (applied)
             {
-                // Only a reconcile that finished its work counts as settled. One that asked to be
-                // run again, or that hit a creation budget part way through, has state still
-                // outstanding that neither the revision nor the local hash would show.
+                // Only a finished reconcile counts as settled.
                 if (!_reapplyRequested.Contains(property) && !_budget.Exhausted)
                     NoteReconciled(property, cached);
                 else _appliedState.Remove(property);
@@ -147,29 +125,19 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         }
 
         /// <summary>
-        /// The rolling repair walk used to re-apply every cached property on every pass, whether or
-        /// not the host had said anything new and whether or not this peer had drifted. On a
-        /// 1,553-property client that was a full reconcile of 96 properties per update forever -
-        /// 232 ms per pass, and 942,000 citizen rewrites per 30 s, because a reconcile rewrites
-        /// health and wellbeing that the local simulation moves straight back.
-        ///
-        /// A property is left alone while the host's revision has not advanced and the local roster
-        /// still hashes to what this peer last left it at. The dirty queue does not consult this,
-        /// so an arrived page, a renter event or a lifecycle signal still reconciles at once.
+        /// Skips a property while the host revision has not advanced and the local roster still hashes to
+        /// what we last left. The dirty queue ignores this, so real changes still reconcile at once.
         /// </summary>
         private bool IsReconciled(Entity property, CachedProperty cached)
         {
-            AppliedState state;
-            if (!_appliedState.TryGetValue(property, out state) ||
+            if (!_appliedState.TryGetValue(property, out AppliedState state) ||
                 state.Revision != cached.Revision) return false;
-            int hash;
-            return TryHashProperty(property, out hash) && hash == state.Hash;
+            return TryHashProperty(property, out int hash) && hash == state.Hash;
         }
 
         private void NoteReconciled(Entity property, CachedProperty cached)
         {
-            int hash;
-            if (!TryHashProperty(property, out hash))
+            if (!TryHashProperty(property, out int hash))
             {
                 _appliedState.Remove(property);
                 return;
@@ -182,10 +150,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         }
 
         /// <summary>
-        /// A cache entry stays valid as long as the same residential building still stands on the
-        /// same spot. It deliberately does not require the prefab to be unchanged: a building that
-        /// levels up keeps its entity and its position but swaps its prefab, and dropping the cache
-        /// there would stop reconciling the house exactly when its two copies diverge.
+        /// Valid while the same residential building stands on the same spot; the prefab may change when
+        /// it levels up.
         /// </summary>
         private bool MatchesCachedProperty(Entity property, CachedProperty cached)
         {
@@ -206,30 +172,25 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             _claimedHouseholds.Clear();
             _wantedHouseholdIds.Clear();
 
-            // Bind a freshly downloaded world's already-identical families by their semantic
-            // fingerprint. After that one bootstrap, every reconcile is exclusively keyed by the
-            // opaque host id; renter-buffer order never has identity meaning again.
+            // Bind a fresh world's identical families by fingerprint once; afterwards only by host id.
             for (int i = 0; i < wanted.Length; i++)
             {
                 OccupancyHousehold desired = wanted[i];
                 if (desired.Departing)
                 {
-                    Entity leaving;
-                    if (!TryResolveHousehold(desired.HouseholdId, out leaving))
+                    if (!TryResolveHousehold(desired.HouseholdId, out Entity leaving))
                     {
                         leaving = FindBootstrapHousehold(desired);
                         if (leaving != Entity.Null)
                             BindHousehold(desired.HouseholdId, leaving);
                     }
-                    // Do not claim it: the unmatched pass below invokes the native move-away
-                    // lifecycle for this exact host identity.
+                    // Not claimed: the unmatched pass below runs the native move-away for this identity.
                     continue;
                 }
                 if (!IsHouseholdDesiredHere(desired.HouseholdId, property)) continue;
                 _wantedHouseholdIds.Add(desired.HouseholdId);
 
-                Entity household;
-                if (!TryResolveHousehold(desired.HouseholdId, out household))
+                if (!TryResolveHousehold(desired.HouseholdId, out Entity household))
                 {
                     household = FindBootstrapHousehold(desired);
                     if (household != Entity.Null) BindHousehold(desired.HouseholdId, household);
@@ -237,8 +198,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 if (household == Entity.Null) continue;
                 _claimedHouseholds.Add(household);
 
-                // Collection verified both renter links and removed duplicates. Reuse that
-                // membership instead of scanning the tower's renter buffer for every family.
+                // Membership was verified during collection.
                 if (!_localHouseholdMembers.Contains(household) &&
                     !IsHouseholdAtProperty(household, property)) continue;
                 CancelUnauthorizedDeparture(household);
@@ -250,10 +210,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             bool settling = IsSettling(property);
             if (settling) ScheduleReapply(property);
 
-            // Do not move a family into a building this peer is still putting up when the host's
-            // is already finished: the two are describing different things, and the completion
-            // just forced above lands on the next update anyway. Retirement and the numbers on
-            // families already living here are unaffected.
+            // No moving into a local building site when the host's is finished; completion lands next update.
             bool hostFinished = cached.ConstructionSpeed == 0;
             bool deferMoveIns = localUnderConstruction && hostFinished;
             if (deferMoveIns)
@@ -262,38 +219,28 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 ScheduleReapply(property);
             }
 
-            // Remove every local identity that this absolute roster no longer places here. A
-            // household desired at another resolved property is transferred through the normal
-            // rent queue; an absent identity takes the ordinary move-away cleanup path.
+            // Identities placed elsewhere transfer through the rent queue; absent ones take move-away.
             for (int i = 0; i < _localHouseholds.Count; i++)
             {
                 Entity local = _localHouseholds[i];
                 if (_claimedHouseholds.Contains(local)) continue;
 
-                ulong localId;
-                PropertyRentIdentity desiredIdentity, localIdentity;
-                Entity destination;
-                bool hasLocalId = TryGetBoundHouseholdId(local, out localId);
+                bool hasLocalId = TryGetBoundHouseholdId(local, out ulong localId);
                 if (hasLocalId &&
-                    TryGetDesiredPropertyIdentity(localId, out desiredIdentity) &&
-                    TryGetPropertyIdentity(property, out localIdentity))
+                    TryGetDesiredPropertyIdentity(localId, out PropertyIdentity desiredIdentity) &&
+                    TryGetPropertyIdentity(property, out PropertyIdentity localIdentity))
                 {
                     if (desiredIdentity.Equals(localIdentity))
                     {
-                        // This property says "not here", but no received destination has superseded
-                        // the last positive location. Preserve identity until a move page arrives or
-                        // the host explicitly marks the household as departing.
+                        // Preserve identity until a move page arrives or the host marks it departing.
                         ScheduleReapply(property);
                         continue;
                     }
 
-                    if (!TryGetDesiredProperty(localId, out destination) ||
+                    if (!TryGetDesiredProperty(localId, out Entity destination) ||
                         destination == property || !CanStageTransferTo(destination))
                     {
-                        // Keep the native two-way source link intact until the destination exists
-                        // locally. A page can arrive before its building resolves (or be the only
-                        // surviving half of a move); breaking the link here would strand the
-                        // household forever if that pending identity later expires.
+                        // Keep the native two-way source link intact until the destination exists locally.
                         ScheduleReapply(property);
                         if (destination != Entity.Null && destination != property)
                             MarkDirty(destination);
@@ -301,8 +248,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     }
 
                     // Stage an outgoing transfer by freeing only the source buffer slot. Keep the
-                    // PropertyRenter component until the native rent action changes it; this breaks
-                    // full A<->B swaps without inventing a half-valid destination link.
+                    // PropertyRenter component until the native rent action changes it.
                     if (!TrackStagedTransfer(localId, local, property, destination))
                     {
                         ScheduleReapply(property);
@@ -322,10 +268,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 }
                 if (hasLocalId && HasActiveDesiredCitizenStillLinked(local))
                 {
-                    // A vanished household shell can be one side of a split. Its retained
-                    // household tombstone does not prove that still-live members left the city;
-                    // wait until their higher-revision destination rosters move them, or exact
-                    // citizen tombstones make them inactive.
+                    // A vanished shell may be a split: wait for destination rosters or citizen tombstones.
                     ScheduleReapply(property);
                     continue;
                 }
@@ -354,14 +297,12 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             for (int i = 0; i < wanted.Length; i++)
             {
                 OccupancyHousehold desired = wanted[i];
-                // Resident state was already applied above. Only outstanding move-ins need
-                // this second pass; replaying settled families doubles all their roster work.
+                // Only outstanding move-ins need this second pass.
                 if (_reconciledHouseholdIds.Contains(desired.HouseholdId)) continue;
                 if (desired.Departing) continue;
                 if (!IsHouseholdDesiredHere(desired.HouseholdId, property)) continue;
 
-                Entity existing;
-                if (TryResolveHousehold(desired.HouseholdId, out existing))
+                if (TryResolveHousehold(desired.HouseholdId, out Entity existing))
                 {
                     if (IsHouseholdAtProperty(existing, property))
                     {
@@ -400,8 +341,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 if (desired.Citizens.Length == 0) continue;
                 if (free <= 0)
                 {
-                    // The local building has fewer homes than the host's - normally a level change
-                    // that has not reached this peer yet. Retried on the next pass.
+                    // Fewer homes than the host's building, normally a level change not yet here. Retried.
                     _refusedMoveIns++;
                     ScheduleReapply(property);
                     break;
@@ -418,11 +358,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         }
 
         /// <summary>
-        /// Keep this peer's building site in step with the host's, and report whether it is still
-        /// one. The build rate is drawn independently on each machine — a house given 39 takes over
-        /// twice as long as the same house given 88 — so without this the same building finishes
-        /// minutes apart on the two cities. Adopting the host's rate makes them finish together;
-        /// forcing completion when the host is already done closes the gap that is left.
+        /// Adopts the host's build rate (drawn per machine) and forces completion once the host is done,
+        /// so the building finishes at the same time on both peers. Returns whether it is still a site.
         /// </summary>
         private bool ApplyConstruction(Entity property, CachedProperty cached)
         {
@@ -432,9 +369,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
             if (hostSpeed != 0)
             {
-                // While the host is building, PrefabName still describes the old prefab; only the
-                // level command knows its target. Keep an existing local site's randomized clock
-                // aligned, and let the later completed absolute page repair a missed target.
+                // While the host builds, only the clock is aligned; the level command owns the target.
                 if (!localConstructing) return false;
                 global::Game.Objects.UnderConstruction active = EntityManager
                     .GetComponentData<global::Game.Objects.UnderConstruction>(property);
@@ -453,19 +388,17 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 string.Equals(currentName, cached.Identity.PrefabName,
                     StringComparison.Ordinal)) return false;
 
-            Entity hostPrefab;
             bool canRepairPrefab = _prefabIndex.TryResolve(cached.Identity.PrefabName,
                     candidate => EntityManager.HasComponent<BuildingPropertyData>(candidate) &&
                                  EntityManager.HasComponent<SpawnableBuildingData>(candidate) &&
                                  !EntityManager.HasComponent<SignatureBuildingData>(candidate),
-                    out hostPrefab) && hostPrefab != Entity.Null;
+                    out Entity hostPrefab) && hostPrefab != Entity.Null;
             if (canRepairPrefab)
             {
                 global::Game.Objects.UnderConstruction completion = localConstructing
                     ? EntityManager.GetComponentData<global::Game.Objects.UnderConstruction>(property)
                     : default(global::Game.Objects.UnderConstruction);
-                // Already queued for the native construction system. Do not keep rewriting the
-                // component or inflate the correction counter while waiting for its partition.
+                // Already queued for the construction system.
                 if (completion.m_NewPrefab == hostPrefab && completion.m_Progress >= 100)
                     return true;
 
@@ -483,8 +416,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 return true;
             }
 
-            // Non-growable residential buildings are not safe targets for prefab replacement.
-            // Preserve the old completion-only behavior if one is locally still being built.
+            // Non-growables are not safe prefab-replacement targets.
             if (!localConstructing) return false;
             global::Game.Objects.UnderConstruction site =
                 EntityManager.GetComponentData<global::Game.Objects.UnderConstruction>(property);

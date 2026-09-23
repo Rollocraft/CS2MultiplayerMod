@@ -15,9 +15,7 @@ namespace CS2MultiplayerMod.Game.Sync.Infrastructure
                 em.HasComponent<NetCourse>(entity) ||
                 em.HasBuffer<global::Game.Areas.Node>(entity)) return false;
 
-            // ObjectToolBaseSystem.CreateBrushes emits this marker alongside the actual
-            // placement/delete definitions. ApplyBrushesSystem only edits the world for
-            // terraforming tools; those brushes must never be discarded as visual output.
+            // The brush display marker; only terraforming brushes edit the world.
             Entity tool = em.GetComponentData<BrushDefinition>(entity).m_Tool;
             return tool != Entity.Null && em.Exists(tool) &&
                    em.HasComponent<ObjectGeometryData>(tool) &&
@@ -27,10 +25,7 @@ namespace CS2MultiplayerMod.Game.Sync.Infrastructure
         public static bool SuppressDeletes(bool nativeCaptured, bool lifecycleApplied,
             bool brushApplied) => nativeCaptured || (lifecycleApplied && !brushApplied);
 
-        /// <summary>
-        /// True when one native object-tool definition is an independent top-level object create
-        /// or delete. Runtime prefab checks still reject buildings and graph-owning objects.
-        /// </summary>
+        /// <summary>An independent top-level create or delete; runtime prefab checks still apply.</summary>
         public static bool IsIndependentObjectDefinition(ObjectToolDefinitionIntent definition)
         {
             if (definition == null || definition.Kind != ObjectToolDefinitionKind.Object ||

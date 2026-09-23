@@ -5,12 +5,8 @@ using System.Threading;
 namespace CS2MultiplayerMod.Core.Session
 {
     /// <summary>
-    /// One seekable snapshot shared by sequential recipients, each holding a lease. The producer
-    /// releases its own lease once every recipient is queued, so the backing stream closes as soon
-    /// as the last transfer finishes or is dropped.
-    ///
-    /// Reference counting is atomic: a cancelled save can be released from the task continuation
-    /// while the game thread is releasing the same snapshot.
+    /// One seekable snapshot leased by sequential recipients; the stream closes when the last lease is
+    /// released. Atomic, as a cancelled save can release from a continuation.
     /// </summary>
     public sealed class BlobSource : IDisposable
     {

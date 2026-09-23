@@ -15,9 +15,8 @@ namespace CS2MultiplayerMod.Core.Networking.Steam
             return moved;
         }
 
-        // Quality and ping both describe a window seconds old. A rate whose bytes are being
-        // acknowledged at close to its own pace is not congested now, whatever that window
-        // still says, so the complaint holds the rate instead of cutting it.
+        // Quality and ping describe a window seconds old; a rate acknowledged near its own pace is not
+        // congested now, so the complaint holds the rate instead of cutting it.
         public static bool IsDelivering(long goodput, int sendRate, float share) =>
             sendRate > 0 && goodput >= (long)(sendRate * share);
     }

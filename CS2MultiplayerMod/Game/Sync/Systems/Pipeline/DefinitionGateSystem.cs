@@ -11,13 +11,9 @@ using CS2MultiplayerMod.Game.Sync.Systems.Net;
 namespace CS2MultiplayerMod.Game.Sync.Systems
 {
     /// <summary>
-    /// Keeps freshly buffered local tool definitions out of an armed remote tool transaction. Tool
-    /// definitions become visible only after <see cref="ToolOutputBarrier"/>; this system runs in
-    /// that gap and removes non-Permanent local definitions while the remote batch is still waiting
-    /// to materialise. Sync-created definitions carry Deleted from birth and are excluded by the
-    /// query. On the commit frame the armed flag clears before this system runs, so local definition
-    /// generation resumes immediately. The active tool is asked to regenerate after a gated frame,
-    /// preserving the visible preview without ever applying it as part of the remote transaction.
+    /// Keeps local tool definitions out of an armed remote transaction. Runs in the gap after
+    /// <see cref="ToolOutputBarrier"/> and removes non-Permanent local definitions; sync definitions
+    /// carry Deleted from birth and are excluded. The tool regenerates its preview afterwards.
     /// </summary>
     public partial class DefinitionGateSystem : GameSystemBase
     {
@@ -35,11 +31,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             _toolSystem = World.GetOrCreateSystemManaged<ToolSystem>();
             _playerCursor = World.GetOrCreateSystemManaged<Players.PlayerCursorSyncSystem>();
 
-            // Fresh, entity-visible definitions that are not a sync feeder's own (those carry
-            // Deleted from birth) - i.e. the active tool's buffered preview definitions.
-            // Zoning definitions are spared: they materialise into Block/Cell Temps, which no
-            // isolated commit reads, and killing one leaves the marquee with no preview to commit
-            // on the frame the player releases (see NetSyncSystem's standing-Temp query).
+            // The active tool's buffered preview definitions. Zoning is spared: its Block/Cell Temps are
+            // never read by an isolated commit, and removing one leaves the marquee nothing to commit.
             _foreignDefinitions = GetEntityQuery(new EntityQueryDesc
             {
                 All = SyncQuery.ReadOnly<CreationDefinition, Updated>(),
@@ -55,18 +48,11 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 if (service == null) return;
                 if (_netSync == null) return;
 
-                // ToolOutputBarrier has consumed this frame. Restore whichever side of the net/brush
-                // transaction was temporarily Disabled before inspecting newly buffered definitions.
-                // This release must also run during a world-sync barrier: an admitted native graph is
-                // allowed to finish draining there, and leaving its commit shield Disabled would keep
-                // recovery waiting forever.
+                // Also during a world-sync barrier: a draining native graph left Disabled would stall recovery.
                 _netSync.FinishIsolationAfterToolOutput();
                 if (!service.GameplaySyncReady) return;
 
-                // Object/upgrade previews no longer need their regenerated definition graph here. They
-                // are captured once from the standing graph immediately before ToolOutputSystem applies
-                // it. Avoid even materializing the often-hundreds-strong preview batch unless NetSync
-                // needs it or an armed remote transaction must gate it.
+                // Object previews are captured before ToolOutputSystem; only materialize this batch when needed.
                 bool armedCommit = _netSync.HasArmedToolCommit;
                 bool activeNetTool = _toolSystem != null &&
                                      _toolSystem.activeTool is global::Game.Tools.NetToolSystem;
@@ -86,17 +72,11 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     : _foreignDefinitions.ToEntityArray(Allocator.Temp);
                 try
                 {
-                    // Cache the active net tool's exact native course intent on every frame. This runs
-                    // before the optional armed-window gate below and is also needed when no commit is
-                    // armed: the next Apply frame publishes this preview rather than inferring from
-                    // its final Created edges.
+                    // Every frame: the next Apply publishes this cached course intent, not its Created edges.
                     _playerCursor.ObserveHoverDefinitions(definitions);
                     _netSync.ObserveLocalNetDefinitions(definitions);
-                    // A newly selected net or a click-frame grid can have no usable graph at the two
-                    // earlier pre-output hooks: its definitions exist only in ToolOutputBarrier's
-                    // command buffer until this point. Publish the graph now while it is still the raw
-                    // pre-PostTool NetCourse operation. The per-frame capture guard makes this a no-op
-                    // when SyncRealizeSystem already sent the standing preview.
+                    // A just-selected net or grid only has definitions in the barrier buffer until here.
+                    // Idempotent when the standing preview was already sent this frame.
                     _netSync.CaptureBufferedLocalNetApply();
                     if (_buildSync == null)
                         _buildSync = World.GetOrCreateSystemManaged<BuildSyncSystem>();

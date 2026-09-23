@@ -1,13 +1,9 @@
 using System.Collections.Generic;
 using Colossal.Mathematics;
-using Game.Common;
-using Game.Net;
 using Game.Prefabs;
 using Game.Simulation;
 using Game.Tools;
-using Unity.Collections;
 using Unity.Entities;
-using Unity.Mathematics;
 using CS2MultiplayerMod.Core.Diagnostics;
 using CS2MultiplayerMod.Core.Protocol.Messages;
 using CS2MultiplayerMod.Core.Session;
@@ -17,13 +13,8 @@ using CS2MultiplayerMod.Game.Sync.Infrastructure;
 
 namespace CS2MultiplayerMod.Game.Sync.Systems.Net
 {
-    // A mixed net operation - one gesture that places, deletes and replaces network at once. It
-    // has to be realized atomically: applying the placements without the deletions leaves the
-    // city with both the old road and the new one.
-    //
-    // This file holds the types, the cycle, and the preflight that decodes the items and checks
-    // they can all be satisfied. Matching what the operation mutates is in MixedOperationMatch.cs
-    // and building the transaction is in MixedOperationBuild.cs.
+    // One gesture that places, deletes and replaces at once, realized atomically; otherwise both the old
+    // and new road remain.
     public partial class NetSyncSystem
     {
         private const float MixedMutationTolXZ = 4f;
@@ -179,9 +170,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
             }
             finally
             {
-                // Native course generation can complete jobs against these source arrays after the
-                // method returns. The ordinary placement path transfers their disposal to the armed
-                // commit; keep the mixed path conservative and complete dependencies before release.
+                // Generation can still read these arrays; complete dependencies before release.
                 if (haveSnapshot && definitionsArmed) Dependency.Complete();
                 if (haveSnapshot)
                 {
@@ -211,8 +200,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                 if (item.CommandId == NetDeleteCommand.Id)
                 {
                     NetDeleteCommand command = NetDeleteCommand.Decode(item.Body);
-                    Entity prefab;
-                    if (!_prefabIndex.TryResolve(command.PrefabName, out prefab))
+                    if (!_prefabIndex.TryResolve(command.PrefabName, out Entity prefab))
                     {
                         failure = "delete prefab '" + command.PrefabName + "' is unavailable";
                         deterministicFailure = true;
@@ -232,8 +220,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                 if (item.CommandId == NetReplaceCommand.Id)
                 {
                     NetReplaceCommand command = NetReplaceCommand.Decode(item.Body);
-                    Entity prefab;
-                    if (!_prefabIndex.TryResolve(command.PrefabName, out prefab) ||
+                    if (!_prefabIndex.TryResolve(command.PrefabName, out Entity prefab) ||
                         !EntityManager.HasComponent<NetData>(prefab) ||
                         !EntityManager.HasComponent<NetGeometryData>(prefab))
                     {
@@ -256,8 +243,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                 }
 
                 NetPlacementCommand placement = NetPlacementCommand.Decode(item.Body);
-                Entity placedPrefab;
-                if (!_prefabIndex.TryResolve(placement.PrefabName, out placedPrefab) ||
+                if (!_prefabIndex.TryResolve(placement.PrefabName, out Entity placedPrefab) ||
                     !EntityManager.HasComponent<NetData>(placedPrefab) ||
                     !EntityManager.HasComponent<NetGeometryData>(placedPrefab))
                 {
@@ -267,8 +253,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                 }
                 if (!string.IsNullOrEmpty(placement.SubPrefabName))
                 {
-                    Entity subPrefab;
-                    if (!_prefabIndex.TryResolve(placement.SubPrefabName, out subPrefab) ||
+                    if (!_prefabIndex.TryResolve(placement.SubPrefabName, out Entity subPrefab) ||
                         !EntityManager.HasComponent<NetLaneData>(subPrefab))
                     {
                         failure = "lane prefab '" + placement.SubPrefabName + "' is unavailable";
@@ -314,13 +299,12 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                     EndKind = KindFree,
                 };
                 NetPrefabInfo info = NetInfoOf(placedPrefab);
-                bool ignoredSurface;
                 bool startResolved = !prepared.StartExternal ||
                     TryResolveNativeEndpointWithLocalSurface(placedPrefab, placement.Start, info,
                         ref nodes, ref edges, ref ownedNodes, ref ownedEdges,
                         ref heightData, ref waterData, allowMergedNodeSplit,
                         out prepared.StartTarget,
-                        out prepared.StartT, out prepared.StartKind, out ignoredSurface);
+                        out prepared.StartT, out prepared.StartKind, out bool ignoredSurface);
                 bool endResolved = !prepared.EndExternal ||
                     TryResolveNativeEndpointWithLocalSurface(placedPrefab, placement.End, info,
                         ref nodes, ref edges, ref ownedNodes, ref ownedEdges,

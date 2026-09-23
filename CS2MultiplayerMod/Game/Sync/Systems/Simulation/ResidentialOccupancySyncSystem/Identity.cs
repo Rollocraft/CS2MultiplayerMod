@@ -9,8 +9,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 {
     public partial class ResidentialOccupancySyncSystem
     {
-        // Host entity ids are opaque on a client. These maps are the only place where a host id is
-        // associated with a local entity, and they are cleared whenever the session world changes.
+        // The only host-id-to-local-entity maps; cleared when the session world changes.
         private readonly Dictionary<ulong, Entity> _householdsByHostId =
             new Dictionary<ulong, Entity>();
         private readonly Dictionary<Entity, ulong> _hostIdsByHousehold =
@@ -19,12 +18,10 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             new Dictionary<ulong, Entity>();
         private readonly Dictionary<Entity, ulong> _hostIdsByCitizen =
             new Dictionary<Entity, ulong>();
-        private readonly Dictionary<PropertyRentIdentity, Entity> _propertiesByIdentity =
-            new Dictionary<PropertyRentIdentity, Entity>();
+        private readonly Dictionary<PropertyIdentity, Entity> _propertiesByIdentity =
+            new Dictionary<PropertyIdentity, Entity>();
 
-        // Positive locations are learned as soon as a page arrives, before its property resolves.
-        // One absolute property page cannot distinguish a departure from a move whose destination
-        // page dropped, so absence never changes identity state. Explicit retained tombstones do.
+        // Learned when a page arrives. Absence never changes identity; explicit tombstones do.
         private readonly Dictionary<ulong, DesiredHouseholdLocation> _desiredHouseholds =
             new Dictionary<ulong, DesiredHouseholdLocation>();
         private readonly Dictionary<ulong, DesiredCitizenLocation> _desiredCitizens =
@@ -34,7 +31,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
         private struct DesiredHouseholdLocation
         {
-            public PropertyRentIdentity PropertyIdentity;
+            public PropertyIdentity PropertyIdentity;
             public ulong Revision;
             public uint LastSeenSweep;
             public bool Active;
@@ -49,29 +46,18 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             public bool Active;
         }
 
-        /// <summary>
-        /// Packs a host entity into an opaque, session-scoped identity. A client must never treat
-        /// the result as one of its own entity handles.
-        /// </summary>
+        /// <summary>An opaque, session-scoped key; never a local entity handle.</summary>
         private static ulong PackHostEntityId(Entity entity)
         {
             if (entity == Entity.Null || entity.Index < 0) return 0;
             return ((ulong)(uint)entity.Version << 32) | (uint)entity.Index;
         }
 
-        /// <summary>
-        /// Session-scoped citizen identity shared with company employment snapshots. The packed
-        /// value is only a wire key; a receiver must resolve it through this system's binding map
-        /// and must never reinterpret it as one of its own entity handles.
-        /// </summary>
+        /// <summary>Citizen key shared with company snapshots; resolve only through this system's map.</summary>
         internal static ulong PackNetworkCitizenId(Entity citizen) =>
             PackHostEntityId(citizen);
 
-        /// <summary>
-        /// Resolve an employee from the same authoritative resident mapping used by occupancy.
-        /// This narrow seam is what lets the company channel attach a job to a real local citizen
-        /// instead of creating a display-only worker count.
-        /// </summary>
+        /// <summary>Lets the company channel attach a job to a real local citizen.</summary>
         internal bool TryResolveCompanyCitizen(ulong citizenId, out Entity citizen) =>
             TryResolveCitizen(citizenId, out citizen);
 
@@ -80,16 +66,14 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             household = Entity.Null;
             if (householdId == 0) return false;
 
-            Entity candidate;
-            if (!_householdsByHostId.TryGetValue(householdId, out candidate)) return false;
+            if (!_householdsByHostId.TryGetValue(householdId, out Entity candidate)) return false;
             if (!IsLiveMappedHousehold(candidate))
             {
                 RemoveHouseholdBinding(householdId, candidate);
                 return false;
             }
 
-            ulong reverseId;
-            if (!_hostIdsByHousehold.TryGetValue(candidate, out reverseId) ||
+            if (!_hostIdsByHousehold.TryGetValue(candidate, out ulong reverseId) ||
                 reverseId != householdId)
             {
                 // Never return one half of a conflicting association.
@@ -106,16 +90,14 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             citizen = Entity.Null;
             if (citizenId == 0) return false;
 
-            Entity candidate;
-            if (!_citizensByHostId.TryGetValue(citizenId, out candidate)) return false;
+            if (!_citizensByHostId.TryGetValue(citizenId, out Entity candidate)) return false;
             if (!IsLiveMappedCitizen(candidate))
             {
                 RemoveCitizenBinding(citizenId, candidate);
                 return false;
             }
 
-            ulong reverseId;
-            if (!_hostIdsByCitizen.TryGetValue(candidate, out reverseId) ||
+            if (!_hostIdsByCitizen.TryGetValue(candidate, out ulong reverseId) ||
                 reverseId != citizenId)
             {
                 _citizensByHostId.Remove(citizenId);
@@ -126,21 +108,16 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             return true;
         }
 
-        /// <summary>
-        /// Binds one host household id to one local household. Rebinding removes both sides of any
-        /// older association first, so forward and reverse lookups can never disagree.
-        /// </summary>
+        /// <summary>Rebinding removes both sides of any older association first.</summary>
         private bool BindHousehold(ulong householdId, Entity household)
         {
             if (householdId == 0 || !IsLiveMappedHousehold(household)) return false;
 
-            Entity previousHousehold;
-            if (_householdsByHostId.TryGetValue(householdId, out previousHousehold) &&
+            if (_householdsByHostId.TryGetValue(householdId, out Entity previousHousehold) &&
                 previousHousehold != household)
                 RemoveHouseholdBinding(householdId, previousHousehold);
 
-            ulong previousId;
-            if (_hostIdsByHousehold.TryGetValue(household, out previousId) &&
+            if (_hostIdsByHousehold.TryGetValue(household, out ulong previousId) &&
                 previousId != householdId)
                 RemoveHouseholdBinding(previousId, household);
 
@@ -156,13 +133,11 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         {
             if (citizenId == 0 || !IsLiveMappedCitizen(citizen)) return false;
 
-            Entity previousCitizen;
-            if (_citizensByHostId.TryGetValue(citizenId, out previousCitizen) &&
+            if (_citizensByHostId.TryGetValue(citizenId, out Entity previousCitizen) &&
                 previousCitizen != citizen)
                 RemoveCitizenBinding(citizenId, previousCitizen);
 
-            ulong previousId;
-            if (_hostIdsByCitizen.TryGetValue(citizen, out previousId) && previousId != citizenId)
+            if (_hostIdsByCitizen.TryGetValue(citizen, out ulong previousId) && previousId != citizenId)
                 RemoveCitizenBinding(previousId, citizen);
 
             _citizensByHostId[citizenId] = citizen;
@@ -173,37 +148,29 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
         private void UnbindHousehold(ulong householdId)
         {
-            Entity household;
-            if (_householdsByHostId.TryGetValue(householdId, out household))
+            if (_householdsByHostId.TryGetValue(householdId, out Entity household))
                 RemoveHouseholdBinding(householdId, household);
         }
 
         private void UnbindHousehold(Entity household)
         {
-            ulong householdId;
-            if (_hostIdsByHousehold.TryGetValue(household, out householdId))
+            if (_hostIdsByHousehold.TryGetValue(household, out ulong householdId))
                 RemoveHouseholdBinding(householdId, household);
         }
 
         private void UnbindCitizen(ulong citizenId)
         {
-            Entity citizen;
-            if (_citizensByHostId.TryGetValue(citizenId, out citizen))
+            if (_citizensByHostId.TryGetValue(citizenId, out Entity citizen))
                 RemoveCitizenBinding(citizenId, citizen);
         }
 
         private void UnbindCitizen(Entity citizen)
         {
-            ulong citizenId;
-            if (_hostIdsByCitizen.TryGetValue(citizen, out citizenId))
+            if (_hostIdsByCitizen.TryGetValue(citizen, out ulong citizenId))
                 RemoveCitizenBinding(citizenId, citizen);
         }
 
-        /// <summary>
-        /// The id map is consulted before the entity is inspected: this is called for every
-        /// household a local economy system touched, and most families in a large city were never
-        /// bound to a host identity at all. An unmapped entity has nothing to unbind either way.
-        /// </summary>
+        /// <summary>Map lookup first: most households touched by local systems were never bound.</summary>
         private bool TryGetBoundHouseholdId(Entity household, out ulong householdId)
         {
             if (!_hostIdsByHousehold.TryGetValue(household, out householdId))
@@ -218,8 +185,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 return false;
             }
 
-            Entity reverse;
-            if (_householdsByHostId.TryGetValue(householdId, out reverse) && reverse == household)
+            if (_householdsByHostId.TryGetValue(householdId, out Entity reverse) && reverse == household)
                 return true;
 
             _hostIdsByHousehold.Remove(household);
@@ -241,8 +207,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 return false;
             }
 
-            Entity reverse;
-            if (_citizensByHostId.TryGetValue(citizenId, out reverse) && reverse == citizen)
+            if (_citizensByHostId.TryGetValue(citizenId, out Entity reverse) && reverse == citizen)
                 return true;
 
             _hostIdsByCitizen.Remove(citizen);
@@ -251,9 +216,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         }
 
         /// <summary>
-        /// Observe every positive identity directly from wire order. Property resolution is a
-        /// separate concern: a move destination may legitimately be pending while the source
-        /// property already resolves and reports the household absent.
+        /// Observes positive identities in wire order, independent of property resolution: a move
+        /// destination may be pending while the source already reports the household absent.
         /// </summary>
         private void ObserveIncomingRoster(OccupancyProperty property, uint sweepId)
         {
@@ -294,36 +258,33 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             }
         }
 
-        private void RegisterResolvedProperty(PropertyRentIdentity identity, Entity property)
+        private void RegisterResolvedProperty(PropertyIdentity identity, Entity property)
         {
-            Entity previous;
-            if (_propertiesByIdentity.TryGetValue(identity, out previous) && previous != property &&
+            if (_propertiesByIdentity.TryGetValue(identity, out Entity previous) && previous != property &&
                 IsLiveProperty(previous) && PositionMatchesAnchor(previous, identity)) return;
             _propertiesByIdentity[identity] = property;
         }
 
-        private void UnregisterResolvedProperty(PropertyRentIdentity identity, Entity property)
+        private void UnregisterResolvedProperty(PropertyIdentity identity, Entity property)
         {
-            Entity current;
-            if (_propertiesByIdentity.TryGetValue(identity, out current) && current == property)
+            if (_propertiesByIdentity.TryGetValue(identity, out Entity current) && current == property)
                 _propertiesByIdentity.Remove(identity);
         }
 
-        private bool TryGetPropertyIdentity(Entity property, out PropertyRentIdentity identity)
+        private bool TryGetPropertyIdentity(Entity property, out PropertyIdentity identity)
         {
-            identity = default(PropertyRentIdentity);
-            CachedProperty cached;
-            if (property == Entity.Null || !_cache.TryGetValue(property, out cached)) return false;
+            identity = default(PropertyIdentity);
+            if (property == Entity.Null || !_cache.TryGetValue(property, out CachedProperty cached)) return false;
             identity = cached.Identity;
             return true;
         }
 
         private bool TryGetDesiredPropertyIdentity(ulong householdId,
-            out PropertyRentIdentity identity)
+            out PropertyIdentity identity)
         {
-            identity = default(PropertyRentIdentity);
-            DesiredHouseholdLocation location;
-            if (householdId == 0 || !_desiredHouseholds.TryGetValue(householdId, out location) ||
+            identity = default(PropertyIdentity);
+            if (householdId == 0 ||
+                !_desiredHouseholds.TryGetValue(householdId, out DesiredHouseholdLocation location) ||
                 !location.Active || location.Unhoused) return false;
             identity = location.PropertyIdentity;
             return true;
@@ -331,16 +292,14 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
         private bool IsHouseholdDesiredHere(ulong householdId, Entity property)
         {
-            PropertyRentIdentity desired, local;
-            return TryGetDesiredPropertyIdentity(householdId, out desired) &&
-                   TryGetPropertyIdentity(property, out local) && desired.Equals(local);
+            return TryGetDesiredPropertyIdentity(householdId, out PropertyIdentity desired) &&
+                   TryGetPropertyIdentity(property, out PropertyIdentity local) && desired.Equals(local);
         }
 
         private bool TryGetDesiredProperty(ulong householdId, out Entity property)
         {
             property = Entity.Null;
-            PropertyRentIdentity identity;
-            if (!TryGetDesiredPropertyIdentity(householdId, out identity) ||
+            if (!TryGetDesiredPropertyIdentity(householdId, out PropertyIdentity identity) ||
                 !_propertiesByIdentity.TryGetValue(identity, out property) ||
                 !IsLiveProperty(property))
             {
@@ -352,17 +311,15 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
         private bool IsCitizenDesiredHere(ulong citizenId, ulong householdId)
         {
-            DesiredCitizenLocation location;
             return citizenId != 0 && householdId != 0 &&
-                   _desiredCitizens.TryGetValue(citizenId, out location) && location.Active &&
+                   _desiredCitizens.TryGetValue(citizenId, out DesiredCitizenLocation location) && location.Active &&
                    location.HouseholdId == householdId;
         }
 
         private bool TryGetDesiredHouseholdId(ulong citizenId, out ulong householdId)
         {
             householdId = 0;
-            DesiredCitizenLocation location;
-            if (citizenId == 0 || !_desiredCitizens.TryGetValue(citizenId, out location) ||
+            if (citizenId == 0 || !_desiredCitizens.TryGetValue(citizenId, out DesiredCitizenLocation location) ||
                 !location.Active || location.HouseholdId == 0) return false;
             householdId = location.HouseholdId;
             return true;
@@ -395,32 +352,27 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
         private void RemoveHouseholdBinding(ulong householdId, Entity household)
         {
-            Entity forward;
-            if (_householdsByHostId.TryGetValue(householdId, out forward) && forward == household)
+            if (_householdsByHostId.TryGetValue(householdId, out Entity forward) && forward == household)
                 _householdsByHostId.Remove(householdId);
 
-            ulong reverse;
-            if (_hostIdsByHousehold.TryGetValue(household, out reverse) && reverse == householdId)
+            if (_hostIdsByHousehold.TryGetValue(household, out ulong reverse) && reverse == householdId)
                 _hostIdsByHousehold.Remove(household);
             _arrivalSources.Remove(household);
         }
 
         private void RemoveCitizenBinding(ulong citizenId, Entity citizen)
         {
-            Entity forward;
-            if (_citizensByHostId.TryGetValue(citizenId, out forward) && forward == citizen)
+            if (_citizensByHostId.TryGetValue(citizenId, out Entity forward) && forward == citizen)
                 _citizensByHostId.Remove(citizenId);
 
-            ulong reverse;
-            if (_hostIdsByCitizen.TryGetValue(citizen, out reverse) && reverse == citizenId)
+            if (_hostIdsByCitizen.TryGetValue(citizen, out ulong reverse) && reverse == citizenId)
                 _hostIdsByCitizen.Remove(citizen);
         }
 
-        private void ObserveDesiredHousehold(ulong householdId, PropertyRentIdentity property,
+        private void ObserveDesiredHousehold(ulong householdId, PropertyIdentity property,
             ulong revision, uint sweepId)
         {
-            DesiredHouseholdLocation existing;
-            if (_desiredHouseholds.TryGetValue(householdId, out existing) &&
+            if (_desiredHouseholds.TryGetValue(householdId, out DesiredHouseholdLocation existing) &&
                 revision <= existing.Revision) return;
             _desiredHouseholds[householdId] = new DesiredHouseholdLocation
             {
@@ -435,8 +387,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         private void ObserveDesiredCitizen(ulong citizenId, ulong householdId, ulong revision,
             uint sweepId)
         {
-            DesiredCitizenLocation existing;
-            if (_desiredCitizens.TryGetValue(citizenId, out existing) &&
+            if (_desiredCitizens.TryGetValue(citizenId, out DesiredCitizenLocation existing) &&
                 revision <= existing.Revision) return;
             if (existing.Active && existing.HouseholdId != householdId)
                 RemoveDesiredCitizenIndex(existing.HouseholdId, citizenId);
@@ -453,8 +404,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         private void AddDesiredCitizenIndex(ulong householdId, ulong citizenId)
         {
             if (householdId == 0 || citizenId == 0) return;
-            HashSet<ulong> citizens;
-            if (!_desiredCitizensByHousehold.TryGetValue(householdId, out citizens))
+            if (!_desiredCitizensByHousehold.TryGetValue(householdId, out HashSet<ulong> citizens))
             {
                 citizens = new HashSet<ulong>();
                 _desiredCitizensByHousehold[householdId] = citizens;
@@ -464,19 +414,17 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
         private void RemoveDesiredCitizenIndex(ulong householdId, ulong citizenId)
         {
-            HashSet<ulong> citizens;
             if (householdId == 0 ||
-                !_desiredCitizensByHousehold.TryGetValue(householdId, out citizens)) return;
+                !_desiredCitizensByHousehold.TryGetValue(householdId, out HashSet<ulong> citizens)) return;
             citizens.Remove(citizenId);
             if (citizens.Count == 0) _desiredCitizensByHousehold.Remove(householdId);
         }
 
         private void ObserveDepartingHousehold(ulong householdId,
-            PropertyRentIdentity property, ulong revision, uint sweepId)
+            PropertyIdentity property, ulong revision, uint sweepId)
         {
             if (householdId == 0) return;
-            DesiredHouseholdLocation existing;
-            if (_desiredHouseholds.TryGetValue(householdId, out existing) &&
+            if (_desiredHouseholds.TryGetValue(householdId, out DesiredHouseholdLocation existing) &&
                 revision <= existing.Revision) return;
             _desiredHouseholds[householdId] = new DesiredHouseholdLocation
             {
@@ -491,13 +439,11 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         private void ObserveDepartureRecord(OccupancyDeparture departure, uint sweepId)
         {
             if (departure.HouseholdId == 0 || departure.Revision == 0) return;
-            DesiredHouseholdLocation existing;
-            if (_desiredHouseholds.TryGetValue(departure.HouseholdId, out existing) &&
+            if (_desiredHouseholds.TryGetValue(departure.HouseholdId, out DesiredHouseholdLocation existing) &&
                 departure.Revision <= existing.Revision) return;
 
-            Entity property;
             if (existing.PropertyIdentity.PrefabName != null &&
-                _propertiesByIdentity.TryGetValue(existing.PropertyIdentity, out property) &&
+                _propertiesByIdentity.TryGetValue(existing.PropertyIdentity, out Entity property) &&
                 IsLiveProperty(property)) MarkDirty(property);
             existing.Revision = departure.Revision;
             existing.LastSeenSweep = sweepId;
@@ -509,9 +455,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
         private bool IsHouseholdDesiredUnhoused(ulong householdId)
         {
-            DesiredHouseholdLocation location;
             return householdId != 0 &&
-                   _desiredHouseholds.TryGetValue(householdId, out location) &&
+                   _desiredHouseholds.TryGetValue(householdId, out DesiredHouseholdLocation location) &&
                    location.Active && location.Unhoused;
         }
 
@@ -519,8 +464,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             uint sweepId)
         {
             if (departure.CitizenId == 0 || departure.Revision == 0) return;
-            DesiredCitizenLocation existing;
-            if (_desiredCitizens.TryGetValue(departure.CitizenId, out existing) &&
+            if (_desiredCitizens.TryGetValue(departure.CitizenId, out DesiredCitizenLocation existing) &&
                 departure.Revision <= existing.Revision) return;
 
             MarkCitizenHouseholdDirty(departure.CitizenId, existing.HouseholdId);
@@ -535,8 +479,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
         private void MarkCitizenHouseholdDirty(ulong citizenId, ulong lastHouseholdId)
         {
-            Entity citizen;
-            if (TryResolveCitizen(citizenId, out citizen) &&
+            if (TryResolveCitizen(citizenId, out Entity citizen) &&
                 EntityManager.HasComponent<HouseholdMember>(citizen))
             {
                 Entity household = EntityManager.GetComponentData<HouseholdMember>(citizen)
@@ -552,8 +495,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 }
             }
 
-            Entity mappedHousehold;
-            if (lastHouseholdId != 0 && TryResolveHousehold(lastHouseholdId, out mappedHousehold) &&
+            if (lastHouseholdId != 0 && TryResolveHousehold(lastHouseholdId, out Entity mappedHousehold) &&
                 EntityManager.HasComponent<PropertyRenter>(mappedHousehold))
             {
                 Entity property = EntityManager.GetComponentData<PropertyRenter>(mappedHousehold)
@@ -572,8 +514,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             uint sweepId)
         {
             if (citizenId == 0) return;
-            DesiredCitizenLocation existing;
-            if (_desiredCitizens.TryGetValue(citizenId, out existing) &&
+            if (_desiredCitizens.TryGetValue(citizenId, out DesiredCitizenLocation existing) &&
                 revision <= existing.Revision) return;
             if (existing.Active) RemoveDesiredCitizenIndex(existing.HouseholdId, citizenId);
             _desiredCitizens[citizenId] = new DesiredCitizenLocation

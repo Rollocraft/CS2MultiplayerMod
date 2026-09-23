@@ -1,9 +1,6 @@
 namespace CS2MultiplayerMod.Core.Protocol.Messages
 {
-    /// <summary>
-    /// Free-text message. Also used for system notices (joins/leaves) so the very
-    /// first end-to-end feature can be exercised without touching the simulation.
-    /// </summary>
+    /// <summary>Free text; also carries system notices such as joins and leaves.</summary>
     public sealed class ChatMessage : INetMessage
     {
         public string SenderName;

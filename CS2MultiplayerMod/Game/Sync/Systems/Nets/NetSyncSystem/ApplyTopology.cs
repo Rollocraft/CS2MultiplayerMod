@@ -1,19 +1,12 @@
 using System.Collections.Generic;
-using Colossal.Mathematics;
 using Game.Common;
 using Game.Net;
 using Game.Tools;
-using Unity.Collections;
 using Unity.Entities;
 
 namespace CS2MultiplayerMod.Game.Sync.Systems.Net
 {
-    // Commit orchestration for NetSyncSystem. A remote net operation includes the objects and areas
-    // its native generation updates as side effects; the complete local preview graph is temporarily
-    // Disabled so an unrelated tool can remain selected without either transaction consuming the
-    // other one's entities.
-    // The graph-shaped half of validation: a temp's original, its nodes and edges, the endpoints
-    // they connect, and the connections that are effectively part of the same transaction.
+    // Graph validation: originals, nodes, edges and their connectivity.
     public partial class NetSyncSystem
     {
         private bool ValidateTransactionOriginal(Entity entity, Temp temp, bool isNode, bool isEdge,
@@ -28,9 +21,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                 reason = "a referenced original vanished between arm and commit";
                 return false;
             }
-            // A valid split/replacement can mark every old edge Deleted inside this transaction.
-            // Treat that as safe only when the generated graph below supplies replacement
-            // connectivity; an unrelated teardown has no such enabled transaction edge.
+            // Old edges Deleted inside the transaction are safe only with replacement connectivity.
             if (isNode)
             {
                 bool replacesEdge = (temp.m_Flags & TempFlags.Replace) != 0 &&
@@ -44,14 +35,11 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                     IsNodeBeingDeleted(original) &&
                     !enabledTransactionConnections.Contains(entity))
                 {
-                    // A node whose complete old connectivity is being removed is safe only when
-                    // this same transaction supplies its replacement edge. Otherwise ApplyNetSystem
-                    // can consume the lingering node after its last real edge has vanished.
+                    // Otherwise ApplyNetSystem consumes the node after its last real edge is gone.
                     reason = "a referenced original node is being torn down without replacement connectivity";
                     return false;
                 }
-                // GenerateNodesSystem deliberately gives a split node the original Edge and
-                // TempFlags.Replace. ApplyNetSystem then uses that pair to split the edge.
+                // A split node carries the original Edge with TempFlags.Replace; ApplyNetSystem splits with it.
             }
             if (isEdge && !EntityManager.HasComponent<Edge>(original))
             {
@@ -64,8 +52,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
             if (updatesOriginal && (isNode || isEdge) &&
                 !ValidateNetPrefabReference(entity, out reason)) return false;
 
-            // The connectivity repair pass reads every edge referenced by an updated node without
-            // checking whether the entity still carries Edge.
+            // The connectivity repair pass reads every referenced edge without checking Edge.
             if (isNode && updatesOriginal && EntityManager.HasBuffer<ConnectedEdge>(original))
             {
                 DynamicBuffer<ConnectedEdge> edges =

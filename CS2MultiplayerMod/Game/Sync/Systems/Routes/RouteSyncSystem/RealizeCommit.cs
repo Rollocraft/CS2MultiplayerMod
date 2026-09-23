@@ -1,9 +1,5 @@
-using System;
 using System.Collections.Generic;
-using Game.Common;
 using Game.Prefabs;
-using Game.Routes;
-using Game.Tools;
 using Unity.Collections;
 using Unity.Entities;
 using Unity.Mathematics;
@@ -14,8 +10,7 @@ using CS2MultiplayerMod.Game.Sync.Infrastructure;
 
 namespace CS2MultiplayerMod.Game.Sync.Systems
 {
-    // Finishing a route the tool has created. Its number and colour can only be applied once the
-    // route entity exists, so they are held until the commit lands - and replayed if it is lost.
+    // Number and colour can only be applied once the route exists; replayed if the commit is lost.
     public partial class RouteSyncSystem
     {
         private void FinalizeCreatedRoutes(long now)
@@ -26,8 +21,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             {
                 PendingCreateMetadata pending = _pendingCreateMetadata[i];
                 if (!pending.GraphCommitted) continue;
-                bool ambiguous;
-                Entity route = FindMetadataTarget(pending, claimed, out ambiguous);
+                Entity route = FindMetadataTarget(pending, claimed, out bool ambiguous);
                 if (route != Entity.Null)
                 {
                     claimed.Add(route);
@@ -53,9 +47,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     "; requested a fresh world sync.");
             }
 
-            // The game's initializer may temporarily give several routes created in one batch the
-            // same free number. Treat every route finalized here as a coordinated assignment, while
-            // still rejecting conflicts with established routes outside this batch.
+            // Routes created in one batch may briefly share a free number; treat them as one assignment.
             var readyRoutes = new HashSet<Entity>(ready.Values);
             foreach (KeyValuePair<PendingCreateMetadata, Entity> pair in ready)
             {
@@ -76,8 +68,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 }
                 else
                 {
-                    RouteSnapshot snapshot;
-                    if (TryCaptureSnapshot(route, out snapshot))
+                    if (TryCaptureSnapshot(route, out RouteSnapshot snapshot))
                         _knownRoutes[route] = snapshot;
                     SyncLog.Detail(LogTopic.Routes, "RouteSync finalized line '" +
                         pending.PrefabName + "' number " + pending.RouteNumber + ".");
@@ -104,8 +95,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                         EntityManager.GetComponentData<PrefabRef>(candidate).m_Prefab !=
                         pending.Prefab)
                         continue;
-                    RouteSnapshot snapshot;
-                    if (!TryCaptureSnapshot(candidate, out snapshot) ||
+                    if (!TryCaptureSnapshot(candidate, out RouteSnapshot snapshot) ||
                         !WaypointsMatchIntent(snapshot.Waypoints,
                             pending.Waypoints))
                         continue;
@@ -124,12 +114,10 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
         private bool DeleteStillNeedsRecovery(RouteDeleteCommand command)
         {
-            Entity prefab;
-            if (!_prefabIndex.TryResolve(command.PrefabName, out prefab)) return true;
-            bool ambiguous;
+            if (!_prefabIndex.TryResolve(command.PrefabName, out Entity prefab)) return true;
             Entity route = FindRoute(prefab, command.RouteNumber,
                 new float3(command.WaypointX, command.WaypointY, command.WaypointZ),
-                RouteAnchorMatchDistanceSq, out ambiguous);
+                RouteAnchorMatchDistanceSq, out bool ambiguous);
             return ambiguous || route != Entity.Null;
         }
 
@@ -158,9 +146,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             if (_pendingUpdateCommit != pending) return;
             _pendingUpdateCommit = null;
 
-            RouteSnapshot snapshot;
             if (EntityManager.Exists(pending.Route) &&
-                TryCaptureSnapshot(pending.Route, out snapshot))
+                TryCaptureSnapshot(pending.Route, out RouteSnapshot snapshot))
                 _knownRoutes[pending.Route] = snapshot;
             else
                 _knownRoutes[pending.Route] = pending.Desired;
@@ -183,9 +170,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         {
             MultiplayerService service = Mod.Service;
             long now = service != null ? service.NowMs : 0;
-            // Gameplay not being ready means the world is already being replaced. The replacement
-            // supersedes this commit, so asking for another one is noise - and asking for a world
-            // reload BECAUSE a world reload is under way is how a session gets into a loop.
+            // Not ready means the world is being replaced; asking for another reload would loop.
             if (service == null || !service.GameplaySyncReady)
             {
                 SyncLog.Warn(LogTopic.Routes, "RouteSync " + operation +

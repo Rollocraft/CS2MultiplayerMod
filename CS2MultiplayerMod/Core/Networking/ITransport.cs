@@ -3,75 +3,53 @@ using System.Collections.Generic;
 
 namespace CS2MultiplayerMod.Core.Networking
 {
-    /// <summary>
-    /// Optional capability exposed by authenticated platform transports. The core session
-    /// uses it only for convenience rules such as auto-approving a platform friend; direct
-    /// IP transports deliberately do not implement it.
-    /// </summary>
+    /// <summary>Platform transports only, for conveniences like auto-approving a friend.</summary>
     public interface IPlatformFriendLookup
     {
         bool IsPlatformFriend(ConnectionId connection);
     }
 
     /// <summary>
-    /// Reliable, ordered, message-oriented transport.
-    ///
-    /// Implementations deliver whole application payloads (the wire framing is an
-    /// implementation detail) and surface connection lifecycle as
-    /// <see cref="TransportEvent"/>s. All I/O happens on background threads; the
-    /// owner drains events on the game thread through <see cref="Poll"/>.
-    ///
-    /// The same interface serves both roles. A host accepts many connections; a
-    /// client holds a single connection addressed by <see cref="ConnectionId.Server"/>.
-    /// Keeping a single abstraction lets the session layer treat host and client
-    /// uniformly and makes the TCP implementation swappable for UDP later.
+    /// When traffic last arrived, whole payload or not. A reliable stream stalled behind a lost segment
+    /// can deliver no payload for longer than the silence timeout while the peer is alive.
+    /// </summary>
+    public interface IInboundActivity
+    {
+        /// <summary>Last inbound traffic on <paramref name="connection"/>, or <see cref="long.MinValue"/>.</summary>
+        long LastInboundActivityMs(ConnectionId connection);
+    }
+
+    /// <summary>
+    /// Reliable, ordered, message-oriented transport for both roles (a client's one connection is
+    /// <see cref="ConnectionId.Server"/>). I/O runs on background threads; the owner drains
+    /// <see cref="TransportEvent"/>s on the game thread through <see cref="Poll"/>.
     /// </summary>
     public interface ITransport : IDisposable
     {
         /// <summary>True once started and not yet shut down.</summary>
         bool IsActive { get; }
 
-        /// <summary>
-        /// Total bytes queued for sending across all connections that have not yet been
-        /// written to their sockets. Drives the host's "Sending world %" progress while a
-        /// large blob drains to a peer.
-        /// </summary>
+        /// <summary>Unsent bytes across all connections; drives "Sending world %".</summary>
         long PendingSendBytes { get; }
 
-        /// <summary>
-        /// Queue a payload for reliable delivery to <paramref name="target"/>.
-        /// Safe to call from the game thread; the transport buffers and sends on its
-        /// own threads. Sending to an unknown/closed connection is a no-op.
-        /// </summary>
+        /// <summary>Queues a payload; safe from the game thread. Unknown or closed targets are a no-op.</summary>
         void Send(ConnectionId target, byte[] payload);
 
         /// <summary>Forcibly close a single connection now, abandoning any unsent backlog.</summary>
         void Disconnect(ConnectionId connection);
 
-        /// <summary>
-        /// Close connection after sending queued payloads - delivers final message
-        /// (e.g. handshake rejection reason) before hanging up without racing
-        /// asynchronous send. See <see cref="Disconnect"/>.
-        /// </summary>
+        /// <summary>Closes once queued payloads are sent, so a final message (e.g. a rejection) arrives.</summary>
         void DisconnectAfterFlush(ConnectionId connection);
 
-        /// <summary>
-        /// Move all pending events into <paramref name="sink"/> and return the count
-        /// added. Must be called regularly from the game thread.
-        /// </summary>
+        /// <summary>Moves pending events into <paramref name="sink"/>; call regularly from the game thread.</summary>
         int Poll(IList<TransportEvent> sink);
 
-        /// <summary>
-        /// Remote IP address of a connection (no port), or null if unknown.
-        /// Used for ban tracking and logging - never for trust decisions.
-        /// </summary>
+        /// <summary>Remote IP (no port) or null; for bans and logs, never for trust.</summary>
         string GetRemoteAddress(ConnectionId connection);
 
         /// <summary>
-        /// Channel-binding token for a connection: the SHA-256 hash of the TLS
-        /// certificate securing it, as this side saw it. Empty when the connection is
-        /// not encrypted. Folding this into the password proof makes a TLS
-        /// man-in-the-middle detectable whenever a password is set.
+        /// SHA-256 of the TLS certificate as this side saw it, or empty without TLS. Folded into the
+        /// password proof, it exposes a man-in-the-middle.
         /// </summary>
         byte[] GetChannelBinding(ConnectionId connection);
 
@@ -79,12 +57,9 @@ namespace CS2MultiplayerMod.Core.Networking
         void Shutdown();
 
         /// <summary>
-        /// Close every connection once its queued payloads have gone out, waiting up to
-        /// <paramref name="timeoutMs"/> for that drain before closing the rest by force.
-        /// Blocks the caller, so the timeout must stay short: this exists for the moment
-        /// the process (or the world) is going away and a final notice still has to reach
-        /// the peers, which <see cref="Shutdown"/> alone cannot guarantee - it abandons
-        /// whatever is still queued.
+        /// Closes every connection after its queue drains, forcing the rest after
+        /// <paramref name="timeoutMs"/>. Blocks, so keep it short; for a final notice on exit, which
+        /// <see cref="Shutdown"/> would abandon.
         /// </summary>
         void ShutdownAfterFlush(int timeoutMs);
     }

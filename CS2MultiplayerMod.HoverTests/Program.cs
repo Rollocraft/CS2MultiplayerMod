@@ -17,6 +17,7 @@ static class Program
         try
         {
             CodecChecks();
+            OpaquePayloadChecks();
             SessionChecks(false);
             SessionChecks(true);
             Console.WriteLine("PASS: hover codecs, hostile payloads, TCP/TLS relay, identity stamping, clearing, backpressure and world-sync barriers.");
@@ -90,6 +91,32 @@ static class Program
             wire[rng.Next(33, wire.Length)] = (byte)rng.Next(256);
             try { Codec.Encode(Codec.Decode(wire)); }
             catch (ProtocolException) { }
+        }
+    }
+
+    static void OpaquePayloadChecks()
+    {
+        var cases = new (INetMessage Message, int LengthOffset, Func<INetMessage, byte[]> Payload)[]
+        {
+            (new StateEditMessage(7, 3, new byte[] { 1, 2, 3 }), 6,
+                message => ((StateEditMessage)message).Data),
+            (new StateSnapshotMessage(3, new byte[] { 1, 2, 3 }), 2,
+                message => ((StateSnapshotMessage)message).Data),
+            (new SimulationCommandMessage(7, 42, 9, new byte[] { 1, 2, 3 }), 15,
+                message => ((SimulationCommandMessage)message).Body),
+        };
+        foreach (var item in cases)
+        {
+            byte[] wire = Codec.Encode(item.Message);
+            Assert(item.Payload(Codec.Decode(wire)).SequenceEqual(new byte[] { 1, 2, 3 }),
+                item.Message.Type + " payload round trip");
+            foreach (int invalidLength in new[] { -1, 0, 2, 4 })
+            {
+                byte[] malformed = (byte[])wire.Clone();
+                BitConverter.GetBytes(invalidLength).CopyTo(malformed, item.LengthOffset);
+                Reject(() => Codec.Decode(malformed),
+                    item.Message.Type + " invalid body length " + invalidLength);
+            }
         }
     }
 

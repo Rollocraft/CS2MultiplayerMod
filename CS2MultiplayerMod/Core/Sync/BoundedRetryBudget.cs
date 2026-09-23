@@ -3,9 +3,8 @@ using System;
 namespace CS2MultiplayerMod.Core.Sync
 {
     /// <summary>
-    /// Small game-free retry counter shared by synchronization pipelines. A caller must explicitly
-    /// reset it after a successful commit; exhausting it is a recovery boundary, never an invitation
-    /// to keep rebuilding the same unsafe transaction forever.
+    /// Retry counter; reset after a successful commit. Exhaustion is a recovery boundary, not a reason to
+    /// keep rebuilding.
     /// </summary>
     public sealed class BoundedRetryBudget
     {

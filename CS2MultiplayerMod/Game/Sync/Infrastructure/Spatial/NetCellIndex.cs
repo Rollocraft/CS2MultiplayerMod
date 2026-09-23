@@ -4,24 +4,15 @@ using Unity.Mathematics;
 namespace CS2MultiplayerMod.Game.Sync.Infrastructure
 {
     /// <summary>
-    /// Uniform XZ grid over one realize cycle's net snapshot, addressed by position in the snapshot
-    /// array.
-    ///
-    /// Resolving a course endpoint used to test every node and every edge in the city, so replaying
-    /// one drawn grid of roads cost (courses x city) main-thread lookups inside a single frame - the
-    /// game builds the same grid in one. A query here is proportional to local network density
-    /// instead. Results are candidates only: callers keep their own distance, layer and liveness
-    /// filters, and an item whose bounds span several cells can be reported more than once.
+    /// Uniform XZ grid over one realize cycle's net snapshot, so endpoint lookups scale with local
+    /// density. Candidates only: callers keep their filters, and a multi-cell item can repeat.
     /// </summary>
     public struct NetCellIndex : System.IDisposable
     {
         private const int MaxAxisCells = 256;
         private const float MinCellSize = 8f;
 
-        /// <summary>
-        /// An item covering more cells than this is held aside and visited by every query, so one
-        /// map-spanning curve cannot be written into thousands of buckets.
-        /// </summary>
+        /// <summary>Larger items are visited by every query instead of filling thousands of buckets.</summary>
         private const int MaxCellsPerItem = 32;
 
         private float2 _origin;
@@ -31,10 +22,7 @@ namespace CS2MultiplayerMod.Game.Sync.Infrastructure
         private NativeArray<int> _cellItems;
         private NativeList<int> _spanning;
 
-        /// <summary>
-        /// Index items by their XZ bounds, <c>xy</c> = minimum and <c>zw</c> = maximum. A point item
-        /// passes the same value for both.
-        /// </summary>
+        /// <summary>Indexes by XZ bounds (<c>xy</c> min, <c>zw</c> max).</summary>
         public static NetCellIndex Build(NativeArray<float4> bounds)
         {
             var index = default(NetCellIndex);
@@ -70,8 +58,7 @@ namespace CS2MultiplayerMod.Game.Sync.Infrastructure
             int total = 0;
             for (int i = 0; i < count; i++)
             {
-                int2 lo, hi;
-                if (!index.CellRange(bounds[i], out lo, out hi))
+                if (!index.CellRange(bounds[i], out int2 lo, out int2 hi))
                 {
                     index._spanning.Add(i);
                     continue;
@@ -92,8 +79,7 @@ namespace CS2MultiplayerMod.Game.Sync.Infrastructure
                 for (int c = 0; c < cells; c++) fill[c] = starts[c];
                 for (int i = 0; i < count; i++)
                 {
-                    int2 lo, hi;
-                    if (!index.CellRange(bounds[i], out lo, out hi)) continue;
+                    if (!index.CellRange(bounds[i], out int2 lo, out int2 hi)) continue;
                     for (int z = lo.y; z <= hi.y; z++)
                     for (int x = lo.x; x <= hi.x; x++)
                     {
@@ -139,9 +125,7 @@ namespace CS2MultiplayerMod.Game.Sync.Infrastructure
 
         private int2 Cell(float2 position)
         {
-            // Clamping is what keeps a query outside the indexed extent (or a non-finite coordinate)
-            // landing on the boundary cell rather than out of range; it is order-preserving, so a
-            // candidate inside the grid is still reached from outside it.
+            // Clamped: out-of-range or non-finite positions land on the boundary cell.
             return math.clamp((int2)math.floor((position - _origin) / _cellSize),
                 int2.zero, _dims - 1);
         }

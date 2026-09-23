@@ -1,73 +1,38 @@
-using System;
-using System.Collections.Concurrent;
 using System.Collections.Generic;
 using CS2MultiplayerMod.Core.Diagnostics;
 using CS2MultiplayerMod.Core.Session;
 using CS2MultiplayerMod.Game.Diagnostics;
 using CS2MultiplayerMod.Game.Sync.Commands;
 using CS2MultiplayerMod.Game.Sync.Infrastructure;
-using Game;
 using Game.Buildings;
-using Game.Common;
-using Game.Objects;
 using Game.Prefabs;
 using Game.Simulation;
-using Game.Tools;
 using Unity.Collections;
 using Unity.Entities;
 using Unity.Mathematics;
 
 namespace CS2MultiplayerMod.Game.Sync.Systems
 {
-    // The client's side: resolving each entry in a page against a local property - by identity
-    // first, then by position - holding what cannot be matched yet, and applying the rents once
-    // it can. Ends with the periodic stats line that says how well that is going.
     public partial class PropertyRentSyncSystem
     {
-        private void DropIncomingPages()
-        {
-            if (_incoming.IsEmpty) return;
-            lock (_incoming)
-            {
-                PropertyRentSnapshot ignored;
-                while (_incoming.TryDequeue(out ignored)) _droppedPages++;
-            }
-        }
-
         private void DrainIncoming(long now, ObjectSearch.Batch search,
             NativeList<Entity> candidates, int maxPages)
         {
             _propertyState.PumpPages(maxPages, snapshot =>
             {
                 _receivedPages++;
-                NotePageContinuity(snapshot);
+                _propertyState.NotePage(snapshot.SweepId, snapshot.PageIndex);
                 for (int i = 0; i < snapshot.Entries.Count; i++)
                     ResolveOrPend(snapshot.Entries[i], snapshot.SweepId, now, search, candidates);
-                if (snapshot.EndOfSweep && _clientSweepIntact &&
-                    snapshot.SweepId == _clientSweepId &&
-                    snapshot.PageIndex + 1 == _clientNextPage)
+                if (snapshot.EndOfSweep && _propertyState.CompletesSweep(snapshot.SweepId, snapshot.PageIndex))
                     PruneCacheAfterCompleteSweep(snapshot.SweepId);
             });
-        }
-
-        private void NotePageContinuity(PropertyRentSnapshot snapshot)
-        {
-            if (snapshot.SweepId != _clientSweepId)
-            {
-                _clientSweepId = snapshot.SweepId;
-                _clientNextPage = 0;
-                _clientSweepIntact = snapshot.PageIndex == 0;
-            }
-            if (snapshot.PageIndex != _clientNextPage) _clientSweepIntact = false;
-            if (snapshot.PageIndex >= _clientNextPage)
-                _clientNextPage = snapshot.PageIndex + 1;
         }
 
         private void ResolveOrPend(PropertyRentEntry entry, uint sweepId, long now,
             ObjectSearch.Batch search, NativeList<Entity> candidates)
         {
-            bool ambiguous;
-            Entity property = ResolveProperty(entry, search, candidates, out ambiguous);
+            Entity property = ResolveProperty(entry, search, candidates, out bool ambiguous);
             if (property != Entity.Null)
             {
                 Cache(property, entry, sweepId);
@@ -78,43 +43,23 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             if (ambiguous) _ambiguous++;
             else _unresolved++;
 
-            PropertyRentIdentity identity = entry.Identity;
-            PendingProperty pending;
-            if (_pending.TryGetValue(identity, out pending))
+            if (_pending.TryGetValue(entry.Identity, out PendingProperty pending))
             {
                 pending.Entry = entry;
                 pending.SweepId = sweepId;
-                return;
             }
-            if (_pending.Count >= MaxPendingIdentities)
-            {
+            else if (!_propertyState.Hold(entry.Identity, new PendingProperty { Entry = entry },
+                         sweepId, now, ResolveTimeoutMs))
                 _cacheDrops++;
-                return;
-            }
-            _pending[identity] = new PendingProperty
-            {
-                Entry = entry,
-                SweepId = sweepId,
-                ExpiresMs = now + ResolveTimeoutMs,
-                NextAttemptMs = now + ResolveRetryMs,
-            };
-            _pendingOrder.Enqueue(identity);
-            long firstRetry = now + ResolveRetryMs;
-            if (_nextPendingPumpMs == 0 || firstRetry < _nextPendingPumpMs)
-                _nextPendingPumpMs = firstRetry;
         }
 
         private void RetryPending(long now, ObjectSearch.Batch search,
             NativeList<Entity> candidates)
         {
-            PropertyRetryPump.Pump(_pending, _pendingOrder, now,
-                MaxPendingRetriesPerUpdate,
-                value => value.ExpiresMs, value => value.NextAttemptMs,
-                (value, retry) => value.NextAttemptMs = retry,
+            _propertyState.RetryPending(now, MaxPendingRetriesPerUpdate,
                 value =>
                 {
-                    bool ambiguous;
-                    Entity property = ResolveProperty(value.Entry, search, candidates, out ambiguous);
+                    Entity property = ResolveProperty(value.Entry, search, candidates, out bool ambiguous);
                     if (property == Entity.Null) return false;
                     Cache(property, value.Entry, value.SweepId);
                     _resolved++;
@@ -126,10 +71,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             NativeList<Entity> candidates, out bool ambiguous)
         {
             ambiguous = false;
-            Entity prefab;
             _prefabIndex.TryResolve(entry.PrefabName,
                 candidate => EntityManager.Exists(candidate) &&
-                    EntityManager.HasComponent<BuildingPropertyData>(candidate), out prefab);
+                    EntityManager.HasComponent<BuildingPropertyData>(candidate), out Entity prefab);
             PropertyResolution result = PropertyEntityResolver.Resolve(EntityManager, search,
                 candidates, new float3(entry.AnchorX, entry.AnchorY, entry.AnchorZ),
                 AnchorSearchRadius, AnchorMatchDistance, AmbiguousDistanceEpsilon, prefab,
@@ -142,8 +86,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         {
             int bucket = (int)(EntityManager.GetSharedComponent<UpdateFrame>(property).m_Index %
                                UpdatePartitions);
-            CachedProperty cached;
-            if (_cache.TryGetValue(property, out cached))
+            if (_cache.TryGetValue(property, out CachedProperty cached))
             {
                 cached.Identity = entry.Identity;
                 cached.Prefab = EntityManager.GetComponentData<PrefabRef>(property).m_Prefab;
@@ -189,20 +132,17 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         {
             List<Entity> entities = _cacheBuckets[bucket];
             HashSet<Entity> members = _cacheBucketMembers[bucket];
-            // Rebuild membership while compacting. This removes complete-sweep tombstones and any
-            // legacy duplicate list entries, and preserves exactly one slot for each live cache.
+            // Rebuild membership while compacting: one slot per live cache entry.
             members.Clear();
             int write = 0;
             for (int i = 0; i < entities.Count; i++)
             {
                 Entity property = entities[i];
-                CachedProperty cached;
-                if (!_cache.TryGetValue(property, out cached))
+                if (!_cache.TryGetValue(property, out CachedProperty cached))
                 {
                     continue;
                 }
-                // A stale entry may remain in its old bucket list after a local UpdateFrame move.
-                // Do not delete the live cache now owned by the new bucket.
+                // Stale entry left behind by an UpdateFrame move; the live cache belongs to the new bucket.
                 if (cached.Bucket != bucket) continue;
                 if (!MatchesCachedProperty(property, cached))
                 {

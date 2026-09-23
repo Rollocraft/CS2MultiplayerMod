@@ -7,11 +7,9 @@ using CS2MultiplayerMod.Core.Protocol;
 namespace CS2MultiplayerMod.Core.Session
 {
     /// <summary>
-    /// Password authentication: random nonces, HMAC-SHA256 proofs, fixed-time
-    /// comparison, temporary-ban book for failures. Standard constructions only -
-    /// nothing here invents cryptography. Proof is HMAC-SHA256(UTF-8 password,
-    /// nonce | channel binding). Channel binding is TLS cert SHA-256 hash as each
-    /// side saw it, so man-in-the-middle with own cert produces rejected proof.
+    /// Password authentication with standard constructions: random nonces, proof =
+    /// HMAC-SHA256(UTF-8 password, nonce | channel binding), fixed-time comparison, temporary bans.
+    /// The binding is the TLS certificate hash each side saw, so a man-in-the-middle's proof fails.
     /// </summary>
     public static class HandshakeAuth
     {
@@ -48,9 +46,8 @@ namespace CS2MultiplayerMod.Core.Session
     }
 
     /// <summary>
-    /// Counts failed authentication attempts per remote address and answers "is this
-    /// address banned right now?". After <see cref="MaxFailures"/> failures within the
-    /// tracking window the address is refused for <see cref="BanMs"/>.
+    /// Failed attempts per address; <see cref="MaxFailures"/> within the window bans it for
+    /// <see cref="BanMs"/>.
     /// </summary>
     public sealed class FailedAuthTracker
     {
@@ -73,8 +70,7 @@ namespace CS2MultiplayerMod.Core.Session
         public bool IsBanned(string address, long nowMs)
         {
             if (string.IsNullOrEmpty(address)) return false;
-            Record record;
-            if (!_records.TryGetValue(address, out record)) return false;
+            if (!_records.TryGetValue(address, out Record record)) return false;
             if (record.BannedUntilMs > nowMs) return true;
             if (nowMs - record.FirstFailureMs > WindowMs) _records.Remove(address);
             return false;
@@ -85,8 +81,7 @@ namespace CS2MultiplayerMod.Core.Session
         {
             if (string.IsNullOrEmpty(address)) return false;
 
-            Record record;
-            if (!_records.TryGetValue(address, out record) || nowMs - record.FirstFailureMs > WindowMs)
+            if (!_records.TryGetValue(address, out Record record) || nowMs - record.FirstFailureMs > WindowMs)
             {
                 record = new Record { FirstFailureMs = nowMs };
                 _records[address] = record;
@@ -104,11 +99,8 @@ namespace CS2MultiplayerMod.Core.Session
         }
 
         /// <summary>
-        /// Drop records that can no longer influence a decision: the failure window has
-        /// passed and no ban is active. Records are otherwise only removed on a
-        /// successful auth or an <see cref="IsBanned"/> query for that same address, so
-        /// a public host sprayed from many addresses would keep one record per address
-        /// for the session's lifetime.
+        /// Drops records with no active ban and an expired window, so a host sprayed from many addresses
+        /// does not keep one record each for the session.
         /// </summary>
         public void Prune(long nowMs)
         {

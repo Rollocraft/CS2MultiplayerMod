@@ -6,13 +6,8 @@ using Unity.Entities;
 namespace CS2MultiplayerMod.Game.Sync.ModSync
 {
     /// <summary>
-    /// Reads and writes one third-party type on an entity without this assembly knowing the type.
-    ///
-    /// The engine's typed calls are the only ones that are safe here, and they are generic, so a
-    /// closed accessor is built once per discovered type and the generic call inside it is an
-    /// ordinary statically-typed one from then on. The alternative - raw component memory through
-    /// the untyped entry points - is exactly the kind of access that faults natively when a layout
-    /// assumption is wrong, and it would be wrong on somebody else's machine, in their save.
+    /// Reads and writes one third-party type through a closed generic built per type, so every access
+    /// uses the engine's typed calls; untyped raw access faults natively on a wrong layout assumption.
     /// </summary>
     internal abstract class ModTypeAccessor
     {
@@ -21,7 +16,7 @@ namespace CS2MultiplayerMod.Game.Sync.ModSync
         public ModFieldPlan Plan { get; private set; }
         public ComponentType ComponentType { get; private set; }
 
-        public ModTypeKind Kind { get { return Descriptor.Kind; } }
+        public ModTypeKind Kind => Descriptor.Kind;
 
         /// <summary>Builds the accessor for a type the catalogue has already accepted.</summary>
         public static ModTypeAccessor Create(Type type, ModTypeKind kind, ModFieldPlan plan,
@@ -50,20 +45,14 @@ namespace CS2MultiplayerMod.Game.Sync.ModSync
             return accessor;
         }
 
-        public bool Has(EntityManager entities, Entity entity)
-        {
-            return entities.HasComponent(entity, ComponentType);
-        }
+        public bool Has(EntityManager entities, Entity entity) => entities.HasComponent(entity, ComponentType);
 
         public void Remove(EntityManager entities, Entity entity)
         {
             if (Has(entities, entity)) entities.RemoveComponent(entity, ComponentType);
         }
 
-        /// <summary>
-        /// Appends this type's current value on <paramref name="entity"/> to <paramref name="sink"/>
-        /// and returns the element count (1 for a component, 0 for a tag, the length of a buffer).
-        /// </summary>
+        /// <summary>Appends the value and returns the element count (1 component, 0 tag, buffer length).</summary>
         public abstract int ReadInto(EntityManager entities, Entity entity, List<ModLeaf> sink,
             Func<Entity, ModEntityRef> translate);
 
@@ -75,10 +64,7 @@ namespace CS2MultiplayerMod.Game.Sync.ModSync
         internal sealed class TagAccessor : ModTypeAccessor
         {
             public override int ReadInto(EntityManager entities, Entity entity, List<ModLeaf> sink,
-                Func<Entity, ModEntityRef> translate)
-            {
-                return 0;
-            }
+                Func<Entity, ModEntityRef> translate) => 0;
 
             public override void Apply(EntityManager entities, Entity entity, ModLeaf[] leaves,
                 int elementCount, Func<ModEntityRef, Entity> translate)
@@ -104,8 +90,7 @@ namespace CS2MultiplayerMod.Game.Sync.ModSync
             {
                 if (elementCount <= 0) return;
 
-                // Start from what is there, so a type that grew a field this build keeps whatever
-                // the sender's plan had nothing to say about instead of being zeroed.
+                // Start from the current value so fields the sender's plan lacks are kept, not zeroed.
                 object boxed = Has(entities, entity)
                     ? (object)entities.GetComponentData<T>(entity)
                     : default(T);

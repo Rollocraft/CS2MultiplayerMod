@@ -9,12 +9,8 @@ using CS2MultiplayerMod.Game.Diagnostics;
 namespace CS2MultiplayerMod.Game.Sync.Infrastructure
 {
     /// <summary>
-    /// Host-side treasury charging for constructions that arrive over the wire. The game
-    /// only charges the machine whose tool placed the object, so a remote player's build
-    /// would otherwise be free city-wide. The host - the money authority - charges the
-    /// shared treasury when realizing a remote command; the building client's own local
-    /// charge is overwritten by the next money snapshot, so everyone converges on exactly
-    /// one charge. All methods are no-ops unless this machine is the connected host.
+    /// Host charging for remote constructions: the game only charges the placing machine, and the
+    /// client's own charge is overwritten by the next money snapshot. No-op unless connected as host.
     /// </summary>
     public static class ConstructionCharger
     {

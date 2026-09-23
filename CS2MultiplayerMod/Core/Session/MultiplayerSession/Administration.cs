@@ -7,24 +7,11 @@ namespace CS2MultiplayerMod.Core.Session
 {
     public sealed partial class MultiplayerSession
     {
-        /// <summary>
-        /// Host-only administrative removal. The explanation is flushed to the selected
-        /// client before the socket closes, so it sees a useful error instead of a generic
-        /// "remote closed" message.
-        /// </summary>
-        public bool KickPlayer(int playerId)
-        {
-            return RemovePlayer(playerId, false);
-        }
+        /// <summary>Host only: the reason is flushed before the socket closes.</summary>
+        public bool KickPlayer(int playerId) => RemovePlayer(playerId, false);
 
-        /// <summary>
-        /// Host-only removal that also blocks the client's address from reconnecting
-        /// until the current hosting session ends.
-        /// </summary>
-        public bool BanPlayer(int playerId)
-        {
-            return RemovePlayer(playerId, true);
-        }
+        /// <summary>Host only: kick and block the address until hosting ends.</summary>
+        public bool BanPlayer(int playerId) => RemovePlayer(playerId, true);
 
         private bool RemovePlayer(int playerId, bool ban)
         {
@@ -71,9 +58,7 @@ namespace CS2MultiplayerMod.Core.Session
             if (string.IsNullOrEmpty(reason))
                 reason = "The host ended your multiplayer session.";
 
-            // A graceful notice means the session simply ended - the host quit the game or
-            // went back to the main menu. Nothing failed, so it must not surface as a
-            // connection error; the player is told what happened and the session closes.
+            // The host just left: a normal end, not a connection error.
             if (notice != null && notice.Graceful)
             {
                 NotifyChat(null, reason);

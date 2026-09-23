@@ -6,9 +6,8 @@ using CS2MultiplayerMod.Game.Sync.Infrastructure;
 namespace CS2MultiplayerMod.Game.Sync.Channels
 {
     /// <summary>
-    /// Replicates the city loan as a player-editable channel. The host arbitrates client
-    /// requests through the game's ChangeLoan API. Clients apply the confirmed balance
-    /// directly: the separate money channel already includes the transaction.
+    /// The city loan, editable through the game's ChangeLoan on the host. Clients set the balance
+    /// directly: the money channel already includes the transaction.
     /// </summary>
     public sealed class LoanStateChannel : IStateChannel
     {
@@ -47,10 +46,8 @@ namespace CS2MultiplayerMod.Game.Sync.Channels
 
             if (Mod.Service != null && Mod.Service.Session.Role == SessionRole.Client)
             {
-                // ChangeLoan clamps repayment against local cash and queues it for a later
-                // frame. After the money snapshot this can refuse an already-paid repayment,
-                // charge it twice, or let edit detection send the old loan back to the host.
-                // Land the authoritative amount now without another treasury transaction.
+                // ChangeLoan clamps against local cash and queues; land the authoritative amount without another
+                // transaction.
                 loan.m_Amount = amount;
                 loan.m_LastModified = em.World
                     .GetOrCreateSystemManaged<global::Game.Simulation.SimulationSystem>().frameIndex;

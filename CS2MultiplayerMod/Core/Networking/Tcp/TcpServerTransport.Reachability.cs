@@ -9,10 +9,7 @@ namespace CS2MultiplayerMod.Core.Networking.Tcp
 {
     public sealed partial class TcpServerTransport
     {
-        /// <summary>
-        /// Spell out where this host can actually be reached, so "my friend cannot
-        /// connect" is debuggable from the log alone instead of by guessing IPs.
-        /// </summary>
+        /// <summary>Logs where this host is reachable, so connection problems are debuggable from the log.</summary>
         private void LogReachability(int port, bool lanOnly)
         {
             try
@@ -64,12 +61,9 @@ namespace CS2MultiplayerMod.Core.Networking.Tcp
             if (b[0] == 172 && b[1] >= 16 && b[1] <= 31) return true; // 172.16.0.0/12
             if (b[0] == 192 && b[1] == 168) return true;       // 192.168.0.0/16
             if (b[0] == 169 && b[1] == 254) return true;       // link-local
-            // 100.64.0.0/10 (CGNAT): Tailscale-style VPNs put peers here, and a friend
-            // on your tailnet is exactly the "trusted local network" LAN-only means.
-            // Unsolicited internet traffic cannot arrive from this range anyway.
+            // 100.64.0.0/10 (CGNAT): Tailscale-style VPN peers count as LAN; internet traffic cannot come from it.
             if (b[0] == 100 && b[1] >= 64 && b[1] <= 127) return true;
             return false;
         }
-
     }
 }
