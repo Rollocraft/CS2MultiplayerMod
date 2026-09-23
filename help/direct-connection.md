@@ -43,11 +43,12 @@ before you start: port, password, player limit, LAN Only and player approval.
 ![](assets/img/ui-join-direct.webp)
 4. Click Join and wait while the host's city downloads.
 
-!!! warning "Set a password"
+!!! warning "A password is required"
 
     A host reachable from the internet accepts anyone who finds the port, and everyone who
-    joins downloads a copy of the city. Set a server password, or use
-    [Steam Relay](steam-relay.md), or switch LAN Only on to accept local players only.
+    joins downloads a copy of the city. Hosting over the internet therefore needs a server
+    password of at least 8 characters. Without one, use [Steam Relay](steam-relay.md) or
+    switch LAN Only on to accept local players only.
 
 ## Playing on the same network
 

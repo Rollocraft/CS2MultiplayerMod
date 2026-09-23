@@ -36,11 +36,12 @@ namespace CS2MultiplayerMod.Core.Session
                 return;
             }
 
-            // Allowed but warned: private games over a forwarded port are the main use case.
-            if (!config.LanOnly && string.IsNullOrEmpty(config.Password))
-                _log.Warn(LogTopic.Session,
-                    "Hosting PUBLICLY with NO PASSWORD: anyone who can reach port " + config.Port +
-                    " can join and receive the city. Setting a password is strongly recommended.");
+            // Anyone who can reach an open port could otherwise join and download the city.
+            if (!config.LanOnly && config.Password.Length < MultiplayerConfig.MinPublicPasswordLength)
+            {
+                Fault(PublicPasswordRequired);
+                return;
+            }
 
             _config = config;
             LocalPlayerName = WireGuard.SanitizePlayerName(config.PlayerName);

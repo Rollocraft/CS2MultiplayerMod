@@ -76,6 +76,10 @@ namespace CS2MultiplayerMod.Localization
             public const string ErrorDlcHelp = "CS2MP.Error.Dlc.Help";
             public const string ErrorMods = "CS2MP.Error.Mods";
             public const string ErrorModsHelp = "CS2MP.Error.Mods.Help";
+            public const string ErrorModSet = "CS2MP.Error.ModSet";
+            public const string ErrorModSetHelp = "CS2MP.Error.ModSet.Help";
+            public const string ErrorPublicPassword = "CS2MP.Error.PublicPassword";
+            public const string ErrorPublicPasswordHelp = "CS2MP.Error.PublicPassword.Help";
             public const string ErrorFull = "CS2MP.Error.Full";
             public const string ErrorFullHelp = "CS2MP.Error.Full.Help";
             public const string ErrorAddress = "CS2MP.Error.Address";
@@ -94,6 +98,10 @@ namespace CS2MultiplayerMod.Localization
             public const string ErrorDeclinedHelp = "CS2MP.Error.Declined.Help";
             public const string ErrorGeneric = "CS2MP.Error.Generic";
             public const string ErrorGenericHelp = "CS2MP.Error.Generic.Help";
+            public const string DiagnosticsNone = "CS2MP.Diagnostics.None";
+            // {0} = file name in the game's Logs folder.
+            public const string DiagnosticsSaved = "CS2MP.Diagnostics.Saved";
+            public const string DiagnosticsFailed = "CS2MP.Diagnostics.Failed";
 
             // -- Connection mode --
             public const string ConnectionRelay = "CS2MP.Connection.Relay";

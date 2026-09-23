@@ -20,6 +20,12 @@ Possible internal details:
 
 The joining player must enter the host's password exactly; it is case-sensitive. Repeated failures can temporarily block the joining address. Confirm the password privately with the host and retry.
 
+### Hosting over the internet needs a server password
+
+Possible internal detail: `Public direct hosting requires a server password of at least 8 characters.`
+
+A Direct Connection host that is not LAN Only accepts connections from the internet, and everyone who joins downloads a copy of the city. Hosting therefore stops before anything is opened. Set a server password of at least 8 characters on the Host tab, switch LAN Only on, or host over [Steam Relay](steam-relay.md), which needs no password.
+
 ### Your multiplayer mod versions do not match
 
 Possible internal details:
@@ -49,7 +55,17 @@ See [Disabling DLC](disable_dlc.md).
 
 The detail lists the other active mods that were detected. By default, hosting and joining are blocked because additional mods can change simulation behavior, tools, or prefab catalogs.
 
-Disable every other mod in the active playset and restart if the message says those mods are still loaded. Advanced users can enable Ignore Mod Compatibility Checks (Own Risk) while offline, but that can cause desyncs, broken cities, or crashes.
+Disable every other mod in the active playset and restart if the message says those mods are still loaded. Advanced users can enable Ignore Mod Compatibility Checks (Own Risk) on the mod's **Advanced** options tab while offline, but that can cause desyncs, broken cities, or crashes.
+
+See [Mod Support and Compatibility](mods.md).
+
+### The host and this player have different mods enabled
+
+Possible internal detail: `Mod playset mismatch - you are missing: <mods>; the host is missing: <mods>; different versions: <mod> (host <version>, yours <version>).`
+
+When a player joins, the host compares the other active mods of both computers, including their versions, and names every difference. Enable the same mods in the same versions on both computers and restart the game. Find It and Asset Icon Library only change what one player sees and are not compared.
+
+A host with Ignore Mod Compatibility Checks (Own Risk) enabled admits a differing set anyway and writes the difference to its log. That can cause desyncs, broken cities or crashes.
 
 See [Mod Support and Compatibility](mods.md).
 
@@ -194,11 +210,11 @@ Recognizable log text:
 
 Correct the value in Options before the next session.
 
-### Public hosting with no password
+### Public hosting enabled
 
-Recognizable log text begins `[security] Hosting PUBLICLY with NO PASSWORD` or `PUBLIC HOSTING ENABLED`.
+Recognizable log text begins `PUBLIC HOSTING ENABLED`.
 
-A direct public host accepts internet connections to the forwarded port, and joined players receive the city. Set a strong password, keep it private, or use Steam Relay/LAN-only mode.
+A direct public host accepts internet connections to the forwarded port, and joined players receive the city. A server password of at least 8 characters is required for it; keep the password private, or use Steam Relay/LAN-only mode.
 
 ### Automatic port forwarding failed
 
@@ -276,6 +292,8 @@ These messages normally appear only in logs. A single recovered warning does not
 - A one-time recovery message followed by a successful world sync means the safety system did its job.
 
 ## Reporting a problem
+
+The quickest way to collect the files is **Save Diagnostics** on the mod's **General** options tab, or `/diag` in the multiplayer chat, right after the problem. It writes one `CS2MP-diagnostic-<date>-<time>.txt` file into the game's `Logs` folder with the versions, the session state, the active mods and the whole flight log. It also works after a join that failed. Send that file in place of item 5 below.
 
 Include:
 

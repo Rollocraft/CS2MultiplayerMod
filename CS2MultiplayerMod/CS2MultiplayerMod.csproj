@@ -45,6 +45,20 @@
         </PropertyGroup>
     </Target>
 
+    <!--The source commit, so a report names the exact code even for a fork or a local build that
+    shares a release number. "-dirty" marks uncommitted changes; without git nothing is stamped
+    and the mod reports "unknown". Never compared on the wire, only logged.-->
+    <Target Name="StampBuildCommit" BeforeTargets="GetAssemblyAttributes;GenerateAssemblyInfo">
+        <Exec Command="git describe --always --dirty --abbrev=12 --exclude=*"
+              WorkingDirectory="$(MSBuildProjectDirectory)\.." ConsoleToMSBuild="true" IgnoreExitCode="true"
+              EchoOff="true" StandardOutputImportance="low" StandardErrorImportance="low">
+            <Output TaskParameter="ConsoleOutput" PropertyName="BuildCommitOutput"/>
+        </Exec>
+        <ItemGroup Condition="$([System.Text.RegularExpressions.Regex]::IsMatch('$(BuildCommitOutput)', '^[0-9a-f]{7,40}(-dirty)?$'))">
+            <AssemblyMetadata Include="CS2MP.Commit" Value="$(BuildCommitOutput)"/>
+        </ItemGroup>
+    </Target>
+
     <!--Imports must be after PropertyGroup block-->
     <Import Project="$([System.Environment]::GetEnvironmentVariable('CSII_TOOLPATH', 'EnvironmentVariableTarget.User'))\Mod.props"/>
     <Import Project="$([System.Environment]::GetEnvironmentVariable('CSII_TOOLPATH', 'EnvironmentVariableTarget.User'))\Mod.targets"/>

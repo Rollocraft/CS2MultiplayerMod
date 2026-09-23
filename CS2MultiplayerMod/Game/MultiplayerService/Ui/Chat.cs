@@ -8,13 +8,20 @@ namespace CS2MultiplayerMod.Game
     {
         /// <summary>
         /// Chat from the hub. The session never echoes our own line, so the local copy is added here,
-        /// sanitized like the wire copy. "/sync" stays a command.
+        /// sanitized like the wire copy. "/sync" stays a command; "/diag" never leaves this machine.
         /// </summary>
         public void SendChatFromUi(string text)
         {
             if (text == null || _session.Status != SessionStatus.Connected) return;
             text = text.Trim();
             if (text.Length == 0) return;
+
+            if (text.Equals("/diag", StringComparison.OrdinalIgnoreCase))
+            {
+                ExportDiagnostics("/diag in chat");
+                AppendChatEntry(null, DiagnosticsStatusText);
+                return;
+            }
 
             if (!text.Equals("/sync", StringComparison.OrdinalIgnoreCase))
             {

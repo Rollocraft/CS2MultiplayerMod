@@ -56,6 +56,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 World.GetOrCreateSystemManaged<TilePurchaseSyncSystem>(),
                 // Event initialization later this frame only looks at freshly Created events.
                 World.GetOrCreateSystemManaged<DisasterSyncSystem>(),
+                World.GetOrCreateSystemManaged<FireSyncSystem>(),
                 // Last: mod state is stored against roads and buildings created by the stages above.
                 World.GetOrCreateSystemManaged<Mods.ModStateSyncSystem>(),
             };

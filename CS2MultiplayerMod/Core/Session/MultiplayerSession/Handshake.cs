@@ -35,7 +35,7 @@ namespace CS2MultiplayerMod.Core.Session
             byte[] proof = HandshakeAuth.ComputeProof(_config.Password, challenge.Nonce, binding);
             SendTo(connection, new HandshakeRequest(
                 ProtocolConstants.ProtocolVersion, _config.ModVersion, _config.GameVersion,
-                LocalPlayerName, proof, _config.DlcList));
+                LocalPlayerName, proof, _config.DlcList, _config.BuildId, _config.ModManifest));
         }
 
         private void HandleHandshakeRequest(ConnectionId connection, Peer peer, HandshakeRequest request, long nowUnixMs)
@@ -52,9 +52,11 @@ namespace CS2MultiplayerMod.Core.Session
             _log.Detail(LogTopic.Session, "Handshake request from " + connection + " (" +
                 (peer.RemoteAddress ?? "?") + "): name='" +
                 WireGuard.SanitizePlayerName(request.PlayerName) + "' protocol=" +
-                request.ProtocolVersion + " mod=" + (request.ModVersion ?? "?") + " game=" +
+                request.ProtocolVersion + " mod=" + (request.ModVersion ?? "?") + " build=" +
+                (string.IsNullOrEmpty(request.BuildId) ? "?" : request.BuildId) + " game=" +
                 (request.GameVersion ?? "?") + " dlcs=[" +
                 string.Join(", ", request.DlcList ?? Array.Empty<string>()) + "]" +
+                " mods=[" + string.Join(", ", request.ModManifest ?? Array.Empty<string>()) + "]" +
                 " passwordProof=" +
                 (request.PasswordProof != null && request.PasswordProof.Length > 0 ? "present" : "missing") +
                 ".");
@@ -119,6 +121,18 @@ namespace CS2MultiplayerMod.Core.Session
                 return;
             }
 
+            string modMismatch = DescribeModMismatch(_config.ModManifest, request.ModManifest);
+            if (modMismatch != null)
+            {
+                if (!_config.IgnoreModCompatibilityChecks)
+                {
+                    Reject(connection, ModMismatchMarker + modMismatch);
+                    return;
+                }
+                _log.Warn(LogTopic.Session, ModMismatchMarker + modMismatch +
+                    " The host chose to ignore this check at their own risk.");
+            }
+
             // Player cap (host counts as one seat).
             int seated = 1;
             foreach (var pair in _peers)
@@ -132,6 +146,7 @@ namespace CS2MultiplayerMod.Core.Session
             // FinalizeJoin de-duplicates names with a "(2)" suffix rather than rejecting.
             peer.Name = WireGuard.SanitizePlayerName(request.PlayerName);
             peer.ModVersion = request.ModVersion;
+            peer.BuildId = request.BuildId;
             peer.GameVersion = request.GameVersion;
 
             // Manual approval: the id is assigned now for the host UI, but the peer stays un-Handshaked until
@@ -174,7 +189,8 @@ namespace CS2MultiplayerMod.Core.Session
 
             SendTo(connection, HandshakeResponse.Accept(peer.PlayerId, _config.SimulationSync));
             _log.Event(LogTopic.Session, "Accepted " + peer + ": mod " +
-                (string.IsNullOrEmpty(peer.ModVersion) ? "?" : peer.ModVersion) + ", game " +
+                (string.IsNullOrEmpty(peer.ModVersion) ? "?" : peer.ModVersion) + " build " +
+                (string.IsNullOrEmpty(peer.BuildId) ? "?" : peer.BuildId) + ", game " +
                 (string.IsNullOrEmpty(peer.GameVersion) ? "?" : peer.GameVersion) + ".");
             NotifyPeerJoined(peer);
 
@@ -269,6 +285,83 @@ namespace CS2MultiplayerMod.Core.Session
             }
             sb.Append(". Both players need the same DLCs enabled.");
             return sb.ToString();
+        }
+
+        /// <summary>Starts a mod-set rejection; the status screen classifies the fault by it.</summary>
+        public const string ModMismatchMarker = "Mod playset mismatch - ";
+
+        /// <summary>
+        /// Null when both sides run the same other mods, otherwise which ones differ. Versions are compared
+        /// only between entries from the same source: a platform version and an assembly version never agree.
+        /// </summary>
+        internal static string DescribeModMismatch(string[] hostMods, string[] clientMods)
+        {
+            var unmatched = new List<ModManifestEntry>();
+            foreach (string line in clientMods ?? Array.Empty<string>())
+                unmatched.Add(ModManifestEntry.Parse(line));
+
+            var clientMissing = new List<string>();
+            var versions = new List<string>();
+            foreach (string line in hostMods ?? Array.Empty<string>())
+            {
+                ModManifestEntry mod = ModManifestEntry.Parse(line);
+                int at = FindMod(unmatched, mod);
+                if (at < 0)
+                {
+                    clientMissing.Add(mod.ToString());
+                    continue;
+                }
+                ModManifestEntry other = unmatched[at];
+                unmatched.RemoveAt(at);
+                if ((mod.Id.Length > 0) == (other.Id.Length > 0) &&
+                    !string.Equals(mod.Version, other.Version, StringComparison.Ordinal))
+                    versions.Add(mod.Name + " (host " + mod.Version + ", yours " + other.Version + ")");
+            }
+            if (clientMissing.Count == 0 && versions.Count == 0 && unmatched.Count == 0) return null;
+
+            var hostMissing = new List<string>();
+            foreach (ModManifestEntry mod in unmatched) hostMissing.Add(mod.ToString());
+
+            var sb = new System.Text.StringBuilder();
+            AppendModList(sb, "you are missing: ", clientMissing);
+            AppendModList(sb, "the host is missing: ", hostMissing);
+            AppendModList(sb, "different versions: ", versions);
+            sb.Append(". Both players need the same mods enabled.");
+            return sb.ToString();
+        }
+
+        /// <summary>
+        /// By platform id first, since titles change between versions; by name only without one. An assembly
+        /// name drops the title's spaces ("RoadSpeedAdjuster"), so names compare by letters and digits.
+        /// </summary>
+        private static int FindMod(List<ModManifestEntry> pool, ModManifestEntry mod)
+        {
+            if (mod.Id.Length > 0)
+                for (int i = 0; i < pool.Count; i++)
+                    if (string.Equals(pool[i].Id, mod.Id, StringComparison.Ordinal)) return i;
+            string name = NameKey(mod.Name);
+            for (int i = 0; i < pool.Count; i++)
+                if ((mod.Id.Length == 0 || pool[i].Id.Length == 0) &&
+                    string.Equals(NameKey(pool[i].Name), name, StringComparison.Ordinal)) return i;
+            return -1;
+        }
+
+        private static string NameKey(string name)
+        {
+            var sb = new System.Text.StringBuilder(name.Length);
+            foreach (char c in name)
+                if (char.IsLetterOrDigit(c)) sb.Append(char.ToLowerInvariant(c));
+            return sb.ToString();
+        }
+
+        private static void AppendModList(System.Text.StringBuilder sb, string label, List<string> mods)
+        {
+            const int listed = 6;
+            if (mods.Count == 0) return;
+            if (sb.Length > 0) sb.Append("; ");
+            int shown = mods.Count < listed ? mods.Count : listed;
+            sb.Append(label).Append(string.Join(", ", mods.GetRange(0, shown).ToArray()));
+            if (mods.Count > shown) sb.Append(" (+").Append(mods.Count - shown).Append(')');
         }
 
         /// <summary>Suffixes " (2)", " (3)", ... to a taken name.</summary>

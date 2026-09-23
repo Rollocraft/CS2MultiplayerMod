@@ -26,7 +26,13 @@ namespace CS2MultiplayerMod.Core.Session
         /// <summary>A join awaiting approval is auto-declined after this.</summary>
         private const int JoinApprovalTimeoutMs = 120000;
 
-        private const int HostPlayerId = 1;
+        /// <summary>The host's player id on every machine; host-authored commands carry it as their origin.</summary>
+        public const int HostPlayerId = 1;
+
+        /// <summary>The fault a public direct host without a long enough password stops with.</summary>
+        public static readonly string PublicPasswordRequired =
+            "Public direct hosting requires a server password of at least " +
+            MultiplayerConfig.MinPublicPasswordLength + " characters.";
 
         /// <summary>Reassembling blobs allowed at once on a client.</summary>
         private const int MaxActiveBlobs = 4;

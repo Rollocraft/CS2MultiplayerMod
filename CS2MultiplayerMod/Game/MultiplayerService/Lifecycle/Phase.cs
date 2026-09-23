@@ -159,15 +159,31 @@ namespace CS2MultiplayerMod.Game
             return true;
         }
 
-        /// <summary>The full version, plus the compared release part when they differ.</summary>
+        /// <summary>
+        /// The session's own public-password rule, checked before a host world is chosen or loaded so the
+        /// player is not told only after the city has loaded. True when the caller must stop.
+        /// </summary>
+        public bool RefuseForPublicPassword(Setting settings)
+        {
+            if (settings == null || settings.HostTransport() != TransportMode.Direct || settings.LanOnly) return false;
+            if ((settings.HostPassword ?? "").Length >= MultiplayerConfig.MinPublicPasswordLength) return false;
+
+            _lastFault = MultiplayerSession.PublicPasswordRequired;
+            _log.Warn(LogTopic.Session, "Cannot host: " + _lastFault +
+                " Set one, switch LAN Only on, or host over Steam Relay.");
+            return true;
+        }
+
+        /// <summary>The full version, plus the compared release part when they differ, and the commit.</summary>
         private static string ModVersionText(MultiplayerConfig config)
         {
             return " mod=" + Mod.Version +
                    (string.Equals(Mod.Version, config.ModVersion, StringComparison.Ordinal)
-                       ? "" : " compat=" + config.ModVersion);
+                       ? "" : " compat=" + config.ModVersion) +
+                   " build=" + config.BuildId;
         }
 
-        /// <summary>This machine's other mods, for the log; nothing about them crosses the wire.</summary>
+        /// <summary>This machine's unsupported mods and whether they block; the handshake compares the full set.</summary>
         private static string LocalModsText(Setting settings)
         {
             bool bypassed = settings != null && settings.IgnoreModCompatibilityChecks;
@@ -180,6 +196,7 @@ namespace CS2MultiplayerMod.Game
             if (!ModEnabled) { _log.Warn(LogTopic.Session, "Cannot host: the mod is disabled in settings."); return; }
             if (_session.Role != SessionRole.None) { _log.Warn(LogTopic.Session, "Cannot host: a session is already active."); return; }
             if (RefuseForOtherMods("host")) return;
+            if (RefuseForPublicPassword(settings)) return;
             _disconnectConfirmationRequested = false;
             ClearClientExitNotice();
             ResetCommandDiagnostics();
@@ -330,7 +347,9 @@ namespace CS2MultiplayerMod.Game
                 autoApprovePlatformFriends: hosting && relay && settings.AutoApproveSteamFriends,
                 clientResyncPolicy: hosting
                     ? settings.SelectedClientResyncPolicy()
-                    : Core.Session.ClientResyncPolicy.Allow);
+                    : Core.Session.ClientResyncPolicy.Allow,
+                buildId: Mod.BuildCommit,
+                modManifest: ModsCheck.Manifest);
         }
     }
 }

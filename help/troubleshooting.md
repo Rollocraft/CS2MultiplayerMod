@@ -110,14 +110,15 @@ join.
 Hosting and joining are blocked while any other mod is active in your Paradox Mods
 playset - including asset-only mods such as maps, prop packs and prefab packs.
 
-1. Disable every mod except CS2 Multiplayer Mod in your active playset. A playset with only
-   this mod is the safest setup.
+1. Disable every other mod in your active playset. Traffic, Road Speed Adjuster, Anarchy,
+   Find It and Asset Icon Library are allowed; a playset with only this mod is the safest
+   setup.
 2. Wait a few seconds; the banner clears on its own.
 3. If it says the mods are *still loaded*, restart the game once.
 
-Advanced users can turn the check off under Options ▸ CS2 Multiplayer Mod ▸ General ▸
-Ignore Mod Compatibility Checks (Own Risk), which permits other mods and mixed mod builds
-at the cost of desyncs, broken cities and crashes. Full details:
+Advanced users can turn the check off under Options ▸ CS2 Multiplayer Mod ▸ Advanced ▸
+Compatibility ▸ Ignore Mod Compatibility Checks (Own Risk), which permits other mods and
+mixed mod builds at the cost of desyncs, broken cities and crashes. Full details:
 [Mods and compatibility](mods.md).
 
 ## Menu issues

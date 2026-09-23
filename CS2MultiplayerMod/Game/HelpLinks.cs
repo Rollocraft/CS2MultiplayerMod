@@ -20,6 +20,8 @@ namespace CS2MultiplayerMod.Game
         public const string GameVersion = "troubleshooting.md#game-version-issues";
         public const string Dlc = "disable_dlc.md";
         public const string Mods = "mods.md";
+        public const string ModSet = "errors-and-warnings.md#the-host-and-this-player-have-different-mods-enabled";
+        public const string PublicPassword = "errors-and-warnings.md#hosting-over-the-internet-needs-a-server-password";
         public const string SessionFull = "errors-and-warnings.md#this-multiplayer-session-is-full";
         public const string Relay = "errors-and-warnings.md#steam-relay-is-unavailable-or-the-join-code-is-invalid";
         public const string Address = "troubleshooting.md#connection-issues";

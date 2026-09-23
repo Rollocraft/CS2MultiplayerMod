@@ -18,8 +18,17 @@ This update expands the regular Host Game controls, improves synchronization for
 * Added synchronization support for durable ECS component and buffer state used by compatible third-party mods.
 * Moving buildings, props and trees with Move It is now synchronized. The move is sent once, when the drag ends. Objects that carry dependent sub-objects are not synchronized yet; the log names them.
 * Road geometry edits made with Move It or Node Controller are now synchronized. The final shape is sent once the edit ends and is applied only to the exact road that was edited. If two roads match equally well, the edit is held instead of changing the wrong road.
+* Fires now start, spread and go out the same way for every player. The host's game decides which buildings and trees catch fire, including fires started by lightning, and the other players' games follow it. The fire itself, its damage and the fire engines still run on every computer.
+* Passenger counts per transport type (residents and tourists) and cargo counts per transport type in the statistics now show the host's numbers for every player.
+* When a player joins, the host now compares both players' other active mods, including their versions. A differing set is refused with a message naming exactly which mods are missing or differ. The host's Ignore Mod Compatibility Checks (Own Risk) setting still admits it.
+* Added Save Diagnostics to the General options tab and `/diag` to the multiplayer chat. Both write one file with the session state and the flight log into the game's Logs folder, ready to attach to a bug report.
+* The version on the General options tab now includes the source commit, and the host's log records the build of every player who joins.
 
 ### Bug fixes
+
+* Hosting over the internet with a Direct Connection now requires a server password of at least 8 characters, because anyone who found the port could otherwise join and download the city. Steam Relay and LAN Only sessions are unaffected.
+* Fixed fires appearing in different places for each player: every game used to roll its own fires, so a burning building on the host did not burn for anyone else.
+* Statistics counters such as deaths, births and mail no longer creep above the host's numbers on the other players' games over time.
 
 * Object and vegetation brush display footprints are no longer mistaken for terrain edits, avoiding rejected commands while the actual objects synchronize separately.
 * Household income is now corrected immediately after the local game recalculates it, preventing clients from consuming stale residential-economy values.

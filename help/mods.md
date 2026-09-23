@@ -81,6 +81,12 @@ The check reads your active Paradox Mods playset. That includes asset-only mods 
 maps, prop packs and prefab packs, which load no code at all. Mods in your other playsets
 are not enabled for this run and are ignored.
 
+When a player joins, the host also compares both players' other active mods, including
+their versions, and rejects the join with the exact difference. This applies to the
+supported mods above too: Traffic, Anarchy or Road Speed Adjuster on only one computer
+changes what the game builds there. Find It and Asset Icon Library only change what one
+player sees and are not compared.
+
 | Banner | Meaning |
 | --- | --- |
 | Other Mods Enabled | Host and Join are blocked; the listed mods have to be disabled |
@@ -90,7 +96,8 @@ are not enabled for this run and are ignored.
 To clear the block:
 
 1. Disable every unsupported mod in your active playset. A playset that contains only CS2
-   Multiplayer Mod and the officially supported mods above is allowed.
+   Multiplayer Mod plus Traffic, Road Speed Adjuster, Anarchy, Find It and Asset Icon
+   Library is allowed; every other mod in the list above still needs the override below.
 2. Go back to the game and wait a few seconds for the banner to clear.
 3. If the banner says the mods are still loaded, restart the game.
 
@@ -98,14 +105,12 @@ To clear the block:
 
 ## Turning the check off
 
-Options ▸ CS2 Multiplayer Mod ▸ General ▸ Ignore Mod Compatibility Checks (Own Risk).
-Change it while offline, before hosting or joining.
-
-![](assets/img/ui-options-general.webp)
+Options ▸ CS2 Multiplayer Mod ▸ Advanced ▸ Compatibility ▸ Ignore Mod Compatibility Checks
+(Own Risk). It can only be changed while offline, before hosting or joining.
 
 With it on, other active mods no longer block hosting or joining on your machine, and a
-host also admits players on a different CS2 Multiplayer Mod build as long as the network
-protocol matches.
+host also admits players on a different CS2 Multiplayer Mod build or with different other
+mods, as long as the network protocol matches.
 
 It does not bypass:
 
@@ -115,8 +120,8 @@ It does not bypass:
 
 It also does not make another mod multiplayer-aware. Use the same playset
 on every computer where possible, and expect desyncs, missing prefabs, broken cities or
-crashes. The host decides whether different multiplayer-mod builds are admitted; each
-player decides whether their own extra mods are allowed locally.
+crashes. The host decides whether different multiplayer-mod builds and different mod sets
+are admitted; each player decides whether their own extra mods are allowed locally.
 
 ---
 

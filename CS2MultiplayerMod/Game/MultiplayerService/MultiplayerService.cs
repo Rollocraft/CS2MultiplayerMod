@@ -2,9 +2,11 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
 using CS2MultiplayerMod.Core.Diagnostics;
+using CS2MultiplayerMod.Core.Protocol;
 using CS2MultiplayerMod.Core.Protocol.Messages;
 using CS2MultiplayerMod.Core.Session;
 using CS2MultiplayerMod.Game.Diagnostics;
+using CS2MultiplayerMod.Localization;
 
 namespace CS2MultiplayerMod.Game
 {
@@ -174,6 +176,49 @@ namespace CS2MultiplayerMod.Game
 
         /// <summary>/sync: ask the host for a fresh world stream (host: refresh everyone).</summary>
         public void RequestWorldSync() => _session.RequestWorldSync();
+
+        private string _lastDiagnosticsFile;
+        private bool _lastDiagnosticsFailed;
+
+        /// <summary>What Save Diagnostics last did this run, for the options screen.</summary>
+        public string DiagnosticsStatusText =>
+            _lastDiagnosticsFailed ? L10n.T(L10n.Key.DiagnosticsFailed)
+            : _lastDiagnosticsFile == null ? L10n.T(L10n.Key.DiagnosticsNone)
+            : L10n.F(L10n.Key.DiagnosticsSaved, _lastDiagnosticsFile);
+
+        /// <summary>
+        /// Save Diagnostics and /diag: this machine's session state plus the flight log in one file. Works
+        /// offline too, so a join that failed can still be reported. Returns the file name, or null.
+        /// </summary>
+        public string ExportDiagnostics(string reason)
+        {
+            var snapshot = new System.Text.StringBuilder();
+            snapshot.Append("mod=").Append(Mod.StampedVersion)
+                .Append(" protocol=").Append(ProtocolConstants.ProtocolVersion)
+                .Append(" game=").Append(GameVersionCheck.CurrentVersion).AppendLine();
+            snapshot.Append("role=").Append(_session.Role).Append(" status=").Append(_session.Status)
+                .Append(" phase=").Append(_phase).Append(" simulationSync=").Append(SimulationSyncEnabled)
+                .AppendLine();
+            snapshot.Append("lastFault=").Append(_lastFault ?? "none").AppendLine();
+            snapshot.Append("unsupportedMods=").Append(ModsCheck.Summary()).AppendLine();
+            snapshot.Append("modSet=[").Append(string.Join(", ", ModsCheck.Manifest)).Append(']').AppendLine();
+            foreach (Peer peer in _session.Peers)
+                snapshot.Append("peer #").Append(peer.PlayerId).Append(" '").Append(peer.Name)
+                    .Append("' handshaked=").Append(peer.Handshaked)
+                    .Append(" latencyMs=").Append(peer.LatencyMs)
+                    .Append(" mod=").Append(peer.ModVersion ?? "?")
+                    .Append(" build=").Append(peer.BuildId ?? "?").AppendLine();
+            snapshot.Append("process ").Append(FlightRecorder.ProcessSnapshot());
+
+            string file = FlightRecorder.ExportBundle(reason, snapshot.ToString());
+            _lastDiagnosticsFailed = file == null;
+            if (file != null) _lastDiagnosticsFile = file;
+            if (file != null)
+                _log.Event(LogTopic.Session, "Diagnostics saved to Logs/" + file + " (" + reason + ").");
+            else
+                _log.Warn(LogTopic.Session, "Diagnostics could not be saved (" + reason + ").");
+            return file;
+        }
 
         /// <summary>
         /// One automatic recovery repairs a divergence; a second inside this window is a storm that freezes

@@ -180,6 +180,48 @@ namespace CS2MultiplayerMod.Game.Diagnostics
             RecordContentList("dlcs", dlcs);
         }
 
+        /// <summary>
+        /// Writes <c>CS2MP-diagnostic-*.txt</c> next to the flight log: the caller's snapshot, then this run's
+        /// flight log, so a report is one attachment taken at the moment of the problem. Returns the file
+        /// name, or null. Never throws.
+        /// </summary>
+        public static string ExportBundle(string reason, string snapshot)
+        {
+            if (!Enabled) return null;
+            // Flushes everything buffered, and marks the moment in the log itself.
+            Note("diagnostic-export reason=" + Quote(reason));
+            try
+            {
+                string dir = LogsDirectory();
+                if (dir == null) return null;
+                string name = "CS2MP-diagnostic-" +
+                              DateTime.UtcNow.ToString("yyyyMMdd-HHmmss", CultureInfo.InvariantCulture) + ".txt";
+                string flightLog = Path.Combine(dir, "CS2MP-flight.log");
+                using (var output = new StreamWriter(Path.Combine(dir, name), false, new UTF8Encoding(false)))
+                {
+                    output.WriteLine("CS2 Multiplayer Mod diagnostics");
+                    output.WriteLine("created=" + DateTime.UtcNow.ToString("O", CultureInfo.InvariantCulture));
+                    output.WriteLine("reason=" + Compact(reason, MaxLineChars));
+                    output.WriteLine(LogPaths.Redact(snapshot ?? ""));
+                    output.WriteLine();
+                    output.WriteLine("--- CS2MP-flight.log ---");
+                    if (File.Exists(flightLog))
+                    {
+                        using (var input = new FileStream(flightLog, FileMode.Open, FileAccess.Read,
+                                   FileShare.ReadWrite | FileShare.Delete))
+                        using (var reader = new StreamReader(input, Encoding.UTF8, true))
+                            output.Write(reader.ReadToEnd());
+                    }
+                }
+                return name;
+            }
+            catch (Exception ex)
+            {
+                Note("diagnostic-export failed detail=" + Quote(SafeExceptionSummary(ex)));
+                return null;
+            }
+        }
+
         /// <summary>Resource counters shared by periodic health snapshots. Never throws.</summary>
         public static string ProcessSnapshot()
         {

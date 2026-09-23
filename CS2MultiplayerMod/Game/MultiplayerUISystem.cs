@@ -382,6 +382,7 @@ namespace CS2MultiplayerMod.Game
                     "Cannot choose a host world: a multiplayer session is already active.");
                 return;
             }
+            if (Mod.Service.RefuseForPublicPassword(Mod.Setting)) return;
 
             MenuUISystem menu = World.GetExistingSystemManaged<MenuUISystem>();
             if (menu == null)

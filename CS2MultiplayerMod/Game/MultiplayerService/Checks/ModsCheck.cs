@@ -6,6 +6,7 @@ using System.Reflection;
 using Colossal.IO.AssetDatabase;
 using Colossal.PSI.Common;
 using CS2MultiplayerMod.Core.Diagnostics;
+using CS2MultiplayerMod.Core.Protocol.Messages;
 using CS2MultiplayerMod.Game.Diagnostics;
 using CS2MultiplayerMod.Localization;
 using Game.Modding;
@@ -51,6 +52,16 @@ namespace CS2MultiplayerMod.Game
                 "Traffic"
             };
 
+        /// <summary>Supported mods that act on this machine alone (search, icons); the handshake skips them.</summary>
+        private static readonly HashSet<string> ClientOnlyPlatformIds =
+            new HashSet<string>(StringComparer.Ordinal) { "77240", "79634" };
+
+        private static readonly HashSet<string> ClientOnlyNames =
+            new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+            {
+                "Find It", "FindIt", "Asset Icon Library", "AssetIconLibrary"
+            };
+
         /// <summary>Names listed before the rest collapse into a "+N more" tail.</summary>
         private const int MaxNamesListed = 6;
 
@@ -67,6 +78,7 @@ namespace CS2MultiplayerMod.Game
         private static readonly Stopwatch Clock = Stopwatch.StartNew();
 
         private static string[] _cached = Array.Empty<string>();
+        private static string[] _manifest = Array.Empty<string>();
         private static long _scannedAt = long.MinValue;
         private static bool _playsetEverPopulated;
         private static bool _restartRequired;
@@ -80,20 +92,40 @@ namespace CS2MultiplayerMod.Game
             {
                 lock (Gate)
                 {
-                    long now = Clock.ElapsedMilliseconds;
-                    if (_scannedAt != long.MinValue && now - _scannedAt < RescanMilliseconds)
-                        return _cached;
-
-                    _scannedAt = now;
-                    string[] previous = _cached;
-                    _cached = Scan();
-                    LogChange(previous, _cached);
+                    RescanIfDue();
                     return _cached;
                 }
             }
         }
 
         public static bool AnyOtherMods => OtherModNames.Length > 0;
+
+        /// <summary>
+        /// Every other live mod as sorted <see cref="ModManifestEntry"/> lines for the handshake. Supported
+        /// mods are included: on one side only they still change what the game builds.
+        /// </summary>
+        public static string[] Manifest
+        {
+            get
+            {
+                lock (Gate)
+                {
+                    RescanIfDue();
+                    return _manifest;
+                }
+            }
+        }
+
+        private static void RescanIfDue()
+        {
+            long now = Clock.ElapsedMilliseconds;
+            if (_scannedAt != long.MinValue && now - _scannedAt < RescanMilliseconds) return;
+
+            _scannedAt = now;
+            string[] previous = _cached;
+            _cached = Scan();
+            LogChange(previous, _cached);
+        }
 
         /// <summary>Localized banner text naming the mods, or "" (hides the banner).</summary>
         public static string BlockText(bool ignored = false)
@@ -136,8 +168,9 @@ namespace CS2MultiplayerMod.Game
         {
             // Without our own folder, this mod's entry would be listed as an offender.
             string[] fromPlayset = Array.Empty<string>();
+            var manifest = new List<string>();
             bool readPlayset = !string.IsNullOrEmpty(OwnFolder()) &&
-                               TryReadActivePlayset(out fromPlayset);
+                               TryReadActivePlayset(out fromPlayset, manifest);
             if (readPlayset && fromPlayset.Length > 0) _playsetEverPopulated = true;
 
             // An empty read counts only once the playset has reported anything; before that the platform may
@@ -146,11 +179,14 @@ namespace CS2MultiplayerMod.Game
             {
                 Array.Sort(fromPlayset, StringComparer.OrdinalIgnoreCase);
                 _restartRequired = false;
+                _manifest = SortedDistinct(manifest);
                 return fromPlayset;
             }
 
             var names = new List<string>();
-            AddLoadedMods(names, new HashSet<string>(StringComparer.OrdinalIgnoreCase));
+            manifest.Clear();
+            AddLoadedMods(names, new HashSet<string>(StringComparer.OrdinalIgnoreCase), manifest);
+            _manifest = SortedDistinct(manifest);
             names.Sort(StringComparer.OrdinalIgnoreCase);
             _restartRequired = names.Count > 0;
             return names.ToArray();
@@ -161,7 +197,7 @@ namespace CS2MultiplayerMod.Game
         /// thread). False when no backend was reachable. Reflection over the platform's instance: naming its
         /// assembly would make stores without it refuse to load this mod.
         /// </summary>
-        private static bool TryReadActivePlayset(out string[] names)
+        private static bool TryReadActivePlayset(out string[] names, List<string> manifest)
         {
             names = Array.Empty<string>();
             try
@@ -184,7 +220,12 @@ namespace CS2MultiplayerMod.Game
                     var found = new List<string>();
                     foreach (PlaysetMod mod in mods)
                     {
-                        if (IsSelf(mod) || IsOfficiallySupported(mod)) continue;
+                        if (IsSelf(mod)) continue;
+                        if (!ClientOnlyPlatformIds.Contains(mod.id ?? "") && !IsClientOnlyName(mod.displayName))
+                            manifest.Add(ModManifestEntry.Format(mod.id,
+                                string.IsNullOrEmpty(mod.version) ? mod.userModVersion : mod.version,
+                                PlaysetName(mod)));
+                        if (IsOfficiallySupported(mod)) continue;
                         string name = PlaysetName(mod);
                         if (!string.IsNullOrEmpty(name)) found.Add(name);
                     }
@@ -201,7 +242,7 @@ namespace CS2MultiplayerMod.Game
             return false;
         }
 
-        private static void AddLoadedMods(List<string> names, HashSet<string> seen)
+        private static void AddLoadedMods(List<string> names, HashSet<string> seen, List<string> manifest)
         {
             try
             {
@@ -212,7 +253,10 @@ namespace CS2MultiplayerMod.Game
                 {
                     if (info == null || info.asset == null) continue;
                     if (!info.asset.isMod || !info.isLoaded) continue;
-                    if (IsSelf(info) || IsOfficiallySupported(info)) continue;
+                    if (IsSelf(info)) continue;
+                    if (!IsClientOnlyName(info.asset.name) && !IsClientOnlyName(info.name))
+                        manifest.Add(ModManifestEntry.Format("", LoadedVersion(info), LoadedName(info)));
+                    if (IsOfficiallySupported(info)) continue;
                     Add(names, seen, LoadedName(info));
                 }
             }
@@ -251,6 +295,23 @@ namespace CS2MultiplayerMod.Game
 
         private static bool IsOfficiallySupported(ModManager.ModInfo info) =>
             IsSupportedName(info.asset.name) || IsSupportedName(info.name);
+
+        private static bool IsClientOnlyName(string name) =>
+            !string.IsNullOrEmpty(name) && ClientOnlyNames.Contains(name.Trim());
+
+        private static string LoadedVersion(ModManager.ModInfo info)
+        {
+            try { return info.asset.version != null ? info.asset.version.ToString() : ""; }
+            catch { return ""; }
+        }
+
+        private static string[] SortedDistinct(List<string> entries)
+        {
+            var set = new SortedSet<string>(entries, StringComparer.Ordinal);
+            var result = new string[set.Count];
+            set.CopyTo(result);
+            return result;
+        }
 
         private static bool IsSupportedName(string name)
         {

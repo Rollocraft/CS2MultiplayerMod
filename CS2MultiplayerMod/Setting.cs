@@ -85,7 +85,7 @@ namespace CS2MultiplayerMod
 
         // ---- General tab ------------------------------------------------------
 
-        /// <summary>Mod version, protocol, and on a local build its stamp.</summary>
+        /// <summary>Mod version and source commit; a local build adds its stamp and the protocol.</summary>
         [SettingsUISection(GeneralTab, GeneralGroup)]
         public string ModVersion => Mod.VersionLine;
 
@@ -142,6 +142,18 @@ namespace CS2MultiplayerMod
         /// </summary>
         [SettingsUISection(GeneralTab, GeneralGroup)]
         public bool VerboseLogging { get; set; } = false;
+
+        /// <summary>Also /diag in the chat; here it works offline, after a join that failed.</summary>
+        [SettingsUIButton]
+        [SettingsUISection(GeneralTab, GeneralGroup)]
+        public bool ExportDiagnosticsButton
+        {
+            set { if (Mod.Service != null) Mod.Service.ExportDiagnostics("Save Diagnostics button"); }
+        }
+
+        [SettingsUISection(GeneralTab, GeneralGroup)]
+        public string DiagnosticsStatus =>
+            Mod.Service != null ? Mod.Service.DiagnosticsStatusText : L10n.T(L10n.Key.DiagnosticsNone);
 
         /// <summary>The markers are drawn every frame, so their cost scales with resolution, not city size.</summary>
         [SettingsUISection(GeneralTab, GeneralGroup)]

@@ -55,9 +55,15 @@ namespace CS2MultiplayerMod.Core.Session
         /// <summary>Mod build identifier, normally compared strictly during the handshake.</summary>
         public readonly string ModVersion;
 
+        /// <summary>Shortest password a direct host open to the internet accepts; relay and LAN-only need none.</summary>
+        public const int MinPublicPasswordLength = 8;
+
+        /// <summary>Source commit of this build; reported in the handshake for the logs, never compared.</summary>
+        public readonly string BuildId;
+
         /// <summary>
-        /// Host only, opt-in: admit a different mod build. The protocol must still match; behaviour can
-        /// still differ.
+        /// Host only, opt-in: admit a different mod build or a different set of other mods. The protocol must
+        /// still match; behaviour can still differ.
         /// </summary>
         public readonly bool IgnoreModCompatibilityChecks;
 
@@ -70,6 +76,9 @@ namespace CS2MultiplayerMod.Core.Session
         /// <summary>Sorted owned DLC names, compared as a set; empty means no sync-relevant DLC.</summary>
         public readonly string[] DlcList;
 
+        /// <summary>Sorted <see cref="Protocol.Messages.ModManifestEntry"/> lines for every other live mod.</summary>
+        public readonly string[] ModManifest;
+
         public MultiplayerConfig(string playerName, string hostAddress, int port, string password = "",
                                  bool lanOnly = true, bool useEncryption = true, int maxPlayers = 8,
                                  string modVersion = "", string gameVersion = "", string[] dlcList = null,
@@ -78,7 +87,8 @@ namespace CS2MultiplayerMod.Core.Session
                                  bool ignoreModCompatibilityChecks = false,
                                  bool simulationSync = true,
                                  bool autoApprovePlatformFriends = false,
-                                 ClientResyncPolicy clientResyncPolicy = ClientResyncPolicy.Allow)
+                                 ClientResyncPolicy clientResyncPolicy = ClientResyncPolicy.Allow,
+                                 string buildId = "", string[] modManifest = null)
         {
             Transport = transport;
             JoinCode = joinCode ?? string.Empty;
@@ -93,6 +103,8 @@ namespace CS2MultiplayerMod.Core.Session
             IgnoreModCompatibilityChecks = ignoreModCompatibilityChecks;
             GameVersion = gameVersion ?? string.Empty;
             DlcList = dlcList ?? System.Array.Empty<string>();
+            BuildId = buildId ?? string.Empty;
+            ModManifest = modManifest ?? System.Array.Empty<string>();
             RequireJoinApproval = requireJoinApproval;
             SimulationSync = simulationSync;
             AutoApprovePlatformFriends = autoApprovePlatformFriends;

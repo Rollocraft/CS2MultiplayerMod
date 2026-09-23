@@ -242,6 +242,8 @@ namespace CS2MultiplayerMod.Game
             Fault(L10n.Key.ErrorRemoved, L10n.Key.ErrorRemovedHelp, HelpLinks.Removed, "removed you", "kicked"),
             Fault(L10n.Key.ErrorDeclined, L10n.Key.ErrorDeclinedHelp, HelpLinks.Declined,
                 "declined", "did not respond to your join"),
+            Fault(L10n.Key.ErrorPublicPassword, L10n.Key.ErrorPublicPasswordHelp, HelpLinks.PublicPassword,
+                "Public direct hosting requires"),
             Fault(L10n.Key.ErrorPassword, L10n.Key.ErrorPasswordHelp, HelpLinks.Password,
                 "Incorrect password", "requires a password"),
             Fault(L10n.Key.ErrorModVersion, L10n.Key.ErrorModVersionHelp, HelpLinks.ModVersion,
@@ -252,6 +254,12 @@ namespace CS2MultiplayerMod.Game
             {
                 Summary = L10n.Key.ErrorDlc, Help = L10n.Key.ErrorDlcHelp, Page = HelpLinks.Dlc,
                 Phrases = new[] { "DLC mismatch" }, Marker = DlcMismatchMarker, Separator = " ",
+            },
+            new FaultKind
+            {
+                Summary = L10n.Key.ErrorModSet, Help = L10n.Key.ErrorModSetHelp, Page = HelpLinks.ModSet,
+                Phrases = new[] { MultiplayerSession.ModMismatchMarker.TrimEnd(' ', '-') },
+                Marker = MultiplayerSession.ModMismatchMarker, Separator = " ",
             },
             new FaultKind
             {

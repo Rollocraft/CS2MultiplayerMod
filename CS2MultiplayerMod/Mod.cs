@@ -62,23 +62,33 @@ namespace CS2MultiplayerMod
         /// </summary>
         internal static string BuildStamp => _buildStamp ?? (_buildStamp = ReadBuildStamp());
 
-        /// <summary>The options-screen version: plain when released; local builds add stamp and protocol.</summary>
+        /// <summary>
+        /// The source commit the csproj stamps from git, "-dirty" with uncommitted changes; "unknown" when the
+        /// build had no git. Reported in the handshake, never compared.
+        /// </summary>
+        internal static string BuildCommit => _buildCommit ?? (_buildCommit = ReadBuildCommit());
+
+        /// <summary>The options-screen version: released builds add the commit; local builds stamp and protocol.</summary>
         internal static string VersionLine =>
             BuildStamp.Length == 0
-                ? Version
-                : L10n.F(L10n.Key.VersionLineDev, Version, BuildStamp,
+                ? Version + " (" + BuildCommit + ")"
+                : L10n.F(L10n.Key.VersionLineDev, Version, BuildStamp + " @" + BuildCommit,
                     ProtocolConstants.ProtocolVersion);
 
-        /// <summary>Version and build stamp for the log, which is read without a language.</summary>
+        /// <summary>Version, build stamp and commit for the log, which is read without a language.</summary>
         internal static string StampedVersion =>
-            BuildStamp.Length == 0 ? Version : Version + " (dev " + BuildStamp + ")";
+            (BuildStamp.Length == 0 ? Version : Version + " (dev " + BuildStamp + ")") + " @" + BuildCommit;
 
         /// <summary>Build metadata marker the csproj stamps onto a non-release build.</summary>
         private const string DevMarker = "+dev.";
 
+        /// <summary>Assembly metadata key the csproj writes the commit under.</summary>
+        private const string CommitMetadataKey = "CS2MP.Commit";
+
         private static string _version;
         private static string _compatibilityVersion;
         private static string _buildStamp;
+        private static string _buildCommit;
 
         /// <summary>The leading digits-and-dots of a version, without a trailing dot.</summary>
         private static string ReleasePart(string version)
@@ -109,6 +119,22 @@ namespace CS2MultiplayerMod
             string stamped = ReadInformationalVersion();
             int marker = stamped.IndexOf(DevMarker, StringComparison.Ordinal);
             return marker < 0 ? "" : stamped.Substring(marker + DevMarker.Length);
+        }
+
+        private static string ReadBuildCommit()
+        {
+            try
+            {
+                foreach (object attribute in typeof(Mod).Assembly.GetCustomAttributes(
+                             typeof(System.Reflection.AssemblyMetadataAttribute), false))
+                {
+                    var metadata = (System.Reflection.AssemblyMetadataAttribute)attribute;
+                    if (metadata.Key == CommitMetadataKey && !string.IsNullOrEmpty(metadata.Value))
+                        return metadata.Value;
+                }
+            }
+            catch { /* a build without git carries no commit */ }
+            return "unknown";
         }
 
         private static string ReadInformationalVersion()
@@ -289,6 +315,12 @@ namespace CS2MultiplayerMod
                 SystemUpdatePhase.ModificationEnd);
             // After Modification2's event initialization places the disaster; its Created tag is gone next frame.
             updateSystem.UpdateAt<Game.Sync.Systems.DisasterSyncSystem>(SystemUpdatePhase.ModificationEnd);
+            // A client's own ignitions exist from Modification2's event initialization (and the previous frame's
+            // spreads) until IgniteSystem applies them.
+            updateSystem.UpdateBefore<Game.Sync.Systems.FireIgniteGateSystem, global::Game.Events.IgniteSystem>(
+                SystemUpdatePhase.Modification4);
+            // After IgniteSystem's barrier has put this frame's fires on their targets.
+            updateSystem.UpdateAt<Game.Sync.Systems.FireSyncSystem>(SystemUpdatePhase.ModificationEnd);
             // After the game's auto-name initialization fills a new name draw. ModificationEnd also runs while
             // paused and still sees the one-frame Created/Updated tags.
             updateSystem.UpdateAfter<Game.Sync.Systems.NameSyncSystem,

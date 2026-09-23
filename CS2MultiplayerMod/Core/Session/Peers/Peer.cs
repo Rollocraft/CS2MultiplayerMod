@@ -44,6 +44,9 @@ namespace CS2MultiplayerMod.Core.Session
         /// <summary>The peer's mod build from its handshake, for the accept line. Null until handshaked.</summary>
         public string ModVersion;
 
+        /// <summary>The peer's source commit, for the same reason as <see cref="ModVersion"/>.</summary>
+        public string BuildId;
+
         /// <summary>The peer's game version, for the same reason as <see cref="ModVersion"/>.</summary>
         public string GameVersion;
 
