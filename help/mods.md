@@ -1,8 +1,8 @@
 # 🧩 CS2 Multiplayer — Mod Compatibility
 
-This list combines **official support and community multiplayer testing**.
+This is a list of officially supported mods (fully working) and community-tested mods (expect things to break).
 
-**Last updated:** September 17, 2026
+**Last updated:** September 29, 2026
 
 ## Officially Supported
 
@@ -20,6 +20,8 @@ Older community testing found host/client limitations. These reports are superse
 
 
 ## Works
+
+List of community-tested mods that seem to work largely without issues. Some things might be broken.
 
 ### 🟢 Anarchy
 **Status:** Works without known issues.
@@ -43,8 +45,8 @@ Older community testing found host/client limitations. These reports are superse
 **Tested by:** J. M. S., Janno
 
 ### 🟢 Find It
-**Status:** Works without known issues.
-**Tested by:** J. M. S.
+**Status:** Works, some issues with placing level 5 industry buildings.
+**Tested by:** J. M. S., Joa
 
 ### 🟢 Region Flag Icons
 **Status:** Works without known issues.
