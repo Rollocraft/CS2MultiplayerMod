@@ -274,7 +274,7 @@ namespace CS2MultiplayerMod.Game
             Fault(L10n.Key.ErrorTimeout, L10n.Key.ErrorTimeoutHelp, HelpLinks.DirectConnection,
                 "TimedOut", "timed out"),
             Fault(L10n.Key.ErrorNetwork, L10n.Key.ErrorNetworkHelp, HelpLinks.DirectConnection,
-                "NetworkUnreachable", "HostUnreachable"),
+                "NetworkUnreachable", "HostUnreachable", "AddressFamilyNotSupported"),
             Fault(L10n.Key.ErrorPortInUse, L10n.Key.ErrorPortInUseHelp, HelpLinks.DirectConnection,
                 "AddressAlreadyInUse"),
         };

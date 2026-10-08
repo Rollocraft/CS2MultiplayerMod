@@ -40,7 +40,7 @@ namespace CS2MultiplayerMod.Core.Session
                     return;
                 }
 
-                if (!string.IsNullOrEmpty(address) && _hostBannedAddresses.Contains(address))
+                if (!string.IsNullOrEmpty(address) && _hostBannedAddresses.Contains(NetAddress.BanKey(address)))
                 {
                     _log.Warn(LogTopic.Transport, "Refused " + connection + " (" + address +
                         "): banned by the host for this session.");

@@ -31,6 +31,7 @@ namespace CS2MultiplayerMod.Core.Networking.Tcp
         private Thread _acceptThread;
         private X509Certificate2 _certificate;
         private bool _lanOnly;
+        private bool _dualStack;
         private int _nextConnectionId = ConnectionId.Server.Value + 1; // 0=None, 1=Server reserved
         private volatile bool _active;
 
@@ -52,7 +53,7 @@ namespace CS2MultiplayerMod.Core.Networking.Tcp
         }
 
         /// <summary>
-        /// <paramref name="lanOnly"/> refuses non-private addresses; <paramref name="certificate"/> (caller
+        /// <paramref name="lanOnly"/> refuses addresses outside this network; <paramref name="certificate"/> (caller
         /// owned) enables TLS, null is plaintext.
         /// </summary>
         public void Start(int port, bool lanOnly = true, X509Certificate2 certificate = null)
@@ -61,8 +62,9 @@ namespace CS2MultiplayerMod.Core.Networking.Tcp
 
             _lanOnly = lanOnly;
             _certificate = certificate;
-            _listener = new TcpListener(IPAddress.Any, port);
-            _listener.Start();
+            _listener = StartListener(port);
+            List<KeyValuePair<IPAddress, string>> localAddresses = LocalAddresses();
+            _localIpv6Subnets = Ipv6Subnets(localAddresses);
             _active = true;
 
             _acceptThread = new Thread(AcceptLoop)
@@ -73,9 +75,43 @@ namespace CS2MultiplayerMod.Core.Networking.Tcp
             _acceptThread.Start();
 
             _log.Event(LogTopic.Transport, "Host listening on " + _listener.LocalEndpoint + " (" +
+                (_dualStack ? "IPv4+IPv6" : "IPv4 only") + ", " +
                 (lanOnly ? "LAN-only" : "PUBLIC") + ", " +
                 (certificate != null ? "TLS" : "PLAINTEXT") + ").");
-            LogReachability(port, lanOnly);
+            LogReachability(port, lanOnly, localAddresses);
+        }
+
+        /// <summary>
+        /// One dual-stack socket takes IPv6 and IPv4 peers alike. Without IPv6 on this machine it falls back to
+        /// IPv4 alone; a busy or forbidden port is rethrown, since the IPv4 bind would fail the same way.
+        /// </summary>
+        private TcpListener StartListener(int port)
+        {
+            if (Socket.OSSupportsIPv6)
+            {
+                TcpListener dual = null;
+                try
+                {
+                    dual = new TcpListener(IPAddress.IPv6Any, port);
+                    dual.Server.DualMode = true;
+                    dual.Start();
+                    _dualStack = true;
+                    return dual;
+                }
+                catch (Exception ex) when (!(ex is SocketException socketEx &&
+                    (socketEx.SocketErrorCode == SocketError.AddressAlreadyInUse ||
+                     socketEx.SocketErrorCode == SocketError.AccessDenied)))
+                {
+                    if (dual != null) { try { dual.Stop(); } catch { /* ignore */ } }
+                    _log.Warn(LogTopic.Transport, "IPv6 listening unavailable (" + ex.Message +
+                        "); accepting IPv4 connections only.");
+                }
+            }
+
+            _dualStack = false;
+            var ipv4 = new TcpListener(IPAddress.Any, port);
+            ipv4.Start();
+            return ipv4;
         }
 
         private void AcceptLoop()
@@ -97,7 +133,12 @@ namespace CS2MultiplayerMod.Core.Networking.Tcp
                 if (!Admit(client)) continue;
 
                 string remote = "?";
-                try { remote = client.Client.RemoteEndPoint.ToString(); } catch { /* socket already dead */ }
+                try
+                {
+                    var endpoint = (IPEndPoint)client.Client.RemoteEndPoint;
+                    remote = NetAddress.FormatEndpoint(NetAddress.Normalize(endpoint.Address).ToString(), endpoint.Port);
+                }
+                catch { /* socket already dead */ }
 
                 var id = new ConnectionId(Interlocked.Increment(ref _nextConnectionId));
                 _log.Detail(LogTopic.Transport, "Accepted TCP connection " + id + " from " + remote +
@@ -120,7 +161,7 @@ namespace CS2MultiplayerMod.Core.Networking.Tcp
         private bool Admit(TcpClient client)
         {
             IPAddress remote = null;
-            try { remote = ((IPEndPoint)client.Client.RemoteEndPoint).Address; }
+            try { remote = NetAddress.Normalize(((IPEndPoint)client.Client.RemoteEndPoint).Address); }
             catch { /* socket already dead — fall through to close */ }
 
             if (remote == null)
@@ -129,7 +170,7 @@ namespace CS2MultiplayerMod.Core.Networking.Tcp
                 return false;
             }
 
-            if (_lanOnly && !IsPrivateAddress(remote))
+            if (_lanOnly && !IsLanAddress(remote))
             {
                 _log.Warn(LogTopic.Transport, "Refused connection from " + remote +
                     ": session is LAN-only.");

@@ -53,6 +53,7 @@ namespace CS2MultiplayerMod.Core.Session
         private readonly Dictionary<string, int> _allowedBlobChannels = new Dictionary<string, int>();
         private readonly HashSet<ushort> _allowedCommandIds = new HashSet<ushort>();
         private readonly HashSet<int> _administrativeRemovals = new HashSet<int>();
+        // Keyed by NetAddress.BanKey, so an IPv6 player cannot step around a ban within their own /64.
         private readonly HashSet<string> _hostBannedAddresses = new HashSet<string>();
         // Already told to go: frames queued behind a flood are not dispatched or logged.
         private readonly HashSet<int> _puntedConnections = new HashSet<int>();

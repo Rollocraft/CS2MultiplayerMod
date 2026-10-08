@@ -227,7 +227,9 @@ namespace CS2MultiplayerMod.Game
             var config = BuildConfig(settings, hosting: false);
             _log.Event(LogTopic.Session, "Join requested: transport=" + config.Transport +
                 " target=" +
-                (config.Transport == TransportMode.SteamRelay ? config.JoinCode : config.HostAddress + ":" + config.Port) +
+                (config.Transport == TransportMode.SteamRelay
+                    ? config.JoinCode
+                    : NetAddress.FormatEndpoint(config.HostAddress, config.Port)) +
                 " password=" + (config.Password.Length > 0 ? "SET" : "NONE") + " name='" +
                 config.PlayerName + "'" + ModVersionText(config) + " game=" +
                 config.GameVersion + " dlcs=[" + string.Join(", ", config.DlcList) + "]" +
@@ -300,8 +302,21 @@ namespace CS2MultiplayerMod.Game
             string target = (settings.ServerAddress ?? "").Trim();
             string joinCode = (settings.JoinCodeInput ?? "").Trim();
 
+            // A pasted "[2001:db8::1]:25001" or "host:25001" carries its port, which wins over the port field;
+            // an IPv6 address is dialed without its brackets.
+            int addressPort = 0;
+            if (!hosting && !relay && NetAddress.TrySplitHostPort(target, out string targetHost, out addressPort))
+            {
+                target = targetHost;
+                if (addressPort > 0 && (settings.JoinPort ?? "").Trim() != addressPort.ToString())
+                    _log.Detail(LogTopic.Session, "Using port " + addressPort + " from the host address " +
+                        "instead of the port field (" + settings.JoinPort + ").");
+            }
+
             string portText = hosting ? settings.HostPort : settings.JoinPort;
-            if (!int.TryParse((portText ?? "").Trim(), out int port) || port <= 0 || port > 65535)
+            int port = addressPort;
+            if (port == 0 &&
+                (!int.TryParse((portText ?? "").Trim(), out port) || port <= 0 || port > 65535))
             {
                 // Never silently host on another port. Relay sessions have no port.
                 if (!relay)

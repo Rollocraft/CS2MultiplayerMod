@@ -154,7 +154,8 @@ namespace CS2MultiplayerMod.Core.Session
 
                 var client = new TcpClientTransport(_log);
                 _transport = client;
-                SetStatus(SessionStatus.Connecting, "Connecting to " + config.HostAddress + ":" + config.Port +
+                SetStatus(SessionStatus.Connecting, "Connecting to " +
+                                                    NetAddress.FormatEndpoint(config.HostAddress, config.Port) +
                                                     (config.UseEncryption ? " (TLS)" : " (PLAINTEXT)"));
                 client.Connect(config.HostAddress, config.Port, config.UseEncryption);
             }

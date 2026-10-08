@@ -59,7 +59,7 @@ namespace CS2MultiplayerMod.Core.Networking
         }
 
         /// <summary>
-        /// A pure format test, so the join screen routes without Steam running; an IPv4 address or host
+        /// A pure format test, so the join screen routes without Steam running; an IP address or host
         /// name never parses as a code.
         /// </summary>
         public static bool LooksLikeJoinCode(string text)

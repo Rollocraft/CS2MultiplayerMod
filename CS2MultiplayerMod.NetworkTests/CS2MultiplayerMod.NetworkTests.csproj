@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net9.0</TargetFramework>
+    <OutputType>Exe</OutputType>
+    <LangVersion>9.0</LangVersion>
+    <Nullable>disable</Nullable>
+  </PropertyGroup>
+  <ItemGroup>
+    <!-- Core is free of game assemblies, so the real transports run here over loopback. -->
+    <Compile Include="..\CS2MultiplayerMod\Core\**\*.cs" LinkBase="Core" />
+  </ItemGroup>
+</Project>

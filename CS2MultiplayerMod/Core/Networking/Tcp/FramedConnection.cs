@@ -81,7 +81,7 @@ namespace CS2MultiplayerMod.Core.Networking.Tcp
             try
             {
                 RemoteAddress = client.Client.RemoteEndPoint is IPEndPoint endpoint
-                    ? endpoint.Address.ToString()
+                    ? NetAddress.Normalize(endpoint.Address).ToString()
                     : null;
             }
             catch { RemoteAddress = null; }

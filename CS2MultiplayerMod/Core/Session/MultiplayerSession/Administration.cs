@@ -32,7 +32,7 @@ namespace CS2MultiplayerMod.Core.Session
             if (selected == null) return false;
             if (ban && string.IsNullOrEmpty(selected.RemoteAddress)) return false;
 
-            if (ban) _hostBannedAddresses.Add(selected.RemoteAddress);
+            if (ban) _hostBannedAddresses.Add(NetAddress.BanKey(selected.RemoteAddress));
 
             string reason = ban
                 ? "The host banned you for the rest of this hosting session."

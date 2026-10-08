@@ -15,6 +15,8 @@ internet.
 
     - [Steam Relay](steam-relay.md) needs no port and no router setup at all.
     - On the same network nothing has to be forwarded either.
+    - Over [IPv6](direct-connection.md#ipv6) nothing is forwarded, but your router's IPv6
+      firewall has to let the port in.
     - When hosting starts, the mod already asks your router to open the port itself. Only
       follow this guide if the hosting status asks you to forward it manually.
 

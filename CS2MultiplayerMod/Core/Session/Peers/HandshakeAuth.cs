@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Security.Cryptography;
 using System.Text;
+using CS2MultiplayerMod.Core.Networking;
 using CS2MultiplayerMod.Core.Protocol;
 
 namespace CS2MultiplayerMod.Core.Session
@@ -46,8 +47,8 @@ namespace CS2MultiplayerMod.Core.Session
     }
 
     /// <summary>
-    /// Failed attempts per address; <see cref="MaxFailures"/> within the window bans it for
-    /// <see cref="BanMs"/>.
+    /// Failed attempts per address (an IPv6 address counts as its /64, see <see cref="NetAddress.BanKey"/>);
+    /// <see cref="MaxFailures"/> within the window bans it for <see cref="BanMs"/>.
     /// </summary>
     public sealed class FailedAuthTracker
     {
@@ -70,6 +71,7 @@ namespace CS2MultiplayerMod.Core.Session
         public bool IsBanned(string address, long nowMs)
         {
             if (string.IsNullOrEmpty(address)) return false;
+            address = NetAddress.BanKey(address);
             if (!_records.TryGetValue(address, out Record record)) return false;
             if (record.BannedUntilMs > nowMs) return true;
             if (nowMs - record.FirstFailureMs > WindowMs) _records.Remove(address);
@@ -80,6 +82,7 @@ namespace CS2MultiplayerMod.Core.Session
         public bool RecordFailure(string address, long nowMs)
         {
             if (string.IsNullOrEmpty(address)) return false;
+            address = NetAddress.BanKey(address);
 
             if (!_records.TryGetValue(address, out Record record) || nowMs - record.FirstFailureMs > WindowMs)
             {
@@ -95,7 +98,7 @@ namespace CS2MultiplayerMod.Core.Session
 
         public void RecordSuccess(string address)
         {
-            if (!string.IsNullOrEmpty(address)) _records.Remove(address);
+            if (!string.IsNullOrEmpty(address)) _records.Remove(NetAddress.BanKey(address));
         }
 
         /// <summary>

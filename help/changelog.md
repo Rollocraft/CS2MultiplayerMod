@@ -23,6 +23,7 @@ This update expands the regular Host Game controls, improves synchronization for
 * When a player joins, the host now compares both players' other active mods, including their versions. A differing set is refused with a message naming exactly which mods are missing or differ. The host's Ignore Mod Compatibility Checks (Own Risk) setting still admits it.
 * Added Save Diagnostics to the General options tab and `/diag` to the multiplayer chat. Both write one file with the session state and the flight log into the game's Logs folder, ready to attach to a bug report.
 * The version on the General options tab now includes the source commit, and the host's log records the build of every player who joins.
+* Direct Connection now works over IPv6. The host accepts IPv4 and IPv6 players at the same time and lists its IPv6 addresses in the log. Host Address takes an IPv6 address, also together with the port as `[2001:db8::1]:25001`. This helps players whose internet provider gives them no public IPv4 address of their own. Bans and repeated wrong passwords from IPv6 count for the player's whole address block, so switching to another address does not get around them.
 
 ### Bug fixes
 
