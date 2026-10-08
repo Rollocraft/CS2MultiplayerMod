@@ -10,11 +10,18 @@ namespace CS2MultiplayerMod.Game.Sync.Commands
 
         /// <summary>The host's fire on that target is out.</summary>
         Extinguish = 2,
+
+        /// <summary>The host's fire on that target is still burning; its current size and damage.</summary>
+        Update = 3,
+
+        /// <summary>The host's fire burned that target down.</summary>
+        BurnDown = 4,
     }
 
     /// <summary>
-    /// Host to clients: one building or tree whose fire started or ended. Clients roll none of their own;
-    /// each machine still runs the burn, the damage and the fire engines itself.
+    /// Host to clients: one building or tree whose fire started, changed, burned it down or ended. Clients
+    /// roll none of their own and destroy nothing by fire on their own; each machine still runs the flames
+    /// and the fire engines itself, pinned to the host's intensity and damage.
     /// </summary>
     public sealed class FireCommand : ISimulationCommand
     {
@@ -24,13 +31,16 @@ namespace CS2MultiplayerMod.Game.Sync.Commands
         /// <summary>The game's own ceiling on a fire's intensity.</summary>
         public const float MaxIntensity = 100f;
 
+        /// <summary>A damage axis (physical, fire, water) runs from untouched to destroyed.</summary>
+        public const float MaxDamage = 1f;
+
         public FireOp Op;
 
         /// <summary>The burning building or tree, found on the receiver by prefab and position.</summary>
         public string TargetPrefab;
         public float X, Y, Z;
 
-        // --- Ignite ---
+        // --- Ignite, Update, BurnDown ---
 
         /// <summary>The fire (or storm) event the ignition belongs to, resolved by prefab name.</summary>
         public string EventPrefab;
@@ -43,7 +53,14 @@ namespace CS2MultiplayerMod.Game.Sync.Commands
 
         public float Intensity;
 
+        // --- Every op ---
+
+        /// <summary>The target's damage on the host, per axis; zero when it has none.</summary>
+        public float DamageX, DamageY, DamageZ;
+
         public ushort CommandId => Id;
+
+        public static bool CarriesEvent(FireOp op) => op != FireOp.Extinguish;
 
         public void Write(NetworkWriter writer)
         {
@@ -53,29 +70,37 @@ namespace CS2MultiplayerMod.Game.Sync.Commands
             writer.WriteFloat(X);
             writer.WriteFloat(Y);
             writer.WriteFloat(Z);
-            if (Op != FireOp.Ignite) return;
-            writer.WriteString(EventPrefab);
-            writer.WriteLong(EventKey);
-            writer.WriteFloat(Intensity);
+            if (CarriesEvent(Op))
+            {
+                writer.WriteString(EventPrefab);
+                writer.WriteLong(EventKey);
+                writer.WriteFloat(Intensity);
+            }
+            writer.WriteFloat(DamageX);
+            writer.WriteFloat(DamageY);
+            writer.WriteFloat(DamageZ);
         }
 
         public void Read(NetworkReader reader)
         {
             byte op = reader.ReadByte();
-            if (op != (byte)FireOp.Ignite && op != (byte)FireOp.Extinguish)
+            if (op < (byte)FireOp.Ignite || op > (byte)FireOp.BurnDown)
                 throw new ProtocolException("Unknown fire op " + op + ".");
             Op = (FireOp)op;
             TargetPrefab = WireGuard.ReadName(reader);
             X = WireGuard.ReadCoordinate(reader);
             Y = WireGuard.ReadCoordinate(reader);
             Z = WireGuard.ReadCoordinate(reader);
-            if (Op == FireOp.Ignite)
+            if (CarriesEvent(Op))
             {
                 EventPrefab = WireGuard.ReadName(reader);
                 EventKey = reader.ReadLong();
                 Intensity = WireGuard.ReadFinite(reader);
                 ValidateIntensity(Intensity);
             }
+            DamageX = ReadDamage(reader);
+            DamageY = ReadDamage(reader);
+            DamageZ = ReadDamage(reader);
 
             if (reader.Remaining != 0)
                 throw new ProtocolException("Trailing bytes in fire command: " + reader.Remaining + ".");
@@ -103,13 +128,16 @@ namespace CS2MultiplayerMod.Game.Sync.Commands
 
         private void ValidateForWrite()
         {
-            if (Op != FireOp.Ignite && Op != FireOp.Extinguish)
+            if (Op < FireOp.Ignite || Op > FireOp.BurnDown)
                 throw new ProtocolException("Unknown fire op " + (byte)Op + ".");
             ValidateName(TargetPrefab, "target");
             ValidateCoordinate(X);
             ValidateCoordinate(Y);
             ValidateCoordinate(Z);
-            if (Op != FireOp.Ignite) return;
+            ValidateDamage(DamageX);
+            ValidateDamage(DamageY);
+            ValidateDamage(DamageZ);
+            if (!CarriesEvent(Op)) return;
             ValidateName(EventPrefab, "event");
             ValidateIntensity(Intensity);
         }
@@ -134,6 +162,19 @@ namespace CS2MultiplayerMod.Game.Sync.Commands
         {
             if (float.IsNaN(value) || value < 0f || value > MaxIntensity)
                 throw new ProtocolException("Implausible fire intensity: " + value + ".");
+        }
+
+        private static float ReadDamage(NetworkReader reader)
+        {
+            float value = WireGuard.ReadFinite(reader);
+            ValidateDamage(value);
+            return value;
+        }
+
+        private static void ValidateDamage(float value)
+        {
+            if (float.IsNaN(value) || value < 0f || value > MaxDamage)
+                throw new ProtocolException("Implausible fire damage: " + value + ".");
         }
     }
 }

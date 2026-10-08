@@ -19,8 +19,11 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
     /// <summary>
     /// Host-authoritative fires. Which building or tree catches fire is drawn per machine from a wall-clock
     /// seed - starts, spreads and lightning alike - so a client drops its own ignitions
-    /// (<see cref="GateLocalIgnitions"/>) and applies the host's. The host reports every building or tree
-    /// that starts or stops burning; the burn, its damage and the fire engines run natively everywhere.
+    /// (<see cref="GateLocalIgnitions"/>) and applies the host's. How a fire ends is just as local: the fire
+    /// engines run in each machine's own traffic, so one machine saves a house another lets burn down. The
+    /// host therefore also reports each fire's size and damage while it burns and whether it burned its
+    /// target down; a client destroys nothing by fire on its own. The flames and the engines still run
+    /// natively everywhere.
     /// </summary>
     public partial class FireSyncSystem : CommandSyncSystem, IRealizeStage
     {
@@ -33,10 +36,32 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         /// <summary>Buildings and trees do not move; this only absorbs float noise.</summary>
         private const float MatchRadius = 2f;
 
+        /// <summary>Per target: how often the host reports a fire that keeps changing.</summary>
+        private const long UpdateIntervalMs = 1000;
+
+        /// <summary>Per target: an unchanged fire is re-stated, relighting one a client's engines put out.</summary>
+        private const long KeepAliveMs = 10000;
+
+        /// <summary>Spreads the reports of a large wildfire over frames.</summary>
+        private const int MaxUpdatesPerFrame = 32;
+
+        /// <summary>Smaller changes wait for the keep-alive.</summary>
+        private const float IntensityStep = 2f;
+        private const float DamageStep = 0.01f;
+
         private struct Burning
         {
             public string Prefab;
             public float3 Position;
+            public string EventPrefab;
+            public long EventKey;
+
+            /// <summary>What the last report said, and when it went out.</summary>
+            public float Intensity;
+            public float3 Damage;
+            public long SentMs;
+            public bool BurnedDown;
+
             public int Pass;
         }
 
@@ -56,15 +81,19 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         private readonly Dictionary<long, Entity> _localEvents = new Dictionary<long, Entity>();
         private readonly HashSet<Entity> _ownIgnites = new HashSet<Entity>();
         private readonly HashSet<Entity> _ownEvents = new HashSet<Entity>();
+        private readonly HashSet<Entity> _ownDestroys = new HashSet<Entity>();
         private long _droppedLocal;
+        private long _droppedBurnDowns;
 
         private PrefabIndex _prefabIndex;
         private ObjectSearch _objectSearch;
         private EntityArchetype _igniteArchetype;
+        private EntityArchetype _destroyArchetype;
         private EntityQuery _burningQuery;
         private EntityQuery _liveEvents;
         private EntityQuery _createdFires;
         private EntityQuery _ignites;
+        private EntityQuery _destroys;
 
         protected override void OnCreate()
         {
@@ -75,6 +104,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             _objectSearch = new ObjectSearch(World.GetOrCreateSystemManaged<global::Game.Objects.SearchSystem>());
             _igniteArchetype = EntityManager.CreateArchetype(
                 ComponentType.ReadWrite<global::Game.Common.Event>(), ComponentType.ReadWrite<Ignite>());
+            _destroyArchetype = EntityManager.CreateArchetype(
+                ComponentType.ReadWrite<global::Game.Common.Event>(),
+                ComponentType.ReadWrite<global::Game.Events.Destroy>());
 
             // Vehicles burn after accidents; they are local on every machine and keep their own fires.
             _burningQuery = GetEntityQuery(new EntityQueryDesc
@@ -94,6 +126,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             });
             _ignites = GetEntityQuery(ComponentType.ReadWrite<Ignite>(),
                 ComponentType.ReadOnly<global::Game.Common.Event>());
+            _destroys = GetEntityQuery(ComponentType.ReadOnly<global::Game.Events.Destroy>(),
+                ComponentType.ReadOnly<global::Game.Common.Event>());
 
             ListenFor(new[] { FireCommand.Id }, FireCommand.MaxEncodedBytes);
         }
@@ -109,31 +143,33 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     if (_burning.Count > 0) _burning.Clear();
                     return;
                 }
-                CaptureFires(service.Session);
+                CaptureFires(service.Session, service.NowMs);
             }
         }
 
         // ---- Host ---------------------------------------------------------------
 
-        private void CaptureFires(MultiplayerSession session)
+        private void CaptureFires(MultiplayerSession session, long now)
         {
             if (_burning.Count == 0 && _burningQuery.IsEmptyIgnoreFilter) return;
 
             _pass++;
+            int updates = MaxUpdatesPerFrame;
             NativeArray<Entity> burning = _burningQuery.ToEntityArray(Allocator.Temp);
             try
             {
                 for (int i = 0; i < burning.Length; i++)
                 {
                     Entity entity = burning[i];
+                    OnFire fire = EntityManager.GetComponentData<OnFire>(entity);
                     if (_burning.TryGetValue(entity, out Burning known))
                     {
                         known.Pass = _pass;
+                        Report(session, entity, fire.m_Intensity, ref known, now, ref updates);
                         _burning[entity] = known;
                         continue;
                     }
 
-                    OnFire fire = EntityManager.GetComponentData<OnFire>(entity);
                     // Zero is a fire going out, and a fire without its event is zeroed by the burn itself.
                     if (fire.m_Intensity <= 0f || fire.m_Event == Entity.Null ||
                         !EntityManager.Exists(fire.m_Event) || !EntityManager.HasComponent<PrefabRef>(fire.m_Event))
@@ -143,20 +179,25 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     string eventPrefab = _prefabIndex.NameOf(EntityManager.GetComponentData<PrefabRef>(fire.m_Event).m_Prefab);
                     if (string.IsNullOrEmpty(targetPrefab) || string.IsNullOrEmpty(eventPrefab)) continue;
 
-                    float3 position = EntityManager.GetComponentData<global::Game.Objects.Transform>(entity).m_Position;
-                    var command = new FireCommand
+                    var tracked = new Burning
                     {
-                        Op = FireOp.Ignite,
-                        TargetPrefab = targetPrefab,
-                        X = position.x,
-                        Y = position.y,
-                        Z = position.z,
+                        Prefab = targetPrefab,
+                        Position = EntityManager.GetComponentData<global::Game.Objects.Transform>(entity).m_Position,
                         EventPrefab = eventPrefab,
                         EventKey = ((long)fire.m_Event.Index << 32) | (uint)fire.m_Event.Version,
-                        Intensity = math.clamp(fire.m_Intensity, 0f, FireCommand.MaxIntensity),
+                        Pass = _pass,
                     };
-                    if (!Send(session, command)) continue;
-                    _burning[entity] = new Burning { Prefab = targetPrefab, Position = position, Pass = _pass };
+                    float3 damage = ReadDamage(entity);
+                    if (!Send(session, Command(FireOp.Ignite, tracked, fire.m_Intensity, damage))) continue;
+                    Remember(ref tracked, fire.m_Intensity, damage, now);
+
+                    // Already rubble (a spread into a ruin): say so, in case this client's copy still stands.
+                    if (EntityManager.HasComponent<Destroyed>(entity))
+                    {
+                        tracked.BurnedDown = true;
+                        Send(session, Command(FireOp.BurnDown, tracked, fire.m_Intensity, damage));
+                    }
+                    _burning[entity] = tracked;
                 }
             }
             finally
@@ -169,18 +210,80 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 if (pair.Value.Pass != _pass) _ended.Add(pair.Key);
             for (int i = 0; i < _ended.Count; i++)
             {
-                Burning ended = _burning[_ended[i]];
-                _burning.Remove(_ended[i]);
-                Send(session, new FireCommand
+                Entity entity = _ended[i];
+                Burning ended = _burning[entity];
+                _burning.Remove(entity);
+
+                float3 damage = ended.Damage;
+                if (EntityManager.Exists(entity) && !EntityManager.HasComponent<Deleted>(entity))
                 {
-                    Op = FireOp.Extinguish,
-                    TargetPrefab = ended.Prefab,
-                    X = ended.Position.x,
-                    Y = ended.Position.y,
-                    Z = ended.Position.z,
-                });
+                    damage = ReadDamage(entity);
+                    // Burned down in the same update that put the fire out.
+                    if (!ended.BurnedDown && EntityManager.HasComponent<Destroyed>(entity))
+                        Send(session, Command(FireOp.BurnDown, ended, 0f, damage));
+                }
+                Send(session, Command(FireOp.Extinguish, ended, 0f, damage));
             }
         }
+
+        /// <summary>A fire still burning: a burn-down at once, its size and damage at a bounded rate.</summary>
+        private void Report(MultiplayerSession session, Entity entity, float intensity, ref Burning known,
+            long now, ref int updates)
+        {
+            if (!known.BurnedDown && EntityManager.HasComponent<Destroyed>(entity))
+            {
+                known.BurnedDown = true;
+                float3 ruin = ReadDamage(entity);
+                if (Send(session, Command(FireOp.BurnDown, known, intensity, ruin)))
+                    Remember(ref known, intensity, ruin, now);
+                return;
+            }
+
+            if (updates <= 0 || now - known.SentMs < UpdateIntervalMs) return;
+            float3 damage = ReadDamage(entity);
+            bool changed = math.abs(intensity - known.Intensity) >= IntensityStep ||
+                           math.cmax(math.abs(damage - known.Damage)) >= DamageStep ||
+                           (intensity <= 0f) != (known.Intensity <= 0f);
+            if (!changed && now - known.SentMs < KeepAliveMs) return;
+
+            updates--;
+            if (Send(session, Command(FireOp.Update, known, intensity, damage)))
+                Remember(ref known, intensity, damage, now);
+        }
+
+        private static void Remember(ref Burning burning, float intensity, float3 damage, long now)
+        {
+            burning.Intensity = intensity;
+            burning.Damage = damage;
+            burning.SentMs = now;
+        }
+
+        private static FireCommand Command(FireOp op, Burning burning, float intensity, float3 damage) =>
+            new FireCommand
+            {
+                Op = op,
+                TargetPrefab = burning.Prefab,
+                X = burning.Position.x,
+                Y = burning.Position.y,
+                Z = burning.Position.z,
+                EventPrefab = burning.EventPrefab,
+                EventKey = burning.EventKey,
+                Intensity = math.clamp(intensity, 0f, FireCommand.MaxIntensity),
+                DamageX = damage.x,
+                DamageY = damage.y,
+                DamageZ = damage.z,
+            };
+
+        /// <summary>The target's damage, zero when it has none; clamped to what the wire accepts.</summary>
+        private float3 ReadDamage(Entity entity)
+        {
+            if (!EntityManager.HasComponent<global::Game.Objects.Damaged>(entity)) return float3.zero;
+            float3 damage = EntityManager.GetComponentData<global::Game.Objects.Damaged>(entity).m_Damage;
+            return new float3(CleanDamage(damage.x), CleanDamage(damage.y), CleanDamage(damage.z));
+        }
+
+        private static float CleanDamage(float value) =>
+            float.IsNaN(value) ? 0f : math.clamp(value, 0f, FireCommand.MaxDamage);
 
         private static bool Send(MultiplayerSession session, FireCommand command)
         {
@@ -194,8 +297,10 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     command.TargetPrefab + "': " + ex.Message);
                 return false;
             }
-            SyncLog.Detail(LogTopic.City, "FireSync sent " + command.Op + " of '" + command.TargetPrefab +
-                "' at (" + command.X + ", " + command.Y + ", " + command.Z + ").");
+            // Updates repeat every second per fire; the edges are what a report needs.
+            if (command.Op != FireOp.Update)
+                SyncLog.Detail(LogTopic.City, "FireSync sent " + command.Op + " of '" + command.TargetPrefab +
+                    "' at (" + command.X + ", " + command.Y + ", " + command.Z + ").");
             return true;
         }
 
@@ -203,7 +308,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
         /// <summary>
         /// Called by <see cref="FireIgniteGateSystem"/> just before IgniteSystem. On a client every building or
-        /// tree ignition this machine drew itself is emptied, and a fire event it rolled is deleted.
+        /// tree ignition this machine drew itself is emptied, a fire event it rolled is deleted, and so is a
+        /// burn-down its own fire decided.
         /// </summary>
         public void GateLocalIgnitions()
         {
@@ -212,9 +318,11 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             {
                 DropLocalFireEvents();
                 DropLocalIgnites();
+                DropLocalBurnDowns();
             }
             _ownIgnites.Clear();
             _ownEvents.Clear();
+            _ownDestroys.Clear();
         }
 
         private void DropLocalFireEvents()
@@ -262,6 +370,49 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             }
         }
 
+        /// <summary>
+        /// A client's fire burns at its own pace and under its own engines, so whether it destroys its target
+        /// is the host's call (<see cref="FireOp.BurnDown"/>). Runs at ToolUpdate, ahead of every modification
+        /// phase, for the burn-downs the previous frame's simulation queued, and again before IgniteSystem for
+        /// any queued since. The event is removed whole; nothing else refers to it yet.
+        /// </summary>
+        private void DropLocalBurnDowns()
+        {
+            if (_destroys.IsEmptyIgnoreFilter) return;
+            NativeArray<Entity> destroys = _destroys.ToEntityArray(Allocator.Temp);
+            try
+            {
+                for (int i = 0; i < destroys.Length; i++)
+                {
+                    Entity entity = destroys[i];
+                    if (_ownDestroys.Contains(entity) || !EntityManager.Exists(entity)) continue;
+                    if (!IsFireBurnDown(EntityManager.GetComponentData<global::Game.Events.Destroy>(entity)))
+                        continue;
+
+                    EntityManager.DestroyEntity(entity);
+                    if (++_droppedBurnDowns == 1 || _droppedBurnDowns % 100 == 0)
+                        SyncLog.Detail(LogTopic.City, "FireSync: kept a building or tree this machine's own fire " +
+                            "would have destroyed (" + _droppedBurnDowns + " so far); the host decides burn-downs.");
+                }
+            }
+            finally
+            {
+                destroys.Dispose();
+            }
+        }
+
+        /// <summary>A destruction by fire of a building or tree; vehicles keep their local fires.</summary>
+        private bool IsFireBurnDown(global::Game.Events.Destroy destroy)
+        {
+            Entity target = destroy.m_Object;
+            if (target == Entity.Null || !EntityManager.Exists(target) ||
+                EntityManager.HasComponent<global::Game.Vehicles.Vehicle>(target)) return false;
+            if (EntityManager.HasComponent<OnFire>(target)) return true;
+            Entity cause = destroy.m_Event;
+            return cause != Entity.Null && EntityManager.Exists(cause) &&
+                   EntityManager.HasComponent<global::Game.Events.Fire>(cause);
+        }
+
         /// <summary>ToolUpdate, so a fire event created here is initialized later this frame.</summary>
         public void RealizePending()
         {
@@ -272,6 +423,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 DrainQueue();
                 return;
             }
+
+            // Before this frame's own burn-downs exist, so none of them can be mistaken for local.
+            DropLocalBurnDowns();
 
             long now = service.NowMs;
             int budget = MaxRealizePerFrame;
@@ -314,27 +468,62 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             }
         }
 
-        /// <summary>False only while the target is missing.</summary>
+        /// <summary>False only while the target is missing; a missed update is superseded within seconds.</summary>
         private bool Realize(FireCommand command, NativeList<Entity> candidates)
         {
             if (!_prefabIndex.TryResolve(command.TargetPrefab, out Entity targetPrefab)) return true;
             Entity target = FindTarget(targetPrefab, new float3(command.X, command.Y, command.Z), candidates);
-            if (target == Entity.Null) return false;
+            if (target == Entity.Null) return command.Op == FireOp.Update;
 
-            bool burning = EntityManager.HasComponent<OnFire>(target);
-            if (command.Op == FireOp.Extinguish)
+            ApplyDamage(target, command);
+            switch (command.Op)
             {
-                if (!burning) return true;
-                // The burn removes a zero fire on its next update, the same way as one the engines put out.
+                case FireOp.Extinguish:
+                    PutOut(target, command);
+                    break;
+                case FireOp.BurnDown:
+                    BurnDown(target, command);
+                    break;
+                default:
+                    Burn(target, command);
+                    break;
+            }
+            return true;
+        }
+
+        private void PutOut(Entity target, FireCommand command)
+        {
+            if (!EntityManager.HasComponent<OnFire>(target)) return;
+            // The burn removes a zero fire on its next update, the same way as one the engines put out.
+            OnFire fire = EntityManager.GetComponentData<OnFire>(target);
+            fire.m_Intensity = 0f;
+            EntityManager.SetComponentData(target, fire);
+            SyncLog.Detail(LogTopic.City, "FireSync: put out '" + command.TargetPrefab + "' as the host did.");
+        }
+
+        /// <summary>
+        /// Ignite lights the target unless it already burns; Update pins a burning fire to the host's size, and
+        /// relights one this machine's engines put out while the host's still burns.
+        /// </summary>
+        private void Burn(Entity target, FireCommand command)
+        {
+            if (EntityManager.HasComponent<OnFire>(target))
+            {
                 OnFire fire = EntityManager.GetComponentData<OnFire>(target);
-                fire.m_Intensity = 0f;
-                EntityManager.SetComponentData(target, fire);
-                SyncLog.Detail(LogTopic.City, "FireSync: put out '" + command.TargetPrefab + "' as the host did.");
-                return true;
+                if (fire.m_Intensity > 0f)
+                {
+                    if (command.Op == FireOp.Update && fire.m_Intensity != command.Intensity)
+                    {
+                        fire.m_Intensity = command.Intensity;
+                        EntityManager.SetComponentData(target, fire);
+                    }
+                    return;
+                }
             }
 
-            if (burning && EntityManager.GetComponentData<OnFire>(target).m_Intensity > 0f) return true;
-            if (!_prefabIndex.TryResolve(command.EventPrefab, out Entity eventPrefab)) return true;
+            // The host's is going out as well.
+            if (command.Intensity <= 0f) return;
+            if (!_prefabIndex.TryResolve(command.EventPrefab, out Entity eventPrefab)) return;
 
             Entity fireEvent = LocalEvent(command.EventKey, eventPrefab);
             if (fireEvent == Entity.Null)
@@ -342,7 +531,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 // Its initialization ignites the target with the prefab's start intensity, as on the host.
                 if (CreateFireEvent(eventPrefab, target, out fireEvent))
                     _localEvents[command.EventKey] = fireEvent;
-                return true;
+                return;
             }
 
             Entity ignite = EntityManager.CreateEntity(_igniteArchetype);
@@ -353,8 +542,47 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 m_Intensity = command.Intensity,
             });
             _ownIgnites.Add(ignite);
-            SyncLog.Detail(LogTopic.City, "FireSync: ignited '" + command.TargetPrefab + "' as the host did.");
-            return true;
+            SyncLog.Detail(LogTopic.City, "FireSync: " + (command.Op == FireOp.Update ? "relit '" : "ignited '") +
+                command.TargetPrefab + "' as the host did.");
+        }
+
+        /// <summary>
+        /// The host's fire destroyed the target: the same destruction event the burn raises, so the native
+        /// collapse, evacuation and notification follow.
+        /// </summary>
+        private void BurnDown(Entity target, FireCommand command)
+        {
+            if (EntityManager.HasComponent<Destroyed>(target)) return;
+
+            Entity fireEvent = EntityManager.HasComponent<OnFire>(target)
+                ? EntityManager.GetComponentData<OnFire>(target).m_Event
+                : Entity.Null;
+            if ((fireEvent == Entity.Null || !EntityManager.Exists(fireEvent)) &&
+                _prefabIndex.TryResolve(command.EventPrefab, out Entity eventPrefab))
+                fireEvent = LocalEvent(command.EventKey, eventPrefab);
+
+            Entity destroy = EntityManager.CreateEntity(_destroyArchetype);
+            EntityManager.SetComponentData(destroy, new global::Game.Events.Destroy
+            {
+                m_Object = target,
+                m_Event = fireEvent,
+            });
+            _ownDestroys.Add(destroy);
+            SyncLog.Detail(LogTopic.City, "FireSync: '" + command.TargetPrefab + "' burned down, as on the host.");
+        }
+
+        /// <summary>
+        /// The host's damage, so this machine's copy looks and counts the same. Only an existing record is
+        /// written: the local burn adds it, with what goes with it, once the fire does damage here.
+        /// </summary>
+        private void ApplyDamage(Entity target, FireCommand command)
+        {
+            if (!EntityManager.HasComponent<global::Game.Objects.Damaged>(target)) return;
+            var host = new float3(command.DamageX, command.DamageY, command.DamageZ);
+            global::Game.Objects.Damaged damaged = EntityManager.GetComponentData<global::Game.Objects.Damaged>(target);
+            if (math.all(damaged.m_Damage == host)) return;
+            damaged.m_Damage = host;
+            EntityManager.SetComponentData(target, damaged);
         }
 
         private Entity FindTarget(Entity prefab, float3 wanted, NativeList<Entity> candidates)

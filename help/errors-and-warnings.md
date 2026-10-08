@@ -280,7 +280,7 @@ These messages normally appear only in logs. A single recovered warning does not
 | `RouteSync` | A route create/update/delete could not resolve or apply. Recreate the route after Sync World. |
 | `GrowableSync`, `Occupancy`, `PropertyRent`, `ZoneDemand` | Simulation state drifted or a population/economy correction could not be captured/applied. Let the host run briefly and Sync World if visible values remain different. |
 | `CityState`, `Statistics`, `PolicySync`, `NameSync`, `DevTree` | A city-state page or edit was malformed, deferred, skipped, or failed. Retry the action once; Sync World if the result differs. |
-| `DisasterSync`, `TreeState`, weather/clock/speed channel warnings | A world-simulation event or state page could not be resolved. Sync World and avoid retriggering the same event if it repeats. |
+| `DisasterSync`, `FireSync`, `AccidentSync`, `TreeState`, weather/clock/speed channel warnings | A world-simulation event or state page could not be resolved. Sync World and avoid retriggering the same event if it repeats. |
 | `realize FAILED`, `channel pump failed`, `queue overflowed`, `retry budget` | A bounded recovery path was exhausted. This is report-worthy, especially when repeated or visible in the city. |
 | `Observer crashed` | One multiplayer observer threw an exception; the session continues, but part of synchronization may be impaired. Preserve the complete exception and flight log. |
 

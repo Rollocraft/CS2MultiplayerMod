@@ -316,11 +316,15 @@ namespace CS2MultiplayerMod
             // After Modification2's event initialization places the disaster; its Created tag is gone next frame.
             updateSystem.UpdateAt<Game.Sync.Systems.DisasterSyncSystem>(SystemUpdatePhase.ModificationEnd);
             // A client's own ignitions exist from Modification2's event initialization (and the previous frame's
-            // spreads) until IgniteSystem applies them.
+            // spreads) until IgniteSystem applies them. Its own burn-downs are dropped here too, and once more at
+            // ToolUpdate for those the previous frame's simulation queued.
             updateSystem.UpdateBefore<Game.Sync.Systems.FireIgniteGateSystem, global::Game.Events.IgniteSystem>(
                 SystemUpdatePhase.Modification4);
             // After IgniteSystem's barrier has put this frame's fires on their targets.
             updateSystem.UpdateAt<Game.Sync.Systems.FireSyncSystem>(SystemUpdatePhase.ModificationEnd);
+            // ModificationEnd: an accident rolled during initialization still carries Created. Host capture and
+            // client gating also run at ToolUpdate, before initialization, through SyncRealizeSystem.
+            updateSystem.UpdateAt<Game.Sync.Systems.AccidentSyncSystem>(SystemUpdatePhase.ModificationEnd);
             // After the game's auto-name initialization fills a new name draw. ModificationEnd also runs while
             // paused and still sees the one-frame Created/Updated tags.
             updateSystem.UpdateAfter<Game.Sync.Systems.NameSyncSystem,
