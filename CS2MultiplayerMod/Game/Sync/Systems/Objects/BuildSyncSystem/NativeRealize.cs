@@ -4,6 +4,7 @@ using Game.Prefabs;
 using Game.Tools;
 using Unity.Collections;
 using Unity.Entities;
+using Unity.Mathematics;
 using CS2MultiplayerMod.Core.Diagnostics;
 using CS2MultiplayerMod.Core.Protocol.Messages;
 using CS2MultiplayerMod.Game.Diagnostics;
@@ -65,6 +66,13 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         private EntityQuery _portableObjects;
         private EntityQuery _portableAreas;
         private Net.NetSyncSystem _nativeNetCoordinator;
+        private ObjectSearch _objectSearch;
+
+        /// <summary>
+        /// Object references and replays match within 2 m of their anchor; the wider box absorbs geometry
+        /// offset from the pivot, since the search tree indexes bounds rather than positions.
+        /// </summary>
+        private const float PortableObjectSearchRadius = 8f;
 
         /// <summary>
         /// Candidates for one resolution pass, bucketed by prefab: one snapshot per domain instead of a
@@ -148,9 +156,44 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             return index.Of(prefab);
         }
 
+        /// <summary>
+        /// Objects of <paramref name="prefab"/> in <see cref="_portableObjects"/>'s domain near
+        /// <paramref name="position"/>, from the static search tree instead of a city-wide snapshot. The tree
+        /// prunes in XZ only; callers keep their own distance tests.
+        /// </summary>
+        private List<Entity> PortableObjectsNear(Entity prefab, float3 position)
+        {
+            var results = new List<Entity>();
+            var near = new NativeList<Entity>(32, Allocator.Temp);
+            try
+            {
+                _objectSearch.CollectNear(position, PortableObjectSearchRadius, near);
+                for (int i = 0; i < near.Length; i++)
+                {
+                    Entity candidate = near[i];
+                    if (!EntityManager.Exists(candidate) ||
+                        !EntityManager.HasComponent<global::Game.Objects.Object>(candidate) ||
+                        !EntityManager.HasComponent<global::Game.Objects.Transform>(candidate) ||
+                        !EntityManager.HasComponent<PrefabRef>(candidate) ||
+                        EntityManager.HasComponent<Temp>(candidate) ||
+                        EntityManager.HasComponent<Deleted>(candidate) ||
+                        EntityManager.HasComponent<global::Game.Objects.Moving>(candidate) ||
+                        EntityManager.HasComponent<global::Game.Vehicles.Vehicle>(candidate) ||
+                        EntityManager.HasComponent<global::Game.Creatures.Creature>(candidate) ||
+                        EntityManager.GetComponentData<PrefabRef>(candidate).m_Prefab != prefab ||
+                        results.Contains(candidate)) continue;
+                    results.Add(candidate);
+                }
+            }
+            finally { near.Dispose(); }
+            return results;
+        }
+
         private void InitializeNativeObjectOperations()
         {
             _nativeNetCoordinator = World.GetOrCreateSystemManaged<Net.NetSyncSystem>();
+            _objectSearch = new ObjectSearch(
+                World.GetOrCreateSystemManaged<global::Game.Objects.SearchSystem>());
             _portableObjects = GetEntityQuery(new EntityQueryDesc
             {
                 All = SyncQuery.ReadOnly<global::Game.Objects.Object,

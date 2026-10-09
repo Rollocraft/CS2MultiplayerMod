@@ -294,7 +294,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                     ? NetToolOperationCommand.MaxEncodedBytes
                     : NetPlacementCommand.MaxEncodedBytes;
                 if (command.Body == null || command.Body.Length > cap) return;
-                if (mixed && _sink.Count >= MixedNetInboxAdmissionCap)
+                if (mixed && CountMixed(_sink) >= MixedNetInboxAdmissionCap)
                 {
                     SyncLog.Warn(LogTopic.Nets,
                         "NetSync: mixed-operation inbox admission cap reached; " +
@@ -304,12 +304,25 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                             CS2MultiplayerMod.Game.Diagnostics.ResyncEvidence.StreamLoss)
                         .About("mixed net inbox")
                         .Tried("nothing - the edit was refused at the door rather than dropped silently")
-                        .Fact("queued mixed operations", _sink.Count)
+                        .Fact("queued mixed operations", CountMixed(_sink))
+                        .Fact("queued net messages", _sink.Count)
                         .Fact("admission cap", MixedNetInboxAdmissionCap));
                     return;
                 }
                 // Remote work waits while a local tool is active: a larger bounded inbox.
                 SyncInbox.Push(_sink, command, NetInboxCap);
+            }
+
+            /// <summary>
+            /// The cap bounds the large mixed envelopes only; a long drawn road queues many small course
+            /// placements that must not count against it. Mixed arrivals are rare, so the walk is cheap.
+            /// </summary>
+            private static int CountMixed(ConcurrentQueue<SimulationCommandMessage> queue)
+            {
+                int mixed = 0;
+                foreach (SimulationCommandMessage queued in queue)
+                    if (queued.CommandId == NetToolOperationCommand.Id) mixed++;
+                return mixed;
             }
         }
     }

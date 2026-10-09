@@ -72,7 +72,6 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         private EntityQuery _createdAppliedObjects;
         private EntityQuery _liveNodes;
         private EntityQuery _liveEdges;
-        private EntityQuery _liveStaticObjects;
 
         // For reproducing the game's building placement (object, lot areas and connection nets):
         // traffic side for driveways, and the lookups GetSubNet / SelectAreaPrefab read.
@@ -138,13 +137,6 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             {
                 All = SyncQuery.ReadOnly<global::Game.Net.Edge, global::Game.Net.Curve>(),
                 None = SyncQuery.ReadOnly<Temp, Deleted>(),
-            });
-
-            // Standing placed objects for the duplicate guard; Static excludes movers, Owner sub-objects.
-            _liveStaticObjects = GetEntityQuery(new EntityQueryDesc
-            {
-                All = SyncQuery.ReadOnly<PrefabRef, Transform, global::Game.Objects.Static>(),
-                None = SyncQuery.ReadOnly<Temp, Owner, Deleted>(),
             });
 
             _diagAnyCreated = GetEntityQuery(ComponentType.ReadOnly<Created>());
@@ -441,8 +433,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 // A committed root's prefab, transform and seed select the exact recent preview graph.
                 if (TryPublishMatchingRecentLocalObjectOperation(localCreated, now)) return;
 
-                // Record every failed correlation; Apply still gates the reduced fallback.
-                NoteCommittedObjectGraphMiss(localCreated);
+                // Record every failed correlation; Apply still gates the reduced fallback. A brush stroke has no
+                // graph to match by design.
+                if (!LocalObjectBrushAppliedThisFrame) NoteCommittedObjectGraphMiss(localCreated);
 
                 // Only the reduced compatibility fallback still depends on the tool Apply sample.
                 if (!_localObjectApplyThisFrame) return;
