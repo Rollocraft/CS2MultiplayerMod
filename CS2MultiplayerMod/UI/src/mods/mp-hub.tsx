@@ -8,6 +8,9 @@ import {
     CONNECTION_RELAY,
     ConnectionSegmented,
     JoinCodeDisplay,
+    publicPasswordMinLength$,
+    publicPasswordMissing,
+    usePublicPasswordHint,
 } from "mods/connection-picker";
 import { RESYNC_LOC, ResyncPolicySegmented } from "mods/resync-policy";
 import {
@@ -418,6 +421,11 @@ const styles: Record<string, CSSProperties> = {
         fontSize: "12.5rem",
         color: "rgba(255, 255, 255, 0.55)",
         margin: "2rem 0 12rem 0",
+    },
+    hintWarning: {
+        fontSize: "12.5rem",
+        color: "#ffb454",
+        margin: "-4rem 0 10rem 0",
     },
     errorLine: {
         fontSize: "13rem",
@@ -858,6 +866,10 @@ const SettingsFields = () => {
     // In a live session follow what it actually runs on; outside one, what is
     // configured for the next.
     const relay = inSession ? sessionUsesRelay : relaySupported && hostConnection !== CONNECTION_DIRECT;
+    const minPasswordLength = useValue(publicPasswordMinLength$);
+    const passwordHint = usePublicPasswordHint(hostPassword, minPasswordLength);
+    const passwordMissing = !inSession &&
+        publicPasswordMissing(relay, lanOnly, hostPassword, minPasswordLength);
 
     return (
         <>
@@ -899,6 +911,7 @@ const SettingsFields = () => {
                 disabled={inSession}
                 onChange={(v) => trigger(GROUP, "setHostPassword", v)}
             />
+            {passwordMissing ? <div style={styles.hintWarning}>{passwordHint}</div> : null}
             <HubField
                 label={t(LOC.maxPlayers, "Max Players")}
                 value={maxPlayers}

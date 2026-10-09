@@ -29,15 +29,26 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             ApplyLocalAuthority(service.Session);
         }
 
-        /// <summary>Every frame before the native move-away consumer; MovingAway can be short-lived.</summary>
-        internal void ProcessHouseholdLifecycleBoundary()
+        /// <summary>
+        /// Every frame before the native move-away consumer; MovingAway can be short-lived.
+        /// <paramref name="changedDepartures"/> holds the departing households whose chunks changed since the
+        /// previous call.
+        /// </summary>
+        internal void ProcessHouseholdLifecycleBoundary(EntityQuery changedDepartures)
         {
             MultiplayerService service = Mod.Service;
-            if (service == null || !service.SimulationSyncReady) return;
+            if (service == null || !service.SimulationSyncReady)
+            {
+                _departureSweepDue = true;
+                return;
+            }
             if (service.Session.Role == SessionRole.Host)
-                ScanHostDepartures(service.NowMs);
+                ScanHostDepartures(service.NowMs, changedDepartures);
             else
+            {
+                _departureSweepDue = true;
                 CancelClientLifecycleDecisions();
+            }
         }
 
         /// <summary>

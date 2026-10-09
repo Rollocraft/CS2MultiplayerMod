@@ -143,13 +143,23 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         /// Scans MovingAway directly: a household can lose its renter link before its property's bucket
         /// is sampled. Tombstones are retained across many pages.
         /// </summary>
-        private void ScanHostDepartures(long now)
+        private void ScanHostDepartures(long now, EntityQuery changedDepartures)
         {
-            if (_departingHouseholds.IsEmptyIgnoreFilter) return;
+            // A new departure changes its chunk, so most scans read only those. Tens of thousands of families
+            // can wait in MovingAway in a large city; the full sweep keeps their tombstones alive and catches up
+            // after scans were skipped.
+            bool sweep = _departureSweepDue || ++_departureScansSinceSweep >= DepartureScansPerSweep;
+            if (sweep)
+            {
+                _departureSweepDue = false;
+                _departureScansSinceSweep = 0;
+            }
+            EntityQuery source = sweep ? _departingHouseholds : changedDepartures;
+            if (source.IsEmptyIgnoreFilter) return;
             NativeArray<Entity> households = default(NativeArray<Entity>);
             try
             {
-                households = _departingHouseholds.ToEntityArray(Allocator.Temp);
+                households = source.ToEntityArray(Allocator.Temp);
                 for (int i = 0; i < households.Length; i++)
                 {
                     Entity household = households[i];
@@ -163,7 +173,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     if (tracked && !_hostHouseholds.ContainsKey(householdId) &&
                         !_hostHouseholdCitizens.ContainsKey(householdId))
                     {
-                        RecordHostDeparture(householdId, known.Revision, now, false);
+                        // Retention is minutes long; renewing it every executor tick only cost time.
+                        if (known.ExpiresMs - now < DepartureRetentionMs / 2)
+                            RecordHostDeparture(householdId, known.Revision, now, false);
                         continue;
                     }
 

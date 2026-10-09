@@ -19,7 +19,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
     /// </summary>
     public partial class CityStateSyncSystem : GameSystemBase
     {
-        /// <summary>How often the host publishes a fresh snapshot.</summary>
+        /// <summary>How often the host publishes a fresh snapshot of each channel.</summary>
         private const long SnapshotIntervalMs = 1000;
 
         /// <summary>How often a client compares its local editable state against the host's.</summary>
@@ -50,8 +50,11 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
         private Observer _observer;
         private TreeStateChannel _treeStateChannel;
-        private readonly Dictionary<byte, long> _captureDueMs = new Dictionary<byte, long>();
-        private int _broadcasts;
+        // Each channel keeps the 1 s cadence on its own phase: captured together, the paged channels
+        // (occupancy, companies, rents, trees) stacked into one 30-40 ms host frame every second.
+        private readonly Dictionary<byte, long> _channelDueMs = new Dictionary<byte, long>();
+        private readonly List<byte> _captureOrder = new List<byte>();
+        private int _broadcastSinceLog;
         private long _lastEditScanMs;
         private long _lastLogMs;
         private int _applied;
@@ -156,7 +159,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 {
                     // Leaving a session invalidates everything we knew about the host's state.
                     if (_lastHostPayload.Count > 0) { _lastHostPayload.Clear(); _pendingEdits.Clear(); }
-                    _captureDueMs.Clear();
+                    _captureOrder.Clear();
+                    _channelDueMs.Clear();
                     for (int i = 0; i < _pumped.Count; i++) _pumped[i].ResetPending();
                     SyncInbox.Clear(_incoming);
                     SyncInbox.Clear(_incomingEdits);
@@ -191,35 +195,50 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         private void CaptureAndBroadcast(MultiplayerSession session)
         {
             long now = _clock.ElapsedMilliseconds;
-            int slot = 0;
-            foreach (var pair in _channels)
+            if (_captureOrder.Count != _channels.Count) ScheduleChannelPhases(now);
+
+            for (int i = 0; i < _captureOrder.Count; i++)
             {
-                if (!_captureDueMs.TryGetValue(pair.Key, out long due))
-                    due = now + slot * SnapshotIntervalMs / _channels.Count;
-                slot++;
-                if (now < due)
-                {
-                    _captureDueMs[pair.Key] = due;
-                    continue;
-                }
-                // Keep the phase after a hitch so the channels never bunch up again.
+                byte channelId = _captureOrder[i];
+                long due = _channelDueMs[channelId];
+                if (now < due) continue;
+                // Keep the phase after a hitch so the channels do not stay bunched together.
                 do due += SnapshotIntervalMs; while (due <= now);
-                _captureDueMs[pair.Key] = due;
+                _channelDueMs[channelId] = due;
 
                 var writer = new NetworkWriter(64);
-                if (!pair.Value.Capture(EntityManager, writer)) continue;
-                session.SendState(pair.Key, writer.ToArray());
-                _broadcasts++;
+                if (!_channels[channelId].Capture(EntityManager, writer)) continue;
+                session.SendState(channelId, writer.ToArray());
+                _broadcastSinceLog++;
             }
 
             // Heartbeat every ~30 s so the log shows state replication is alive without spam.
             if (now - _lastLogMs >= 30000)
             {
                 _lastLogMs = now;
-                SyncLog.Detail(LogTopic.City, "CityState: broadcast " + _broadcasts +
+                SyncLog.Detail(LogTopic.City, "CityState: broadcast " + _broadcastSinceLog +
                     " channel snapshot(s) to clients in the last 30s.");
-                _broadcasts = 0;
+                _broadcastSinceLog = 0;
             }
+        }
+
+        /// <summary>Spreads the channels' first captures evenly over one interval.</summary>
+        private void ScheduleChannelPhases(long now)
+        {
+            _captureOrder.Clear();
+            _channelDueMs.Clear();
+            foreach (byte channelId in _channels.Keys) _captureOrder.Add(channelId);
+            for (int i = 0; i < _captureOrder.Count; i++)
+                _channelDueMs[_captureOrder[i]] = now + SnapshotIntervalMs * i / _captureOrder.Count;
+        }
+
+        /// <summary>The next capture of this channel runs on the coming frame.</summary>
+        private void CaptureChannelNow(byte channelId)
+        {
+            long now = _clock.ElapsedMilliseconds;
+            // An edit can arrive before the first scheduled host capture.
+            if (_captureOrder.Count != _channels.Count) ScheduleChannelPhases(now);
+            if (_channelDueMs.ContainsKey(channelId)) _channelDueMs[channelId] = now;
         }
 
         // ---- Client ------------------------------------------------------------

@@ -206,6 +206,9 @@ namespace CS2MultiplayerMod.Game
                 () => Mod.Setting != null ? Mod.Setting.MaxPlayers : "8"));
             AddUpdateBinding(new GetterValueBinding<bool>(Group, "lanOnly",
                 () => Mod.Setting != null && Mod.Setting.LanOnly));
+            // The session's own rule, so the menus warn before a host attempt is refused.
+            AddBinding(new ValueBinding<int>(Group, "publicPasswordMinLength",
+                MultiplayerConfig.MinPublicPasswordLength));
             AddUpdateBinding(new GetterValueBinding<bool>(Group, "requireApproval",
                 () => Mod.Setting == null || Mod.Setting.RequireJoinApproval));
             AddUpdateBinding(new GetterValueBinding<bool>(Group, "autoApproveSteamFriends",
@@ -226,15 +229,26 @@ namespace CS2MultiplayerMod.Game
                     Mod.Setting.HostConnection = value;
                     // Persist now: the host flow reads it back only after the chosen world loads.
                     Mod.Setting.ApplyAndSave();
+                    ClearResolvedPublicPasswordFault();
                 }));
             AddBinding(new TriggerBinding<string>(Group, "setHostPort",
                 value => { if (Mod.Setting != null) Mod.Setting.HostPort = value; }));
             AddBinding(new TriggerBinding<string>(Group, "setHostPassword",
-                value => { if (Mod.Setting != null) Mod.Setting.HostPassword = value; }));
+                value =>
+                {
+                    if (Mod.Setting == null) return;
+                    Mod.Setting.HostPassword = value;
+                    ClearResolvedPublicPasswordFault();
+                }));
             AddBinding(new TriggerBinding<string>(Group, "setMaxPlayers",
                 value => { if (Mod.Setting != null) Mod.Setting.MaxPlayers = value; }));
             AddBinding(new TriggerBinding<bool>(Group, "setLanOnly",
-                value => { if (Mod.Setting != null) Mod.Setting.LanOnly = value; }));
+                value =>
+                {
+                    if (Mod.Setting == null) return;
+                    Mod.Setting.LanOnly = value;
+                    ClearResolvedPublicPasswordFault();
+                }));
             AddBinding(new TriggerBinding<bool>(Group, "setRequireApproval",
                 value =>
                 {
@@ -390,12 +404,19 @@ namespace CS2MultiplayerMod.Game
                 SyncLog.Error(LogTopic.Ui, "Could not open the game's world-selection screen.");
                 return;
             }
+            // The port and password typed on the host screen must survive the world load.
+            Mod.Setting.ApplyAndSave();
 
             _hostAfterWorldLoad = true;
             _hostWorldLoadStarted = false;
             menu.activeScreen = screen;
             SyncLog.Detail(LogTopic.Ui, "Host world selection opened through the game's " + screen +
                 " screen.");
+        }
+
+        private static void ClearResolvedPublicPasswordFault()
+        {
+            if (Mod.Service != null) Mod.Service.ClearResolvedPublicPasswordFault(Mod.Setting);
         }
 
         private void CancelPendingHost()

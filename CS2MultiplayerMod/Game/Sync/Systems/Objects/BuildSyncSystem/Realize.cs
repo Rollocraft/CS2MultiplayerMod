@@ -1,6 +1,5 @@
 using System.Text;
 using Game.Prefabs;
-using Unity.Collections;
 using Unity.Entities;
 using Unity.Mathematics;
 using CS2MultiplayerMod.Core.Diagnostics;
@@ -42,10 +41,6 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 ObjectAttachKind attachKind)> _rzRealizedThisFrame =
             new System.Collections.Generic.List<
                 (Entity, float3, int, quaternion, ObjectAttachKind)>();
-        private NativeArray<Entity> _dupEntities;
-        private NativeArray<global::Game.Objects.Transform> _dupTransforms;
-        private NativeArray<PrefabRef> _dupPrefabs;
-        private bool _dupSnapshotTaken;
 
         private readonly HeldTime _targetHold = new HeldTime();
 
@@ -72,36 +67,23 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             _rzFrameBatchedObjects = 0;
             _rzFrameDuplicates = 0;
             _rzRealizedThisFrame.Clear();
-            try
+            if (!TryRealizeBlockedNativeObject(now)) return;
+
+            // A transmitted Y assumes the sender's terrain.
+            if (!RealizeGate.TerrainBacklog)
             {
-                if (!TryRealizeBlockedNativeObject(now)) return;
-
-                // A transmitted Y assumes the sender's terrain.
-                if (!RealizeGate.TerrainBacklog)
-                {
-                    RetryPendingAttachments(now);
-                    DrainIncoming(session, now);
-                }
-
-                if (_rzFrameSpawned > 0 || _rzFrameDuplicates > 0)
-                {
-                    var note = new StringBuilder("build realize n=").Append(_rzFrameSpawned);
-                    if (_rzFrameDuplicates > 0) note.Append(" dup=").Append(_rzFrameDuplicates);
-                    int held = _incoming.Count + _nativeObjectReplayPrefix.Count;
-                    if (held > 0) note.Append(" held=").Append(held);
-                    AppendRealizedNames(note);
-                    SyncLog.Trace(LogTopic.Buildings, note.ToString());
-                }
+                RetryPendingAttachments(now);
+                DrainIncoming(session, now);
             }
-            finally
+
+            if (_rzFrameSpawned > 0 || _rzFrameDuplicates > 0)
             {
-                if (_dupSnapshotTaken)
-                {
-                    _dupEntities.Dispose();
-                    _dupTransforms.Dispose();
-                    _dupPrefabs.Dispose();
-                    _dupSnapshotTaken = false;
-                }
+                var note = new StringBuilder("build realize n=").Append(_rzFrameSpawned);
+                if (_rzFrameDuplicates > 0) note.Append(" dup=").Append(_rzFrameDuplicates);
+                int held = _incoming.Count + _nativeObjectReplayPrefix.Count;
+                if (held > 0) note.Append(" held=").Append(held);
+                AppendRealizedNames(note);
+                SyncLog.Trace(LogTopic.Buildings, note.ToString());
             }
         }
 

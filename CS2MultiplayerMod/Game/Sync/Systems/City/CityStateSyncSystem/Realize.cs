@@ -24,8 +24,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 try
                 {
                     channel.Apply(EntityManager, new NetworkReader(edit.Data));
-                    // Confirm to everyone right away instead of waiting out the interval.
-                    _captureDueMs[edit.ChannelId] = _clock.ElapsedMilliseconds;
+                    // Confirm the edit to everyone right away instead of waiting out the interval.
+                    CaptureChannelNow(edit.ChannelId);
                     SyncLog.Detail(LogTopic.City, "CityState: player " + edit.OriginPlayerId +
                         " edited channel " + edit.ChannelId + "; applied and broadcasting.");
                 }

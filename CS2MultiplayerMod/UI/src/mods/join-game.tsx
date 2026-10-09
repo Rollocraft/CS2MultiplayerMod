@@ -9,6 +9,9 @@ import {
     CONNECTION_RELAY,
     ConnectionDropdown,
     JoinCodeDisplay,
+    publicPasswordMinLength$,
+    publicPasswordMissing,
+    usePublicPasswordHint,
 } from "mods/connection-picker";
 import { DisclaimerModal, disclaimerAccepted$ } from "mods/disclaimer";
 import { MultiplayerJoinLoadingScreen } from "mods/loading-screen";
@@ -32,6 +35,7 @@ const LOC = {
     hostAddress: "CS2MP.UI.HostAddress",
     port: "CS2MP.UI.Port",
     password: "CS2MP.UI.Password",
+    lanOnly: "CS2MP.UI.LanOnly",
     requireApproval: "CS2MP.UI.RequireApproval",
     autoApproveSteamFriends: "CS2MP.UI.AutoApproveSteamFriends",
     simulationSync: "CS2MP.UI.SimulationSync",
@@ -54,6 +58,9 @@ const isHost$ = bindValue<boolean>(GROUP, "isHost", false);
 const savedGames$ = bindValue<unknown[]>("menu", "saves", []);
 const multiplayerMenuActive$ = bindValue<boolean>(GROUP, "multiplayerMenuActive", false);
 const hostConnection$ = bindValue<string>(GROUP, "hostConnection", CONNECTION_RELAY);
+const hostPort$ = bindValue<string>(GROUP, "hostPort", "25001");
+const hostPassword$ = bindValue<string>(GROUP, "hostPassword", "");
+const lanOnly$ = bindValue<boolean>(GROUP, "lanOnly", false);
 const requireApproval$ = bindValue<boolean>(GROUP, "requireApproval", true);
 const autoApproveSteamFriends$ = bindValue<boolean>(GROUP, "autoApproveSteamFriends", false);
 const resyncPolicy$ = bindValue<string>(GROUP, "resyncPolicy", RESYNC_ALLOW);
@@ -418,6 +425,16 @@ const HostOption = ({ label, value, onChange }: {
     </div>
 );
 
+/** Direct internet hosting the session would refuse; Load/Create stay closed until it is fixed. */
+const useHostPasswordMissing = () => {
+    const relaySupported = useValue(relaySupported$);
+    const mode = useValue(hostConnection$);
+    const lanOnly = useValue(lanOnly$);
+    const password = useValue(hostPassword$);
+    const minLength = useValue(publicPasswordMinLength$);
+    return publicPasswordMissing(relaySupported && mode !== CONNECTION_DIRECT, lanOnly, password, minLength);
+};
+
 /**
  * Host connection picker: relay (default) or a direct port. In relay mode the code
  * players need is shown right here, because that is the only thing they have to be
@@ -434,6 +451,11 @@ const ConnectionPicker = () => {
     const autoApproveSteamFriends = useValue(autoApproveSteamFriends$);
     const resyncPolicy = useValue(resyncPolicy$);
     const simulationSync = useValue(simulationSync$);
+    const hostPort = useValue(hostPort$);
+    const hostPassword = useValue(hostPassword$);
+    const lanOnly = useValue(lanOnly$);
+    const passwordMissing = useHostPasswordMissing();
+    const passwordHint = usePublicPasswordHint(hostPassword, useValue(publicPasswordMinLength$));
 
     const relay = relaySupported && mode !== CONNECTION_DIRECT;
 
@@ -468,6 +490,25 @@ const ConnectionPicker = () => {
                         : `${t(LOC.relayUnavailableHint, "Steam is not available right now, so relay hosting cannot start. Use a direct connection instead.")}${relayReason ? ` (${relayReason})` : ""}`
                     : t(LOC.directHint, "Players connect to your address and port. Needs the port forwarded on your router.")}
             </div>
+            {/* Direct hosting opens a port, so its port and password are set here
+                rather than only in Options or the in-game hub. */}
+            {!relay && (
+                <>
+                    <div style={styles.connectionSpacer} />
+                    <Field
+                        label={t(LOC.port, "Port")}
+                        value={hostPort}
+                        onChange={(v) => trigger(GROUP, "setHostPort", v)}
+                    />
+                    <Field
+                        label={t(LOC.password, "Password")}
+                        secret
+                        value={hostPassword}
+                        onChange={(v) => trigger(GROUP, "setHostPassword", v)}
+                    />
+                    {passwordMissing ? <div style={styles.hintWarning}>{passwordHint}</div> : null}
+                </>
+            )}
             <div style={styles.hostOptions}>
                 <HostOption
                     label={t(LOC.requireApproval, "Approve Players")}
@@ -482,7 +523,16 @@ const ConnectionPicker = () => {
                 />
             </div>
             <div style={styles.hostOptions}>
-                {relay && requireApproval ? (
+                {!relay ? (
+                    <>
+                        <HostOption
+                            label={t(LOC.lanOnly, "LAN Only")}
+                            value={lanOnly}
+                            onChange={(value) => trigger(GROUP, "setLanOnly", value)}
+                        />
+                        <div style={{ width: "28rem", flexShrink: 0 }} />
+                    </>
+                ) : requireApproval ? (
                     <>
                         <HostOption
                             label={t(LOC.autoApproveSteamFriends, "Auto-Approve Steam Friends")}
@@ -575,6 +625,7 @@ export const MultiplayerScreenRenderer = ({ focusKey, className, onClose }: Nati
     const modsBlocked = useModsBlocked();
     const relaySupported = useValue(relaySupported$);
     const joinIsRelay = relaySupported && joinConnection !== CONNECTION_DIRECT;
+    const hostPasswordMissing = useHostPasswordMissing();
     const [view, setView] = useState<MultiplayerView>("choice");
 
     // Keep the multiplayer marker alive through the native exit animation. Once
@@ -737,14 +788,14 @@ export const MultiplayerScreenRenderer = ({ focusKey, className, onClose }: Nati
                 focusKey="load-world"
                 icon="Media/Glyphs/Progress.svg"
                 label={t(LOC.loadWorld, "Load World")}
-                disabled={!hasSavedGame || inSession || modsBlocked}
+                disabled={!hasSavedGame || inSession || modsBlocked || hostPasswordMissing}
                 onSelect={() => openHostWorld("hostLoadWorld")}
             />
             <ChoiceTile
                 focusKey="create-world"
                 icon="Media/Glyphs/Plus.svg"
                 label={t(LOC.createWorld, "Create World")}
-                disabled={inSession || modsBlocked}
+                disabled={inSession || modsBlocked || hostPasswordMissing}
                 onSelect={() => openHostWorld("hostCreateWorld")}
             />
         </ChoiceScreen>

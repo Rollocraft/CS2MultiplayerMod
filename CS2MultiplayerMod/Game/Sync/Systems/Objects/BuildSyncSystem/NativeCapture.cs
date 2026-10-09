@@ -300,6 +300,17 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 return;
             }
 
+            // Brush strokes travel as their committed result through the brush batches, which this Apply arms
+            // here too, so the stroke's first frame is captured even before the tool sample sees it.
+            if (!hasStampingNet && IsLocalObjectBrushStroke(captured))
+            {
+                _cachedLocalObjectOperation = null;
+                LocalObjectBrushAppliedThisFrame = true;
+                _localObjectApplyThisFrame = true;
+                _localLifecycleApplyThisFrame = true;
+                return;
+            }
+
             string stampPrefabName = null;
             if (hasStampingNet)
             {

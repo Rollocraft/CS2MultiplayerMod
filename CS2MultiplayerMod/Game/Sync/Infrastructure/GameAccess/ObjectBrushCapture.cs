@@ -25,8 +25,14 @@ namespace CS2MultiplayerMod.Game.Sync.Infrastructure
         public static bool SuppressDeletes(bool nativeCaptured, bool lifecycleApplied,
             bool brushApplied) => nativeCaptured || (lifecycleApplied && !brushApplied);
 
-        /// <summary>An independent top-level create or delete; runtime prefab checks still apply.</summary>
-        public static bool IsIndependentObjectDefinition(ObjectToolDefinitionIntent definition)
+        /// <summary>
+        /// An independent top-level create or delete; runtime prefab checks still apply.
+        /// <paramref name="allowOptional"/> accepts the brush's Optional mark (the validator may drop a
+        /// colliding tree); only a sender that publishes the committed result instead of the graph may pass it,
+        /// because a receiver placing these directly would keep the trees the validator dropped.
+        /// </summary>
+        public static bool IsIndependentObjectDefinition(ObjectToolDefinitionIntent definition,
+            bool allowOptional = false)
         {
             if (definition == null || definition.Kind != ObjectToolDefinitionKind.Object ||
                 !string.IsNullOrEmpty(definition.SubPrefabName) ||
@@ -35,12 +41,14 @@ namespace CS2MultiplayerMod.Game.Sync.Infrastructure
                 !string.IsNullOrEmpty(definition.AttachedPrefabName) ||
                 definition.HasOwnerDefinition || definition.HasUpgraded) return false;
 
+            uint flags = definition.CreationFlags;
+            if (allowOptional) flags &= ~(uint)CreationFlags.Optional;
             bool placement = !definition.PrefabIsNull &&
                              definition.Original.Kind == PortableEntityKind.None &&
-                             definition.CreationFlags == 0u;
+                             flags == 0u;
             bool deletion = definition.PrefabIsNull &&
                             definition.Original.Kind == PortableEntityKind.Object &&
-                            definition.CreationFlags == 1u;
+                            flags == 1u;
             return placement || deletion;
         }
     }

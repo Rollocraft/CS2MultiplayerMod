@@ -184,18 +184,30 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             }
         }
 
+        /// <summary>
+        /// The search tree's neighbourhood first; the city-wide snapshot only when it has no match (an object
+        /// the tree does not hold), since filling that snapshot costs tens of milliseconds in a large city.
+        /// </summary>
         private Entity FindPortableObject(Entity prefab, float3 position, PortableEntityRef identity)
         {
-            List<Entity> candidates = Candidates(_objectCandidates, _portableObjects, prefab);
+            Entity best = ClosestPortableObject(PortableObjectsNear(prefab, position), position, identity);
+            if (best != Entity.Null) return best;
+            return ClosestPortableObject(Candidates(_objectCandidates, _portableObjects, prefab),
+                position, identity);
+        }
+
+        private Entity ClosestPortableObject(List<Entity> candidates, float3 position,
+            PortableEntityRef identity)
+        {
             Entity best = Entity.Null;
             float bestDistance = 4f;
             for (int i = 0; i < candidates.Count; i++)
             {
                 Entity candidate = candidates[i];
-                if (!MatchesPortableOwner(candidate, identity)) continue;
                 float distance = math.distancesq(EntityManager
                     .GetComponentData<global::Game.Objects.Transform>(candidate).m_Position, position);
-                if (distance >= bestDistance) continue;
+                // Distance before the owner walk: a common tree prefab has many thousands of instances.
+                if (distance >= bestDistance || !MatchesPortableOwner(candidate, identity)) continue;
                 best = candidate;
                 bestDistance = distance;
             }

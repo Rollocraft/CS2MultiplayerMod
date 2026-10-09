@@ -13,7 +13,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
     {
         /// <summary>
         /// A same-prefab object (or one spawned this frame) with the same replay identity within
-        /// <see cref="DuplicateRadiusSq"/>, or at the exact transform. Snapshot once per realizing frame.
+        /// <see cref="DuplicateRadiusSq"/>, or at the exact transform.
         /// </summary>
         private bool AlreadyStandsAt(ObjectPlacementCommand command, Entity prefab,
             float3 position, quaternion rotation)
@@ -37,50 +37,61 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 return true;
             }
 
-            if (!_dupSnapshotTaken)
+            // The neighbourhood from the static search tree; a city-wide copy per realizing frame cost tens of
+            // milliseconds in a large city.
+            var near = new NativeList<Entity>(32, Allocator.Temp);
+            try
             {
-                _dupEntities = _liveStaticObjects.ToEntityArray(Allocator.Temp);
-                _dupTransforms = _liveStaticObjects.ToComponentDataArray<global::Game.Objects.Transform>(Allocator.Temp);
-                _dupPrefabs = _liveStaticObjects.ToComponentDataArray<PrefabRef>(Allocator.Temp);
-                _dupSnapshotTaken = true;
-            }
-            for (int i = 0; i < _dupTransforms.Length; i++)
-            {
-                if (_dupPrefabs[i].m_Prefab != prefab) continue;
-                float3 p = _dupTransforms[i].m_Position;
-                if (math.distancesq(p.xz, position.xz) >= DuplicateRadiusSq ||
-                    math.abs(p.y - position.y) > DuplicateMaxDy) continue;
-
-                Entity candidate = _dupEntities[i];
-                bool attached = EntityManager.HasComponent<global::Game.Objects.Attached>(candidate);
-                if ((command.AttachKind != ObjectAttachKind.None) != attached) continue;
-                if (attached)
+                _objectSearch.CollectNear(position, PortableObjectSearchRadius, near);
+                for (int i = 0; i < near.Length; i++)
                 {
-                    Entity parent = EntityManager
-                        .GetComponentData<global::Game.Objects.Attached>(candidate).m_Parent;
-                    bool parentMatchesKind = parent != Entity.Null && EntityManager.Exists(parent) &&
-                        (command.AttachKind == ObjectAttachKind.NetNode
-                            ? EntityManager.HasComponent<global::Game.Net.Node>(parent)
-                            : EntityManager.HasComponent<global::Game.Net.Edge>(parent));
-                    if (!parentMatchesKind) continue;
+                    Entity candidate = near[i];
+                    if (!EntityManager.Exists(candidate) ||
+                        !EntityManager.HasComponent<global::Game.Objects.Static>(candidate) ||
+                        !EntityManager.HasComponent<global::Game.Objects.Transform>(candidate) ||
+                        !EntityManager.HasComponent<PrefabRef>(candidate) ||
+                        EntityManager.HasComponent<global::Game.Tools.Temp>(candidate) ||
+                        EntityManager.HasComponent<Owner>(candidate) ||
+                        EntityManager.HasComponent<Deleted>(candidate) ||
+                        EntityManager.GetComponentData<PrefabRef>(candidate).m_Prefab != prefab) continue;
+
+                    global::Game.Objects.Transform transform =
+                        EntityManager.GetComponentData<global::Game.Objects.Transform>(candidate);
+                    float3 p = transform.m_Position;
+                    if (math.distancesq(p.xz, position.xz) >= DuplicateRadiusSq ||
+                        math.abs(p.y - position.y) > DuplicateMaxDy) continue;
+
+                    bool attached = EntityManager.HasComponent<global::Game.Objects.Attached>(candidate);
+                    if ((command.AttachKind != ObjectAttachKind.None) != attached) continue;
+                    if (attached)
+                    {
+                        Entity parent = EntityManager
+                            .GetComponentData<global::Game.Objects.Attached>(candidate).m_Parent;
+                        bool parentMatchesKind = parent != Entity.Null && EntityManager.Exists(parent) &&
+                            (command.AttachKind == ObjectAttachKind.NetNode
+                                ? EntityManager.HasComponent<global::Game.Net.Node>(parent)
+                                : EntityManager.HasComponent<global::Game.Net.Edge>(parent));
+                        if (!parentMatchesKind) continue;
+                    }
+
+                    float rotationDot = attached ? 1f : math.abs(math.dot(
+                        math.normalizesafe(transform.m_Rotation.value,
+                            new float4(0f, 0f, 0f, 1f)), rotation.value));
+                    if (math.distancesq(p, position) <= ExactDuplicateDistanceSq &&
+                        rotationDot >= 0.99999f) return true;
+
+                    // Proximity alone is not a replay; without a seed, keep the command.
+                    if (!EntityManager.HasComponent<PseudoRandomSeed>(candidate) ||
+                        unchecked((ushort)EntityManager
+                            .GetComponentData<PseudoRandomSeed>(candidate).m_Seed) !=
+                        unchecked((ushort)command.RandomSeed)) continue;
+
+                    // Attachment can rotate a prop; free-standing ones must also match orientation.
+                    if (!attached && rotationDot < 0.9999f) continue;
+                    return true;
                 }
-
-                float rotationDot = attached ? 1f : math.abs(math.dot(
-                    math.normalizesafe(_dupTransforms[i].m_Rotation.value,
-                        new float4(0f, 0f, 0f, 1f)), rotation.value));
-                if (math.distancesq(p, position) <= ExactDuplicateDistanceSq &&
-                    rotationDot >= 0.99999f) return true;
-
-                // Proximity alone is not a replay; without a seed, keep the command.
-                if (!EntityManager.HasComponent<PseudoRandomSeed>(candidate) ||
-                    unchecked((ushort)EntityManager
-                        .GetComponentData<PseudoRandomSeed>(candidate).m_Seed) !=
-                    unchecked((ushort)command.RandomSeed)) continue;
-
-                // Attachment can rotate a prop; free-standing ones must also match orientation.
-                if (!attached && rotationDot < 0.9999f) continue;
-                return true;
             }
+            finally { near.Dispose(); }
             return false;
         }
 

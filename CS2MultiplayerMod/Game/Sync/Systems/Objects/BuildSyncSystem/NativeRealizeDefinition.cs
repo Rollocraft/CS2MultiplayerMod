@@ -163,8 +163,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         private Entity FindEquivalentPlacedObject(Entity prefab, ObjectDefinitionIntent source,
             int randomSeed, PortableEntityRef identity)
         {
-            List<Entity> candidates = Candidates(_objectCandidates, _portableObjects, prefab);
             float3 position = new float3(source.PosX, source.PosY, source.PosZ);
+            // A replay stands where it was placed, so the search tree's neighbourhood is enough.
+            List<Entity> candidates = PortableObjectsNear(prefab, position);
             float4 rotation = math.normalizesafe(new float4(source.RotX, source.RotY,
                     source.RotZ, source.RotW),
                 new float4(0f, 0f, 0f, 1f));
@@ -173,12 +174,10 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             for (int i = 0; i < candidates.Count; i++)
             {
                 Entity candidate = candidates[i];
-                if (!MatchesPortableOwner(candidate, identity)) continue;
-
                 global::Game.Objects.Transform transform = EntityManager
                     .GetComponentData<global::Game.Objects.Transform>(candidate);
                 float distance = math.distancesq(transform.m_Position, position);
-                if (distance >= bestDistance) continue;
+                if (distance >= bestDistance || !MatchesPortableOwner(candidate, identity)) continue;
 
                 // Attachment can rotate the instance; orientation only counts when unattached.
                 bool attached = EntityManager.HasComponent<global::Game.Objects.Attached>(candidate);

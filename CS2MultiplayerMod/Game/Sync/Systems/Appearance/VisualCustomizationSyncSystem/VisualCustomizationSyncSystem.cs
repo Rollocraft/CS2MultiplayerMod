@@ -207,11 +207,13 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             _paletteSystem = World.GetOrCreateSystemManaged<MeshColorPaletteSystem>();
             _endFrameBarrier = World.GetOrCreateSystemManaged<EndFrameBarrier>();
 
+            // Plants carry no editable color (TryReadState rejects them), and a large city re-batches
+            // growing trees every frame; leave them out at the chunk level.
             _batchColorQuery = GetEntityQuery(new EntityQueryDesc
             {
                 All = SyncQuery.ReadOnly<BatchesUpdated, CustomMeshColor, MeshColor, PrefabRef,
                     Transform>(),
-                None = SyncQuery.ReadOnly<Temp, Deleted>(),
+                None = SyncQuery.ReadOnly<Temp, Deleted, global::Game.Objects.Plant>(),
                 Options = EntityQueryOptions.IgnoreComponentEnabledState,
             });
 

@@ -24,7 +24,7 @@ The joining player must enter the host's password exactly; it is case-sensitive.
 
 Possible internal detail: `Public direct hosting requires a server password of at least 8 characters.`
 
-A Direct Connection host that is not LAN Only accepts connections from the internet, and everyone who joins downloads a copy of the city. Hosting therefore stops before anything is opened. Set a server password of at least 8 characters on the Host tab, switch LAN Only on, or host over [Steam Relay](steam-relay.md), which needs no password.
+A Direct Connection host that is not LAN Only accepts connections from the internet, and everyone who joins downloads a copy of the city. Hosting therefore stops before anything is opened. Set a server password of at least 8 characters (on the main menu's Host Game screen, in the in-game multiplayer panel or on the Host tab of the options), switch LAN Only on, or host over [Steam Relay](steam-relay.md), which needs no password.
 
 ### Your multiplayer mod versions do not match
 

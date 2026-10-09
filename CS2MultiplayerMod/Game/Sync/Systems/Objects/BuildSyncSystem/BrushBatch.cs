@@ -2,6 +2,7 @@ using System.Collections.Generic;
 using Game.Common;
 using Game.Objects;
 using Game.Prefabs;
+using Game.Tools;
 using Unity.Entities;
 using Unity.Mathematics;
 using CS2MultiplayerMod.Core.Diagnostics;
@@ -9,6 +10,7 @@ using CS2MultiplayerMod.Core.Protocol.Messages;
 using CS2MultiplayerMod.Core.Session;
 using CS2MultiplayerMod.Game.Sync.Commands;
 using CS2MultiplayerMod.Game.Diagnostics;
+using CS2MultiplayerMod.Game.Sync.Infrastructure;
 
 namespace CS2MultiplayerMod.Game.Sync.Systems
 {
@@ -19,6 +21,31 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             ObjectPlacementBatchCommand.MaxPlacements;
         private int _rzFrameBatchedObjects;
         private bool _suppressBatchedObjectDetail;
+
+        /// <summary>
+        /// The object brush laying or removing independent top-level objects only. Such a stroke publishes its
+        /// committed result (the trees here, removals through DeleteSync's batch) instead of its graph: the graph
+        /// marks every tree Optional, which a receiver can only honour through one serialized native transaction
+        /// per brushed frame. Anything owned, attached or lifecycle-bound keeps the native graph.
+        /// </summary>
+        private bool IsLocalObjectBrushStroke(List<ObjectToolDefinitionIntent> definitions)
+        {
+            ObjectToolSystem tool = _toolSystem != null ? _toolSystem.activeTool as ObjectToolSystem : null;
+            if (tool == null || tool.actualMode != ObjectToolSystem.Mode.Brush ||
+                definitions == null || definitions.Count == 0) return false;
+
+            for (int i = 0; i < definitions.Count; i++)
+            {
+                ObjectToolDefinitionIntent definition = definitions[i];
+                if (!ObjectBrushCapture.IsIndependentObjectDefinition(definition, allowOptional: true))
+                    return false;
+                if (definition.PrefabIsNull) continue;
+                if (!_prefabIndex.TryResolve(definition.PrefabName, out Entity prefab) ||
+                    IsSimulationOnlyPlacementPrefab(prefab) ||
+                    RequiresCompleteObjectLifecycle(prefab)) return false;
+            }
+            return true;
+        }
 
         private bool TryCaptureObjectBrushPlacements(MultiplayerSession session,
             List<Entity> created)

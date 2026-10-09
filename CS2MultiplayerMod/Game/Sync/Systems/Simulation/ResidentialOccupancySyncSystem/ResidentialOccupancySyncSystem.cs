@@ -54,6 +54,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         private const int MaxTrackedHouseholdChecksPerUpdate = 1024;
         private const int MaxTrackedCitizenChecksPerUpdate = 2048;
         private const long DepartureRetentionMs = 900000;
+        /// <summary>Executor ticks between full MovingAway sweeps; the others read changed chunks only.</summary>
+        private const int DepartureScansPerSweep = 64;
         private const int MaxMoveInFinalizationsPerUpdate = 256;
         private const int MaxPendingRetriesPerPump = 128;
         private const long ResolveRetryMs = PropertySyncLimits.ResolveRetryMs;
@@ -147,6 +149,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         private EntityQuery _bootstrapCitizens;
         private EntityQuery _unreachableHouseholds;
         private EntityQuery _departingHouseholds;
+        private bool _departureSweepDue = true;
+        private int _departureScansSinceSweep;
         private EntityQuery _clientPropertySeekers;
         private EntityQuery _renterUpdates;
         private EntityQuery _prefabs;
