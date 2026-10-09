@@ -31,7 +31,9 @@ Which address you share depends on where the other players are:
 | Over the internet, using IPv6 | Your IPv6 address, shown in the log when hosting starts. See [IPv6](#ipv6) |
 
 Session settings live in the multiplayer panel while you play, and in the mod options
-before you start: port, password, player limit, LAN Only and player approval.
+before you start: port, password, player limit, LAN Only and player approval. Port, password
+and LAN Only are also on the Host Game screen of the main menu once Direct Connection is
+selected.
 
 ![](assets/img/ui-session-panel-stopped.webp)
 

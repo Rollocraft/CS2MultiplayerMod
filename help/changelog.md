@@ -32,6 +32,7 @@ This update expands the regular Host Game controls, improves synchronization for
 * Fixed fires appearing in different places for each player: every game used to roll its own fires, so a burning building on the host did not burn for anyone else.
 * Fixed houses and whole areas burning down for one player while they still stood for the host, and then reappearing after a world sync. Each game decided on its own whether a fire destroyed a building, and a player whose fire engines arrived later than the host's lost buildings the host saved. Only the host's game decides that now.
 * Statistics counters such as deaths, births and mail no longer creep above the host's numbers on the other players' games over time.
+* The Direct Connection host screen in the main menu now has Port, Password and LAN Only fields. Before, it refused to host without a password but offered nowhere to type one. Both host screens now show how many password characters are still missing, and the in-game panel clears the password error as soon as the password is long enough.
 
 * Object and vegetation brush display footprints are no longer mistaken for terrain edits, avoiding rejected commands while the actual objects synchronize separately.
 * Household income is now corrected immediately after the local game recalculates it, preventing clients from consuming stale residential-economy values.

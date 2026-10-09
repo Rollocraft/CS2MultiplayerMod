@@ -165,13 +165,31 @@ namespace CS2MultiplayerMod.Game
         /// </summary>
         public bool RefuseForPublicPassword(Setting settings)
         {
-            if (settings == null || settings.HostTransport() != TransportMode.Direct || settings.LanOnly) return false;
-            if ((settings.HostPassword ?? "").Length >= MultiplayerConfig.MinPublicPasswordLength) return false;
+            if (!PublicPasswordMissing(settings)) return false;
 
             _lastFault = MultiplayerSession.PublicPasswordRequired;
             _log.Warn(LogTopic.Session, "Cannot host: " + _lastFault +
                 " Set one, switch LAN Only on, or host over Steam Relay.");
             return true;
+        }
+
+        /// <summary>Public direct hosting with a password shorter than the session accepts.</summary>
+        public static bool PublicPasswordMissing(Setting settings)
+        {
+            if (settings == null || settings.HostTransport() != TransportMode.Direct || settings.LanOnly) return false;
+            return (settings.HostPassword ?? "").Length < MultiplayerConfig.MinPublicPasswordLength;
+        }
+
+        /// <summary>
+        /// Drops a public-password refusal once the host settings satisfy it, so the hub does not keep
+        /// showing the error after the player fixed it.
+        /// </summary>
+        public void ClearResolvedPublicPasswordFault(Setting settings)
+        {
+            if (_session.Role != SessionRole.None) return;
+            if (!string.Equals(_lastFault, MultiplayerSession.PublicPasswordRequired, StringComparison.Ordinal))
+                return;
+            if (!PublicPasswordMissing(settings)) _lastFault = null;
         }
 
         /// <summary>The full version, plus the compared release part when they differ, and the commit.</summary>
