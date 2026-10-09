@@ -358,6 +358,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             if (_hostIdsByHousehold.TryGetValue(household, out ulong reverse) && reverse == householdId)
                 _hostIdsByHousehold.Remove(household);
             _arrivalSources.Remove(household);
+            _settledHouseholds.Remove(household);
         }
 
         private void RemoveCitizenBinding(ulong citizenId, Entity citizen)

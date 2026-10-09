@@ -61,6 +61,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         /// <summary>Recorded apart from the capped list, so the property is never marked settled.</summary>
         private void ScheduleReapply(Entity property)
         {
+            _reapplySignals++;
             _reapplyRequested.Add(property);
             if (_reapply.Count >= MaxDirtyProperties) return;
             _reapply.Add(property);

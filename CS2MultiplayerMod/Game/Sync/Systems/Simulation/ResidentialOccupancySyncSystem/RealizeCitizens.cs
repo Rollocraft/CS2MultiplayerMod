@@ -13,9 +13,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 {
     public partial class ResidentialOccupancySyncSystem
     {
-        private void ApplyCitizens(Entity household, Entity property, OccupancyHousehold wanted)
+        private bool ApplyCitizens(Entity household, Entity property, OccupancyHousehold wanted)
         {
-            if (!EntityManager.HasBuffer<HouseholdCitizen>(household)) return;
+            if (!EntityManager.HasBuffer<HouseholdCitizen>(household)) return false;
             DedupeCitizens(household);
             // Snapshot first: a structural change invalidates buffer handles.
             _memberScratch.Clear();
@@ -78,7 +78,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             }
 
             // Remove nobody until every desired identity is present, or a budget boundary empties the family.
-            if (settling || missingWanted) return;
+            if (settling || missingWanted) return false;
             for (int i = _memberScratch.Count - 1; i >= 0; i--)
             {
                 Entity citizen = _memberScratch[i];
@@ -97,6 +97,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 EntityManager.AddComponent<Deleted>(citizen);
                 _removedCitizens++;
             }
+            return true;
         }
 
         private Entity FindBootstrapCitizen(OccupancyCitizen wanted)
@@ -274,6 +275,25 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             ApplyHealthProblem(citizen, wanted);
         }
 
+        /// <summary>The resident fields a page changes while the roster's structure stays the same.</summary>
+        private void ApplyCitizenVitals(OccupancyHousehold wanted)
+        {
+            for (int i = 0; i < wanted.Citizens.Length; i++)
+            {
+                OccupancyCitizen desired = wanted.Citizens[i];
+                if (!IsCitizenDesiredHere(desired.CitizenId, wanted.HouseholdId) ||
+                    !TryResolveCitizen(desired.CitizenId, out Entity citizen)) continue;
+                Citizen data = EntityManager.GetComponentData<Citizen>(citizen);
+                if (data.m_Health == desired.Health && data.m_WellBeing == desired.WellBeing &&
+                    data.m_UnemploymentCounter == desired.UnemploymentCounter) continue;
+                data.m_Health = desired.Health;
+                data.m_WellBeing = desired.WellBeing;
+                data.m_UnemploymentCounter = desired.UnemploymentCounter;
+                EntityManager.SetComponentData(citizen, data);
+                _rewrittenCitizens++;
+            }
+        }
+
         /// <summary>
         /// Health problems are lifecycle drawn from RandomSeed.Next, so presence and flags follow the host;
         /// local event and request handles are kept.
@@ -379,7 +399,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             }
         }
 
-        private void ApplyPets(Entity household, Entity property, OccupancyHousehold wanted)
+        /// <summary>True only when every pet already matched; any repair is verified on the next pass.</summary>
+        private bool ApplyPets(Entity household, Entity property, OccupancyHousehold wanted)
         {
             DedupePets(household);
             _memberScratch.Clear();
@@ -411,11 +432,11 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 else _claimedPets.Add(match);
             }
 
-            if (_claimedPets.Count == _memberScratch.Count && _missingPetPrefabs.Count == 0) return;
+            if (_claimedPets.Count == _memberScratch.Count && _missingPetPrefabs.Count == 0) return true;
             if (IsSettling(household))
             {
                 ScheduleReapply(property);
-                return;
+                return false;
             }
 
             for (int i = _memberScratch.Count - 1; i >= 0; i--)
@@ -433,6 +454,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 MarkSettling(household);
                 ScheduleReapply(property);
             }
+            return false;
         }
     }
 }

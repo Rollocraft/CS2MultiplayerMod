@@ -86,8 +86,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         }
 
         /// <summary>
-        /// Rolling change detector: at most <see cref="MaxPropertiesObservedPerUpdate"/> per update,
-        /// resuming where it stopped. A partition initializes and prunes only after one full lap.
+        /// Rolling change detector: at most <see cref="MaxPropertiesObservedPerUpdate"/> buildings or
+        /// <see cref="MaxCitizensObservedPerUpdate"/> residents per update, resuming where it stopped. A
+        /// partition initializes and prunes only after one full lap.
         /// </summary>
         private void ScanHostChanges(int bucket)
         {
@@ -102,14 +103,18 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 if (cursor >= properties.Length) { cursor = 0; wrapped = true; }
                 int examine = properties.Length < MaxPropertiesObservedPerUpdate
                     ? properties.Length : MaxPropertiesObservedPerUpdate;
-                for (int i = 0; i < examine; i++)
+                // The probe costs per resident: a dense partition resumes next update instead.
+                int observedCitizens = 0;
+                for (int i = 0; i < examine && observedCitizens < MaxCitizensObservedPerUpdate; i++)
                 {
                     if (cursor >= properties.Length) { cursor = 0; wrapped = true; }
                     Entity property = properties[cursor++];
                     _observedProperties++;
 
                     // The allocation-free probe; see CaptureProbe.cs.
-                    if (!TryHashProperty(property, out int hash)) continue;
+                    bool hashed = TryHashProperty(property, true, out int hash);
+                    observedCitizens += _probeCitizenIds.Count;
+                    if (!hashed) continue;
                     bool known = _hostObserved.TryGetValue(property, out HostObserved observed);
                     if (known && !observed.Stale && observed.Hash == hash)
                     {

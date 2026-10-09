@@ -193,6 +193,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             cached.WaterFulfilledFresh = wanted.WaterFulfilledFresh;
             cached.WaterFulfilledSewage = wanted.WaterFulfilledSewage;
             cached.Households = wanted.Households;
+            cached.ContentRevision = wanted.Revision;
             cached.LastReceived = wanted;
             cached.Bucket = bucket;
             cached.LastSeenSweep = sweepId;

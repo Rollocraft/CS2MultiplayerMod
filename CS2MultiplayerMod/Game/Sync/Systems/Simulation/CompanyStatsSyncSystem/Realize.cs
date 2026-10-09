@@ -132,6 +132,12 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             bool tenancyChanged = cached.Entry.HasTenant != entry.HasTenant ||
                                   !string.Equals(cached.Entry.CompanyPrefabName,
                                       entry.CompanyPrefabName, StringComparison.Ordinal);
+            if (entry.EmployeeRosterUnchanged && !tenancyChanged && !cached.Entry.EmployeeRosterUnchanged)
+            {
+                entry.Employees = cached.Entry.Employees;
+                entry.EmployeeRosterComplete = cached.Entry.EmployeeRosterComplete;
+                entry.EmployeeRosterUnchanged = false;
+            }
             cached.Entry = entry;
             cached.LastSeenSweep = sweepId;
             // Applied at the 16-frame boundary; the statistics rotation is 2,048 frames.
@@ -152,8 +158,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         }
 
         /// <summary>
-        /// Re-arms an incomplete apply for a few passes only: an unbound employee does not bind by asking
-        /// again, and the page that binds it marks the building dirty itself.
+        /// Re-arms an incomplete apply (prefab still converging, tenant not created yet) for a few passes
+        /// only; a later page marks the building dirty itself.
         /// </summary>
         private void RetryStateDirty(Entity property)
         {
@@ -631,7 +637,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
             ApplyResources(company, entry);
             ApplyTradeCosts(company, entry);
-            if (!ApplyEmployees(company, entry)) complete = false;
+            // Not part of completeness: an employee this peer cannot resolve (a commuter, say) stays
+            // unresolved until a later page, and retrying re-applied most of a large city several times.
+            ApplyEmployees(company, entry);
             return complete;
         }
 
@@ -708,11 +716,13 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         /// Sets Worker on the local residents occupancy mapped to host ids, so native commuting follows.
         /// An incomplete roster is additive only.
         /// </summary>
-        private bool ApplyEmployees(Entity company, CompanyStatsEntry entry)
+        private void ApplyEmployees(Entity company, CompanyStatsEntry entry)
         {
+            // No full roster seen yet for this building: the joined world already carries the host's.
+            if (entry.EmployeeRosterUnchanged) return;
             CompanyStatsEmployee[] wanted = entry.Employees;
             int wantedCount = wanted == null ? 0 : wanted.Length;
-            if (!EntityManager.HasBuffer<Employee>(company)) return wantedCount == 0;
+            if (!EntityManager.HasBuffer<Employee>(company)) return;
 
             _resolvedEmployeeScratch.Clear();
             _desiredEmployeeEntities.Clear();
@@ -783,7 +793,6 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     _clientEmployeeObserved.Clear();
                 _clientEmployeeObserved[company] = HashEmployeeBuffer(company);
             }
-            return allResolved;
         }
 
         private void RemoveEmployeeReference(Entity workplace, Entity citizen)

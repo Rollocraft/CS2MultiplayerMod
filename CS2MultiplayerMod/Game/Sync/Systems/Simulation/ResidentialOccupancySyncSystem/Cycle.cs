@@ -123,6 +123,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             RestoreAllStagedTransferLinks();
             _cache.Clear();
             _appliedState.Clear();
+            _settledHouseholds.Clear();
             _hostScanCadence.Reset();
             _repairScanCadence.Reset();
             _reapplyRequested.Clear();
@@ -150,7 +151,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             _bootstrapHouseholdIndex.Clear();
             _bootstrapCitizenIndex.Clear();
             _bootstrapIdentityIndexBuilt = false;
-            _unreachableSeen.Clear();
+            _unreachableCursor = 0;
             _localHouseholds.Clear();
             _localHouseholdMembers.Clear();
             _reconciledHouseholdIds.Clear();
@@ -287,7 +288,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     _unresolved + ", ambiguous=" + _ambiguous + ", expired=" + _expired + ", stale=" +
                     _stalePages + ", pruned=" + _pruned + ", cacheDropped=" + _cacheDrops +
                     ", appliedProperties=" + _appliedProperties +
-                    ", reconcileSkipped=" + _reconcileSkipped + ", unchangedProperties=" +
+                    ", reconcileSkipped=" + _reconcileSkipped +
+                    ", householdsSkipped=" + _householdsSkipped + ", unchangedProperties=" +
                     _unchangedProperties + ", households +" +
                     _createdHouseholds + "/-" + _retiredHouseholds + ", citizens +" +
                     _createdCitizens + "/-" + _removedCitizens + "/~" + _rewrittenCitizens +
@@ -309,6 +311,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             }
             _sentPages = _sentProperties = _priorityChanges = _priorityDrops = _captureSkips = 0;
             _observedProperties = _probeSkipped = _reconcileSkipped = _unchangedProperties = 0;
+            _householdsSkipped = 0;
             _sentBytes = 0;
             _receivedPages = _droppedPages = _resolved = _unresolved = _ambiguous = 0;
             _expired = _stalePages = _pruned = _cacheDrops = _appliedProperties = 0;

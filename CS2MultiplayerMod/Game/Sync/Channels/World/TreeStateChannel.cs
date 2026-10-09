@@ -255,7 +255,7 @@ namespace CS2MultiplayerMod.Game.Sync.Channels
                 em.HasComponent<Deleted>(entity) || em.HasComponent<Owner>(entity)) return;
 
             Entity prefab = em.GetComponentData<PrefabRef>(entity).m_Prefab;
-            string prefabName = _prefabSystem.GetPrefabName(prefab);
+            string prefabName = _prefabIndex.NameOf(prefab);
             Tree tree = em.GetComponentData<Tree>(entity);
             byte state = (byte)tree.m_State;
             if (string.IsNullOrEmpty(prefabName) || !TreeStateBatch.IsValidState(state)) return;

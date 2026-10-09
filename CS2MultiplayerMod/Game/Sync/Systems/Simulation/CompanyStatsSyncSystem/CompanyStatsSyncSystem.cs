@@ -134,6 +134,10 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         private Dictionary<Entity, int> _hostObserved => _propertyState.HostObserved;
         private readonly Dictionary<Entity, int> _hostEmployeeObserved =
             new Dictionary<Entity, int>();
+        // The roster each property last went out with in full; see TryOmitUnchangedRoster.
+        private readonly Dictionary<Entity, int> _hostRosterSent = new Dictionary<Entity, int>();
+        private readonly List<KeyValuePair<Entity, int>> _hostRosterPending =
+            new List<KeyValuePair<Entity, int>>();
         private bool[] _hostPartitionInitialized => _propertyState.HostPartitions.Initialized;
         private int[] _hostPartitionCursor => _propertyState.HostPartitions.Cursor;
         private Dictionary<PropertyIdentity, Entity> _priority => _propertyState.Priority;
@@ -184,6 +188,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         private long _lastStatsMs;
         private long _sentBytes;
         private int _sentPages, _sentEntries, _priorityChanges, _priorityDrops, _captureSkips;
+        private int _rostersOmitted;
         private int _receivedPages, _droppedPages, _resolved, _unresolved, _ambiguous, _expired;
         private int _appliedCompanies, _correctedFields, _correctedResources;
         private int _correctedCompanyData, _correctedTradeCosts, _correctedEmployees;
@@ -356,6 +361,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             _stateScanCadence.Reset();
             _tenancyScanCadence.Reset();
             _hostEmployeeObserved.Clear();
+            _hostRosterSent.Clear();
+            _hostRosterPending.Clear();
             _hostEfficiencyObserved.Clear();
             _clientEfficiencyObserved.Clear();
             _hostExtractorProduce.Clear();
@@ -451,7 +458,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                                        ", extractorSignals=" + _hostExtractorSignals +
                                        ", lifecycleSignals=" + _hostLifecycleSignals +
                                        ", queued=" + _priority.Count + ", dropped=" +
-                                       _priorityDrops + ", skipped=" + _captureSkips + ".");
+                                       _priorityDrops + ", skipped=" + _captureSkips +
+                                       ", rostersOmitted=" + _rostersOmitted + ".");
             else
             {
                 WriteToWorkplaceTopics("pages=" + _receivedPages + ", queueDropped=" +
@@ -480,6 +488,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             }
 
             _sentPages = _sentEntries = _priorityChanges = _priorityDrops = _captureSkips = 0;
+            _rostersOmitted = 0;
             _sentBytes = 0;
             _receivedPages = _droppedPages = _resolved = _unresolved = _ambiguous = _expired = 0;
             _appliedCompanies = _correctedFields = _correctedResources = 0;

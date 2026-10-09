@@ -36,6 +36,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         private const uint BootstrapRetirementGraceFrames = 8192;
 
         private const int MaxUnreachableRetiredPerUpdate = 8;
+        private const int MinUnreachableSlice = 256;
 
         private readonly Dictionary<Entity, uint> _settling = new Dictionary<Entity, uint>();
         private readonly Dictionary<Entity, uint> _unreachableSince = new Dictionary<Entity, uint>();
@@ -75,9 +76,28 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
         private readonly Dictionary<Entity, AppliedState> _appliedState =
             new Dictionary<Entity, AppliedState>();
+
+        /// <summary>What a full reconcile last left one family at; see <see cref="ReconcileHousehold"/>.</summary>
+        private struct SettledHousehold
+        {
+            public Entity Property;
+            public ulong Revision;
+            public int Structure;
+            public int Hash;
+            public uint VerifiedFrame;
+        }
+
+        /// <summary>One rolling rotation, the cadence at which the bucket walk re-verifies a settled building.</summary>
+        private const uint HouseholdVerifyFrames = UpdatePartitions * UpdateIntervalFrames;
+        private const int MaxSettledHouseholds = 262144;
+
+        private readonly Dictionary<Entity, SettledHousehold> _settledHouseholds =
+            new Dictionary<Entity, SettledHousehold>();
+        private int _reapplySignals;
+        private int _householdsSkipped;
         private readonly List<Entity> _settlingScratch = new List<Entity>();
         private readonly HashSet<Entity> _appliedThisUpdate = new HashSet<Entity>();
-        private readonly HashSet<Entity> _unreachableSeen = new HashSet<Entity>();
+        private int _unreachableCursor;
         private readonly List<Entity> _reapply = new List<Entity>();
         private readonly HashSet<Entity> _reapplyRequested = new HashSet<Entity>();
         private readonly List<int> _bootstrapKeyScratch = new List<int>();
@@ -93,6 +113,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             public int VehiclesCreated;
             public int HouseholdsRetired;
 
+            /// <summary>Residents hashed by the rolling walk; bounds the walk, not the applies.</summary>
+            public int CitizensVerified;
+
             public void Reset()
             {
                 Properties = 0;
@@ -100,6 +123,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 CitizensCreated = 0;
                 VehiclesCreated = 0;
                 HouseholdsRetired = 0;
+                CitizensVerified = 0;
             }
 
             public bool Exhausted =>

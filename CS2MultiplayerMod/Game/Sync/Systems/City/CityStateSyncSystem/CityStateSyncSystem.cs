@@ -50,7 +50,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
         private Observer _observer;
         private TreeStateChannel _treeStateChannel;
-        private long _lastSnapshotMs;
+        private readonly Dictionary<byte, long> _captureDueMs = new Dictionary<byte, long>();
+        private int _broadcasts;
         private long _lastEditScanMs;
         private long _lastLogMs;
         private int _applied;
@@ -155,6 +156,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 {
                     // Leaving a session invalidates everything we knew about the host's state.
                     if (_lastHostPayload.Count > 0) { _lastHostPayload.Clear(); _pendingEdits.Clear(); }
+                    _captureDueMs.Clear();
                     for (int i = 0; i < _pumped.Count; i++) _pumped[i].ResetPending();
                     SyncInbox.Clear(_incoming);
                     SyncInbox.Clear(_incomingEdits);
@@ -182,25 +184,41 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
         // ---- Host ------------------------------------------------------------
 
+        /// <summary>
+        /// Every channel once per interval, each at its own phase: the paged channels build a whole page
+        /// per capture, and capturing all of them in one frame was a once-a-second hitch in a large city.
+        /// </summary>
         private void CaptureAndBroadcast(MultiplayerSession session)
         {
             long now = _clock.ElapsedMilliseconds;
-            if (_lastSnapshotMs != 0 && now - _lastSnapshotMs < SnapshotIntervalMs) return;
-            _lastSnapshotMs = now;
-
-            int sent = 0;
+            int slot = 0;
             foreach (var pair in _channels)
             {
+                if (!_captureDueMs.TryGetValue(pair.Key, out long due))
+                    due = now + slot * SnapshotIntervalMs / _channels.Count;
+                slot++;
+                if (now < due)
+                {
+                    _captureDueMs[pair.Key] = due;
+                    continue;
+                }
+                // Keep the phase after a hitch so the channels never bunch up again.
+                do due += SnapshotIntervalMs; while (due <= now);
+                _captureDueMs[pair.Key] = due;
+
                 var writer = new NetworkWriter(64);
-                if (pair.Value.Capture(EntityManager, writer)) { session.SendState(pair.Key, writer.ToArray()); sent++; }
+                if (!pair.Value.Capture(EntityManager, writer)) continue;
+                session.SendState(pair.Key, writer.ToArray());
+                _broadcasts++;
             }
 
             // Heartbeat every ~30 s so the log shows state replication is alive without spam.
             if (now - _lastLogMs >= 30000)
             {
                 _lastLogMs = now;
-                SyncLog.Detail(LogTopic.City, "CityState: broadcasting " + sent +
-                    " channel(s)/snapshot to clients.");
+                SyncLog.Detail(LogTopic.City, "CityState: broadcast " + _broadcasts +
+                    " channel snapshot(s) to clients in the last 30s.");
+                _broadcasts = 0;
             }
         }
 

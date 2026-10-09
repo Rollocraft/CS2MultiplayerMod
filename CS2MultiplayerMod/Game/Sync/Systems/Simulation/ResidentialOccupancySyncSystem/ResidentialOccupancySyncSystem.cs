@@ -65,6 +65,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         // Urgent changes do not wait on them: renter events and the dirty queue act at once.
         private const int MaxPropertiesObservedPerUpdate = 128;
         private const int MaxCachedPropertiesWalkedPerUpdate = 256;
+        // Residents hashed per update, about 2 us each; only dense partitions ever reach them.
+        private const int MaxCitizensObservedPerUpdate = 8192;
+        private const int MaxCitizensVerifiedPerUpdate = 4096;
         // Departure records rotate within a reserved slice of each page, leaving room for the baseline.
         private const int HostDeparturesPerPage =
             ResidentialOccupancySnapshot.MaxDeparturesPerPage;
@@ -216,6 +219,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             public PropertyIdentity Identity;
             public Entity Prefab;
             public ulong Revision;
+
+            /// <summary>Revision that last replaced <see cref="Households"/>; unchanged pages keep it.</summary>
+            public ulong ContentRevision;
             public OccupancyProperty LastReceived;
             public byte ConstructionSpeed;
             public bool HasElectricityConsumer;

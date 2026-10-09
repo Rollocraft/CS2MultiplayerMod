@@ -39,13 +39,15 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 PageIndex = _capturePageIndex,
             };
             var identities = new HashSet<PropertyIdentity>();
+            _hostRosterPending.Clear();
             int estimatedBytes = AddPriorityEntries(snapshot, identities, 9);
 
             int index = _captureCursor;
             while (index < _hostSweepEntities.Length &&
                    snapshot.Entries.Count < CompanyStatsSnapshot.MaxEntries)
             {
-                if (!TryCaptureEntry(_hostSweepEntities[index], out CompanyStatsEntry entry))
+                Entity property = _hostSweepEntities[index];
+                if (!TryCaptureEntry(property, out CompanyStatsEntry entry))
                 {
                     _captureSkips++;
                     index++;
@@ -69,6 +71,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
                 identities.Add(entry.Identity);
                 snapshot.Entries.Add(entry);
+                NoteRosterQueued(property, entry, 0);
                 estimatedBytes += entryBytes;
                 index++;
             }
@@ -88,6 +91,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 _captureSkips++;
                 return false;
             }
+            CommitSentRosters();
 
             if (snapshot.EndOfSweep)
             {
@@ -160,6 +164,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     _priority.Remove(identity);
                     continue;
                 }
+                bool omitted = TryOmitUnchangedRoster(property, ref entry, out int roster);
                 int entryBytes = CompanyStatsSnapshot.EstimateEncodedBytes(entry);
                 // Leave room for the baseline to advance; the first entry that does not fit waits for the next page.
                 if (estimatedBytes + entryBytes > PriorityByteBudget)
@@ -170,6 +175,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 }
                 _priority.Remove(identity);
                 snapshot.Entries.Add(entry);
+                NoteRosterQueued(property, entry, roster);
+                if (omitted) _rostersOmitted++;
                 estimatedBytes += entryBytes;
                 added++;
             }
@@ -774,18 +781,60 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                                 costs[i].SellCost.GetHashCode()) * 16777619;
                         hash = (hash ^ costs[i].LastTransferRequestTime.GetHashCode()) * 16777619;
                     }
+                return (hash ^ RosterHash(entry)) * 16777619;
+            }
+        }
+
+        private static int RosterHash(CompanyStatsEntry entry)
+        {
+            unchecked
+            {
                 CompanyStatsEmployee[] employees = entry.Employees;
-                hash = (hash ^ (entry.EmployeeRosterComplete ? 1 : 0)) * 16777619;
+                int hash = ((int)2166136261 ^ (entry.EmployeeRosterComplete ? 1 : 0)) * 16777619;
                 hash = (hash ^ (employees == null ? 0 : employees.Length)) * 16777619;
                 if (employees != null)
                     for (int i = 0; i < employees.Length; i++)
                     {
-                        hash = (hash ^ employees[i].CitizenId.GetHashCode() ^ employees[i].Level ^
-                                employees[i].Shift ^ employees[i].LastCommuteTime.GetHashCode()) *
-                               16777619;
+                        hash = (hash ^ employees[i].CitizenId.GetHashCode()) * 16777619;
+                        hash = (hash ^ employees[i].Level) * 16777619;
+                        hash = (hash ^ employees[i].Shift) * 16777619;
+                        hash = (hash ^ employees[i].LastCommuteTime.GetHashCode()) * 16777619;
                     }
                 return hash;
             }
+        }
+
+        /// <summary>
+        /// A priority entry repeats within seconds while its roster, most of its bytes, rarely moves; an
+        /// unchanged one travels as a flag. Baseline entries always carry it, so a client that missed the
+        /// last full roster converges within a sweep.
+        /// </summary>
+        private bool TryOmitUnchangedRoster(Entity property, ref CompanyStatsEntry entry, out int roster)
+        {
+            roster = 0;
+            if (!entry.HasTenant || entry.Employees == null || entry.Employees.Length == 0) return false;
+            roster = RosterHash(entry);
+            if (!_hostRosterSent.TryGetValue(property, out int sent) || sent != roster) return false;
+            entry.Employees = null;
+            entry.EmployeeRosterComplete = false;
+            entry.EmployeeRosterUnchanged = true;
+            return true;
+        }
+
+        /// <summary>Recorded only once the page encodes: a roster nobody received was not sent.</summary>
+        private void NoteRosterQueued(Entity property, CompanyStatsEntry entry, int roster)
+        {
+            if (!entry.HasTenant || entry.EmployeeRosterUnchanged) return;
+            _hostRosterPending.Add(new KeyValuePair<Entity, int>(property,
+                roster != 0 ? roster : RosterHash(entry)));
+        }
+
+        private void CommitSentRosters()
+        {
+            if (_hostRosterSent.Count > 2 * MaxCachedProperties) _hostRosterSent.Clear();
+            for (int i = 0; i < _hostRosterPending.Count; i++)
+                _hostRosterSent[_hostRosterPending[i].Key] = _hostRosterPending[i].Value;
+            _hostRosterPending.Clear();
         }
 
         private void AdvanceHostSweep()

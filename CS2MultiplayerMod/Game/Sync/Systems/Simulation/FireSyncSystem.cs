@@ -106,7 +106,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 ComponentType.ReadWrite<global::Game.Common.Event>(), ComponentType.ReadWrite<Ignite>());
             _destroyArchetype = EntityManager.CreateArchetype(
                 ComponentType.ReadWrite<global::Game.Common.Event>(),
-                ComponentType.ReadWrite<global::Game.Events.Destroy>());
+                ComponentType.ReadWrite<global::Game.Objects.Destroy>());
 
             // Vehicles burn after accidents; they are local on every machine and keep their own fires.
             _burningQuery = GetEntityQuery(new EntityQueryDesc
@@ -126,7 +126,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             });
             _ignites = GetEntityQuery(ComponentType.ReadWrite<Ignite>(),
                 ComponentType.ReadOnly<global::Game.Common.Event>());
-            _destroys = GetEntityQuery(ComponentType.ReadOnly<global::Game.Events.Destroy>(),
+            _destroys = GetEntityQuery(ComponentType.ReadOnly<global::Game.Objects.Destroy>(),
                 ComponentType.ReadOnly<global::Game.Common.Event>());
 
             ListenFor(new[] { FireCommand.Id }, FireCommand.MaxEncodedBytes);
@@ -386,7 +386,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 {
                     Entity entity = destroys[i];
                     if (_ownDestroys.Contains(entity) || !EntityManager.Exists(entity)) continue;
-                    if (!IsFireBurnDown(EntityManager.GetComponentData<global::Game.Events.Destroy>(entity)))
+                    if (!IsFireBurnDown(EntityManager.GetComponentData<global::Game.Objects.Destroy>(entity)))
                         continue;
 
                     EntityManager.DestroyEntity(entity);
@@ -402,7 +402,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         }
 
         /// <summary>A destruction by fire of a building or tree; vehicles keep their local fires.</summary>
-        private bool IsFireBurnDown(global::Game.Events.Destroy destroy)
+        private bool IsFireBurnDown(global::Game.Objects.Destroy destroy)
         {
             Entity target = destroy.m_Object;
             if (target == Entity.Null || !EntityManager.Exists(target) ||
@@ -562,7 +562,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 fireEvent = LocalEvent(command.EventKey, eventPrefab);
 
             Entity destroy = EntityManager.CreateEntity(_destroyArchetype);
-            EntityManager.SetComponentData(destroy, new global::Game.Events.Destroy
+            EntityManager.SetComponentData(destroy, new global::Game.Objects.Destroy
             {
                 m_Object = target,
                 m_Event = fireEvent,

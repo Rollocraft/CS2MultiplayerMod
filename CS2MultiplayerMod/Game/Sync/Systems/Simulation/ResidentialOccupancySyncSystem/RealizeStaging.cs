@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using CS2MultiplayerMod.Game.Sync.Commands;
 using Game.Buildings;
@@ -170,13 +171,15 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
         /// <summary>
         /// The system that re-houses families is held on a client, so a homeless household emigrates
-        /// after a grace period.
+        /// after a grace period. The grace is timed in frames, so one slice per update still visits every
+        /// family once per rolling rotation.
         /// </summary>
         private void SweepUnreachableHouseholds()
         {
             if (_unreachableHouseholds.IsEmptyIgnoreFilter)
             {
                 if (_unreachableSince.Count > 0) _unreachableSince.Clear();
+                _unreachableCursor = 0;
                 return;
             }
             uint now = _simulationSystem.frameIndex;
@@ -184,12 +187,14 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             try
             {
                 households = _unreachableHouseholds.ToEntityArray(Allocator.Temp);
-                _unreachableSeen.Clear();
+                if (_unreachableCursor >= households.Length) _unreachableCursor = 0;
+                int slice = Math.Max(MinUnreachableSlice,
+                    (households.Length + UpdatePartitions - 1) / UpdatePartitions);
+                int end = Math.Min(households.Length, _unreachableCursor + slice);
                 int retired = 0;
-                for (int i = 0; i < households.Length; i++)
+                for (int i = _unreachableCursor; i < end; i++)
                 {
                     Entity household = households[i];
-                    _unreachableSeen.Add(household);
                     if (IsSettling(household)) continue;
                     bool bound = TryGetBoundHouseholdId(household, out ulong householdId);
                     if (bound && IsHouseholdDesiredUnhoused(householdId))
@@ -218,12 +223,14 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     retired++;
                     _retiredHouseholds++;
                 }
+                _unreachableCursor = end;
+                if (end < households.Length) return;
+                _unreachableCursor = 0;
                 PruneUnreachable();
             }
             finally
             {
                 if (households.IsCreated) households.Dispose();
-                _unreachableSeen.Clear();
             }
         }
 
@@ -233,7 +240,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             if (_unreachableSince.Count == 0) return;
             _settlingScratch.Clear();
             foreach (KeyValuePair<Entity, uint> pair in _unreachableSince)
-                if (!_unreachableSeen.Contains(pair.Key)) _settlingScratch.Add(pair.Key);
+                if (!EntityManager.Exists(pair.Key) ||
+                    !_unreachableHouseholds.MatchesIgnoreFilter(pair.Key))
+                    _settlingScratch.Add(pair.Key);
             for (int i = 0; i < _settlingScratch.Count; i++)
                 _unreachableSince.Remove(_settlingScratch[i]);
             _settlingScratch.Clear();

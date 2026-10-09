@@ -61,6 +61,59 @@ namespace CS2MultiplayerMod.Game.Sync.Commands
             left.UnemploymentCounter == right.UnemploymentCounter &&
             Same(left.NameIndices, right.NameIndices);
 
+        /// <summary>
+        /// What a full household reconcile acts on, minus the economy and resident vitals a client writes
+        /// directly; equal hashes let it skip the rest.
+        /// </summary>
+        internal static int StructureHash(in OccupancyHousehold household)
+        {
+            unchecked
+            {
+                int hash = Mix((int)2166136261, household.HouseholdId.GetHashCode());
+                hash = Mix(hash, Text(household.PrefabName));
+                hash = Mix(hash, household.Flags);
+                hash = Mix(hash, household.Departing ? 1 : 0);
+                hash = Mix(hash, household.NameIndices);
+                hash = Mix(hash, household.Pets);
+                hash = Mix(hash, household.OwnedVehicles);
+                OccupancyCitizen[] citizens = household.Citizens;
+                int count = citizens == null ? -1 : citizens.Length;
+                hash = Mix(hash, count);
+                for (int i = 0; i < count; i++)
+                {
+                    hash = Mix(hash, citizens[i].CitizenId.GetHashCode());
+                    hash = Mix(hash, Text(citizens[i].PrefabName));
+                    hash = Mix(hash, citizens[i].State);
+                    hash = Mix(hash, citizens[i].PseudoRandom);
+                    hash = Mix(hash, citizens[i].BirthDay);
+                    hash = Mix(hash, citizens[i].HealthProblem);
+                    hash = Mix(hash, citizens[i].Employment);
+                    hash = Mix(hash, citizens[i].NameIndices);
+                }
+                return hash;
+            }
+        }
+
+        private static int Mix(int hash, int value) => unchecked((hash ^ value) * 16777619);
+
+        private static int Text(string value) => value == null ? -1 : value.GetHashCode();
+
+        private static int Mix(int hash, int[] values)
+        {
+            if (values == null) return Mix(hash, -1);
+            hash = Mix(hash, values.Length);
+            for (int i = 0; i < values.Length; i++) hash = Mix(hash, values[i]);
+            return hash;
+        }
+
+        private static int Mix(int hash, string[] values)
+        {
+            if (values == null) return Mix(hash, -1);
+            hash = Mix(hash, values.Length);
+            for (int i = 0; i < values.Length; i++) hash = Mix(hash, Text(values[i]));
+            return hash;
+        }
+
         private static bool Same(int[] left, int[] right)
         {
             if (!SameLength(left, right)) return false;

@@ -37,7 +37,10 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
             int end = start + examine;
             int write = start;
-            for (int i = start; i < end; i++)
+            int i = start;
+            // Verification costs per resident, so a dense partition resumes next visit instead of
+            // stalling one frame.
+            for (; i < end && _budget.CitizensVerified < MaxCitizensVerifiedPerUpdate; i++)
             {
                 Entity property = entities[i];
                 if (!_cache.TryGetValue(property, out CachedProperty cached))
@@ -75,8 +78,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 }
                 ApplyOne(property);
             }
-            // Reconciling can append to this bucket: drop only the window's gap.
-            if (write < end) entities.RemoveRange(write, end - write);
+            // Reconciling can append to this bucket: drop only the examined gap.
+            if (write < i) entities.RemoveRange(write, i - write);
             _cacheBucketCursor[bucket] = write >= entities.Count ? 0 : write;
         }
 
@@ -132,12 +135,14 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         {
             if (!_appliedState.TryGetValue(property, out AppliedState state) ||
                 state.Revision != cached.Revision) return false;
-            return TryHashProperty(property, out int hash) && hash == state.Hash;
+            bool hashed = TryHashProperty(property, false, out int hash);
+            _budget.CitizensVerified += _probeCitizenIds.Count;
+            return hashed && hash == state.Hash;
         }
 
         private void NoteReconciled(Entity property, CachedProperty cached)
         {
-            if (!TryHashProperty(property, out int hash))
+            if (!TryHashProperty(property, false, out int hash))
             {
                 _appliedState.Remove(property);
                 return;
@@ -147,6 +152,61 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 Revision = cached.Revision,
                 Hash = hash,
             };
+        }
+
+        /// <summary>
+        /// Skips a family while its host structure is the one it last settled against and, re-checked once
+        /// per rolling rotation, its local state still hashes the same. Economy and resident vitals change on
+        /// nearly every page and are written directly. A building waiting for a free unit retries every
+        /// update; this keeps that retry from rewriting everyone already living there.
+        /// </summary>
+        private void ReconcileHousehold(Entity household, Entity property, CachedProperty cached,
+            OccupancyHousehold desired)
+        {
+            uint now = _simulationSystem.frameIndex;
+            if (_settledHouseholds.TryGetValue(household, out SettledHousehold settled) &&
+                settled.Property == property &&
+                (settled.Revision == cached.ContentRevision ||
+                 settled.Structure == OccupancyContentComparer.StructureHash(in desired)))
+            {
+                if (settled.Revision != cached.ContentRevision)
+                {
+                    ApplyHouseholdEconomy(household, property,
+                        DesiredHouseholdEconomy.From(desired, default(PropertyIdentity), 0));
+                    ApplyCitizenVitals(desired);
+                    settled.Revision = cached.ContentRevision;
+                    _settledHouseholds[household] = settled;
+                }
+                if (now - settled.VerifiedFrame < HouseholdVerifyFrames)
+                {
+                    _householdsSkipped++;
+                    return;
+                }
+                if (TryHashHousehold(household, out int current) && current == settled.Hash)
+                {
+                    settled.VerifiedFrame = now;
+                    _settledHouseholds[household] = settled;
+                    _householdsSkipped++;
+                    return;
+                }
+            }
+
+            int deferrals = _reapplySignals;
+            bool complete = ApplyHousehold(household, property, desired);
+            NotePlacedHousehold(cached, desired, household);
+            if (complete && deferrals == _reapplySignals && TryHashHousehold(household, out int hash))
+            {
+                if (_settledHouseholds.Count >= MaxSettledHouseholds) _settledHouseholds.Clear();
+                _settledHouseholds[household] = new SettledHousehold
+                {
+                    Property = property,
+                    Revision = cached.ContentRevision,
+                    Structure = OccupancyContentComparer.StructureHash(in desired),
+                    Hash = hash,
+                    VerifiedFrame = now,
+                };
+            }
+            else _settledHouseholds.Remove(household);
         }
 
         /// <summary>
@@ -202,8 +262,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 if (!_localHouseholdMembers.Contains(household) &&
                     !IsHouseholdAtProperty(household, property)) continue;
                 CancelUnauthorizedDeparture(household);
-                ApplyHousehold(household, property, desired);
-                NotePlacedHousehold(cached, desired, household);
+                ReconcileHousehold(household, property, cached, desired);
                 _reconciledHouseholdIds.Add(desired.HouseholdId);
             }
 
@@ -307,8 +366,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     if (IsHouseholdAtProperty(existing, property))
                     {
                         CancelUnauthorizedDeparture(existing);
-                        ApplyHousehold(existing, property, desired);
-                        NotePlacedHousehold(cached, desired, existing);
+                        ReconcileHousehold(existing, property, cached, desired);
                         continue;
                     }
                     if (free <= 0)

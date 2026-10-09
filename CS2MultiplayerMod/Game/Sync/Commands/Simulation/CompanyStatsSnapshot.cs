@@ -31,10 +31,12 @@ namespace CS2MultiplayerMod.Game.Sync.Commands
         private const int FlagEmployeeRosterComplete = 1 << 5;
         private const int FlagHasTaxPayer = 1 << 6;
         private const int FlagHasEfficiency = 1 << 7;
+        private const int FlagEmployeeRosterUnchanged = 1 << 8;
         private const int FlagsMask = FlagHasTenant | FlagHasProfitability |
                                       FlagHasServiceAvailable | FlagHasLodgingProvider |
                                       FlagHasWorkProvider | FlagEmployeeRosterComplete |
-                                      FlagHasTaxPayer | FlagHasEfficiency;
+                                      FlagHasTaxPayer | FlagHasEfficiency |
+                                      FlagEmployeeRosterUnchanged;
 
         private static readonly CompanyStatsResource[] EmptyResources =
             new CompanyStatsResource[0];
@@ -388,7 +390,7 @@ namespace CS2MultiplayerMod.Game.Sync.Commands
                 return !entry.HasProfitability && !entry.HasServiceAvailable &&
                        !entry.HasLodgingProvider && !entry.HasWorkProvider &&
                        !entry.EmployeeRosterComplete && !entry.HasTaxPayer &&
-                       !entry.HasEfficiency &&
+                       !entry.HasEfficiency && !entry.EmployeeRosterUnchanged &&
                        string.IsNullOrEmpty(entry.CompanyPrefabName) &&
                        string.IsNullOrEmpty(entry.BrandPrefabName) &&
                        string.IsNullOrEmpty(entry.CompanyCustomName) &&
@@ -426,6 +428,8 @@ namespace CS2MultiplayerMod.Game.Sync.Commands
             if (entry.HasTaxPayer &&
                 (!IsValidStat(entry.UntaxedIncome) || !IsValidStat(entry.AverageTaxRate) ||
                  !IsValidStat(entry.AverageTaxPaid))) return false;
+            if (entry.EmployeeRosterUnchanged &&
+                (entry.EmployeeRosterComplete || !IsEmpty(entry.Employees))) return false;
 
             return ValidateResources(entry.Resources) &&
                    ValidateTradeCosts(entry.TradeCosts) &&
@@ -504,6 +508,7 @@ namespace CS2MultiplayerMod.Game.Sync.Commands
             if (entry.EmployeeRosterComplete) flags |= FlagEmployeeRosterComplete;
             if (entry.HasTaxPayer) flags |= FlagHasTaxPayer;
             if (entry.HasEfficiency) flags |= FlagHasEfficiency;
+            if (entry.EmployeeRosterUnchanged) flags |= FlagEmployeeRosterUnchanged;
             return flags;
         }
 
@@ -519,6 +524,7 @@ namespace CS2MultiplayerMod.Game.Sync.Commands
             entry.EmployeeRosterComplete = (flags & FlagEmployeeRosterComplete) != 0;
             entry.HasTaxPayer = (flags & FlagHasTaxPayer) != 0;
             entry.HasEfficiency = (flags & FlagHasEfficiency) != 0;
+            entry.EmployeeRosterUnchanged = (flags & FlagEmployeeRosterUnchanged) != 0;
         }
 
         private static bool IsValidStat(int value) =>
@@ -656,6 +662,12 @@ namespace CS2MultiplayerMod.Game.Sync.Commands
         /// </summary>
         public bool EmployeeRosterComplete;
         public CompanyStatsEmployee[] Employees;
+
+        /// <summary>
+        /// The roster is the one the host last sent in full, so none travels: keep the cached copy, or
+        /// leave employment local when there is none.
+        /// </summary>
+        public bool EmployeeRosterUnchanged;
 
         public PropertyIdentity Identity =>
             new PropertyIdentity(PrefabName, AnchorX, AnchorY, AnchorZ);

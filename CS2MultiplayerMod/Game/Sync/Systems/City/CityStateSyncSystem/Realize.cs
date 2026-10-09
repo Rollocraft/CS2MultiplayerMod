@@ -11,7 +11,6 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         /// <summary>Apply edits clients submitted; the snapshot that follows confirms them.</summary>
         private void ApplyIncomingEdits()
         {
-            bool any = false;
             while (_incomingEdits.TryDequeue(out StateEditMessage edit))
             {
                 if (!_channels.TryGetValue(edit.ChannelId, out IStateChannel channel) ||
@@ -25,7 +24,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 try
                 {
                     channel.Apply(EntityManager, new NetworkReader(edit.Data));
-                    any = true;
+                    // Confirm to everyone right away instead of waiting out the interval.
+                    _captureDueMs[edit.ChannelId] = _clock.ElapsedMilliseconds;
                     SyncLog.Detail(LogTopic.City, "CityState: player " + edit.OriginPlayerId +
                         " edited channel " + edit.ChannelId + "; applied and broadcasting.");
                 }
@@ -35,9 +35,6 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                         edit.ChannelId + ": " + ex.Message);
                 }
             }
-
-            // Confirm edits to everyone right away instead of waiting out the interval.
-            if (any) _lastSnapshotMs = 0;
         }
 
         private void ApplyIncoming()

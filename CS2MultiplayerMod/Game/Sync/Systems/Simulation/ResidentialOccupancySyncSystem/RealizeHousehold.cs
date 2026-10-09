@@ -190,7 +190,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             return false;
         }
 
-        private void ApplyHousehold(Entity household, Entity property, OccupancyHousehold wanted)
+        /// <summary>False while anything is still outstanding: a missing member, pet or settle window.</summary>
+        private bool ApplyHousehold(Entity household, Entity property, OccupancyHousehold wanted)
         {
             if (ResolvePrefab<HouseholdData>(wanted.PrefabName, out Entity prefab) &&
                 EntityManager.HasComponent<PrefabRef>(household) &&
@@ -211,9 +212,10 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 DesiredHouseholdEconomy.From(wanted, default(PropertyIdentity), 0));
 
             ApplyNameIndices(household, wanted.NameIndices);
-            ApplyCitizens(household, property, wanted);
-            ApplyPets(household, property, wanted);
+            bool complete = ApplyCitizens(household, property, wanted);
+            complete &= ApplyPets(household, property, wanted);
             ApplyOwnedVehicles(household, property, wanted);
+            return complete;
         }
     }
 }

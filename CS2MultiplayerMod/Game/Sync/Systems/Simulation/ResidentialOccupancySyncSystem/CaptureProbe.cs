@@ -20,8 +20,12 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         private readonly HashSet<ulong> _probeHouseholdIds = new HashSet<ulong>();
         private readonly HashSet<ulong> _probeCitizenIds = new HashSet<ulong>();
 
-        /// <summary>False means "no conclusion this pass"; the baseline sweep still carries the property.</summary>
-        private bool TryHashProperty(Entity property, out int hash)
+        /// <summary>
+        /// False means "no conclusion this pass"; the baseline sweep still carries the property. A client
+        /// passes <paramref name="foldEconomy"/> false: rent and income have their own writer-ordered
+        /// corrections there, and the local sim rewrites them between those.
+        /// </summary>
+        private bool TryHashProperty(Entity property, bool foldEconomy, out int hash)
         {
             hash = 0;
 
@@ -68,7 +72,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                         !EntityManager.HasBuffer<Resources>(renter)) return false;
                     if (householdCount >= ResidentialOccupancySnapshot.MaxHouseholdsPerProperty)
                         return false;
-                    if (!TryFoldHousehold(renter, rented, ref folded)) return false;
+                    if (!TryFoldHousehold(renter, rented, foldEconomy, ref folded)) return false;
                     householdCount++;
                 }
 
@@ -78,7 +82,24 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             }
         }
 
-        private bool TryFoldHousehold(Entity household, PropertyRenter rented, ref int folded)
+        /// <summary>One family alone, for the client's per-household reconcile gate.</summary>
+        private bool TryHashHousehold(Entity household, out int hash)
+        {
+            hash = 0;
+            if (!EntityManager.HasComponent<PropertyRenter>(household) ||
+                !EntityManager.HasComponent<PrefabRef>(household) ||
+                !EntityManager.HasBuffer<HouseholdCitizen>(household)) return false;
+            _probeHouseholdIds.Clear();
+            _probeCitizenIds.Clear();
+            int folded = unchecked((int)2166136261);
+            if (!TryFoldHousehold(household, EntityManager.GetComponentData<PropertyRenter>(household),
+                    false, ref folded)) return false;
+            hash = folded;
+            return true;
+        }
+
+        private bool TryFoldHousehold(Entity household, PropertyRenter rented, bool foldEconomy,
+            ref int folded)
         {
             ulong householdId = PackHostEntityId(household);
             if (householdId == 0 || !_probeHouseholdIds.Add(householdId)) return false;
@@ -96,11 +117,14 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 // Only bits a receiver installs; MovedIn is local on every peer.
                 folded = (folded ^ ((byte)data.m_Flags & HouseholdFlagMask)) * 16777619;
                 folded = (folded ^ (departing ? 1 : 0)) * 16777619;
-                folded = (folded ^ Clamp(rented.m_Rent, 0,
-                    ResidentialOccupancySnapshot.MaxRent)) * 16777619;
-                folded = (folded ^ Clamp(data.m_Income,
-                    -ResidentialOccupancySnapshot.MaxMoney,
-                    ResidentialOccupancySnapshot.MaxMoney)) * 16777619;
+                if (foldEconomy)
+                {
+                    folded = (folded ^ Clamp(rented.m_Rent, 0,
+                        ResidentialOccupancySnapshot.MaxRent)) * 16777619;
+                    folded = (folded ^ Clamp(data.m_Income,
+                        -ResidentialOccupancySnapshot.MaxMoney,
+                        ResidentialOccupancySnapshot.MaxMoney)) * 16777619;
+                }
                 folded = FoldNameIndices(folded, household);
 
                 DynamicBuffer<HouseholdCitizen> members =
