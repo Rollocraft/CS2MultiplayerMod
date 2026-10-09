@@ -19,7 +19,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
     /// </summary>
     public partial class CityStateSyncSystem : GameSystemBase
     {
-        /// <summary>How often the host publishes a fresh snapshot.</summary>
+        /// <summary>How often the host publishes a fresh snapshot of each channel.</summary>
         private const long SnapshotIntervalMs = 1000;
 
         /// <summary>How often a client compares its local editable state against the host's.</summary>
@@ -50,7 +50,11 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
         private Observer _observer;
         private TreeStateChannel _treeStateChannel;
-        private long _lastSnapshotMs;
+        // Each channel keeps the 1 s cadence on its own phase: captured together, the paged channels
+        // (occupancy, companies, rents, trees) stacked into one 30-40 ms host frame every second.
+        private readonly Dictionary<byte, long> _channelDueMs = new Dictionary<byte, long>();
+        private readonly List<byte> _captureOrder = new List<byte>();
+        private int _broadcastSinceLog;
         private long _lastEditScanMs;
         private long _lastLogMs;
         private int _applied;
@@ -155,6 +159,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 {
                     // Leaving a session invalidates everything we knew about the host's state.
                     if (_lastHostPayload.Count > 0) { _lastHostPayload.Clear(); _pendingEdits.Clear(); }
+                    _captureOrder.Clear();
                     for (int i = 0; i < _pumped.Count; i++) _pumped[i].ResetPending();
                     SyncInbox.Clear(_incoming);
                     SyncInbox.Clear(_incomingEdits);
@@ -185,23 +190,44 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         private void CaptureAndBroadcast(MultiplayerSession session)
         {
             long now = _clock.ElapsedMilliseconds;
-            if (_lastSnapshotMs != 0 && now - _lastSnapshotMs < SnapshotIntervalMs) return;
-            _lastSnapshotMs = now;
+            if (_captureOrder.Count != _channels.Count) ScheduleChannelPhases(now);
 
-            int sent = 0;
-            foreach (var pair in _channels)
+            for (int i = 0; i < _captureOrder.Count; i++)
             {
+                byte channelId = _captureOrder[i];
+                if (now < _channelDueMs[channelId]) continue;
+                _channelDueMs[channelId] = now + SnapshotIntervalMs;
+
                 var writer = new NetworkWriter(64);
-                if (pair.Value.Capture(EntityManager, writer)) { session.SendState(pair.Key, writer.ToArray()); sent++; }
+                if (!_channels[channelId].Capture(EntityManager, writer)) continue;
+                session.SendState(channelId, writer.ToArray());
+                _broadcastSinceLog++;
             }
 
             // Heartbeat every ~30 s so the log shows state replication is alive without spam.
             if (now - _lastLogMs >= 30000)
             {
                 _lastLogMs = now;
-                SyncLog.Detail(LogTopic.City, "CityState: broadcasting " + sent +
-                    " channel(s)/snapshot to clients.");
+                SyncLog.Detail(LogTopic.City, "CityState: broadcast " + _broadcastSinceLog +
+                    " channel snapshot(s) to clients in the last 30s.");
+                _broadcastSinceLog = 0;
             }
+        }
+
+        /// <summary>Spreads the channels' first captures evenly over one interval.</summary>
+        private void ScheduleChannelPhases(long now)
+        {
+            _captureOrder.Clear();
+            _channelDueMs.Clear();
+            foreach (byte channelId in _channels.Keys) _captureOrder.Add(channelId);
+            for (int i = 0; i < _captureOrder.Count; i++)
+                _channelDueMs[_captureOrder[i]] = now + SnapshotIntervalMs * i / _captureOrder.Count;
+        }
+
+        /// <summary>The next capture of this channel runs on the coming frame.</summary>
+        private void CaptureChannelNow(byte channelId)
+        {
+            if (_channelDueMs.ContainsKey(channelId)) _channelDueMs[channelId] = 0;
         }
 
         // ---- Client ------------------------------------------------------------
