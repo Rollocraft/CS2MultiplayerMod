@@ -6,7 +6,7 @@ description: "Fixes for the problems players hit most often: joining, desyncs, c
 # Troubleshooting guide
 
 Having issues? This guide covers the problems players hit most often. Updated
-`2026-10-12` for version `1.7.1`.
+`2026-10-12` for version `0.1.7.1`.
 
 
 ## Pick your problem

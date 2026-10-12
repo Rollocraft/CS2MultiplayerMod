@@ -43,8 +43,8 @@ This list combines **official support and community multiplayer testing**.
 | 🟢 Works | Realistic Workplaces And Households | No multiplayer issues observed in the tested modset. | Janno |
 | 🟢 Works | Traffic Tool Essentials | No multiplayer issues observed in the tested modset. | Janno |
 | 🟢 Works | Official Region Packs | Official region packs such as the German and French packs were tested without problems. | J. M. S. |
-| 🟡 Partially works | Move It | Since 1.7.1, moving buildings, props and trees and road edits are synchronized once you let go. Objects with attached sub-objects are not synchronized yet. | J. M. S., Janno |
-| 🟡 Partially works | Node Controller | Since 1.7.1, road edits are synchronized when the edit ends. If the mod cannot tell which road was edited, it holds the edit instead of changing the wrong road. | DaStrobel, J. M. S., Janno |
+| 🟡 Partially works | Move It | Since 0.1.7.1, moving buildings, props and trees and road edits are synchronized once you let go. Objects with attached sub-objects are not synchronized yet. | J. M. S., Janno |
+| 🟡 Partially works | Node Controller | Since 0.1.7.1, road edits are synchronized when the edit ends. If the mod cannot tell which road was edited, it holds the edit instead of changing the wrong road. | DaStrobel, J. M. S., Janno |
 | 🟡 Partially works | Traffic Lights Enhancement | Works when used by the host. Changes become effective for clients after a resync. Non-host players cannot change intersection settings themselves. | DaStrobel |
 | 🟡 Partially works | CoPaste | Works for the host. Usage by non-host players can cause desyncs and may require a forced resync. | Tommy |
 | 🟡 Partially works | [529 Tiles](https://mods.paradoxplaza.com/mods/74328/Windows) | When using `Select initial starting tiles`, only the host can purchase the free starting tiles. Afterwards non-host players can purchase tiles normally. | Tommy |

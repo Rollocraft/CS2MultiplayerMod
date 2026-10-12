@@ -5,7 +5,7 @@ description: "What changed in each release of the mod: new features, sync work a
 
 # Changelog
 
-## Version 1.7.1 - Working on
+## Version 0.1.7.1 - 2026-10-12
 
 This update is mostly about performance in large cities. Hosts and clients both do far less work keeping a big city in sync, the host no longer stutters once a second, and painting trees no longer slows down the other players. It also adds Move It and Node Controller support, makes fires and traffic accidents the same for every player, adds IPv6 and more host controls, and fixes players being disconnected on slower Steam Relay connections.
 
@@ -61,7 +61,7 @@ This update is mostly about performance in large cities. Hosts and clients both 
 ### Quality of life
 
 * Milestone and unlock popups now close by themselves after 10 seconds in multiplayer, with a countdown bar, so an AFK player can no longer keep the whole session paused.
-* The Options page shows the mod version, including the build, at the top of the General tab. The read-only status rows were removed, since the in-game multiplayer panel shows the same information live.
+* The Options page shows the mod version at the top of the General tab. The read-only status rows were removed, since the in-game multiplayer panel shows the same information live.
 * The host's log records the mod build of every player who joins.
 
 ### Compatibility

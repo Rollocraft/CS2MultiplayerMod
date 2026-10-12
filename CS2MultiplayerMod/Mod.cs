@@ -68,10 +68,10 @@ namespace CS2MultiplayerMod
         /// </summary>
         internal static string BuildCommit => _buildCommit ?? (_buildCommit = ReadBuildCommit());
 
-        /// <summary>The options-screen version: released builds add the commit; local builds stamp and protocol.</summary>
+        /// <summary>The options-screen version: plain for released builds; local builds add stamp, commit and protocol.</summary>
         internal static string VersionLine =>
             BuildStamp.Length == 0
-                ? Version + " (" + BuildCommit + ")"
+                ? Version
                 : L10n.F(L10n.Key.VersionLineDev, Version, BuildStamp + " @" + BuildCommit,
                     ProtocolConstants.ProtocolVersion);
 
