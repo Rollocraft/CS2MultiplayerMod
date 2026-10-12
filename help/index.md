@@ -21,7 +21,7 @@ services, finances, progression, time and weather stay in sync while you build t
   <a class="card" href="steam-relay/">
     <span class="card__icon"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="14" width="20" height="8" rx="2"/><path d="M6.01 18H6"/><path d="M10.01 18H10"/><path d="M15 18h3"/><path d="M12 14V6"/><path d="M8 6h8"/><path d="M8 2v4"/><path d="M16 2v4"/></svg></span>
     <span class="card__title">Connection</span>
-    <p class="card__text">Steam Relay needs nothing but a join code. A direct connection needs an address and one TCP port.</p>
+    <p class="card__text">Steam Relay needs nothing but a join code. A direct connection needs an address and one TCP port, or a VPN such as Hamachi.</p>
     <span class="card__more">Pick a connection →</span>
   </a>
 

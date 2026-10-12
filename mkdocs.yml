@@ -42,6 +42,7 @@ nav:
   - Connection:
       - Steam Relay: steam-relay.md
       - Direct connection: direct-connection.md
+      - Hamachi and other VPNs: hamachi.md
       - Set up port forwarding: forwarding.md
       - Port forwarding problems: forwarding_troubleshoot.md
   - Changelog: changelog.md

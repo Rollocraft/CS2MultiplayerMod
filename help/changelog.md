@@ -7,71 +7,66 @@ description: "What changed in each release of the mod: new features, sync work a
 
 ## Version 1.7.1 - Working on
 
-This update expands the regular Host Game controls, improves synchronization for dense object-brush edits and compatible third-party mods, adds synchronization for Move It and Node Controller edits, strengthens residential economy correction, and prevents milestone popups from leaving an entire session paused when a player is away. It also fixes players being dropped from sessions on slower Steam Relay connections and makes terraforming, and roads built on terraformed ground, look the same for every player.
-
-### New
-
-* Added Approve Players and Simulation Sync to the normal Multiplayer > Host Game flow.
-* Added an Auto-Approve Steam Friends rule. Authenticated Steam friends may join immediately while everyone else still waits for host approval. This option is available for Steam Relay sessions only.
-* Added a client resync policy with three choices: Allow, Ask Host, and Host Only.
-* Ask Host now displays an in-game prompt containing the requesting player and reason, with Accept and Decline actions.
-* Added synchronization support for durable ECS component and buffer state used by compatible third-party mods.
-* Moving buildings, props and trees with Move It is now synchronized. The move is sent once, when the drag ends. Objects that carry dependent sub-objects are not synchronized yet; the log names them.
-* Road geometry edits made with Move It or Node Controller are now synchronized. The final shape is sent once the edit ends and is applied only to the exact road that was edited. If two roads match equally well, the edit is held instead of changing the wrong road.
-* Fires now start, spread and go out the same way for every player. The host's game decides which buildings and trees catch fire, including fires started by lightning, and the other players' games follow it. The host's game also decides how big each fire is, how much damage it does and whether it burns a building or tree down. The flames and the fire engines still run on every computer.
-* Traffic accidents now happen on the same road for every player. The host's game decides where an accident happens, and the other players' games no longer roll their own. The cars involved come from each player's own traffic, so they can differ.
-* Passenger counts per transport type (residents and tourists) and cargo counts per transport type in the statistics now show the host's numbers for every player.
-* When a player joins, the host now compares both players' other active mods, including their versions. A differing set is refused with a message naming exactly which mods are missing or differ. The host's Ignore Mod Compatibility Checks (Own Risk) setting still admits it.
-* Added Save Diagnostics to the General options tab and `/diag` to the multiplayer chat. Both write one file with the session state and the flight log into the game's Logs folder, ready to attach to a bug report.
-* The version on the General options tab now includes the source commit, and the host's log records the build of every player who joins.
-* Direct Connection now works over IPv6. The host accepts IPv4 and IPv6 players at the same time and lists its IPv6 addresses in the log. Host Address takes an IPv6 address, also together with the port as `[2001:db8::1]:25001`. This helps players whose internet provider gives them no public IPv4 address of their own. Bans and repeated wrong passwords from IPv6 count for the player's whole address block, so switching to another address does not get around them.
-
-### Bug fixes
-
-* Hosting over the internet with a Direct Connection now requires a server password of at least 8 characters, because anyone who found the port could otherwise join and download the city. Steam Relay and LAN Only sessions are unaffected.
-* Fixed fires appearing in different places for each player: every game used to roll its own fires, so a burning building on the host did not burn for anyone else.
-* Fixed houses and whole areas burning down for one player while they still stood for the host, and then reappearing after a world sync. Each game decided on its own whether a fire destroyed a building, and a player whose fire engines arrived later than the host's lost buildings the host saved. Only the host's game decides that now.
-* Statistics counters such as deaths, births and mail no longer creep above the host's numbers on the other players' games over time.
-* The Direct Connection host screen in the main menu now has Port, Password and LAN Only fields. Before, it refused to host without a password but offered nowhere to type one. Both host screens now show how many password characters are still missing, and the in-game panel clears the password error as soon as the password is long enough.
-* Fixed trees painted with the object brush appearing slowly, a few at a time, for the other players while the painter saw them at once. In a large city each brushed frame cost the other players' games a city-wide search, which dropped their frame rate sharply and could trigger a world sync while someone was drawing roads at the same time. Brush strokes are now sent as the finished trees and placed in one frame.
-* Drawing a long road no longer counts each of its pieces against the limit meant for the larger mixed road edits, which could request a world sync when the other player's game fell a little behind.
-* Lower host overhead in large cities: the host spreads its once-a-second city snapshots over the second instead of sending them in one frame, checks departing households only when they change, and skips trees when watching for building color edits.
-
-* Object and vegetation brush display footprints are no longer mistaken for terrain edits, avoiding rejected commands while the actual objects synchronize separately.
-* Household income is now corrected immediately after the local game recalculates it, preventing clients from consuming stale residential-economy values.
-* Milestone and building-unlock popups now close automatically after 10 seconds during multiplayer.
-* This prevents an AFK host or client from indefinitely blocking simulation continuation for everyone else.
-* Clients now receive the native milestone popup for newly reached host milestones, including milestone 1, without replaying earlier milestones or duplicating development points.
-* Release builds now always include and validate the multiplayer UI bundle, preventing the main-menu button, in-game button and milestone countdown from all being absent on affected installations.
-* Fixed players being disconnected during a world download or in busy sessions on the Steam Relay. The client used to give up after 10 seconds without a complete message even while data was still arriving. It now waits up to 60 seconds as long as traffic keeps coming in.
-* When a player's game loses contact with the host, it now reports "Lost the connection to the host" instead of wrongly saying the host disconnected them.
-* Fixed players being kicked with "rate limit exceeded: commands/sec" when the host's own game hitched. Traffic is now measured by when it arrived, short bursts are allowed, and an unusually high command rate is written to the log instead of ending the session.
-* Fixed terraforming producing different heights for players whose games run at different frame rates. A player at 93 FPS used to receive about 1.5 times the height change from a 60 FPS player's brush strokes. Replayed brush strokes now move the ground exactly as far as they did for the player who made them.
-* Fixed roads built onto freshly terraformed ground turning into a different road for the other player, for example an elevated road on a retaining wall for one player and a ground road on raised terrain for the other.
-* Straight road segments now keep the exact slope they were built with on every machine, even if the terrain under them changed before the road arrived. Long spans are now measured along their full length.
-* Resetting a Road Speed Adjuster speed back to default now also resets it for the other players.
-* Resetting a building's custom colour back to default is now synchronized.
-* Zone-grown buildings now use the same building variant for every player, and a mismatched variant is repaired when the building is next synchronized.
-* Mod state for compatible third-party mods is only applied when exactly one road, node or object matches. Ambiguous matches are held instead of guessed, and objects must lie within the matching distance.
-* Mod data is now matched by field names as well as field types, so a differing mod version can no longer write values into the wrong fields.
+This update is mostly about performance in large cities. Hosts and clients both do far less work keeping a big city in sync, the host no longer stutters once a second, and painting trees no longer slows down the other players. It also adds Move It and Node Controller support, makes fires and traffic accidents the same for every player, adds IPv6 and more host controls, and fixes players being disconnected on slower Steam Relay connections.
 
 ### Performance
 
-* Added bounded batching for object-brush placements and deletions. Dense tree and prop strokes now travel as frame batches instead of flooding the session with one command per object.
-* Improved Steam Relay congestion control so stale quality or ping reports do not repeatedly reduce the transfer rate while current traffic is being acknowledged successfully.
-* Steam Relay transfers no longer speed up blindly before the first connection quality report, which previously overloaded slow paths at the start of a world download.
-* Clients no longer re-apply residential occupancy pages whose content has not changed.
-* Residential economy and purchase corrections do less work per update, and the host inspects fewer residential properties per update.
+* Clients in large cities do much less work keeping homes and households in sync. Households that have not changed are skipped, families waiting for a free home are no longer re-applied again and again, and the checking work is limited by the number of residents, so very dense cities no longer slow it down.
+* Workplaces use much less bandwidth: a company's employee list is only sent again when it actually changes.
+* The host no longer stutters once a second in large cities. It used to collect all city data in a single frame every second; this is now spread across the whole second.
+* The host does less work tracking households that leave the city, and no longer checks trees when looking for building colour changes.
+* Painting trees and props with the object brush no longer slows down the other players. Strokes are sent as the finished objects and placed in one frame, instead of every brushed frame making the other players' games search the whole city. Dense strokes are sent in batches instead of one message per object.
+* Steam Relay copes better with slow connections. It no longer speeds up blindly at the start of a world download, and outdated connection reports no longer keep cutting the transfer speed.
+* The household money corrections do less work, and the host checks fewer homes per update.
+
+### New
+
+* Move It: moving buildings, props and trees is now synchronized once you let go. Objects with attached sub-objects are not supported yet.
+* Move It and Node Controller road edits are now synchronized when the edit ends. If the mod cannot tell which road was edited, it holds the edit instead of changing the wrong road.
+* Fires are now decided by the host: which buildings and trees catch fire (including from lightning), how bad the fire gets and whether a building burns down are the same for every player. The flames and fire engines still run on every computer.
+* Traffic accidents now happen on the same road for every player. The cars involved can still differ.
+* Data that compatible mods save with the city is now synchronized.
+* Host Game now includes Approve Players and Simulation Sync.
+* New Auto-Approve Steam Friends option: Steam friends can join right away while everyone else waits for approval. Steam Relay only.
+* New setting for who may request a world sync: Allow, Ask Host or Host Only. With Ask Host, the host gets a popup showing who asked and why.
+* Direct Connection now supports IPv6, for players whose internet provider does not give them their own IPv4 address. Host Address accepts IPv6, also with a port, like `[2001:db8::1]:25001`.
+* When a player joins, the host compares both players' active mods and their versions and names exactly which ones differ. Ignore Mod Compatibility Checks (Own Risk) still lets them in.
+* Save Diagnostics in the General options tab and `/diag` in the chat save one file with everything needed for a bug report into the game's Logs folder.
+* Transport passenger and cargo statistics now show the host's numbers for every player.
+* Clients now get the normal milestone popup when the host reaches a new milestone.
+
+### Connection fixes
+
+* Fixed players being disconnected on Steam Relay during a world download or in busy sessions. The client used to give up after 10 seconds; it now waits up to 60 seconds as long as data is still arriving.
+* Fixed players being kicked with "rate limit exceeded: commands/sec" when the host's game stuttered.
+* Losing the connection now says "Lost the connection to the host" instead of claiming the host disconnected you.
+* Hosting a Direct Connection over the internet now requires a password of at least 8 characters, because anyone who found the port could otherwise join and download the city. Steam Relay and LAN Only are not affected.
+* The Direct Connection host screen in the main menu now has Port, Password and LAN Only fields, and both host screens show how many password characters are still missing.
+
+### Sync fixes
+
+* Fixed fires appearing in different places for each player, and buildings burning down for one player while they still stood for the host.
+* Fixed terraforming giving different heights for players running at different frame rates.
+* Fixed roads built on freshly terraformed ground turning into a different road for the other player, for example a retaining-wall road for one and a ground road for the other.
+* Straight roads now keep the exact slope they were built with for every player, even if the ground changed before the road arrived.
+* Drawing a long road no longer triggers a world sync when the other player's game is a little behind.
+* Statistics such as deaths, births and mail no longer slowly drift above the host's numbers.
+* Zone-grown buildings now look the same for every player.
+* Resetting a building's colour or a Road Speed Adjuster speed back to default is now synchronized.
+* Household income is corrected right after the game recalculates it, so clients no longer show outdated values.
+* Brush outlines for trees and props are no longer mistaken for terrain edits.
+* Mod data is only applied when exactly one road, node or object matches, and a different mod version can no longer write values into the wrong place.
+* Fixed the main-menu button, in-game button and milestone countdown all missing on some installations.
 
 ### Quality of life
 
-* Added a visible countdown bar before milestone and building-unlock popups close, allowing players to dismiss them normally during the grace period.
-* The mod's Options page now shows its version at the top of the General tab.
-* Removed the read-only status rows from that page. The in-game multiplayer panel and the join screen already report the same session state live.
+* Milestone and unlock popups now close by themselves after 10 seconds in multiplayer, with a countdown bar, so an AFK player can no longer keep the whole session paused.
+* The Options page shows the mod version, including the build, at the top of the General tab. The read-only status rows were removed, since the in-game multiplayer panel shows the same information live.
+* The host's log records the mod build of every player who joins.
 
 ### Compatibility
 
-* This version requires protocol version 69. All players must update to version 1.7.1 before joining the same session.
+* This update changes the network protocol, so all players must update together. Older versions cannot join.
 
 ## Version 0.1.7 - 2026-09-15
 

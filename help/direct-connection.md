@@ -27,13 +27,14 @@ Which address you share depends on where the other players are:
 | Players | Address to share                                                                               |
 | --- |------------------------------------------------------------------------------------------------|
 | Same network (LAN) | Your local IP address, shown in the log when hosting starts or via a Terminal with the command `ipconfig` |
-| Over the internet | Your public IPv4, from [api.ipify.org](https://api.ipify.org/)                                 |
+| Over the internet | Your public IPv4, from [api.ipify.org](https://api.ipify.org/). The port has to be open - see [Over the internet](#internet) |
 | Over the internet, using IPv6 | Your IPv6 address, shown in the log when hosting starts. See [IPv6](#ipv6) |
+| Over Hamachi or another VPN | Your VPN address, for example `25.x.x.x` with Hamachi. See [Hamachi and other VPNs](hamachi.md) |
 
-Session settings live in the multiplayer panel while you play, and in the mod options
-before you start: port, password, player limit, LAN Only and player approval. Port, password
-and LAN Only are also on the Host Game screen of the main menu once Direct Connection is
-selected.
+The Host Game screen of the main menu has Port, Password, Approve Players, Simulation Sync,
+LAN Only and Client Resyncs once Direct Connection is selected. The in-game multiplayer panel
+has the same settings plus your player name and the player limit. The Host Game tab of the
+mod options has them too, except Simulation Sync.
 
 ![](assets/img/ui-session-panel-stopped.webp)
 
@@ -58,6 +59,22 @@ selected.
 Nothing has to be forwarded. Joining players use the host's local IP address and the same
 port. The host can switch LAN Only on to refuse everything that is not from the local
 network.
+
+## Over the internet { #internet }
+
+When you host with LAN Only off, the mod asks your router to open the port by itself (UPnP).
+Whether the router agreed is written to the mod's log - see
+[Let the mod open the port](forwarding.md#upnp). If it did not, forward the port by hand with
+[Set up port forwarding](forwarding.md).
+
+The chat message "Friends from another network can only join if you forward TCP port ..." is
+shown at every start; it does not mean the automatic attempt failed.
+
+## Playing over Hamachi or another VPN
+
+With Hamachi, Radmin VPN, ZeroTier or Tailscale, all players share one virtual network and
+nothing has to be forwarded. Hamachi and Radmin VPN addresses count as internet addresses, so
+LAN Only has to be off for them. See [Hamachi and other VPNs](hamachi.md).
 
 ## IPv6
 

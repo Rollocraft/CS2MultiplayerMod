@@ -6,7 +6,7 @@ description: "Fixes for the problems players hit most often: joining, desyncs, c
 # Troubleshooting guide
 
 Having issues? This guide covers the problems players hit most often. Updated
-`2026-08-23` for version `v0.1.6` 
+`2026-10-12` for version `1.7.1`.
 
 
 ## Pick your problem
@@ -21,6 +21,7 @@ Having issues? This guide covers the problems players hit most often. Updated
       <li><a href="../steam-relay/">Steam Relay</a></li>
       <li><a href="../direct-connection/">Direct connection</a></li>
       <li><a href="../forwarding_troubleshoot/">Port forwarding problems</a></li>
+      <li><a href="../hamachi/">Hamachi and other VPNs</a></li>
     </ul>
   </div>
 
@@ -71,18 +72,20 @@ First: both players have to use the same connection type. See
 
 ### Direct connection, host side
 
-- The mod asks your router to open the port when hosting starts. If the hosting status
-  asks you to forward it yourself, follow [Set up port forwarding](forwarding.md).
+- The mod asks your router to open the port when hosting starts. Check the `UPnP:` line in
+  the mod's log; if the router refused or did not answer, follow
+  [Set up port forwarding](forwarding.md#upnp).
 - Allow the port through the Windows Firewall and any antivirus.
 - LAN Only refuses everything that is not from your local network. Switch it off for
-  internet play.
+  internet play, and for Hamachi or Radmin VPN - see [Hamachi and other VPNs](hamachi.md).
 
 [Issues with port forwarding?](forwarding_troubleshoot.md)
 
 ### Direct connection, joining side
 
-- Use the host's local IP on the same network, and their public IP over the internet. The
-  port has to match the host's exactly.
+- Use the host's local IP on the same network, their public IP over the internet, or their
+  VPN address over Hamachi and similar programs. The port has to match the host's exactly.
+- The host's public IP can change from day to day. Ask for the current one.
 - Check that your connection is not blocked by antivirus or your local firewall, and that
   you are online.
 
@@ -94,7 +97,7 @@ Still having issues? Remove the mod on PDXMods. Restart the game. Reinstall the 
 
 ## Game Version Issues
 
-Check that you have the same game version as the people you are trying to play with. You can find the game version in the bottom left of the Main Menu when you start the game. The beginning should look similar to this: `1.6.0f1`. If not, update your game through Steam or XBox/Gamepass.
+Check that you have the same game version as the people you are trying to play with. You can find the game version in the bottom left of the Main Menu when you start the game. The beginning should look similar to this: `1.6.2f1`. If not, update your game through Steam or XBox/Gamepass.
 
 Still having issues? [Verify Game Files](verify_files.md) (Steam: Right-click Game => Properties => Installed Files => Verify Integrity of game files; [XBox/Gamepass (click)](verify_files.md)).
 

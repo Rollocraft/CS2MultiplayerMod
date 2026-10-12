@@ -95,7 +95,14 @@ See [Diagnose issues with port forwarding](forwarding_troubleshoot.md).
 
 Possible internal details include `TimedOut`, `timed out`, or a handshake timeout.
 
-Verify that the host is still online and that the address and port are correct. Allow the port through the host firewall. Direct internet sessions also need a TCP port forward. If the join was waiting for approval, the host must respond before the approval timeout.
+The connection attempt got no reply at all. The usual causes, most common first:
+
+- The host's router did not open the port. The host's log has a `UPnP:` line saying the router refused or did not answer - see [Let the mod open the port](forwarding.md#upnp).
+- The address is wrong or out of date. Over the internet it has to be the host's current public IP; many providers change it from time to time.
+- The host's firewall drops the connection. Allow Cities: Skylines II through the Windows Firewall on the network type in use.
+- Over Hamachi, a Hamachi connection is not green yet, or the game is not allowed through the firewall on public networks - see [Hamachi and other VPNs](hamachi.md#troubleshooting).
+
+If the join was waiting for approval, the host must respond before the approval timeout. [Steam Relay](steam-relay.md) avoids all of the above when everyone has the Steam copy.
 
 See [Diagnose issues with port forwarding](forwarding_troubleshoot.md).
 
@@ -218,9 +225,9 @@ A direct public host accepts internet connections to the forwarded port, and joi
 
 ### Automatic port forwarding failed
 
-Recognizable log lines begin `[upnp]` and may say no local address was found, the router refused the request, verification failed, or automatic forwarding failed.
+Recognizable log lines contain `UPnP:` and say that no local address was found, that the router refused the request, that no router answered, that the router did not report the mapping back, or that automatic forwarding failed.
 
-Hosting is still active locally. Configure the TCP port manually or use Steam Relay. See [Port Forwarding](forwarding.md) and [Port Forwarding Troubleshooting](forwarding_troubleshoot.md).
+Hosting is still active, and players on your network or on a VPN can still join, but players over the internet cannot reach the port. Allow UPnP on your router, forward the TCP port by hand, or use Steam Relay. See [Let the mod open the port](forwarding.md#upnp) and [Port Forwarding Troubleshooting](forwarding_troubleshoot.md).
 
 ### Multiplayer UI did not load
 
@@ -246,7 +253,7 @@ Messages such as `Cannot host`, `Cannot join`, `Cannot choose a host world`, or 
 
 Recognizable text includes `session is LAN-only`, `too many open connections`, `Transport event queue full`, `Peer timed out`, `Handshake timed out`, or `connection(s) still draining`.
 
-- A LAN-only refusal is expected when an internet address reaches a host that deliberately accepts only private-network clients.
+- A LAN-only refusal is expected when an internet address reaches a host that deliberately accepts only private-network clients. Hamachi (`25.x.x.x`) and Radmin VPN (`26.x.x.x`) addresses count as internet addresses, so switch LAN Only off for them - see [Hamachi and other VPNs](hamachi.md).
 - Too many connections can be a burst of pending joins or unwanted traffic. Keep a public host password-protected.
 - A full transport queue or timeout means the game/network could not process traffic fast enough. Stop the session if it repeats, reduce load, and retry.
 - Connections still draining during a deliberate shutdown are forcibly closed after the farewell timeout; no manual cleanup is needed.

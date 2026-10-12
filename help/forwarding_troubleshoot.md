@@ -1,21 +1,61 @@
 ---
 title: Port forwarding problems
-description: "Port forwarded and still nobody can join? Check the firewall, rule out CGNAT and confirm the port is really open."
+description: "Friends cannot reach your direct connection? Check the router, the address, the firewall and CGNAT, in that order."
 ---
 
 # Diagnose issues with port forwarding
 
-[Set up port forwarding.](forwarding.md)
+Your friend sees "The host did not answer in time" or a similar error? Go through these
+checks in order. Most problems are solved by the first two.
 
-If you still experience issues, even though you have port forwarding enabled, check that your firewall/anti-virus allows opening ports on your local machine. 
+## 1. Did the port really open? { #port-open }
 
-If you still cannot connect, check that you are not under Carrier-Grade NAT (CGNAT). Open your router settings, check the displayed public IP address (WAN IP) and compare to the IP shown [here](https://api.ipify.org/). If they are different, you are likely behind CGNAT. You might have luck by letting someone else host.
+Open the host's `CS2MultiplayerMod.log` and look for the line containing `UPnP:`. If it says
+the router refused, or that no router answered, the port is closed. Allow UPnP on the router
+or forward the port by hand - see [Set up port forwarding](forwarding.md#upnp).
 
-If the game reports that the hosting port is already being used, close any other running host/game instance. You can instead choose another TCP port, but the host, every joining player, the firewall rule, and the router forwarding rule must all use that same new port.
+## 2. Is it the right address? { #address }
 
-## Alternatives to port forwarding
+- Over the internet, your friends need your **public** address from
+  [api.ipify.org](https://api.ipify.org/), not the local one that starts with `192.168.` or
+  `10.`.
+- Many providers change the public address from time to time. Look it up again before each
+  session.
+- The port your friends enter has to be exactly the port you host on.
 
-Some people have had success in using a local VPN to get their friends onto their local network. This is not recommended. People have been using Radmin. Many routers also support hosting a VPN into your local network.
+## 3. Is the firewall letting it in? { #firewall }
+
+Windows Firewall, and any antivirus with its own firewall, has to allow Cities: Skylines II.
+Open **Windows Security ▸ Firewall & network protection ▸ Allow an app through firewall**,
+click **Change settings** and make sure `Cities2` is ticked for the network type your PC uses
+(Private, Public, or both).
+
+## 4. Are you testing from inside your own network? { #own-network }
+
+Joining your own public address from a PC in the same network fails on many routers, even when
+the forward works. Test with a friend outside your network, or from a phone hotspot. Players in
+your own network use your local address instead.
+
+## 5. Are you behind CGNAT? { #cgnat }
+
+Open your router settings and compare the public address shown there (WAN IP) with the one
+from [api.ipify.org](https://api.ipify.org/). If they differ, your provider shares one
+public address between many customers and port forwarding cannot work. Use one of the
+alternatives below, or let someone else host.
+
+## 6. Is the port already in use? { #port-in-use }
+
+If the game reports that the hosting port is already being used, close any other running
+host or game instance. You can instead choose another TCP port, but the host, every joining
+player, the firewall rule and the router forwarding rule must all use that same new port.
+
+## Alternatives to port forwarding { #alternatives }
+
+| Alternative | When it works |
+| --- | --- |
+| [Steam Relay](steam-relay.md) | Everyone has the Steam copy of the game. No port, no router setup. |
+| [IPv6](direct-connection.md#ipv6) | Both sides have IPv6. Nothing to forward, but the router's IPv6 firewall has to let the port in. |
+| [Hamachi or another VPN](hamachi.md) | Works on every copy of the game, with no router setup. Every player installs the VPN program. |
 
 ---
 

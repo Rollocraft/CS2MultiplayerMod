@@ -86,7 +86,7 @@ namespace CS2MultiplayerMod.Core.Networking.Tcp
                 _log.Event(LogTopic.Transport,
                     "Players on the internet need your PUBLIC IP and TCP port " + port +
                     " reaching this machine through the Windows Firewall. The router is being asked " +
-                    "to forward it automatically - see the [upnp] lines below for whether it agreed. " +
+                    "to forward it automatically - see the \"UPnP:\" lines below for whether it agreed. " +
                     "If it did not, forward the port by hand or host over the Steam relay instead.");
         }
 
