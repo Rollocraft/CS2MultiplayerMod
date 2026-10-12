@@ -11,29 +11,17 @@ using CS2MultiplayerMod.Core.Diagnostics;
 namespace CS2MultiplayerMod.Game
 {
     /// <summary>
-    /// Handles the joining player's copy of the host world. The intent is that a client
-    /// plays *in the host's session* rather than accumulating savegames: the received
-    /// <c>.cok</c> is written under a clearly-temporary name, loaded straight into the
-    /// game, and deleted again when the player leaves (and overwritten on the next join),
-    /// so no permanent copy is kept.
-    ///
-    /// Safety invariants (security findings 4/34): the staging path is a compile-time
-    /// constant - nothing from the network ever influences a file name or path, so a
-    /// streamed blob can only ever overwrite <c>_MP_JoinSession.cok</c> and never a real
-    /// save; the blob itself was already verified against the announced transfer size
-    /// by the session layer before it gets here; and it is only accepted at all from an
-    /// authenticated host on the registered "map" channel.
+    /// The joining client's copy of the host world: written under a fixed transient name, loaded, and
+    /// deleted on leave, so no permanent copy is kept. The path is a compile-time constant (nothing from
+    /// the network names a file), the size was verified by the session, and only an authenticated host's
+    /// "map" channel reaches here.
     /// </summary>
     internal static class JoinMapLoader
     {
         public const string TransientName = "_MP_JoinSession";
         private const string SaveExtension = ".cok";
 
-        /// <summary>
-        /// Write the received world to the fixed transient path and kick off loading it.
-        /// Returns true when a load was actually started; false means "staged but not
-        /// loading" (or not even staged) - the caller surfaces a recoverable state.
-        /// </summary>
+        /// <summary>True when a load started; false means staged but not loading, which the caller recovers.</summary>
         public static bool StageAndLoad(byte[] saveBytes, IModLogger log)
         {
             if (saveBytes == null || saveBytes.Length == 0)
@@ -47,9 +35,7 @@ namespace CS2MultiplayerMod.Game
 
             try
             {
-                // Drop any previous transient world (file + index entry) first, so a
-                // mid-session /sync re-stream never leaves a stale registration shadowing
-                // the fresh one when we look it up below.
+                // Drop the previous transient world first, so a stale registration cannot shadow this one.
                 DeleteTransient(log);
 
                 Directory.CreateDirectory(dir);
@@ -61,10 +47,8 @@ namespace CS2MultiplayerMod.Game
                 log.Event(LogTopic.WorldTransfer, "Host world received (" +
                     (saveBytes.Length / 1024) + " KB); loading into game...");
 
-                // Claim the load before starting it: the session watcher treats a world swap
-                // it did not ask for as the player walking out of the session. Claimed here
-                // rather than at the Load call so the fallback below - the player loading the
-                // staged world by hand after an index miss - is covered by the same mark.
+                // Claim the load first, including the manual fallback below, so the session watcher does not read
+                // it as leaving.
                 if (Mod.Service != null) Mod.Service.ExpectOwnWorldLoad();
                 return TryLoad(log);
             }
@@ -79,13 +63,8 @@ namespace CS2MultiplayerMod.Game
         {
             try
             {
-                // The game only ever sees savegames it has indexed in AssetDatabase.user.
-                // Its file data source indexes a freshly written .cok through a watcher
-                // that polls on window *focus* (FileSystemDataSource, PollingMode.OnFocus)
-                // — and a joining player never alt-tabs, so the world we just wrote stays
-                // invisible and the join silently stalls at "100%". So we register the
-                // file ourselves, exactly as the engine's watcher would on focus, but
-                // synchronously, right now.
+                // The game indexes a new .cok only on window focus, which a joining player never changes, so the
+                // join would stall at 100%. Register it now, as the watcher would.
                 RegisterStagedSave(log);
 
                 SaveGameMetadata metadata = FindStagedSave();
@@ -110,17 +89,8 @@ namespace CS2MultiplayerMod.Game
         }
 
         /// <summary>
-        /// Make <see cref="AssetDatabase.user"/> aware of the transient .cok we just wrote
-        /// by adding it to the user data source as a package asset - the exact call the
-        /// engine's own file watcher makes when it notices a new save
-        /// (<c>FileSystemDataSource.OnFileSystemEvent -> AddEntry</c>). Adding a
-        /// <see cref="PackageAsset"/> opens the package and registers the
-        /// <see cref="SaveGameMetadata"/> it contains, so the save becomes loadable
-        /// immediately instead of only after the next window-focus poll.
-        ///
-        /// The path is the same compile-time constant the bytes were written to - nothing
-        /// from the network influences it, so this can only ever register
-        /// <c>_MP_JoinSession.cok</c>.
+        /// Adds the transient .cok to the user data source as a package asset, as the file watcher does on a
+        /// new save, so it is loadable immediately. Only ever the fixed <c>_MP_JoinSession.cok</c>.
         /// </summary>
         private static void RegisterStagedSave(IModLogger log)
         {
@@ -129,8 +99,7 @@ namespace CS2MultiplayerMod.Game
 
             try
             {
-                // Mirror the watcher: build the entry from the real, forward-slashed file
-                // path with no escaping (the path is fixed and already clean).
+                // As the watcher does: the real forward-slashed path, unescaped.
                 string fullPath = Path.Combine(dir, TransientName + SaveExtension).Replace('\\', '/');
                 string fileDir = Path.GetDirectoryName(fullPath)?.Replace('\\', '/');
                 string fileName = Path.GetFileName(fullPath);
@@ -139,19 +108,13 @@ namespace CS2MultiplayerMod.Game
             }
             catch (Exception ex)
             {
-                // Non-fatal: if the engine's watcher later notices the file (e.g. on an
-                // alt-tab) the lookup can still succeed; otherwise the caller recovers.
+                // Non-fatal: the watcher may still find it on focus; otherwise the caller recovers.
                 log.Warn(LogTopic.WorldTransfer,
                     "Could not register the host world with the save index: " + ex.Message);
             }
         }
 
-        /// <summary>
-        /// Find the <see cref="SaveGameMetadata"/> for the staged world. The streamed
-        /// package keeps the *host's* internal asset names, so the only thing that
-        /// identifies our copy is its file path - match on the asset's URI containing the
-        /// transient name rather than on its display name.
-        /// </summary>
+        /// <summary>By URI containing the transient name: the package keeps the host's internal asset names.</summary>
         private static SaveGameMetadata FindStagedSave()
         {
             var filter = SearchFilter<SaveGameMetadata>.ByCondition(
@@ -165,9 +128,7 @@ namespace CS2MultiplayerMod.Game
         /// <summary>Remove the transient world so the joining player keeps no local copy.</summary>
         public static void DeleteTransient(IModLogger log)
         {
-            // Remove the index registration(s) first: deleting the asset drops the .cok
-            // (and its .cid guid sidecar) from disk together with the entry, so the next
-            // join re-registers from a clean slate.
+            // Deleting the indexed asset removes the .cok and .cid sidecar with the entry.
             bool removedViaIndex = false;
             try
             {
@@ -190,8 +151,7 @@ namespace CS2MultiplayerMod.Game
                     ex.Message);
             }
 
-            // Belt and braces: if the world was staged but never indexed, remove the raw
-            // file (and any guid sidecar) directly so no local copy of the host city lingers.
+            // Staged but never indexed: remove the raw files directly.
             try
             {
                 string dir = SavesDirectory();
@@ -214,10 +174,7 @@ namespace CS2MultiplayerMod.Game
 
         public static string SavesDirectory()
         {
-            // The game's own user-data path — correct on every installation. The
-            // CSII_USERDATAPATH environment variable is only set on developer
-            // machines by the modding toolchain, so it is merely a fallback;
-            // relying on it broke map loading for every normal player.
+            // The game's own user-data path; CSII_USERDATAPATH is set only on developer machines.
             string userData = null;
             try { userData = Colossal.PSI.Environment.EnvPath.kUserDataPath; }
             catch (Exception) { }

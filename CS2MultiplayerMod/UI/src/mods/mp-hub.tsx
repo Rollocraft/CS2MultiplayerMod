@@ -1,7 +1,6 @@
+import { GROUP, parseArray, tryModule, useT } from "mods/ui-helpers";
 import { bindValue, trigger, useValue } from "cs2/api";
 import { AutoNavigationScope, BackConsumer, InputActionBarrier, NavigationDirection } from "cs2/input";
-import { useLocalization } from "cs2/l10n";
-import { getModule } from "cs2/modding";
 import { Button, Portal, Tooltip } from "cs2/ui";
 import {
     CONNECTION_DIRECT,
@@ -9,7 +8,11 @@ import {
     CONNECTION_RELAY,
     ConnectionSegmented,
     JoinCodeDisplay,
+    publicPasswordMinLength$,
+    publicPasswordMissing,
+    usePublicPasswordHint,
 } from "mods/connection-picker";
+import { RESYNC_LOC, ResyncPolicySegmented } from "mods/resync-policy";
 import {
     CSSProperties,
     MouseEvent as ReactMouseEvent,
@@ -22,15 +25,13 @@ import {
 } from "react";
 import { useBackKey } from "mods/back-action";
 import { DisclaimerModal, disclaimerAccepted$ } from "mods/disclaimer";
+import { FormField, FormFieldProps } from "mods/form-field";
 import { HELP_PAGE, OpenHelpButton } from "mods/help-link";
 import { OtherModsBanner } from "mods/mods-banner";
 import { TransferProgress } from "mods/transfer-progress";
 import { VersionWarningBanner } from "mods/version-banner";
 
-// Binding group shared with MultiplayerUISystem (same group as the join dialog).
-const GROUP = "cs2mp";
-
-// Locale keys served by the mod's LocaleEN/LocaleDE sources (L10n.Key constants).
+// Keys from the mod's locales/<lang>.properties.
 const LOC = {
     multiplayer: "CS2MP.UI.Multiplayer",
     sessionSettings: "CS2MP.UI.SessionSettings",
@@ -71,9 +72,13 @@ const LOC = {
     cancelKick: "CS2MP.UI.CancelKick",
     tryThis: "CS2MP.UI.TryThis",
     requireApproval: "CS2MP.UI.RequireApproval",
+    autoApproveSteamFriends: "CS2MP.UI.AutoApproveSteamFriends",
     simulationSync: "CS2MP.UI.SimulationSync",
+    ...RESYNC_LOC,
     joinRequestTitle: "CS2MP.UI.JoinRequestTitle",
     joinRequestBody: "CS2MP.UI.JoinRequestBody",
+    resyncRequestTitle: "CS2MP.UI.ResyncRequestTitle",
+    resyncRequestBody: "CS2MP.UI.ResyncRequestBody",
     accept: "CS2MP.UI.Accept",
     decline: "CS2MP.UI.Decline",
     playerName: "CS2MP.UI.PlayerName",
@@ -81,11 +86,6 @@ const LOC = {
     password: "CS2MP.UI.Password",
     disconnect: "CS2MP.UI.Disconnect",
     closeSession: "CS2MP.UI.CloseSession",
-};
-
-const useT = () => {
-    const { translate } = useLocalization();
-    return (id: string, fallback: string) => translate(id, fallback) ?? fallback;
 };
 
 // All vanilla glyphs verified to exist in Cities2_Data\Content\Game\UI\Media\Glyphs.
@@ -120,9 +120,12 @@ const hostPassword$ = bindValue<string>(GROUP, "hostPassword", "");
 const maxPlayers$ = bindValue<string>(GROUP, "maxPlayers", "8");
 const lanOnly$ = bindValue<boolean>(GROUP, "lanOnly", false);
 const requireApproval$ = bindValue<boolean>(GROUP, "requireApproval", true);
+const autoApproveSteamFriends$ = bindValue<boolean>(GROUP, "autoApproveSteamFriends", false);
 const simulationSync$ = bindValue<boolean>(GROUP, "simulationSync", true);
+const resyncPolicy$ = bindValue<string>(GROUP, "resyncPolicy", "allow");
 const playerList$ = bindValue<string>(GROUP, "playerList", "[]");
 const pendingJoins$ = bindValue<string>(GROUP, "pendingJoins", "[]");
+const pendingResyncs$ = bindValue<string>(GROUP, "pendingResyncs", "[]");
 const canSaveClientWorld$ = bindValue<boolean>(GROUP, "canSaveClientWorld", false);
 const clientWorldSaveStatus$ = bindValue<string>(GROUP, "clientWorldSaveStatus", "idle");
 const clientWorldSaveName$ = bindValue<string>(GROUP, "clientWorldSaveName", "");
@@ -146,43 +149,17 @@ interface PendingJoin {
     name: string;
 }
 
-const parseChatLog = (json: string): ChatEntry[] => {
-    try {
-        const parsed = JSON.parse(json);
-        return Array.isArray(parsed) ? parsed : [];
-    } catch {
-        return [];
-    }
-};
-
-const parsePlayerList = (json: string): PlayerEntry[] => {
-    try {
-        const parsed = JSON.parse(json);
-        return Array.isArray(parsed) ? parsed : [];
-    } catch {
-        return [];
-    }
-};
-
-const parsePendingJoins = (json: string): PendingJoin[] => {
-    try {
-        const parsed = JSON.parse(json);
-        return Array.isArray(parsed) ? parsed : [];
-    } catch {
-        return [];
-    }
-};
+interface PendingResync {
+    id: number;
+    name: string;
+    reason: string;
+    automatic: boolean;
+}
 
 // Vanilla right-menu styling so the button is indistinguishable from the
 // Chirper/notification buttons below it. The module paths are vanilla-internal
 // and may move on a game update, hence the inline fallback look.
-const tryModule = (path: string, exportName: string): any => {
-    try {
-        return getModule(path, exportName);
-    } catch {
-        return null;
-    }
-};
+
 const tryClasses = (path: string): Record<string, string> | null =>
     tryModule(path, "classes");
 const rmButton = tryClasses("game-ui/game/components/right-menu/right-menu-button.module.scss");
@@ -198,7 +175,6 @@ const kindColors: Record<string, string> = {
     error: "#ff8a7a",
 };
 
-// rem behaves like resolution-independent pixels (the game scales root font size).
 // Once the user drags/resizes, geometry switches to measured px (see PanelGeometry).
 const styles: Record<string, CSSProperties> = {
     buttonWrap: {
@@ -445,6 +421,11 @@ const styles: Record<string, CSSProperties> = {
         fontSize: "12.5rem",
         color: "rgba(255, 255, 255, 0.55)",
         margin: "2rem 0 12rem 0",
+    },
+    hintWarning: {
+        fontSize: "12.5rem",
+        color: "#ffb454",
+        margin: "-4rem 0 10rem 0",
     },
     errorLine: {
         fontSize: "13rem",
@@ -793,52 +774,15 @@ const PanelBody = ({ top, middle, bottom }: {
 
 // ---- Form building blocks -----------------------------------------------------
 
-interface HubFieldProps {
-    label: string;
-    value: string;
-    secret?: boolean;
-    disabled?: boolean;
-    onChange: (value: string) => void;
-}
-
-// Text field with an InputActionBarrier while focused: in-game nearly every
-// letter is a shortcut (B = bulldozer, …), so typing must not reach the game.
-const HubField = ({ label, value, secret, disabled, onChange }: HubFieldProps) => {
-    const [draft, setDraft] = useState(value);
-    const [editing, setEditing] = useState(false);
-
-    useEffect(() => {
-        if (!editing) setDraft(value);
-    }, [value]);
-
-    return (
-        <div style={styles.row}>
-            <div style={styles.label}>{label}</div>
-            <InputActionBarrier disabled={!editing}>
-                <input
-                    type={secret ? "password" : "text"}
-                    style={disabled ? { ...styles.input, ...styles.inputDisabled } : styles.input}
-                    value={draft}
-                    disabled={disabled}
-                    spellCheck={false}
-                    autoComplete="off"
-                    onFocus={() => setEditing(true)}
-                    onBlur={() => {
-                        setEditing(false);
-                        if (draft !== value) onChange(draft);
-                    }}
-                    onMouseDown={(e) => e.stopPropagation()}
-                    onKeyDown={(e) => e.stopPropagation()}
-                    onChange={(e) => {
-                        const next = (e.target as HTMLInputElement).value;
-                        setDraft(next);
-                        onChange(next);
-                    }}
-                />
-            </InputActionBarrier>
-        </div>
-    );
-};
+// In game nearly every letter is a shortcut (B = bulldozer), so a focused field holds an
+// InputActionBarrier.
+const HubField = (props: FormFieldProps) => (
+    <FormField
+        {...props}
+        styles={styles}
+        wrap={(input, editing) => <InputActionBarrier disabled={!editing}>{input}</InputActionBarrier>}
+    />
+);
 
 const HubToggle = ({ label, value, disabled, onChange }: {
     label: string;
@@ -911,7 +855,9 @@ const SettingsFields = () => {
     const maxPlayers = useValue(maxPlayers$);
     const lanOnly = useValue(lanOnly$);
     const requireApproval = useValue(requireApproval$);
+    const autoApproveSteamFriends = useValue(autoApproveSteamFriends$);
     const simulationSync = useValue(simulationSync$);
+    const resyncPolicy = useValue(resyncPolicy$);
     const hostConnection = useValue(hostConnection$);
     const sessionUsesRelay = useValue(sessionUsesRelay$);
     const relaySupported = useValue(relaySupported$);
@@ -920,6 +866,10 @@ const SettingsFields = () => {
     // In a live session follow what it actually runs on; outside one, what is
     // configured for the next.
     const relay = inSession ? sessionUsesRelay : relaySupported && hostConnection !== CONNECTION_DIRECT;
+    const minPasswordLength = useValue(publicPasswordMinLength$);
+    const passwordHint = usePublicPasswordHint(hostPassword, minPasswordLength);
+    const passwordMissing = !inSession &&
+        publicPasswordMissing(relay, lanOnly, hostPassword, minPasswordLength);
 
     return (
         <>
@@ -961,6 +911,7 @@ const SettingsFields = () => {
                 disabled={inSession}
                 onChange={(v) => trigger(GROUP, "setHostPassword", v)}
             />
+            {passwordMissing ? <div style={styles.hintWarning}>{passwordHint}</div> : null}
             <HubField
                 label={t(LOC.maxPlayers, "Max Players")}
                 value={maxPlayers}
@@ -983,6 +934,22 @@ const SettingsFields = () => {
                 disabled={inSession}
                 onChange={(v) => trigger(GROUP, "setRequireApproval", v)}
             />
+            {relay && requireApproval && (
+                <HubToggle
+                    label={t(LOC.autoApproveSteamFriends, "Auto-Approve Steam Friends")}
+                    value={autoApproveSteamFriends}
+                    disabled={inSession}
+                    onChange={(v) => trigger(GROUP, "setAutoApproveSteamFriends", v)}
+                />
+            )}
+            <div style={styles.row}>
+                <div style={styles.label}>{t(LOC.policy, "Client Resync Requests")}</div>
+                <ResyncPolicySegmented
+                    value={resyncPolicy}
+                    disabled={inSession}
+                    onChange={(v) => trigger(GROUP, "setResyncPolicy", v)}
+                />
+            </div>
             {/* The host answers for the whole session, so this is fixed once one is
                 running - a client sees the host's answer, not its own. */}
             <HubToggle
@@ -1643,23 +1610,28 @@ const ToastList = ({ toasts }: { toasts: ChatEntry[] }) => (
     </div>
 );
 
-// Host-only prompt shown whenever one or more players are waiting to be let in.
+// Host-only prompts shown whenever players are waiting to join or resync.
 // It floats at the top of the screen (not a full-screen blocker) so the host can
-// keep playing and admit each join when ready. Always mounted with the right-menu
+// keep playing and answer each request when ready. Always mounted with the right-menu
 // button, so it appears even when the hub panel is closed.
-const JoinRequestModal = () => {
+const ApprovalRequestModals = () => {
     const t = useT();
     const isHost = useValue(isHost$);
-    const pendingJson = useValue(pendingJoins$);
-    const pending = useMemo(() => parsePendingJoins(pendingJson), [pendingJson]);
+    const pendingJoinsJson = useValue(pendingJoins$);
+    const pendingResyncsJson = useValue(pendingResyncs$);
+    const pendingJoins = useMemo(() => parseArray<PendingJoin>(pendingJoinsJson), [pendingJoinsJson]);
+    const pendingResyncs = useMemo(
+        () => parseArray<PendingResync>(pendingResyncsJson),
+        [pendingResyncsJson],
+    );
 
-    if (!isHost || pending.length === 0) return null;
+    if (!isHost || (pendingJoins.length === 0 && pendingResyncs.length === 0)) return null;
 
     return (
         <Portal>
             <div style={styles.joinAnchor}>
-                {pending.map((join) => (
-                    <InputActionBarrier key={join.id}>
+                {pendingJoins.map((join) => (
+                    <InputActionBarrier key={`join-${join.id}`}>
                         <AutoNavigationScope
                             debugName="CS2MP Join Request"
                             direction={NavigationDirection.Horizontal}
@@ -1690,6 +1662,42 @@ const JoinRequestModal = () => {
                         </AutoNavigationScope>
                     </InputActionBarrier>
                 ))}
+                {pendingResyncs.map((request) => (
+                    <InputActionBarrier key={`resync-${request.id}`}>
+                        <AutoNavigationScope
+                            debugName="CS2MP Resync Request"
+                            direction={NavigationDirection.Horizontal}
+                            initialFocused="allow"
+                            allowLooping>
+                            <div style={styles.joinCard} onMouseDown={(e) => e.stopPropagation()}>
+                                <div style={styles.joinCardTitle}>
+                                    {t(LOC.resyncRequestTitle, "World Sync Request")}
+                                </div>
+                                <div style={styles.joinCardBody}>
+                                    {t(LOC.resyncRequestBody, "{0} requested a world sync: {1}")
+                                        .replace("{0}", request.name)
+                                        .replace("{1}", request.reason)}
+                                </div>
+                                <div style={styles.joinCardButtons}>
+                                    <Button
+                                        variant="primary"
+                                        focusKey="allow"
+                                        style={styles.joinCardButton}
+                                        onSelect={() => trigger(GROUP, "approveResync", request.id)}>
+                                        {t(LOC.accept, "Accept")}
+                                    </Button>
+                                    <Button
+                                        variant="flat"
+                                        focusKey="decline"
+                                        style={styles.joinCardButton}
+                                        onSelect={() => trigger(GROUP, "declineResync", request.id)}>
+                                        {t(LOC.decline, "Decline")}
+                                    </Button>
+                                </div>
+                            </div>
+                        </AutoNavigationScope>
+                    </InputActionBarrier>
+                ))}
             </div>
         </Portal>
     );
@@ -1704,8 +1712,8 @@ export const MultiplayerRightMenuButton = () => {
     const inSession = useValue(inSession$);
     const statusKind = useValue(statusKind$);
     const accepted = useValue(disclaimerAccepted$);
-    const entries = useMemo(() => parseChatLog(chatJson), [chatJson]);
-    const players = useMemo(() => parsePlayerList(playerJson), [playerJson]);
+    const entries = useMemo(() => parseArray<ChatEntry>(chatJson), [chatJson]);
+    const players = useMemo(() => parseArray<PlayerEntry>(playerJson), [playerJson]);
 
     // Read marker: everything up to this id has been seen with the panel open.
     const [readSeenId, setReadSeenId] = useState(0);
@@ -1746,7 +1754,7 @@ export const MultiplayerRightMenuButton = () => {
 
     return (
         <>
-            <JoinRequestModal />
+            <ApprovalRequestModals />
             <Tooltip tooltip={title} direction="left">
                 <div style={styles.buttonWrap} className={rmMenu ? rmMenu.item : undefined}>
                     <Button

@@ -7,12 +7,8 @@ using CS2MultiplayerMod.Game.Diagnostics;
 namespace CS2MultiplayerMod.Game.Sync.Infrastructure
 {
     /// <summary>
-    /// Bounded enqueue for the sync systems' incoming-message queues, plus a drain registry so a
-    /// world reload can purge every queue at once. The queues fill while gameplay sync is gated
-    /// (e.g. during a map load) or when a peer floods; shedding the oldest beyond a cap keeps memory
-    /// bounded. Overflow invalidates and clears the whole queued suffix, then requests an explicit
-    /// world recovery; silently shedding only its oldest command could apply dependent work without
-    /// the building, connector, or original it references.
+    /// Bounded inbox enqueue plus a drain registry for world reloads. Overflow clears the whole queued
+    /// suffix and requests recovery: shedding only the oldest could apply work without its dependency.
     /// </summary>
     internal static class SyncInbox
     {
@@ -21,11 +17,7 @@ namespace CS2MultiplayerMod.Game.Sync.Infrastructure
         /// <summary>Sink for the rare backpressure/drain warnings (set by the mod; also by tests).</summary>
         public static Action<string> LogWarn;
 
-        /// <summary>
-        /// The synchronous resync gate, installed by the mod (see <see cref="Settle"/>). Left null
-        /// in tests, where every request settles - a test has no world to reload and no arbiter to
-        /// consult, so the historical "ask and it happens" behaviour is the right default there.
-        /// </summary>
+        /// <summary>The resync arbiter, installed by the mod; null in tests, where every request settles.</summary>
         public static Func<ResyncReport, ResyncVerdict> Arbitrate;
 
         private static readonly object DrainGate = new object();
@@ -45,8 +37,7 @@ namespace CS2MultiplayerMod.Game.Sync.Infrastructure
                 if (queue.Count <= cap) return true;
                 Clear(queue);
             }
-            // Shedding a queued suffix means commands were lost before they could be applied.
-            // Nothing local can supply them again, so this is not a wait-and-see.
+            // Lost commands cannot be supplied again locally.
             RequestResync(ResyncReport
                 .Create("sync inbox overflow", "stream", ResyncEvidence.StreamLoss)
                 .About(subject ?? "inbox " + typeof(T).Name + " cap " + cap)
@@ -60,40 +51,26 @@ namespace CS2MultiplayerMod.Game.Sync.Infrastructure
             return false;
         }
 
-        /// <summary>
-        /// Ask for a world reload without evidence. No call site in the mod does this any more -
-        /// every one of them now names what it saw - but the overload stays as the safe default for
-        /// anything added later: an unclassified request is treated as an unproven timeout, so it
-        /// is held and corroborated rather than reloading a world on nothing.
-        /// </summary>
-        public static void RequestResync(string reason)
-        {
-            RequestResync(ResyncReport.FromReason(reason));
-        }
+        /// <summary>A reload request without evidence, held and corroborated as an unproven timeout.</summary>
+        public static void RequestResync(string reason) => RequestResync(ResyncReport.FromReason(reason));
 
         /// <summary>
-        /// Queue an evidence-carrying request for the main thread to weigh. Use this when the caller
-        /// cannot keep its work - the queue was shed, the command was malformed, the graph is gone.
-        /// A caller that CAN hold its work should use <see cref="Settle"/> instead and act on the
-        /// verdict, because a held report is a world reload that never has to happen.
+        /// Queues an evidence-carrying request, for callers that cannot keep their work; callers that can
+        /// should use <see cref="Settle"/>.
         /// </summary>
         public static void RequestResync(ResyncReport report)
         {
             lock (ResyncGate)
             {
-                // First reason wins, as before: the earliest fault is the one that explains the
-                // rest, and a later request is usually a consequence of the same divergence.
+                // First reason wins: the earliest fault usually explains the rest.
                 if (_resyncPending == 0) _resyncReport = report ?? ResyncReport.FromReason(null);
                 Volatile.Write(ref _resyncPending, 1);
             }
         }
 
         /// <summary>
-        /// Put a report to the arbiter now and get its verdict, on the main thread.
-        ///
-        /// <see cref="ResyncVerdict.Held"/> means the caller must KEEP its work queued and retry:
-        /// the fault is not proven, the mutating net feeders have been frozen for the length of the
-        /// hold, and a retry that succeeds withdraws the report instead of reloading the world.
+        /// The arbiter's verdict now. <see cref="ResyncVerdict.Held"/>: keep the work and retry; net feeders
+        /// are frozen meanwhile, and a successful retry withdraws the report.
         /// </summary>
         public static ResyncVerdict Settle(ResyncReport report)
         {
@@ -125,15 +102,11 @@ namespace CS2MultiplayerMod.Game.Sync.Infrastructure
             if (queue == null) return;
             lock (queue)
             {
-                T dropped;
-                while (queue.TryDequeue(out dropped)) { }
+                while (queue.TryDequeue(out T dropped)) { }
             }
         }
 
-        /// <summary>
-        /// Register a callback that clears one system's queue(s). Idempotent by delegate identity, so
-        /// a system re-created across a session restart never double-registers.
-        /// </summary>
+        /// <summary>Idempotent by delegate identity.</summary>
         public static void RegisterDrain(Action drain)
         {
             if (drain == null) return;
@@ -147,10 +120,7 @@ namespace CS2MultiplayerMod.Game.Sync.Infrastructure
             lock (DrainGate) Drains.Remove(drain);
         }
 
-        /// <summary>
-        /// Run every registered drain once. A throwing drain is caught and warned so the rest still
-        /// run - a world reload must fully purge, whatever one system does.
-        /// </summary>
+        /// <summary>Runs every drain; one throwing drain does not stop the rest.</summary>
         public static void DrainAll()
         {
             Action[] snapshot;

@@ -1,6 +1,4 @@
-using System.Collections.Concurrent;
 using System.Collections.Generic;
-using Game;
 using Game.Areas;
 using Game.Common;
 using Game.Prefabs;
@@ -16,18 +14,15 @@ using CS2MultiplayerMod.Game.Sync.Commands;
 namespace CS2MultiplayerMod.Game.Sync.Systems
 {
     /// <summary>
-    /// Replicates player-drawn areas and their redraws. Building-owned extractor/storage lots
-    /// use owner-qualified snapshots so their draggable borders can be repaired without replacing
-    /// the owning building. Map tiles and other building-owned lots remain excluded.
+    /// Replicates player-drawn areas and redraws. Extractor/storage lots use owner-qualified snapshots;
+    /// map tiles and other building-owned lots are excluded.
     /// </summary>
-    public partial class AreaSyncSystem : GameSystemBase
+    public partial class AreaSyncSystem : CommandSyncSystem, IRealizeStage
     {
         private const long EditScanIntervalMs = 1000;
         private const long OwnedAreaRetryWindowMs = 10000;
         private const int MaxPendingOwnedAreas = 256;
 
-        private readonly ConcurrentQueue<SimulationCommandMessage> _incoming =
-            new ConcurrentQueue<SimulationCommandMessage>();
         private readonly ReplicationGuard _guard = new ReplicationGuard();
         private readonly List<(OwnedAreaSnapshotCommand command, int origin, long deadline)>
             _ownedAreaRetry =
@@ -46,14 +41,12 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         private EntityQuery _districtAreas;
         private EntityQuery _ownedSpecializedAreas;
         private EntityQuery _ownedAreaOwners;
-        private CommandObserver _observer;
 
         protected override void OnCreate()
         {
             base.OnCreate();
 
-            // A specialized placement's lot must not be published ahead of its building, which
-            // BuildSync holds until the polygon closes (see the redraw scan).
+            // A specialized lot must not publish ahead of its building (see the redraw scan).
             _buildSync = World.GetOrCreateSystemManaged<BuildSyncSystem>();
             _prefabSystem = World.GetOrCreateSystemManaged<PrefabSystem>();
             _prefabIndex = new PrefabIndex(_prefabSystem, GetEntityQuery(ComponentType.ReadOnly<PrefabData>()));
@@ -83,10 +76,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 None = SyncQuery.ReadOnly<Temp, Deleted, Owner>(),
             });
 
-            _observer = SyncObserverBinding.Bind(
-                () => new CommandObserver(_incoming, AreaCreateCommand.Id,
-                AreaUpdateCommand.Id, AreaDeleteCommand.Id,
-                OwnedAreaSnapshotCommand.Id));
+            ListenFor(new[] { AreaCreateCommand.Id, AreaUpdateCommand.Id, AreaDeleteCommand.Id,
+                OwnedAreaSnapshotCommand.Id }, drainOnReload: false);
         }
 
         private static EntityQueryDesc AreaQuery(ComponentType lifecycleTag) => new EntityQueryDesc
@@ -106,12 +97,6 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 ComponentType.ReadOnly<MapTile>(),
             },
         };
-
-        protected override void OnDestroy()
-        {
-            SyncObserverBinding.Unbind(_observer);
-            base.OnDestroy();
-        }
 
         protected override void OnUpdate()
         {
@@ -155,8 +140,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             long now = service.NowMs;
             RepairIncompleteDistricts(now);
             RetryOwnedAreaSnapshots(now);
-            SimulationCommandMessage message;
-            while (_incoming.TryDequeue(out message))
+            while (_incoming.TryDequeue(out SimulationCommandMessage message))
             {
                 if (message.OriginPlayerId == session.LocalPlayerId) continue;
                 try
@@ -182,15 +166,6 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         }
 
         // ---- Polygon edits (redraws) -------------------------------------------
-
-
-
-
-
-
-
-
-
 
         private static string AreaKey(string prefabName, float3 firstNode) =>
             "area|" + ReplicationGuard.Key(prefabName, firstNode);
@@ -218,9 +193,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 !EntityManager.HasComponent<PrefabRef>(area)) return false;
 
             areaPrefab = EntityManager.GetComponentData<PrefabRef>(area).m_Prefab;
-            Entity topOwner;
             if (!IsSpecializedAreaPrefab(areaPrefab) ||
-                !TryFindTopAreaOwner(area, out topOwner) || topOwner == Entity.Null ||
+                !TryFindTopAreaOwner(area, out Entity topOwner) || topOwner == Entity.Null ||
                 !EntityManager.HasComponent<PrefabRef>(topOwner) ||
                 !EntityManager.HasComponent<global::Game.Objects.Transform>(topOwner))
                 return false;
@@ -279,6 +253,5 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             }
             return false;
         }
-
     }
 }

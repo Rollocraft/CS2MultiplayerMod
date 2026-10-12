@@ -3,14 +3,12 @@ using System;
 namespace CS2MultiplayerMod.Game.Diagnostics
 {
     /// <summary>
-    /// Replaces absolute paths with placeholders before they reach a log line. Logs get
-    /// pasted into bug reports verbatim, and every CS2 folder sits under the player's
-    /// profile, so a raw path hands out their Windows account name.
+    /// Replaces absolute paths with placeholders: logs are pasted publicly, and profile paths carry the
+    /// Windows account name.
     /// </summary>
     internal static class LogPaths
     {
-        // Longest first: the user data path lives inside the profile, so it has to match
-        // before the profile prefix swallows it.
+        // Longest first: the user data path is inside the profile.
         private static string[][] _rules;
 
         public static string Redact(string text)
@@ -33,8 +31,7 @@ namespace CS2MultiplayerMod.Game.Diagnostics
             string userData = Safe(delegate { return Colossal.PSI.Environment.EnvPath.kUserDataPath; });
             string profile = Safe(delegate { return Environment.GetFolderPath(Environment.SpecialFolder.UserProfile); });
 
-            // Some call sites normalise separators before logging, so both spellings of
-            // each root have to be covered.
+            // Both separator spellings: some call sites normalise before logging.
             var rules = new System.Collections.Generic.List<string[]>();
             AddRule(rules, userData, "%CS2_USERDATA%");
             AddRule(rules, profile, "%USERPROFILE%");

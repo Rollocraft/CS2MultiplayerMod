@@ -17,11 +17,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 {
     public partial class ResidentialOccupancySyncSystem
     {
-        /// <summary>
-        /// One exact household contract already present in the downloaded world. Channel 21
-        /// replaces this bootstrap as soon as it binds the host household identity; until then it
-        /// prevents the client's first RentAdjust pass from erasing the save-cut value.
-        /// </summary>
+        /// <summary>A save-cut household contract, kept until channel 21 binds the household.</summary>
         private sealed class LoadedWorldHouseholdRent
         {
             public Entity Property;
@@ -40,10 +36,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         private bool _loadedWorldRentSeedWarned;
 
         /// <summary>
-        /// Called from the small pre-RentAdjust ordering system. The world transfer already carries
-        /// every household's exact PropertyRenter contract, but host identity pages arrive on a
-        /// rolling schedule. Preserve those local save-cut contracts once per installed world so
-        /// the first native rent update has an identity-safe value to restore afterwards.
+        /// Before RentAdjust: keeps the world transfer's exact contracts until identity pages arrive, once
+        /// per installed world.
         /// </summary>
         internal void SeedLoadedWorldHouseholdRents()
         {
@@ -68,8 +62,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 for (int i = 0; i < properties.Length; i++)
                     SeedPropertyHouseholdRents(properties[i]);
 
-                // Advance only after the complete query was consumed. A failed partial pass is
-                // cleared below and retried before the next RentAdjust update.
+                // Advance only after the whole query; a failed pass retries.
                 _loadedWorldRentSeedGeneration = installGeneration;
                 _loadedWorldRentSeeded = true;
                 _loadedWorldRentSeedWarned = false;
@@ -105,8 +98,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             for (int i = 0; i < renters.Length; i++)
             {
                 Entity household = renters[i].m_Renter;
-                // Match channel 21's scope exactly. Tourist and commuter household contracts
-                // remain native and must not be frozen at the downloaded save cut.
+                // Channel 21's scope: tourist and commuter contracts stay native.
                 if (!IsCapturableHousehold(household, property)) continue;
 
                 PropertyRenter rented = EntityManager.GetComponentData<PropertyRenter>(household);
@@ -123,10 +115,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         }
 
         /// <summary>
-        /// Runs at PropertyRentSyncSystem's existing post-RentAdjust boundary. Native rent
-        /// calculation remains enabled for all of its property maintenance side effects; this
-        /// method changes only the household contracts for which channel 21 has an exact identity,
-        /// plus the short-lived loaded-world bootstrap entries that precede identity binding.
+        /// After RentAdjust: rewrites only contracts channel 21 has an identity for, plus save-cut entries
+        /// not yet bound.
         /// </summary>
         internal void CorrectHouseholdRentsAfterRentAdjust(int bucket)
         {
@@ -145,10 +135,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             for (int i = 0; i < properties.Count; i++)
             {
                 Entity property = properties[i];
-                CachedProperty cached;
-                if (!_cache.TryGetValue(property, out cached) || cached.Bucket != bucket) continue;
-                // Cache ownership/pruning belongs to the normal occupancy reconcile. This narrow
-                // boundary only consumes a still-valid entry and never changes roster state.
+                if (!_cache.TryGetValue(property, out CachedProperty cached) || cached.Bucket != bucket) continue;
+                // Consumes a valid entry only; roster state is the reconcile's.
                 if (!MatchesCachedProperty(property, cached)) continue;
 
                 int currentBucket = (int)(EntityManager
@@ -167,12 +155,10 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     OccupancyHousehold desired = wanted[h];
                     if (!IsHouseholdDesiredHere(desired.HouseholdId, property)) continue;
 
-                    Entity household;
-                    if (!TryResolveHousehold(desired.HouseholdId, out household) ||
+                    if (!TryResolveHousehold(desired.HouseholdId, out Entity household) ||
                         !EntityManager.HasComponent<PropertyRenter>(household)) continue;
 
-                    // A bound identity has superseded its save-cut bootstrap even when no write is
-                    // needed. Keeping that old value could otherwise resurrect it after turnover.
+                    // A bound identity supersedes its save-cut value.
                     ForgetLoadedWorldHouseholdRent(household);
 
                     PropertyRenter rented = EntityManager.GetComponentData<PropertyRenter>(household);
@@ -194,12 +180,10 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             for (int i = 0; i < households.Count; i++)
             {
                 Entity household = households[i];
-                LoadedWorldHouseholdRent bootstrap;
-                if (!_loadedWorldHouseholdRents.TryGetValue(household, out bootstrap) ||
+                if (!_loadedWorldHouseholdRents.TryGetValue(household, out LoadedWorldHouseholdRent bootstrap) ||
                     bootstrap.Bucket != bucket) continue;
 
-                ulong boundId;
-                if (TryGetBoundHouseholdId(household, out boundId))
+                if (TryGetBoundHouseholdId(household, out ulong boundId))
                 {
                     _loadedWorldHouseholdRents.Remove(household);
                     continue;
@@ -267,8 +251,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         /// <summary>Binding to channel 21 permanently supersedes the save-cut fallback.</summary>
         private void ForgetLoadedWorldHouseholdRent(Entity household)
         {
-            LoadedWorldHouseholdRent bootstrap;
-            if (!_loadedWorldHouseholdRents.TryGetValue(household, out bootstrap)) return;
+            if (!_loadedWorldHouseholdRents.TryGetValue(household, out LoadedWorldHouseholdRent bootstrap)) return;
             _loadedWorldHouseholdRents.Remove(household);
             if (bootstrap.Bucket >= 0 && bootstrap.Bucket < UpdatePartitions)
                 _loadedWorldRentBucketMembers[bootstrap.Bucket].Remove(household);

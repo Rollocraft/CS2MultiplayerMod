@@ -40,12 +40,10 @@ namespace CS2MultiplayerMod.Game.Sync.Players
             _netHoverPrefab = null;
         }
 
-        // Called with the already materialized LOCAL definition batch. Never query the city's
-        // temporary graph: an isolated remote transaction can also own previews in this world.
+        // Local definitions only: an isolated remote transaction can own previews too.
         public void ObserveHoverDefinitions(NativeArray<Entity> definitions)
         {
-            var tool = _hoverTools.activeTool as NetToolSystem;
-            if (tool == null || !InputManager.instance.controlOverWorld)
+            if (_hoverTools.activeTool is not NetToolSystem tool || !InputManager.instance.controlOverWorld)
             {
                 ClearHoverCapture();
                 return;
@@ -57,8 +55,7 @@ namespace CS2MultiplayerMod.Game.Sync.Players
             Entity selected = _netHoverPrefab != null ? _hoverPrefabs.GetEntity(_netHoverPrefab) : Entity.Null;
             Entity underground = selected != Entity.Null && EntityManager.HasComponent<PlaceableNetData>(selected)
                 ? EntityManager.GetComponentData<PlaceableNetData>(selected).m_UndergroundPrefab : Entity.Null;
-            // Bound work even for a very large grid/stamp. The display is deliberately partial
-            // for those tools, while the real build command retains the complete operation.
+            // Bounded; the display is deliberately partial for large grids and stamps.
             for (int i = 0; i < math.min(definitions.Length, 128) && _netHoverCount < _netHover.Length; i++)
             {
                 Entity entity = definitions[i];
@@ -117,8 +114,7 @@ namespace CS2MultiplayerMod.Game.Sync.Players
                 {
                     NativeList<ControlPoint> points = netTool.GetControlPoints(out JobHandle dependencies);
                     dependencies.Complete();
-                    // A cancelled course returns to the initial cursor point. Do not keep its
-                    // old curve merely because the tool is still selected.
+                    // A cancelled course returns to the first point; drop its old curve.
                     if (!points.IsCreated || points.Length < 2 ||
                         netTool.GetPrefab() != _netHoverPrefab || netTool.actualMode != _netHoverMode)
                         _netHoverCount = 0;
@@ -133,20 +129,14 @@ namespace CS2MultiplayerMod.Game.Sync.Players
                 }
                 else ClearHoverCapture();
 
-                PlayerHoverShape shape;
-                // What the active tool is pointing at, else the net under the cursor: the tool
-                // raycast searches only what that tool needs, which leaves nets out entirely
-                // whenever no tool is selected.
-                if (TryTargetShape(hasHit ? hit.m_Owner : Entity.Null, out shape) ||
+                // The tool's target, else the net under the cursor (no-tool raycasts skip nets).
+                if (TryTargetShape(hasHit ? hit.m_Owner : Entity.Null, out PlayerHoverShape shape) ||
                     TryTargetShape(_hoverNets.NetHit, out shape)) return Single(shape);
                 return Array.Empty<PlayerHoverShape>();
             }
         }
 
-        /// <summary>
-        /// The outline of an existing city entity. Read from the sender's own components: no shared
-        /// entity IDs. The receiver matches the geometry to its own native hover target.
-        /// </summary>
+        /// <summary>The outline of a city entity from the sender's components; the receiver matches geometry.</summary>
         private bool TryTargetShape(Entity target, out PlayerHoverShape shape)
         {
             shape = default;
@@ -195,8 +185,6 @@ namespace CS2MultiplayerMod.Game.Sync.Players
                 return ValidShape(shape);
             }
 
-            // The game's own footprint corners, so the outline sits on the object as placed rather
-            // than on an axis-aligned approximation of it.
             Quad3 corners = global::Game.Objects.ObjectUtils.CalculateBaseCorners(baseCentre, rotation, bounds);
             shape = new PlayerHoverShape
             {

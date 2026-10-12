@@ -6,6 +6,7 @@ using System.Reflection;
 using Colossal.IO.AssetDatabase;
 using Colossal.PSI.Common;
 using CS2MultiplayerMod.Core.Diagnostics;
+using CS2MultiplayerMod.Core.Protocol.Messages;
 using CS2MultiplayerMod.Game.Diagnostics;
 using CS2MultiplayerMod.Localization;
 using Game.Modding;
@@ -16,33 +17,50 @@ using PlaysetMod = Colossal.PSI.Common.Mod;
 namespace CS2MultiplayerMod.Game
 {
     /// <summary>
-    /// Finds every mod other than this one that is live for the running game. Hosting and
-    /// joining are both refused while any is present: nothing in the sync layer accounts
-    /// for a third party changing prefabs, tools or the simulation, so one such mod on one
-    /// side is enough to desync the session or crash the other player.
-    ///
-    /// The active Paradox Mods playset is the source of truth wherever it can be read: it
-    /// tracks what the player toggles live, and it is the only source that also lists
-    /// asset-only mods (maps, prop and prefab packs), which load no assembly and so are
-    /// invisible to the mod loader. Only the <em>active</em> playset is read; mods sitting in
-    /// the player's other playsets are not enabled for this run and are ignored.
-    ///
-    /// It is re-read on the rescan interval rather than once, for two reasons: the playset
-    /// reads empty for the first seconds of a run (the platform reports no active playset
-    /// until it has signed in and synced, which is why the game's own startup log can say
-    /// "(none)"), and a mod toggled off mid-session has to clear the gate without a restart.
-    ///
-    /// The loaded-assembly list is only a fallback, for when no playset is ever readable
-    /// (offline, or a local development install). It cannot clear until the game restarts,
-    /// so a block that came from it says so.
+    /// Unsupported live mods; hosting and joining are refused while any is present. The active Paradox
+    /// playset is the source where readable: it tracks live toggles and lists asset-only mods. It reads
+    /// empty until the platform has synced, so it is re-read on an interval. Loaded assemblies are the
+    /// fallback, which only clears on restart.
     /// </summary>
     internal static class ModsCheck
     {
-        /// <summary>
-        /// This mod's Paradox Mods id (Properties/PublishConfiguration.xml). Recognises our
-        /// own playset entry when it carries no local path to match on.
-        /// </summary>
+        /// <summary>This mod's Paradox Mods id, for a playset entry without a local path.</summary>
         private const string OwnPlatformId = "150432";
+
+        /// <summary>Verified Paradox Mods ids; titles can change or be localized.</summary>
+        private static readonly HashSet<string> SupportedPlatformIds =
+            new HashSet<string>(StringComparer.Ordinal)
+            {
+                "74604",  // Anarchy
+                "77240",  // Find It
+                "79634",  // Asset Icon Library
+                "80095",  // Traffic
+                "125866"  // Road Speed Adjuster
+            };
+
+        /// <summary>Exact titles and assembly names for installs without a Paradox id.</summary>
+        private static readonly HashSet<string> SupportedNames =
+            new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+            {
+                "Anarchy",
+                "Asset Icon Library",
+                "AssetIconLibrary",
+                "Find It",
+                "FindIt",
+                "Road Speed Adjuster",
+                "RoadSpeedAdjuster",
+                "Traffic"
+            };
+
+        /// <summary>Supported mods that act on this machine alone (search, icons); the handshake skips them.</summary>
+        private static readonly HashSet<string> ClientOnlyPlatformIds =
+            new HashSet<string>(StringComparer.Ordinal) { "77240", "79634" };
+
+        private static readonly HashSet<string> ClientOnlyNames =
+            new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+            {
+                "Find It", "FindIt", "Asset Icon Library", "AssetIconLibrary"
+            };
 
         /// <summary>Names listed before the rest collapse into a "+N more" tail.</summary>
         private const int MaxNamesListed = 6;
@@ -50,10 +68,7 @@ namespace CS2MultiplayerMod.Game
         /// <summary>Cap per name, so one absurdly long mod title cannot flood the UI.</summary>
         private const int MaxNameLength = 64;
 
-        /// <summary>
-        /// The blocking state is read from a getter binding on every UI frame, and a scan
-        /// walks the loaded mod list, so results are held for this long in between.
-        /// </summary>
+        /// <summary>Read every UI frame; a scan walks the mod list, so results are cached this long.</summary>
         private const long RescanMilliseconds = 5000;
 
         /// <summary>Marker the fault string carries so the status screen can classify it.</summary>
@@ -63,31 +78,21 @@ namespace CS2MultiplayerMod.Game
         private static readonly Stopwatch Clock = Stopwatch.StartNew();
 
         private static string[] _cached = Array.Empty<string>();
+        private static string[] _manifest = Array.Empty<string>();
         private static long _scannedAt = long.MinValue;
         private static bool _playsetEverPopulated;
         private static bool _restartRequired;
         private static string _ownFolder;
         private static bool _scanWarned;
 
-        /// <summary>
-        /// Display names of the other live mods, sorted, or an empty array when the only
-        /// mod running is this one. A scan that fails outright reports empty: a detection
-        /// fault must not lock the player out of multiplayer altogether.
-        /// </summary>
+        /// <summary>Sorted names of unsupported live mods. A failed scan reports empty rather than locking players out.</summary>
         public static string[] OtherModNames
         {
             get
             {
                 lock (Gate)
                 {
-                    long now = Clock.ElapsedMilliseconds;
-                    if (_scannedAt != long.MinValue && now - _scannedAt < RescanMilliseconds)
-                        return _cached;
-
-                    _scannedAt = now;
-                    string[] previous = _cached;
-                    _cached = Scan();
-                    LogChange(previous, _cached);
+                    RescanIfDue();
                     return _cached;
                 }
             }
@@ -96,9 +101,33 @@ namespace CS2MultiplayerMod.Game
         public static bool AnyOtherMods => OtherModNames.Length > 0;
 
         /// <summary>
-        /// Localized sentence naming the offending mods for the blocking banner, or "" when
-        /// nothing else is running (which hides the banner).
+        /// Every other live mod as sorted <see cref="ModManifestEntry"/> lines for the handshake. Supported
+        /// mods are included: on one side only they still change what the game builds.
         /// </summary>
+        public static string[] Manifest
+        {
+            get
+            {
+                lock (Gate)
+                {
+                    RescanIfDue();
+                    return _manifest;
+                }
+            }
+        }
+
+        private static void RescanIfDue()
+        {
+            long now = Clock.ElapsedMilliseconds;
+            if (_scannedAt != long.MinValue && now - _scannedAt < RescanMilliseconds) return;
+
+            _scannedAt = now;
+            string[] previous = _cached;
+            _cached = Scan();
+            LogChange(previous, _cached);
+        }
+
+        /// <summary>Localized banner text naming the mods, or "" (hides the banner).</summary>
         public static string BlockText(bool ignored = false)
         {
             string[] names = OtherModNames;
@@ -112,21 +141,14 @@ namespace CS2MultiplayerMod.Game
                 NamesText(names));
         }
 
-        /// <summary>
-        /// English detail for the session fault and the log. Faults stay English on purpose:
-        /// the status screen classifies them by substring and localizes for display.
-        /// </summary>
+        /// <summary>English: the status screen classifies faults by substring.</summary>
         public static string FaultDetail()
         {
             string[] names = OtherModNames;
             return names.Length == 0 ? "" : FaultMarker + " " + NamesText(names);
         }
 
-        /// <summary>
-        /// The other live mods for a session log line: <c>none</c>, or the names in brackets.
-        /// Recorded whether or not they block anything - with the compatibility check bypassed
-        /// they are the first thing to suspect in a desync, so the log has to say they were there.
-        /// </summary>
+        /// <summary>For the session log whether or not they block: with the check bypassed they are the first suspect.</summary>
         public static string Summary()
         {
             string[] names = OtherModNames;
@@ -144,45 +166,38 @@ namespace CS2MultiplayerMod.Game
 
         private static string[] Scan()
         {
-            // Not before our own folder is known: a read that cannot recognise this mod's
-            // own entry would list it as an offender and block multiplayer outright.
+            // Without our own folder, this mod's entry would be listed as an offender.
             string[] fromPlayset = Array.Empty<string>();
+            var manifest = new List<string>();
             bool readPlayset = !string.IsNullOrEmpty(OwnFolder()) &&
-                               TryReadActivePlayset(out fromPlayset);
+                               TryReadActivePlayset(out fromPlayset, manifest);
             if (readPlayset && fromPlayset.Length > 0) _playsetEverPopulated = true;
 
-            // An empty read only counts once the playset has proved it reports anything at
-            // all. Before that it is indistinguishable from a platform that has not finished
-            // starting up, and trusting it would open the gate for the first seconds of
-            // every run.
+            // An empty read counts only once the playset has reported anything; before that the platform may
+            // still be starting.
             if (readPlayset && (_playsetEverPopulated || fromPlayset.Length > 0))
             {
                 Array.Sort(fromPlayset, StringComparer.OrdinalIgnoreCase);
                 _restartRequired = false;
+                _manifest = SortedDistinct(manifest);
                 return fromPlayset;
             }
 
             var names = new List<string>();
-            AddLoadedMods(names, new HashSet<string>(StringComparer.OrdinalIgnoreCase));
+            manifest.Clear();
+            AddLoadedMods(names, new HashSet<string>(StringComparer.OrdinalIgnoreCase), manifest);
+            _manifest = SortedDistinct(manifest);
             names.Sort(StringComparer.OrdinalIgnoreCase);
             _restartRequired = names.Count > 0;
             return names.ToArray();
         }
 
         /// <summary>
-        /// The mods the active playset has enabled, as the game's own mod loader reads them
-        /// on startup. The call resolves from the platform's local mod cache, so it neither
-        /// blocks on the network nor needs the player to be online - it does wait out an
-        /// asynchronous call on the calling thread, which is why the rescan interval and not
-        /// the UI frame decides how often it runs. False when no backend could be asked at
-        /// all, which is distinct from a backend answering "nothing enabled".
-        ///
-        /// The Paradox backend is reached by reflection over the instance the platform
-        /// already created, deliberately without naming its assembly: a declared reference
-        /// the running copy of the game cannot resolve makes it refuse to load this mod at
-        /// all - the same reason the Steam relay lives in its own runtime-loaded assembly.
+        /// Mods the active playset enables, from the local mod cache (no network, but it blocks the calling
+        /// thread). False when no backend was reachable. Reflection over the platform's instance: naming its
+        /// assembly would make stores without it refuse to load this mod.
         /// </summary>
-        private static bool TryReadActivePlayset(out string[] names)
+        private static bool TryReadActivePlayset(out string[] names, List<string> manifest)
         {
             names = Array.Empty<string>();
             try
@@ -206,6 +221,11 @@ namespace CS2MultiplayerMod.Game
                     foreach (PlaysetMod mod in mods)
                     {
                         if (IsSelf(mod)) continue;
+                        if (!ClientOnlyPlatformIds.Contains(mod.id ?? "") && !IsClientOnlyName(mod.displayName))
+                            manifest.Add(ModManifestEntry.Format(mod.id,
+                                string.IsNullOrEmpty(mod.version) ? mod.userModVersion : mod.version,
+                                PlaysetName(mod)));
+                        if (IsOfficiallySupported(mod)) continue;
                         string name = PlaysetName(mod);
                         if (!string.IsNullOrEmpty(name)) found.Add(name);
                     }
@@ -222,7 +242,7 @@ namespace CS2MultiplayerMod.Game
             return false;
         }
 
-        private static void AddLoadedMods(List<string> names, HashSet<string> seen)
+        private static void AddLoadedMods(List<string> names, HashSet<string> seen, List<string> manifest)
         {
             try
             {
@@ -234,6 +254,9 @@ namespace CS2MultiplayerMod.Game
                     if (info == null || info.asset == null) continue;
                     if (!info.asset.isMod || !info.isLoaded) continue;
                     if (IsSelf(info)) continue;
+                    if (!IsClientOnlyName(info.asset.name) && !IsClientOnlyName(info.name))
+                        manifest.Add(ModManifestEntry.Format("", LoadedVersion(info), LoadedName(info)));
+                    if (IsOfficiallySupported(info)) continue;
                     Add(names, seen, LoadedName(info));
                 }
             }
@@ -262,11 +285,48 @@ namespace CS2MultiplayerMod.Game
             return SharesOwnFolder(info.asset.path);
         }
 
-        /// <summary>
-        /// Whether a reported path belongs to this mod. Compared both ways round because
-        /// the playset reports a mod's root folder while our own assembly can sit in a
-        /// subfolder of it.
-        /// </summary>
+        private static bool IsOfficiallySupported(PlaysetMod mod)
+        {
+            if (!string.IsNullOrEmpty(mod.id) && SupportedPlatformIds.Contains(mod.id))
+                return true;
+
+            return IsSupportedName(mod.displayName);
+        }
+
+        private static bool IsOfficiallySupported(ModManager.ModInfo info) =>
+            IsSupportedName(info.asset.name) || IsSupportedName(info.name);
+
+        private static bool IsClientOnlyName(string name) =>
+            !string.IsNullOrEmpty(name) && ClientOnlyNames.Contains(name.Trim());
+
+        private static string LoadedVersion(ModManager.ModInfo info)
+        {
+            try { return info.asset.version != null ? info.asset.version.ToString() : ""; }
+            catch { return ""; }
+        }
+
+        private static string[] SortedDistinct(List<string> entries)
+        {
+            var set = new SortedSet<string>(entries, StringComparer.Ordinal);
+            var result = new string[set.Count];
+            set.CopyTo(result);
+            return result;
+        }
+
+        private static bool IsSupportedName(string name)
+        {
+            if (string.IsNullOrEmpty(name)) return false;
+
+            string candidate = name.Trim();
+            if (SupportedNames.Contains(candidate)) return true;
+
+            // Some local mod loaders expose the assembly filename rather than its simple name.
+            const string extension = ".dll";
+            return candidate.EndsWith(extension, StringComparison.OrdinalIgnoreCase) &&
+                   SupportedNames.Contains(candidate.Substring(0, candidate.Length - extension.Length));
+        }
+
+        /// <summary>Both ways round: the playset reports the root folder, our assembly may be in a subfolder.</summary>
         private static bool SharesOwnFolder(string path)
         {
             string own = OwnFolder();
@@ -277,10 +337,7 @@ namespace CS2MultiplayerMod.Game
             return IsSameOrUnder(own, other) || IsSameOrUnder(other, own);
         }
 
-        /// <summary>
-        /// Containment that stops at a path separator, so a neighbouring folder whose name
-        /// merely starts with ours ("CS2MultiplayerModExtras") is not mistaken for this mod.
-        /// </summary>
+        /// <summary>Stops at a path separator, so "CS2MultiplayerModExtras" is not this mod.</summary>
         private static bool IsSameOrUnder(string path, string root)
         {
             if (path.Length == root.Length)
@@ -290,10 +347,7 @@ namespace CS2MultiplayerMod.Game
                    path.StartsWith(root, StringComparison.OrdinalIgnoreCase);
         }
 
-        /// <summary>
-        /// This mod's own folder. Resolution is retried until it succeeds - the mod loader
-        /// has no asset for us yet during the earliest part of startup.
-        /// </summary>
+        /// <summary>Retried until resolved: the loader has no asset for us early in startup.</summary>
         private static string OwnFolder()
         {
             if (!string.IsNullOrEmpty(_ownFolder)) return _ownFolder;
@@ -347,13 +401,7 @@ namespace CS2MultiplayerMod.Game
             return name.Length > MaxNameLength ? name.Substring(0, MaxNameLength) : name;
         }
 
-        /// <summary>
-        /// Reports the set whenever it changes, ungated: which other mods were live is one of the
-        /// few facts every bug report needs, and with the compatibility check bypassed the mod
-        /// that broke the session is in this list rather than in ours. Rare enough for an event -
-        /// it only fires when the set actually changes - and it names the source it read, which
-        /// is what a player needs when the block names a mod they have already turned off.
-        /// </summary>
+        /// <summary>Logs the unsupported set and its source whenever it changes, ungated.</summary>
         private static void LogChange(string[] previous, string[] current)
         {
             if (previous.Length == current.Length)
@@ -367,8 +415,8 @@ namespace CS2MultiplayerMod.Game
             string source = _restartRequired ? "loaded assemblies (restart to clear)" : "active playset";
             SyncLog.Event(LogTopic.Startup,
                 current.Length == 0
-                    ? "No other mods are active - multiplayer is available."
-                    : "Other mods are active, from the " + source + ": " +
+                    ? "No unsupported mods are active - multiplayer is available."
+                    : "Unsupported mods are active, from the " + source + ": " +
                       string.Join(", ", current) + ".");
         }
 
@@ -377,7 +425,7 @@ namespace CS2MultiplayerMod.Game
             if (_scanWarned) return;
             _scanWarned = true;
             SyncLog.Warn(LogTopic.Startup, "Could not read the " + source + " (" + ex.Message +
-                "); other mods cannot be detected from it.");
+                "); unsupported mods cannot be detected from it.");
         }
     }
 }

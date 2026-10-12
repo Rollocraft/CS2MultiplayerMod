@@ -1,4 +1,3 @@
-using System.Text;
 using Colossal.Mathematics;
 using CS2MultiplayerMod.Core.Diagnostics;
 using CS2MultiplayerMod.Game.Diagnostics;
@@ -12,13 +11,11 @@ using Unity.Mathematics;
 
 namespace CS2MultiplayerMod.Game.Sync.Systems
 {
-    // The sub-networks a placed object owns: the driveways and paths generated inside its lot,
-    // each course rebuilt in the owner's local space so both peers lay down the same geometry.
     public partial class BuildSyncSystem
     {
         /// <summary>
-        /// Emit connection-net definitions per <see cref="SubNet"/>, curves averaged at shared
-        /// node indices, mirrored for left-hand traffic and transformed local to world.
+        /// Connection-net definitions per <see cref="SubNet"/>: shared node positions averaged, mirrored for
+        /// left-hand traffic, local to world.
         /// </summary>
         private void RealizeSubNets(Entity prefab, OwnerDefinition owner, Entity ownerEntity,
             Entity lotOwner, bool simulationSpawn, ref Unity.Mathematics.Random random)
@@ -27,10 +24,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             DynamicBuffer<SubNet> subNets = EntityManager.GetBuffer<SubNet>(prefab, isReadOnly: true);
             if (subNets.Length == 0) return;
 
-            // Height fields for the per-course snapping below. GetHeightData(waitForPending) is how
-            // the terrain path already reads a settled surface; the water dependency is completed
-            // before the data is touched. The spawner recipe snaps to no surface at all, so it does
-            // not pay for either read.
+            // Settled height fields; the spawner recipe snaps to nothing and skips both reads.
             var heightData = default(TerrainHeightData);
             var waterData = default(WaterSurfaceData<SurfaceWater>);
             var lotInfo = default(global::Game.Buildings.BuildingUtils.LotInfo);
@@ -38,14 +32,12 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             if (!simulationSpawn)
             {
                 heightData = _terrainSystem.GetHeightData(waitForPending: true);
-                Unity.Jobs.JobHandle waterDeps;
-                waterData = _waterSystem.GetSurfaceData(out waterDeps);
+                waterData = _waterSystem.GetSurfaceData(out Unity.Jobs.JobHandle waterDeps);
                 waterDeps.Complete();
                 hasLot = TryGetOwnerLot(lotOwner, out lotInfo);
             }
 
-            // Average the curve endpoints that share a node index, so sub-nets meeting at a node agree
-            // on one position (.w counts contributors; divide to get the mean).
+            // Average endpoints sharing a node index (.w counts contributors).
             var nodePositions = new NativeList<float4>(subNets.Length * 2, Allocator.Temp);
             try
             {
@@ -71,8 +63,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 {
                     _netGeometryLookup.Update(this);
                     SubNet subNet = global::Game.Net.NetUtils.GetSubNet(subNets, k, lefthand, ref _netGeometryLookup);
-                    // GenerateNodes/EdgesSystem read NetData/NetGeometryData[prefab] with NO existence
-                    // check → a sub-net prefab missing them hard-crashes the game. Skip rather than risk it.
+                    // NetData/NetGeometryData are read unchecked: a missing one is a native crash.
                     if (!EntityManager.HasComponent<NetData>(subNet.m_Prefab) ||
                         !EntityManager.HasComponent<NetGeometryData>(subNet.m_Prefab))
                     {
@@ -94,11 +85,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             }
         }
 
-        /// <summary>
-        /// Reproduce the lot info the game derives for the building a set of connection nets is laid
-        /// on. Requires a <see cref="global::Game.Buildings.Lot"/>; without one the caller falls back
-        /// to terrain snapping, exactly as the tools do.
-        /// </summary>
+        /// <summary>The lot info the game derives; without a Lot the caller snaps to terrain.</summary>
         private bool TryGetOwnerLot(Entity lotOwner,
             out global::Game.Buildings.BuildingUtils.LotInfo lotInfo)
         {
@@ -126,7 +113,6 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                         lotOwner, isReadOnly: true)
                     : default(DynamicBuffer<global::Game.Buildings.InstalledUpgrade>);
 
-            bool hasExtensionLots;
             lotInfo = global::Game.Buildings.BuildingUtils.CalculateLotInfo(
                 new float2(EntityManager.GetComponentData<BuildingData>(ownerPrefab).m_LotSize) * 4f,
                 EntityManager.GetComponentData<global::Game.Objects.Transform>(lotOwner),
@@ -135,15 +121,11 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 EntityManager.GetComponentData<PrefabRef>(lotOwner),
                 upgrades, _transformLookup, _prefabRefLookup, _objectGeometryLookup,
                 _buildingTerraformLookup, _buildingExtensionLookup, defaultNoSmooth: false,
-                out hasExtensionLots);
+                out bool hasExtensionLots);
             return true;
         }
 
-        /// <summary>
-        /// The world position of a node index several sub-nets share. A water net takes its height
-        /// from the water surface rather than from the averaged prefab-local position - except on
-        /// the spawner recipe, which never samples a surface at all.
-        /// </summary>
+        /// <summary>A shared node's world position; water nets use the water surface, except on the spawner recipe.</summary>
         private static float3 SharedSubNetNodePosition(float3 localPosition, OwnerDefinition owner,
             NetGeometryData netGeometry, bool simulationSpawn, ref TerrainHeightData heightData,
             ref WaterSurfaceData<SurfaceWater> waterData)
@@ -157,11 +139,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         }
 
         /// <summary>
-        /// <paramref name="simulationSpawn"/> picks the recipe everything the simulation grows uses
-        /// instead of the tool's: prefab-local height, no surface snapping, and merging disabled on
-        /// both ends. The two are not interchangeable - a tool placement's driveway is meant to join
-        /// the road it snapped to, a grown building's is not allowed to touch it. See
-        /// docs/internals/building-placement-and-subnets.md.
+        /// <paramref name="simulationSpawn"/> selects the spawner recipe: prefab-local height, no snapping,
+        /// merging disabled. A tool driveway joins its road; a grown building's must not.
         /// </summary>
         private void RealizeSubNetCourse(Entity netPrefab, Bezier4x3 curve, int2 nodeIndex, int2 parentMesh,
             CompositionFlags upgrades, NativeList<float4> nodePositions, OwnerDefinition owner,
@@ -183,11 +162,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             if (ownerEntity == Entity.Null) EntityManager.AddComponentData(netDef, owner);
 
             var course = default(NetCourse);
-            // Tool-recipe height handling. A course whose BOTH ends are mesh-relative keeps its
-            // prefab-local height; otherwise the free end(s) are snapped - to water, to the host
-            // building's lot surface, or to the terrain - and the prefab-local height is then
-            // re-applied as an offset. Laying a tool placement's paths at raw LocalToWorld height
-            // instead is why they met the street at the wrong height and read as unconnected.
+            // Tool recipe: ends not both mesh-relative snap to water, the host lot or terrain, then the
+            // prefab-local height is re-applied as an offset.
             _netGeometryLookup.Update(this);
             NetGeometryData netGeometry = _netGeometryLookup.HasComponent(netPrefab)
                 ? _netGeometryLookup[netPrefab]

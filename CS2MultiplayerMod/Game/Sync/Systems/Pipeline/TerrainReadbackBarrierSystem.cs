@@ -4,9 +4,8 @@ using Unity.Entities;
 namespace CS2MultiplayerMod.Game.Sync.Systems
 {
     /// <summary>
-    /// Completes a remote terrain pass's asynchronous CPU height readback at the beginning of
-    /// ToolUpdate. Running before interactive tools matters: a road preview generated from the old
-    /// CPU surface is already wrong even if realization waits later in the same phase.
+    /// Completes the remote terrain height readback before interactive tools build previews from
+    /// the stale CPU surface.
     /// </summary>
     public partial class TerrainReadbackBarrierSystem : GameSystemBase
     {

@@ -14,10 +14,8 @@ using CS2MultiplayerMod.Game.Sync.Infrastructure;
 namespace CS2MultiplayerMod.Game.Sync.Channels
 {
     /// <summary>
-    /// Host-authoritative current taxable-income statistic buckets. The taxation panel calculates
-    /// every displayed money amount from these four parameterized statistics, not from the tax-rate
-    /// table itself. They are intentionally a separate, non-editable channel: players may propose
-    /// rates through channel 6, but can never propose taxable income to the host.
+    /// Taxable-income statistics the taxation panel computes its amounts from. Not editable: clients
+    /// propose rates (channel 6), never income.
     /// </summary>
     public sealed class TaxIncomeStateChannel : IStateChannel, IPumpedStateChannel
     {
@@ -163,9 +161,8 @@ namespace CS2MultiplayerMod.Game.Sync.Channels
                 for (int i = 0; i < entries.Length; i++)
                 {
                     Entry wanted = entries[i];
-                    Entity entity;
                     if (!lookup.TryGetValue(new CityStatisticsSystem.StatisticsKey(
-                            wanted.Type, wanted.Parameter), out entity) ||
+                            wanted.Type, wanted.Parameter), out Entity entity) ||
                         entity == Entity.Null || !em.Exists(entity)) continue;
 
                     if (!em.HasBuffer<CityStatistic>(entity)) continue;

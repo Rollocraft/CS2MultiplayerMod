@@ -5,16 +5,11 @@ using Game.Companies;
 using Game.Prefabs;
 using Game.Tools;
 using CS2MultiplayerMod.Game.Sync.Infrastructure;
-using Unity.Collections;
 using Unity.Entities;
 
 namespace CS2MultiplayerMod.Game.Sync.Systems
 {
-    /// <summary>
-    /// Fast client boundary for host company state. It runs on the native job-matching cadence so
-    /// an arrived name/economy page and any locally changed Employee/Worker link are repaired long
-    /// before the company's slower accounting partition comes around.
-    /// </summary>
+    /// <summary>On the job-matching cadence, well before the slower accounting partition.</summary>
     public sealed partial class CompanyStateBoundarySystem : GameSystemBase
     {
         private CompanyStatsSyncSystem _companies;
@@ -47,26 +42,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         protected override void OnUpdate()
         {
             if (_companies == null) return;
-            NativeArray<Entity> companies = default(NativeArray<Entity>);
-            NativeArray<Entity> properties = default(NativeArray<Entity>);
-            try
-            {
-                if (!_changedEmployees.IsEmptyIgnoreFilter)
-                {
-                    companies = _changedEmployees.ToEntityArray(Allocator.Temp);
-                    _companies.CaptureEmployeeChanges(companies);
-                }
-                if (!_changedEfficiencies.IsEmptyIgnoreFilter)
-                {
-                    properties = _changedEfficiencies.ToEntityArray(Allocator.Temp);
-                    _companies.CaptureEfficiencyChanges(properties);
-                }
-            }
-            finally
-            {
-                if (companies.IsCreated) companies.Dispose();
-                if (properties.IsCreated) properties.Dispose();
-            }
+            SyncQuery.WithEntities(_changedEmployees, _companies.CaptureEmployeeChanges);
+            SyncQuery.WithEntities(_changedEfficiencies, _companies.CaptureEfficiencyChanges);
             _companies.ApplyClientStateBoundary();
         }
     }

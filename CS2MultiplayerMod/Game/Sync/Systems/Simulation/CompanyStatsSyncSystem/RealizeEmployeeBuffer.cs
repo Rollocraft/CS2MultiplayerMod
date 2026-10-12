@@ -55,9 +55,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 return true;
             }
 
-            // Partial rosters retain unrelated commuters and unresolved employees. Index the
-            // desired residents once, then compact in one pass; repeated buffer searches made
-            // a large, partially resolved workplace quadratic during district creation.
+            // Index desired residents once, then compact in one pass (repeated searches were quadratic).
             _partialEmployeeStates.Clear();
             _partialEmployeeSeen.Clear();
             for (int i = 0; i < _resolvedEmployeeScratch.Count; i++)
@@ -70,8 +68,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             for (int i = 0; i < count; i++)
             {
                 Employee current = employees[i];
-                CompanyStatsEmployee wanted;
-                if (_partialEmployeeStates.TryGetValue(current.m_Worker, out wanted))
+                if (_partialEmployeeStates.TryGetValue(current.m_Worker, out CompanyStatsEmployee wanted))
                 {
                     if (!_partialEmployeeSeen.Add(current.m_Worker))
                     {
@@ -99,6 +96,5 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             }
             return changed;
         }
-
     }
 }

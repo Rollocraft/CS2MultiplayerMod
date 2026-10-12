@@ -1,5 +1,5 @@
-import { useLocalization } from "cs2/l10n";
-import { getModule } from "cs2/modding";
+import { GROUP, tryModule, useT } from "mods/ui-helpers";
+import { bindValue } from "cs2/api";
 import { Button, Dropdown, DropdownToggle } from "cs2/ui";
 import { CSSProperties } from "react";
 
@@ -21,14 +21,26 @@ export const CONNECTION_LOC = {
     joinCodeSelectHint: "CS2MP.Connection.JoinCodeSelectHint",
     joinCodeEntry: "CS2MP.Connection.JoinCodeEntry",
     joinCodeEntryHint: "CS2MP.Connection.JoinCodeEntryHint",
+    publicPasswordHint: "CS2MP.Connection.PublicPasswordHint",
 };
 
-const tryModule = (path: string, exportName: string): any => {
-    try {
-        return getModule(path, exportName);
-    } catch {
-        return null;
-    }
+// The C# session rule (MultiplayerConfig.MinPublicPasswordLength), so both host
+// screens warn before a host attempt is refused rather than after.
+export const publicPasswordMinLength$ = bindValue<number>(GROUP, "publicPasswordMinLength", 8);
+
+/** Direct, non-LAN hosting with a password the session would refuse. */
+export const publicPasswordMissing = (relay: boolean, lanOnly: boolean, password: string, minLength: number) =>
+    !relay && !lanOnly && (password ?? "").length < minLength;
+
+/** "{0}" is the minimum length, "{1}" how many characters are typed so far. */
+export const usePublicPasswordHint = (password: string, minLength: number) => {
+    const t = useT();
+    return t(
+        CONNECTION_LOC.publicPasswordHint,
+        "Hosting over the internet needs a password of at least {0} characters ({1}/{0}). Or switch LAN Only on, or use Steam Relay.",
+    )
+        .split("{0}").join(String(minLength))
+        .split("{1}").join(String((password ?? "").length));
 };
 
 // The menu's own dropdown skin, so this matches the native dropdowns elsewhere.
@@ -51,11 +63,6 @@ const fallbackOption: CSSProperties = {
     padding: "9rem 14rem",
     fontSize: "17rem",
     textAlign: "left",
-};
-
-export const useT = () => {
-    const { translate } = useLocalization();
-    return (id: string, fallback: string) => translate(id, fallback) ?? fallback;
 };
 
 interface ConnectionDropdownProps {

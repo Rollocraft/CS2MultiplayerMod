@@ -3,11 +3,7 @@ using CS2MultiplayerMod.Game.Sync.Commands;
 
 namespace CS2MultiplayerMod.Game
 {
-    /// <summary>
-    /// Single source of truth for gameplay commands accepted at the session boundary.
-    /// Keeping authorization and diagnostic names together makes a newly introduced
-    /// command visible in logs as soon as it is admitted to the protocol.
-    /// </summary>
+    /// <summary>Gameplay commands accepted at the session boundary, with their diagnostic names.</summary>
     internal static class GameplayCommandRegistry
     {
         private static readonly ushort[] AllowedCommandIds =
@@ -26,12 +22,11 @@ namespace CS2MultiplayerMod.Game
             DisasterEventCommand.Id, EntityNameCommand.Id,
             GrowableLifecycleCommand.Id,
             ModTypeTableCommand.Id, ModStateCommand.Id,
+            ObjectPlacementBatchCommand.Id, ObjectDeleteBatchCommand.Id,
+            FireCommand.Id, AccidentCommand.Id,
         };
 
-        internal static void Register(MultiplayerSession session)
-        {
-            session.AllowCommands(AllowedCommandIds);
-        }
+        internal static void Register(MultiplayerSession session) => session.AllowCommands(AllowedCommandIds);
 
         /// <summary>A copy for callers that iterate the allow-list without being able to edit it.</summary>
         internal static ushort[] CopyAllowedIds() => (ushort[])AllowedCommandIds.Clone();
@@ -70,6 +65,10 @@ namespace CS2MultiplayerMod.Game
                 case GrowableLifecycleCommand.Id: return "growable-lifecycle";
                 case ModTypeTableCommand.Id: return "mod-type-table";
                 case ModStateCommand.Id: return "mod-state";
+                case ObjectPlacementBatchCommand.Id: return "object-place-batch";
+                case ObjectDeleteBatchCommand.Id: return "object-delete-batch";
+                case FireCommand.Id: return "fire";
+                case AccidentCommand.Id: return "traffic-accident";
                 default: return "unknown";
             }
         }

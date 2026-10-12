@@ -3,11 +3,7 @@ using System.Text;
 
 namespace CS2MultiplayerMod.Core.Protocol
 {
-    /// <summary>
-    /// Counterpart to <see cref="NetworkWriter"/>. Reads little-endian primitives and
-    /// length-prefixed UTF-8 strings from a byte buffer, validating bounds so a
-    /// malformed or truncated payload throws rather than reading out of range.
-    /// </summary>
+    /// <summary>Reads what <see cref="NetworkWriter"/> writes; a truncated payload throws, never over-reads.</summary>
     public sealed class NetworkReader
     {
         private readonly byte[] _buffer;
@@ -86,8 +82,7 @@ namespace CS2MultiplayerMod.Core.Protocol
 
         public byte[] ReadBytes(int count)
         {
-            // A negative count comes from wire data (a length prefix), so it is a
-            // protocol error, not a caller bug.
+            // A negative count comes off the wire: a protocol error.
             if (count < 0) throw new ProtocolException("Negative byte-array length: " + count + ".");
             Require(count);
             byte[] result = new byte[count];
@@ -96,10 +91,18 @@ namespace CS2MultiplayerMod.Core.Protocol
             return result;
         }
 
+        /// <summary>Read a length-prefixed payload that must fill the rest of this message.</summary>
+        public byte[] ReadRemainingLengthPrefixedBytes(string messageName)
+        {
+            int length = ReadInt();
+            if (length != Remaining)
+                throw new ProtocolException(messageName + " body length does not match its envelope.");
+            return length == 0 ? Array.Empty<byte>() : ReadBytes(length);
+        }
+
         private void Require(int count)
         {
-            // Overflow-safe form: count comes off the wire, and "_position + count" would
-            // wrap negative for a forged length near int.MaxValue and slip past the check.
+            // Overflow-safe: "_position + count" wraps for a forged length near int.MaxValue.
             if (count < 0 || count > _end - _position)
                 throw new ProtocolException("Unexpected end of payload: needed " + count + " byte(s), have " + Remaining + ".");
         }

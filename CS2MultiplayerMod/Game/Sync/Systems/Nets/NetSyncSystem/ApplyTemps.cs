@@ -1,5 +1,4 @@
 using System.Collections.Generic;
-using Colossal.Mathematics;
 using CS2MultiplayerMod.Core.Diagnostics;
 using CS2MultiplayerMod.Game.Diagnostics;
 using CS2MultiplayerMod.Game.Sync.Infrastructure;
@@ -11,13 +10,8 @@ using Unity.Entities;
 
 namespace CS2MultiplayerMod.Game.Sync.Systems.Net
 {
-    // Commit orchestration for NetSyncSystem. A remote net operation includes the objects and areas
-    // its native generation updates as side effects; the complete local preview graph is temporarily
-    // Disabled so an unrelated tool can remain selected without either transaction consuming the
-    // other one's entities.
-    // Disabling, releasing and clearing the temporary entities a tool leaves behind, and choosing
-    // which transaction query is the live one. Isolation is what keeps a remote batch and a local
-    // tool's output from consuming each other's entities.
+    // Disabling, releasing and clearing tool Temps so a remote batch and a local tool never consume
+    // each other's entities.
     public partial class NetSyncSystem
     {
         private readonly NetPreviewVisibility _isolatedLocalNetVisibility = new NetPreviewVisibility();
@@ -33,8 +27,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                     if (!EntityManager.Exists(entity) || EntityManager.HasComponent<Disabled>(entity)) continue;
                     EntityManager.AddComponent<Disabled>(entity);
                     destination.Add(entity);
-                    // Hidden on an original survives Disabled on its preview. EdgeIterator then
-                    // omits the real adjoining road while generating the remote junction.
+                    // Hidden on an original survives Disabled on its preview and hides the real road from EdgeIterator.
                     if (ReferenceEquals(destination, _isolatedLocalTemps))
                         _isolatedLocalNetVisibility.Suspend(EntityManager, entity);
                 }
@@ -93,9 +86,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                      !EntityManager.HasComponent<global::Game.Buildings.ServiceUpgrade>(e));
             }
 
-            // Match the normal tool-clear ownership rule. Non-essential lane/object children of a
-            // Temp owner are removed with that owner; independently tagging both sides can make
-            // cleanup process the child after its ownership graph has already vanished.
+            // The tool-clear ownership rule: non-essential children go with their owner.
             bool deleteEntity = !handledSubObject || (temp.m_Flags & TempFlags.Essential) != 0 ||
                                 owner == Entity.Null || !EntityManager.Exists(owner) ||
                                 !EntityManager.HasComponent<Temp>(owner);
@@ -132,9 +123,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
         }
 
         /// <summary>
-        /// Mark every live Temp matched by <paramref name="query"/> as Deleted, the way the game's
-        /// own clear pass does: restore an original the preview was hiding, drop the highlight on
-        /// street-name aggregates, then tag the Temp. Returns how many were cleared.
+        /// Clears Temps as the game's clear pass does: restore hidden originals, drop street-name highlights,
+        /// tag Deleted.
         /// </summary>
         private int ClearTempEntities(EntityQuery query)
         {
@@ -166,9 +156,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
 
             _protectedRemoteNetTemps.Clear();
             DisableQueryEntities(ActiveTransactionQuery(), _protectedRemoteNetTemps);
-            // A local Apply owns its complete standing preview, regardless of the selected
-            // tool. Releasing only the road-shaped portion can commit a building without its owned
-            // driveway, or clear a subnet while leaving its owner behind.
+            // A local Apply owns its whole preview; releasing part could split a building from its driveway.
             ReleaseTrackedTemps(_isolatedLocalTemps);
             _localToolOutputProtectedThisFrame = true;
             SyncLog.Trace(LogTopic.Nets, "net remote batch protected for local " + tool.applyMode +

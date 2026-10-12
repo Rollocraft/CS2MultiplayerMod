@@ -1,15 +1,11 @@
+import { GROUP, tryModule, useT } from "mods/ui-helpers";
 import { bindValue, trigger, useValue } from "cs2/api";
 import { AutoNavigationScope, BackConsumer, InputActionBarrier, NavigationDirection } from "cs2/input";
-import { useLocalization } from "cs2/l10n";
-import { getModule } from "cs2/modding";
 import { Button, Portal } from "cs2/ui";
 import { CSSProperties, useEffect, useState } from "react";
 import { useBackKey } from "mods/back-action";
 import { HELP_PAGE, OpenHelpButton } from "mods/help-link";
 import { MULTIPLAYER_BLUE } from "mods/multiplayer-theme";
-
-// Binding group shared with MultiplayerUISystem on the C# side.
-const GROUP = "cs2mp";
 
 const LOC = {
     joiningTitle: "CS2MP.UI.JoiningTitle",
@@ -30,11 +26,6 @@ const LOC = {
     tryAgain: "CS2MP.UI.TryAgain",
 };
 
-const useT = () => {
-    const { translate } = useLocalization();
-    return (id: string, fallback: string) => translate(id, fallback) ?? fallback;
-};
-
 const statusKind$ = bindValue<string>(GROUP, "statusKind", "offline");
 const statusTitle$ = bindValue<string>(GROUP, "statusTitle", "");
 const statusDetail$ = bindValue<string>(GROUP, "statusDetail", "");
@@ -52,14 +43,6 @@ const clientExitFailed$ = bindValue<boolean>(GROUP, "clientExitFailed", false);
 const clientExitReason$ = bindValue<string>(GROUP, "clientExitReason", "");
 
 type LoadingScreenSurface = "menu" | "game" | "multiplayer";
-
-const tryModule = (path: string, exportName: string): any => {
-    try {
-        return getModule(path, exportName);
-    } catch {
-        return null;
-    }
-};
 
 const backdropClasses: Record<string, string> | null =
     tryModule("game-ui/menu/components/menu-ui-backdrops/menu-ui-backdrops.module.scss", "classes");
@@ -120,7 +103,6 @@ const releaseBackdropImage = () => {
     }, 500);
 };
 
-// rem behaves like resolution-independent pixels (the game scales root font size).
 const styles: Record<string, CSSProperties> = {
     overlay: {
         position: "fixed",

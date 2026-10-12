@@ -3,13 +3,8 @@ using Game;
 namespace CS2MultiplayerMod.Game.Sync.Systems
 {
     /// <summary>
-    /// Owns the native company-lifecycle boundary immediately before the move-away executor. On a
-    /// client it removes the closure and property-seeking decisions local systems proposed, while
-    /// leaving those systems running for the figures, resource orders and demand signals the rest
-    /// of the simulation still needs from them. Closures the host roster asked for are whitelisted
-    /// and pass through untouched.
-    ///
-    /// The main company system owns all retained state; this class is only its ordering point.
+    /// Just before the move-away executor: strips local closure and property-seeking proposals on a
+    /// client. State lives in CompanyStatsSyncSystem; this is only its ordering point.
     /// </summary>
     public sealed partial class CompanyLifecycleBoundarySystem : GameSystemBase
     {
@@ -21,11 +16,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             _companies = World.GetOrCreateSystemManaged<CompanyStatsSyncSystem>();
         }
 
-        /// <summary>
-        /// The native executor runs on a wide interval, so matching it here keeps this boundary
-        /// off the frames where it would have nothing to do. A proposal made in between simply
-        /// waits, because nothing consumes it until that executor runs either.
-        /// </summary>
+        /// <summary>The executor's own interval: proposals wait for it anyway.</summary>
         public override int GetUpdateInterval(SystemUpdatePhase phase) =>
             phase == SystemUpdatePhase.GameSimulation ? 16 : 1;
 

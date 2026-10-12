@@ -1,9 +1,6 @@
 namespace CS2MultiplayerMod.Core.Protocol
 {
-    /// <summary>
-    /// Discriminator written as the first byte of every payload. Values are explicit
-    /// and must remain stable across versions (append new ones, never renumber).
-    /// </summary>
+    /// <summary>First payload byte. Stable across versions: append, never renumber.</summary>
     public enum MessageType : byte
     {
         Unknown = 0,
@@ -32,42 +29,22 @@ namespace CS2MultiplayerMod.Core.Protocol
         /// <summary>Host -> clients: one chunk of a large named byte stream (e.g. a savegame).</summary>
         BlobChunk = 8,
 
-        /// <summary>
-        /// Client -> host: player edited shared setting (taxes, policies, ...).
-        /// Host applies and re-broadcasts via <see cref="StateSnapshot"/>.
-        /// </summary>
+        /// <summary>Client -> host edit of shared settings; confirmed by the next <see cref="StateSnapshot"/>.</summary>
         StateEdit = 9,
 
-        /// <summary>
-        /// Client -> host: player ran /sync, wants current world streamed immediately
-        /// (on-demand drift correction).
-        /// </summary>
+        /// <summary>Client -> host: stream the current world now.</summary>
         ResyncRequest = 10,
 
-        /// <summary>
-        /// Host -> client on connect: random nonce folded into password proof
-        /// (challenge-response - password never travels). Carries host's protocol version
-        /// for incompatible client detection.
-        /// </summary>
+        /// <summary>Host -> client: the password-proof nonce and the host's protocol version.</summary>
         HandshakeChallenge = 11,
 
-        /// <summary>
-        /// Coordinates an atomic world replacement. The host opens an epoch, clients
-        /// acknowledge quiescence and load completion, and the host explicitly resumes it.
-        /// </summary>
+        /// <summary>World replacement: the host opens an epoch, clients acknowledge, the host resumes.</summary>
         WorldSyncControl = 12,
 
-        /// <summary>
-        /// Host -> client: explains why the host is deliberately ending this player's
-        /// session (for example, an administrative kick) before closing the connection.
-        /// </summary>
+        /// <summary>Host -> client: why the session is ending, sent before closing.</summary>
         DisconnectNotice = 13,
 
-        /// <summary>
-        /// Host -> client: the handshake passed every automatic check, but the host
-        /// requires manual approval. The client waits (showing an "awaiting approval"
-        /// screen) until a <see cref="HandshakeResponse"/> accepts or rejects it.
-        /// </summary>
+        /// <summary>Host -> client: checks passed, awaiting manual approval.</summary>
         HandshakePending = 14,
     }
 }

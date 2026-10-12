@@ -5,23 +5,13 @@ using Game;
 using Game.SceneFlow;
 using CS2MultiplayerMod.Core.Diagnostics;
 using CS2MultiplayerMod.Core.Session;
-using CS2MultiplayerMod.Game.Diagnostics;
 
 namespace CS2MultiplayerMod.Game
 {
     /// <summary>
-    /// Leaving the shared city ends the session on this machine - quitting the game,
-    /// returning to the main menu, or loading a different world. Without this a host that
-    /// walked out to the menu kept its port open and its clients "connected" to a city
-    /// nobody was playing, and a client that left kept receiving edits for a world it no
-    /// longer had.
-    ///
-    /// Two independent signals drive it, because neither alone covers every exit:
-    ///  - the game's own pre-load callback, which fires before the world it is about to
-    ///    replace is torn down (see <see cref="MultiplayerSystem"/>);
-    ///  - a per-frame check of the game's lifecycle state, which is the only warning a
-    ///    process exit gives. Shutdown runs the frame loop for a while after the quit is
-    ///    requested, which is the window this uses to say goodbye properly.
+    /// Leaving the shared city (quit, main menu, another world) ends the session here. Two signals: the
+    /// pre-load callback (see <see cref="MultiplayerSystem"/>), and a per-frame lifecycle check, the
+    /// only warning a process exit gives.
     /// </summary>
     public sealed partial class MultiplayerService
     {
@@ -48,11 +38,8 @@ namespace CS2MultiplayerMod.Game
         internal string ClientExitReason => _clientExitNotice ?? "";
 
         /// <summary>
-        /// Marks the world load this mod is about to start as its own, so the transition
-        /// watcher does not read the joining client's incoming city as the player walking
-        /// out of the session. Every load we trigger goes through <see cref="JoinMapLoader"/>,
-        /// including the hand-loaded fallback when the save index misses - hence the window
-        /// rather than a single-shot flag.
+        /// Claims the next world load as ours, so a joining client's city is not read as leaving. A window,
+        /// since <see cref="JoinMapLoader"/> may fall back to a second load.
         /// </summary>
         internal void ExpectOwnWorldLoad() => _expectedWorldLoadMs = NowMs;
 
@@ -64,16 +51,11 @@ namespace CS2MultiplayerMod.Game
             return expected;
         }
 
-        /// <summary>
-        /// The game is about to load <paramref name="mode"/>; the world open right now is
-        /// on its way out. Anything that is not our own incoming session world takes this
-        /// machine out of the shared city.
-        /// </summary>
+        /// <summary>Any load other than our own incoming world takes this machine out of the session.</summary>
         internal void HandleWorldTransition(Purpose purpose, GameMode mode)
         {
-            // Consume our claim before checking the session role. The host can disappear
-            // after its save load was queued but before this callback arrives; that world
-            // still belongs to the dead session and must be closed once loading finishes.
+            // Consume the claim first: a host world queued before the host vanished still belongs to the
+            // dead session.
             if (mode.IsGame() && ConsumeExpectedWorldLoad())
             {
                 _clientHostWorldActive = true;
@@ -82,9 +64,7 @@ namespace CS2MultiplayerMod.Game
                 return;
             }
 
-            // Any other load replaces the temporary client world. Clear the ownership
-            // marker before Stop() publishes Offline, otherwise that observer would start
-            // a second, competing main-menu load while the player's chosen load is active.
+            // Clear the marker before Stop() publishes Offline, or a second main-menu load would compete.
             ForgetClientHostWorld();
 
             if (_session.Role == SessionRole.None)
@@ -106,11 +86,7 @@ namespace CS2MultiplayerMod.Game
                 "The host returned to the main menu, so this session has ended.");
         }
 
-        /// <summary>
-        /// Watches the two states no callback announces: the game shutting down, and a
-        /// world transition that never reached <see cref="HandleWorldTransition"/>.
-        /// Called once per frame from the service pump.
-        /// </summary>
+        /// <summary>Per frame: shutdown, and a world transition that missed <see cref="HandleWorldTransition"/>.</summary>
         private void PumpGameExit()
         {
             GameManager manager;
@@ -118,10 +94,8 @@ namespace CS2MultiplayerMod.Game
             catch (Exception) { return; }
             if (manager == null) return;
 
-            // Mirror the game mode unconditionally, so the flag describes where this machine
-            // is rather than where it was when some past session ended. Only a transition
-            // observed on this frame counts as leaving - a session started from the main
-            // menu (a client joining) must never look like one that walked out of a city.
+            // Mirror the mode every frame; only a transition seen now counts as leaving, never a session
+            // started from the menu.
             bool inCity = manager.gameMode.IsGame();
             bool leftCity = _inCityWorld && !inCity;
             _inCityWorld = inCity;
@@ -138,8 +112,7 @@ namespace CS2MultiplayerMod.Game
 
                 if (leftCity)
                 {
-                    // Belt and braces for the pre-load callback: whatever happened, this
-                    // machine is no longer in the city the session is played in.
+                    // Backstop for the pre-load callback.
                     LeaveSharedSession("No longer in a city world (" + manager.gameMode + ")",
                         "The host left the city, so this session has ended.");
                     return;
@@ -150,21 +123,10 @@ namespace CS2MultiplayerMod.Game
             PumpTransientCleanup(manager);
         }
 
-        /// <summary>
-        /// Remember that the current (or currently loading) city is the disposable copy
-        /// received from the host. A disconnect must leave it rather than turning that copy
-        /// into an apparently normal single-player city.
-        /// </summary>
-        internal void MarkClientHostWorldActive()
-        {
-            _clientHostWorldActive = true;
-        }
+        /// <summary>The open city is the host's disposable copy; a disconnect must leave it.</summary>
+        internal void MarkClientHostWorldActive() => _clientHostWorldActive = true;
 
-        /// <summary>
-        /// Queue, rather than immediately start, the return to the main menu. Disconnects
-        /// can arrive inside the session pump while the host save is still loading; starting
-        /// another load there would race the game's active load pipeline.
-        /// </summary>
+        /// <summary>Queued: a disconnect inside the pump may race a host save that is still loading.</summary>
         private void QueueClientMainMenu(string reason)
         {
             if (!_clientHostWorldActive) return;
@@ -184,19 +146,13 @@ namespace CS2MultiplayerMod.Game
                 "); returning to the main menu.");
         }
 
-        /// <summary>
-        /// The notice remains on the main menu until acknowledged, so a disconnect can
-        /// never look like the host's world silently became a normal local save.
-        /// </summary>
+        /// <summary>Stays until acknowledged, so the host's world never passes as a local save.</summary>
         internal void DismissClientExitNotice()
         {
-            // Never let UI dismissal expose a disconnected host world. The automatic
-            // close must finish first, or the player can retry it from the blocking screen.
+            // The automatic close must finish first; the blocking screen offers a retry.
             if (_clientHostWorldActive || _clientMainMenuPending) return;
             ClearClientExitNotice();
-            // A kick/ban first reports Faulted, but this session-ended notice already
-            // presented that reason. Do not reveal the generic connection-error overlay
-            // underneath it after the player acknowledges the close.
+            // This notice already showed the kick/ban reason; do not reveal the error overlay beneath it.
             _lastFault = null;
         }
 
@@ -227,8 +183,7 @@ namespace CS2MultiplayerMod.Game
             GameManager.State state = manager.state;
             if (state == GameManager.State.Quitting || state == GameManager.State.Terminated)
             {
-                // The process is already disposing this world; starting another load would
-                // only compete with shutdown.
+                // Shutdown is disposing the world; another load would compete.
                 _clientMainMenuPending = false;
                 _clientMainMenuTask = null;
                 return;
@@ -240,12 +195,10 @@ namespace CS2MultiplayerMod.Game
                 return;
             }
 
-            // Let a host-world load which was already in flight finish first. The service
-            // keeps pumping in UIUpdate throughout loading and will enter here afterward.
+            // Let an in-flight load finish; the pump keeps running in UIUpdate.
             if (manager.isGameLoading) return;
 
-            // A save and a main-menu load cannot safely own the same world together. If the
-            // session ends while the player is keeping a copy, finish that copy first.
+            // A save and a main-menu load cannot share a world: finish the save.
             if (ClientWorldSaveInProgress) return;
 
             if (_clientMainMenuTask != null)
@@ -285,8 +238,7 @@ namespace CS2MultiplayerMod.Game
                 _clientMainMenuAttempts++;
                 Task task = manager.MainMenu();
 
-                // MainMenu changes gameMode before its first asynchronous wait. Its preload
-                // callback normally clears the pending state during the call itself.
+                // MainMenu changes gameMode before its first await; its preload callback usually clears this.
                 if (_clientMainMenuPending && manager.gameMode.IsGame())
                 {
                     if (task != null)
@@ -308,8 +260,7 @@ namespace CS2MultiplayerMod.Game
             _clientMainMenuTask = null;
             if (_clientMainMenuAttempts >= ClientMainMenuMaxAttempts)
             {
-                // Keep ownership marked: PumpTransientCleanup must not delete the save
-                // beneath an open world. The UI stays blocking and offers an explicit retry.
+                // Keep ownership so PumpTransientCleanup does not delete the open world's save.
                 _clientMainMenuPending = false;
                 _clientMainMenuFailed = true;
                 _log.Error(LogTopic.Session,
@@ -335,10 +286,7 @@ namespace CS2MultiplayerMod.Game
             _clientMainMenuFailed = false;
         }
 
-        /// <summary>
-        /// Close the session because this machine is leaving the shared city. The host tells
-        /// its clients first - they would otherwise see nothing but a dropped socket.
-        /// </summary>
+        /// <summary>The host notifies clients first, or they only see a dropped socket.</summary>
         private void LeaveSharedSession(string logReason, string hostNotice)
         {
             if (_leavingSession || _session.Role == SessionRole.None) return;
@@ -349,8 +297,7 @@ namespace CS2MultiplayerMod.Game
                 _log.Event(LogTopic.Session, logReason + " - " +
                     (host ? "closing the session for every player." : "disconnecting from the host."));
 
-                // The world is being torn down or replaced: restoring the simulation speed
-                // into it would write to a world that is on its way out.
+                // Do not restore speed into a world being torn down.
                 ResetWorldSyncState(restoreSpeed: false);
                 _session.StopWithNotice(hostNotice);
                 SetPhase(ClientWorldPhase.None);
@@ -371,9 +318,8 @@ namespace CS2MultiplayerMod.Game
         }
 
         /// <summary>
-        /// Deletes the joining client's copy of the host world once the game is idle again.
-        /// It is deliberately not done from the transition callback: that runs inside the
-        /// game's load pipeline, and the save index is exactly what is being rebuilt there.
+        /// Deletes the client's host-world copy once idle; the transition callback runs inside the load
+        /// pipeline, which is rebuilding the save index.
         /// </summary>
         private void PumpTransientCleanup(GameManager manager)
         {

@@ -33,6 +33,30 @@
         <PropertyGroup Condition="'$(PublishedModVersion)' != ''">
             <InformationalVersion>$(PublishedModVersion)</InformationalVersion>
         </PropertyGroup>
+        <!--Anything but Release is a local build, and gets the second it was compiled appended as
+        SemVer build metadata. That is the number the options screen and the log show for a dev
+        build, and the reason it is the time and not a counter is that it needs no state in the
+        repo. It changes every build, so a Debug build always recompiles this project - which is
+        the point: the number proves the running game has the code that was just compiled. A
+        Release build stamps the plain published version, so a public build shows clean numbers,
+        and nothing here reaches the wire (the handshake compares the release part only).-->
+        <PropertyGroup Condition="'$(Configuration)' != 'Release' and '$(InformationalVersion)' != ''">
+            <InformationalVersion>$(InformationalVersion)+dev.$([System.DateTime]::Now.ToString("yyMMdd-HHmmss"))</InformationalVersion>
+        </PropertyGroup>
+    </Target>
+
+    <!--The source commit, so a report names the exact code even for a fork or a local build that
+    shares a release number. "-dirty" marks uncommitted changes; without git nothing is stamped
+    and the mod reports "unknown". Never compared on the wire, only logged.-->
+    <Target Name="StampBuildCommit" BeforeTargets="GetAssemblyAttributes;GenerateAssemblyInfo">
+        <Exec Command="git describe --always --dirty --abbrev=12 --exclude=*"
+              WorkingDirectory="$(MSBuildProjectDirectory)\.." ConsoleToMSBuild="true" IgnoreExitCode="true"
+              EchoOff="true" StandardOutputImportance="low" StandardErrorImportance="low">
+            <Output TaskParameter="ConsoleOutput" PropertyName="BuildCommitOutput"/>
+        </Exec>
+        <ItemGroup Condition="$([System.Text.RegularExpressions.Regex]::IsMatch('$(BuildCommitOutput)', '^[0-9a-f]{7,40}(-dirty)?$'))">
+            <AssemblyMetadata Include="CS2MP.Commit" Value="$(BuildCommitOutput)"/>
+        </ItemGroup>
     </Target>
 
     <!--Imports must be after PropertyGroup block-->
@@ -155,6 +179,26 @@
     file imports Mod.targets above, so the ordering holds.-->
     <Target Name="BuildUI" AfterTargets="DeployWIP" Condition="'$(NeedBuild)'=='true'">
         <Exec Command="npm run build" WorkingDirectory="$(ProjectDir)UI"/>
+        <Error Condition="!Exists('$(DeployDir)\$(TargetName).mjs')"
+               Text="The multiplayer UI bundle was not generated at $(DeployDir)\$(TargetName).mjs."/>
+        <!-- Keep the UI beside the DLL in bin as well as in the live/publish folder.
+        Manual release archives are made from bin, and omitting this file removes the
+        main-menu button, in-game button, connection overlays and milestone countdown. -->
+        <ItemGroup>
+            <MultiplayerUiOutput Include="$(DeployDir)\$(TargetName).mjs"/>
+            <MultiplayerUiOutput Include="$(DeployDir)\$(TargetName).mjs.LICENSE.txt"
+                                 Condition="Exists('$(DeployDir)\$(TargetName).mjs.LICENSE.txt')"/>
+        </ItemGroup>
+        <Copy SourceFiles="@(MultiplayerUiOutput)" DestinationFolder="$(OutDir)"/>
+    </Target>
+
+    <!-- Never upload an incomplete folder even when the toolchain's Update command
+    deliberately skips Build/DeployWIP and publishes the existing deployment. -->
+    <Target Name="ValidatePublishedUI" BeforeTargets="Publish">
+        <Error Condition="!Exists('$(DeployDir)\$(TargetName).dll')"
+               Text="The publish folder has not been built. Build the mod before publishing."/>
+        <Error Condition="!Exists('$(DeployDir)\$(TargetName).mjs')"
+               Text="The publish folder is missing $(TargetName).mjs. Build the mod before publishing."/>
     </Target>
 
     <!--The Burst stubs are compiled through the toolchain's cache directory and keep its

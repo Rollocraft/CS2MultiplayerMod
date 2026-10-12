@@ -1,9 +1,7 @@
-using System;
 using System.Collections.Generic;
 using Game.Common;
 using Game.Prefabs;
 using Game.Routes;
-using Game.Tools;
 using Unity.Collections;
 using Unity.Entities;
 using Unity.Mathematics;
@@ -11,8 +9,6 @@ using CS2MultiplayerMod.Game.Sync.Commands;
 
 namespace CS2MultiplayerMod.Game.Sync.Systems
 {
-    // Finding the local route a command refers to, and telling an existing one from a route this
-    // peer has yet to create: by number, by anchor position, and by the shape of its waypoints.
     public partial class RouteSyncSystem
     {
         private Entity[] MatchOriginalWaypoints(Entity route, Entity[] connections,
@@ -75,10 +71,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             return true;
         }
 
-        /// <summary>
-        /// A waypoint that only shapes the path is placed at exactly the submitted position; one
-        /// bound to a stop follows that stop and is compared with the stop tolerances.
-        /// </summary>
+        /// <summary>Path waypoints match exactly; stop waypoints use the stop tolerances.</summary>
         private static bool WaypointPositionMatches(float3 actual, float3 wanted,
             Entity connection) =>
             connection == Entity.Null
@@ -101,8 +94,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                         RouteNumberOf(candidate) != routeNumber)
                         continue;
 
-                    RouteSnapshot snapshot;
-                    if (TryCaptureSnapshot(candidate, out snapshot) &&
+                    if (TryCaptureSnapshot(candidate, out RouteSnapshot snapshot) &&
                         WaypointsMatchIntent(snapshot.Waypoints, desired))
                         return candidate;
                     numberConflict = true;
@@ -128,8 +120,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     Entity candidate = routes[i];
                     if (EntityManager.GetComponentData<PrefabRef>(candidate).m_Prefab != prefab)
                         continue;
-                    RouteSnapshot snapshot;
-                    if (TryCaptureSnapshot(candidate, out snapshot) &&
+                    if (TryCaptureSnapshot(candidate, out RouteSnapshot snapshot) &&
                         WaypointsMatchIntent(snapshot.Waypoints, desired))
                         result.Add(candidate);
                 }
@@ -158,8 +149,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     if (routeNumber > 0 && RouteNumberOf(candidate) == routeNumber)
                         exact.Add(candidate);
 
-                    float3 first;
-                    if (TryGetFirstWaypoint(candidate, out first) &&
+                    if (TryGetFirstWaypoint(candidate, out float3 first) &&
                         math.distancesq(first, anchor) <= maxAnchorDistanceSq)
                         spatial.Add(candidate);
                 }
@@ -175,8 +165,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 Entity match = Entity.Null;
                 for (int i = 0; i < exact.Count; i++)
                 {
-                    float3 first;
-                    if (!TryGetFirstWaypoint(exact[i], out first) ||
+                    if (!TryGetFirstWaypoint(exact[i], out float3 first) ||
                         math.distancesq(first, anchor) > maxAnchorDistanceSq)
                         continue;
                     if (match != Entity.Null)

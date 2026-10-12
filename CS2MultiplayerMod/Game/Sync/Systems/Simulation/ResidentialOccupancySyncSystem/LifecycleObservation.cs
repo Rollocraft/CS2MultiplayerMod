@@ -10,9 +10,8 @@ using Unity.Entities;
 namespace CS2MultiplayerMod.Game.Sync.Systems
 {
     /// <summary>
-    /// Turns an exact household-member or health-lifecycle mutation into a property-level signal.
-    /// Renter events cannot see a baby, an individual death, or a citizen moved by a household
-    /// split because the household remains in the same building for all three operations.
+    /// Turns household-member and health changes into property signals: births, deaths and splits
+    /// do not move the household, so renter events miss them.
     /// </summary>
     public partial class ResidentialOccupancySyncSystem
     {
@@ -40,10 +39,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             {
                 foreach (Entity property in _lifecyclePropertyScratch)
                 {
-                    PropertyRentIdentity identity;
-                    if (!TryGetHostPropertyIdentity(property, out identity)) continue;
-                    HostObserved observed;
-                    if (_hostObserved.TryGetValue(property, out observed)) observed.Stale = true;
+                    if (!TryGetHostPropertyIdentity(property, out PropertyIdentity identity)) continue;
+                    if (_hostObserved.TryGetValue(property, out HostObserved observed)) observed.Stale = true;
                     Prioritize(property, identity);
                     _lifecyclePrioritySignals++;
                 }

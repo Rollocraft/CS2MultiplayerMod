@@ -24,8 +24,7 @@ namespace CS2MultiplayerMod.Game.Sync.Infrastructure
             return true;
         }
 
-        // Older replicas can persist in saves without Complete, disabling the area's edit actions.
-        // Only committed, standalone districts qualify; never finish a tool preview or owned lot.
+        // Replicas saved without Complete lose their edit actions; only standalone districts qualify.
         internal static bool RepairDistrict(EntityManager em, Entity entity)
         {
             if (!em.Exists(entity) || !em.HasComponent<District>(entity) ||

@@ -1,5 +1,4 @@
 using System.Collections.Generic;
-using Colossal.Mathematics;
 using CS2MultiplayerMod.Core.Diagnostics;
 using CS2MultiplayerMod.Game.Diagnostics;
 using Game.Common;
@@ -10,19 +9,12 @@ using Unity.Entities;
 
 namespace CS2MultiplayerMod.Game.Sync.Systems.Net
 {
-    // Commit orchestration for NetSyncSystem. A remote net operation includes the objects and areas
-    // its native generation updates as side effects; the complete local preview graph is temporarily
-    // Disabled so an unrelated tool can remain selected without either transaction consuming the
-    // other one's entities.
-    // Validating an armed net transaction, including the objects attached to the net being built
-    // and the owner every temp in the batch resolves to.
+    // Validating an armed net transaction, its attached objects and every Temp's owner.
     public partial class NetSyncSystem
     {
         /// <summary>
-        /// Verify the complete generated net transaction immediately before scheduling its apply.
-        /// Split targets and reuse nodes were resolved a frame earlier; a concurrent local edit may
-        /// have invalidated an original, endpoint, owner, or connectivity buffer in the meantime.
-        /// Partial work is discarded and rebuilt rather than passed to an unchecked apply path.
+        /// Verifies the generated transaction just before its apply: a local edit since arming may have
+        /// invalidated an original, endpoint, owner or buffer. Rebuilt rather than applied unchecked.
         /// </summary>
         private bool ValidateArmedNetTransaction(out string reason)
         {
@@ -135,9 +127,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
         }
 
         /// <summary>
-        /// An owner-less object in a net transaction must be the native update copy of an existing
-        /// object attached to a touched node/edge. This excludes an unrelated placement preview from
-        /// the net apply pass while retaining the exact path that recentres roundabout islands.
+        /// An owner-less object must be the update copy of an object attached to a touched node or edge
+        /// (e.g. a recentred roundabout island), never an unrelated preview.
         /// </summary>
         private bool ValidateNetAttachedObjectRoot(Entity entity, Temp temp,
             HashSet<Entity> members, out string reason)
@@ -212,20 +203,12 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
             if (!EntityManager.HasComponent<Owner>(entity)) return true;
 
             Entity owner = EntityManager.GetComponentData<Owner>(entity).m_Owner;
-            // An unset owner is a normal intermediate state, not corruption. Native generation
-            // leaves it unset on a sub-element whose owner is described by prefab + transform, and
-            // the resolution pass a phase later fills it in by an exact transform match. That match
-            // is one-shot - the description is consumed whether or not it hit - so a single miss is
-            // permanent. Re-link from the description this batch still holds rather than discarding
-            // a graph whose ownership the batch itself can state.
-            Entity relinked;
-            if (owner == Entity.Null && TryRelinkGeneratedOwner(entity, members, out relinked))
+            // An unset owner is normal: resolution is one-shot, so a miss is permanent. Re-link from the
+            // batch's own description.
+            if (owner == Entity.Null && TryRelinkGeneratedOwner(entity, members, out Entity relinked))
             {
-                // Owner is already present, so this writes a value without changing the archetype:
-                // the enclosing member array and set stay valid.
+                // No archetype change: the member arrays stay valid.
                 EntityManager.SetComponentData(entity, new Owner { m_Owner = relinked });
-                // One line per orphan would be hundreds on a large placement; the pass reports a
-                // total, and the first member is enough to identify which graph needed repair.
                 if (_relinkedOwners++ == 0)
                     SyncLog.Trace(LogTopic.Nets, "transaction owner re-linked " +
                         DescribeTransactionEntity(entity) + " owner=#" + relinked.Index);
@@ -241,10 +224,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
             if (EntityManager.HasComponent<Temp>(owner) &&
                 (!members.Contains(owner) || EntityManager.HasComponent<Disabled>(owner)))
             {
-                // Generated child entities may still point at an isolated preview copy of an
-                // existing owner. The apply passes patch that reference to Temp.m_Original before
-                // consuming the child. Accept exactly that resolvable form; a new/replacement Temp
-                // owner outside this transaction would leave the child attached to discarded work.
+                // A child may point at an isolated preview copy of an existing owner, which the apply passes patch
+                // to Temp.m_Original. Any other Temp owner outside this transaction is refused.
                 Temp ownerTemp = EntityManager.GetComponentData<Temp>(owner);
                 Entity original = ownerTemp.m_Original;
                 bool resolvesToLiveOriginal = original != Entity.Null &&

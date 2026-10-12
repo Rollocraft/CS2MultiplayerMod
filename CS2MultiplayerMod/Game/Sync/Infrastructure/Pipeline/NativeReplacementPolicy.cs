@@ -2,8 +2,7 @@ namespace CS2MultiplayerMod.Game.Sync.Infrastructure
 {
     internal static class NativeReplacementPolicy
     {
-        // Delete wins over replacement, and lane cancellation wins over both. Only the
-        // branch that actually replaces an edge/lane dereferences a mandatory original.
+        // Delete beats replacement and lane cancellation beats both; only a real replacement needs the original.
         public static bool RequiresOriginal(bool edge, bool lane, bool delete, bool cancel,
             bool replace, bool combine)
         {

@@ -13,16 +13,12 @@ using CS2MultiplayerMod.Game.Sync.Infrastructure;
 using CS2MultiplayerMod.Game.Sync.Commands;
 namespace CS2MultiplayerMod.Game.Sync.Systems.Net
 {
-    // Capture (host) side of NetSyncSystem: detect the edges the local player drew, drop the
-    // side-effect halves of a mid-span split, broadcast the rest as NetPlacementCommands, and emit the
-    // periodic 5 s diagnostic summaries.
     public partial class NetSyncSystem
     {
         private void RecordDiagnostic(string prefabName)
         {
             _diagTotal++;
-            int count;
-            _diag.TryGetValue(prefabName, out count);
+            _diag.TryGetValue(prefabName, out int count);
             _diag[prefabName] = count + 1;
         }
 
@@ -65,12 +61,12 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
             if (_capPinnedSpans > 0 || _rzPinnedSpans > 0 || _rzPinRefused > 0 ||
                 _capSelfAnchoredSpans > 0 || _capBentDeckSpans > 0)
             {
-                SyncLog.Detail(LogTopic.Nets, "NetSync water profile/5s: pinned " +
-                    _capPinnedSpans + " span(s) over water; left " + _capSelfAnchoredSpans +
+                SyncLog.Detail(LogTopic.Nets, "NetSync profile/5s: pinned " +
+                    _capPinnedSpans + " straight span(s); left " + _capSelfAnchoredSpans +
                     " banded by their own elevation and " + _capBentDeckSpans +
                     " with a deck that is not one line to the receiver's own generator; realized " +
                     _rzPinnedSpans + " pinned span(s), " + _rzPinRefused +
-                    " refused (those rebuild their deck from local water).");
+                    " refused (those rebuild their deck from local surfaces).");
             }
 
             if (_rzSurfaceCorrections > 0)
@@ -102,10 +98,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
             _diagStartMs = now;
         }
 
-        /// <summary>
-        /// Send the pieces captured LAST frame that ride behind a replicated span delete - one frame
-        /// after it, so the receiver always bulldozes before it rebuilds (commands arrive in send order).
-        /// </summary>
+        /// <summary>Pieces behind a replicated span delete, one frame later so the delete lands first.</summary>
         private void FlushDeferredSpanPieces(MultiplayerSession session)
         {
             if (_deferredSpanPieces.Count == 0) return;
@@ -119,38 +112,21 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
 
         private void CaptureNewEdges(MultiplayerSession session, long now)
         {
-            // A local net-tool Apply was already serialized from its native NetCourse intent in
-            // ToolUpdate. Every Created edge in that operation (drawn courses, split halves and
-            // reductions) is output, not another placement command.
+            // Already sent from native intent this frame; these edges are its output.
             if (_nativeApplyCapturedFrame == _realizeFrame) return;
 
-            // Object-prefab networks (asset-stamp intersections, building driveways/connectors,
-            // etc.) are already carried inside one atomic ObjectToolOperationCommand. Replaying the
-            // resulting Created edges here discarded their shared graph and rebuilt them as many
-            // independent clicks: slow for large stamps and unreliable at tightly-spaced nodes.
+            // Object-owned networks travel inside one atomic object command.
             BuildSyncSystem buildSync = World.GetExistingSystemManaged<BuildSyncSystem>();
             if (buildSync != null && buildSync.NativeLifecycleCapturedThisFrame) return;
 
-            // On the frame a self-driven ApplyTool pass commits a remote batch, every Created edge
-            // here is that batch's output - skip exactly this frame (never a wall-clock window,
-            // which also swallowed roads the player built while remote batches streamed in).
+            // Exactly the frame a remote batch commits; never a wall-clock window.
             if (_suppressCaptureThisFrame) return;
             if (_createdEdges.IsEmptyIgnoreFilter) return;
 
-            // Snapshot this frame's Deleted edges. When the player taps a road mid-span, CS2 makes the
-            // T-junction by DELETING the existing edge and CREATING its two halves plus the drawn road
-            // (our logs: Created=3 Updated=1 Deleted=1). The halves are Created too, but they are a
-            // SIDE EFFECT of the split - not something the player drew. Replicating them makes the
-            // receiver re-split its own still-whole geometry destructively (roads vanish, the new road
-            // ends up disconnected). So below we drop any Created edge that is a true 3D sub-curve of a
-            // same-prefab Deleted edge (one of its halves) and send only the edge the player drew; the
-            // receiver reproduces the split locally via the Temp+ApplyTool realize path.
-            //
-            // NOT a local split: a span REBUILT at another height (the raise/lower gesture) or only
-            // PARTIALLY re-covered (something placed on top consumed the rest - a roundabout swallows
-            // the stretch inside its circle; the receiver's own split would keep it). For those the
-            // delete IS replicated (DeleteSyncSystem, same test on the same frame's data) and every
-            // kept piece is sent one frame behind it so the delete travels first.
+            // A mid-span tap deletes the edge and creates its two halves plus the drawn road. Halves that are
+            // 3D sub-curves of a same-prefab Deleted edge are dropped; the receiver splits locally. A span
+            // rebuilt at another height or only partly re-covered is not a split: its delete replicates and
+            // the pieces follow one frame behind.
             NativeArray<Entity> delEnts = _deletedEdges.ToEntityArray(Allocator.Temp);
             NativeArray<Curve> delCurves = _deletedEdges.ToComponentDataArray<Curve>(Allocator.Temp);
             var delPrefabs = new NativeArray<Entity>(delEnts.Length, Allocator.Temp);
@@ -163,8 +139,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
             for (int i = 0; i < entities.Length; i++)
                 createdPrefabs[i] = EntityManager.GetComponentData<PrefabRef>(entities[i]).m_Prefab;
 
-            // Which deleted spans are rebuilt at another height or only partially re-covered: their
-            // deletes replicate, so every piece on them must be sent back rather than dropped.
+            // Rebuilt or partly re-covered spans: their pieces are sent, not dropped.
             var delRebuilt = new bool[delEnts.Length];
             var delPartial = new bool[delEnts.Length];
             for (int dI = 0; dI < delEnts.Length; dI++)
@@ -186,10 +161,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                     delPartial[dI] = !SplitMatch.CoverWholeSpan(pieces, delCurves[dI].m_Bezier);
             }
 
-            // Per-edge commands emitted because no native operation covered this apply. Each one is
-            // replayed as its own serialized batch with both endpoints re-derived geometrically, so
-            // the receiver rebuilds the shape segment by segment instead of in one pass. Counted so a
-            // degraded replay is visible in the flight log rather than being inferred from symptoms.
+            // Per-edge fallback commands (no native operation); counted so a degraded replay is visible.
             int stubs = 0;
             try
             {
@@ -200,8 +172,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                     string name = _prefabSystem.GetPrefabName(prefab);
                     if (string.IsNullOrEmpty(name)) continue;
 
-                    // Safety net: never sync the game's auto-generated hidden lanes/paths;
-                    // they are recreated locally when the visible road is rebuilt.
+                    // Hidden lanes and paths are regenerated locally.
                     if (name.StartsWith("Invisible"))
                     {
                         continue;
@@ -209,8 +180,6 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
 
                     Bezier4x3 b = createdCurves[i].m_Bezier;
 
-                    // A piece on a purely-split span is a local side effect (dropped); a piece on a
-                    // span whose delete is replicated rides one frame behind that delete.
                     bool onDeletedSpan = false, onKeptSpan = false;
                     for (int dI = 0; dI < delCurves.Length; dI++)
                     {
@@ -231,11 +200,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                     }
 
                     Curve curve = createdCurves[i];
-                    // The committed end nodes carry the elevation this span was built at. Without it
-                    // the receiver commits a ground net and the generator pulls the curve end down to
-                    // the terrain — over water that is the lakebed, and the span becomes a dive.
-                    float2 startElevation, endElevation;
-                    CommittedEndElevations(entity, out startElevation, out endElevation);
+                    // Without end-node elevations the receiver commits a ground net and pulls the ends to the lakebed.
+                    CommittedEndElevations(entity, out float2 startElevation, out float2 endElevation);
                     var command = new NetPlacementCommand
                     {
                         PrefabName = name,
@@ -246,8 +212,6 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                         Length = curve.m_Length,
                         Start = { ElevationLeft = startElevation.x, ElevationRight = startElevation.y },
                         End = { ElevationLeft = endElevation.x, ElevationRight = endElevation.y },
-                        // Over water the receiver would rebuild the deck from ITS water field; pin
-                        // the span to the two committed end-node heights instead.
                         PinProfile = ShouldPinCommittedEdge(prefab, b, startElevation,
                             endElevation),
                     };
@@ -279,11 +243,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                     " (no native operation covered this apply)");
         }
 
-        /// <summary>
-        /// The <see cref="global::Game.Net.Elevation"/> of a committed edge's two end nodes. A node
-        /// without the component sits on the ground and is elevation 0 - the game's own convention,
-        /// and the value a course endpoint must carry to reproduce this span.
-        /// </summary>
+        /// <summary>End-node elevations; a node without the component is on the ground (0).</summary>
         private void CommittedEndElevations(Entity edge, out float2 start, out float2 end)
         {
             start = default;

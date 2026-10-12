@@ -1,18 +1,12 @@
-using System.Collections.Generic;
-using Colossal.Mathematics;
 using Game.Common;
 using Game.Net;
 using Game.Prefabs;
 using Game.Tools;
-using Unity.Collections;
 using Unity.Entities;
-using Unity.Mathematics;
 using CS2MultiplayerMod.Game.Sync.Commands;
 
 namespace CS2MultiplayerMod.Game.Sync.Systems
 {
-    // Turning one of the tool's definition entities into the intent that travels on the wire:
-    // its prefab, transform, attachment and course positions.
     public partial class BuildSyncSystem
     {
         private bool TryCaptureObjectToolDefinition(Entity entity,
@@ -31,10 +25,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 Kind = isObject ? ObjectToolDefinitionKind.Object :
                     isNet ? ObjectToolDefinitionKind.NetCourse : ObjectToolDefinitionKind.Area,
                 PrefabIsNull = creation.m_Prefab == Entity.Null,
-                // Permanent is an execution-policy bit for definitions that are consumed on this
-                // machine without ToolOutputSystem's transaction. It is not object intent. Sending
-                // it made the receiver refuse the whole native batch because remote work must pass
-                // through the isolated Temp/apply/drain lifecycle.
+                // Permanent is local execution policy, not intent; receivers refuse it.
                 CreationFlags = (uint)(creation.m_Flags & ~CreationFlags.Permanent),
                 RandomSeed = creation.m_RandomSeed,
             };
@@ -91,9 +82,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             else if (isNet)
             {
                 NetCourse data = EntityManager.GetComponentData<NetCourse>(entity);
-                ObjectCoursePositionIntent start, end;
-                if (!TryCaptureCoursePosition(data.m_StartPosition, out start) ||
-                    !TryCaptureCoursePosition(data.m_EndPosition, out end)) return false;
+                if (!TryCaptureCoursePosition(data.m_StartPosition, out ObjectCoursePositionIntent start) ||
+                    !TryCaptureCoursePosition(data.m_EndPosition, out ObjectCoursePositionIntent end)) return false;
                 value.NetCourse = new ObjectNetCourseIntent
                 {
                     Start = start,
@@ -147,9 +137,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             prefabName = null;
             if (attached == Entity.Null) return true;
 
-            // Placeholder facilities emit their visible level-one building as a second object
-            // definition whose attachment target is the placeholder prefab entity itself. That is
-            // a local prefab relationship, not a live-world entity reference.
+            // Attached to the placeholder prefab itself: a local prefab relationship.
             if (EntityManager.Exists(attached) &&
                 EntityManager.HasComponent<PrefabData>(attached))
             {
@@ -170,8 +158,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             out ObjectCoursePositionIntent value)
         {
             value = new ObjectCoursePositionIntent();
-            PortableEntityRef target;
-            if (!TryCaptureCourseTarget(data.m_Entity, out target)) return false;
+            if (!TryCaptureCourseTarget(data.m_Entity, out PortableEntityRef target)) return false;
             value.Entity = target;
             value.PosX = data.m_Position.x; value.PosY = data.m_Position.y;
             value.PosZ = data.m_Position.z;
@@ -186,17 +173,13 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             return true;
         }
 
-        private bool TryCaptureCourseTarget(Entity entity, out PortableEntityRef value)
-        {
-            return TryCapturePortableRef(entity, out value);
-        }
+        private bool TryCaptureCourseTarget(Entity entity, out PortableEntityRef value) =>
+            TryCapturePortableRef(entity, out value);
 
         private bool TryGetStablePortableEntity(Entity entity, out Entity stable)
         {
             stable = entity;
-            // Standing definitions can reference the previous preview's Temp graph. Follow its
-            // live original; a preview-only target is represented as None and regenerated from the
-            // transmitted definition on the receiver.
+            // Follow a preview Temp to its live original; preview-only targets become None.
             const int maxTempDepth = 16;
             for (int depth = 0; stable != Entity.Null && depth < maxTempDepth; depth++)
             {

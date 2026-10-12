@@ -4,16 +4,9 @@ using CS2MultiplayerMod.Core.Sync;
 namespace CS2MultiplayerMod.Game.Sync.Commands
 {
     /// <summary>
-    /// "A player stamped a prebuilt intersection." Carries the complete input set the game's own
-    /// definition generator takes for a stamp - the asset-stamp prefab, one placement control
-    /// point, and the placing tool's seed - so the receiver regenerates the graph locally.
-    ///
-    /// Two courses of a stamp share a node only when their endpoint positions are bit-identical:
-    /// the node generator keys them on an exact float comparison. The generator guarantees that by
-    /// computing every shared endpoint from one prefab-local averaged table, so regenerating
-    /// reproduces the guarantee. Replaying finished definitions only reproduces the numbers, and a
-    /// single endpoint that does not survive the round trip intact becomes a ramp that renders but
-    /// connects to nothing.
+    /// A stamped intersection as the generator's inputs (prefab, control point, tool seed), regenerated
+    /// on the receiver. Stamp courses share a node only on bit-identical endpoints, which only the
+    /// generator reproduces; replayed definitions leave ramps that connect to nothing.
     /// </summary>
     public sealed class AssetStampCommand : ISimulationCommand
     {

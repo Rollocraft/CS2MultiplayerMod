@@ -1,15 +1,10 @@
 using System;
-using System.Collections.Concurrent;
-using System.Collections.Generic;
-using System.Runtime.InteropServices;
-using System.Threading;
 using CS2MultiplayerMod.Core.Diagnostics;
 using Steamworks;
 
 namespace CS2MultiplayerMod.Core.Networking.Steam
 {
-    // Connection bookkeeping: binding a Steam connection handle to a connection id, accepting an
-    // incoming one, and closing and describing them.
+    // Binding, accepting, closing and describing Steam connections.
     public sealed partial class SteamRelayTransport
     {
         // ---- connection lifecycle -------------------------------------------------
@@ -30,8 +25,7 @@ namespace CS2MultiplayerMod.Core.Networking.Steam
         {
             lock (_gate)
             {
-                Endpoint found;
-                return _byHandle.TryGetValue(handle, out found) ? found : null;
+                return _byHandle.TryGetValue(handle, out Endpoint found) ? found : null;
             }
         }
 
@@ -46,9 +40,7 @@ namespace CS2MultiplayerMod.Core.Networking.Steam
 
         private void OnConnectionStatusChanged(SteamNetConnectionStatusChangedCallback_t evt)
         {
-            // The callback is process-wide: it also carries connections belonging to the
-            // game itself or to another transport instance. Anything we did not open is
-            // not ours to answer.
+            // The callback is process-wide; connections we did not open are not ours.
             if (!_active) return;
 
             Endpoint endpoint = Find(evt.m_hConn.m_HSteamNetConnection);
@@ -79,8 +71,7 @@ namespace CS2MultiplayerMod.Core.Networking.Steam
 
         private void AcceptIncoming(SteamNetConnectionStatusChangedCallback_t evt)
         {
-            // Only inbound connections carry our listen socket; a client's own outbound
-            // dial reports Connecting too and must not be accepted.
+            // Only inbound connections carry our listen socket; a client's own dial also reports Connecting.
             if (!_isHost) return;
             if (evt.m_info.m_hListenSocket != _listenSocket) return;
 
@@ -109,8 +100,7 @@ namespace CS2MultiplayerMod.Core.Networking.Steam
             Endpoint endpoint = Bind(id, evt.m_hConn, steamId);
             if (!SteamNetworkingSockets.SetConnectionPollGroup(evt.m_hConn, _pollGroup))
             {
-                // Outside the poll group this connection is deaf; better to refuse it than
-                // to leave a peer that handshakes and then goes quiet forever.
+                // Outside the poll group the connection is deaf; refuse it.
                 _log.Warn(LogTopic.Transport, "Could not add Steam relay connection " + id +
                     " from " + steamId + " to the poll group; refusing it.");
                 Close(endpoint, "poll group rejected the connection", linger: false);
@@ -119,8 +109,7 @@ namespace CS2MultiplayerMod.Core.Networking.Steam
 
             _log.Detail(LogTopic.Transport, "Accepted Steam relay connection " + id + " from " +
                 steamId + ".");
-            // Connected is announced on the Connected state, so the session never talks to
-            // a connection that is still negotiating.
+            // Connected only on the Connected state, never mid-negotiation.
         }
 
         private static string DescribeClose(SteamNetConnectionStatusChangedCallback_t evt)
@@ -133,16 +122,14 @@ namespace CS2MultiplayerMod.Core.Networking.Steam
         }
 
         /// <summary>
-        /// Steam's own account of a connection. Worth the call on a failed send: closing
-        /// from the send path unhooks the endpoint, so the status callback that would have
-        /// carried this reason arrives to nothing and the log ends with no cause at all.
+        /// Steam's account of a connection, for a failed send: closing from the send path unhooks the
+        /// endpoint, so the status callback's reason would be lost.
         /// </summary>
         private static string DescribeConnection(Endpoint endpoint)
         {
             try
             {
-                SteamNetConnectionInfo_t info;
-                if (!SteamNetworkingSockets.GetConnectionInfo(endpoint.Handle, out info))
+                if (!SteamNetworkingSockets.GetConnectionInfo(endpoint.Handle, out SteamNetConnectionInfo_t info))
                     return "Steam no longer knows the connection.";
                 return "Steam reports state=" + info.m_eState + " endReason=" + info.m_eEndReason +
                        " \"" + info.m_szEndDebug + "\".";
@@ -162,9 +149,6 @@ namespace CS2MultiplayerMod.Core.Networking.Steam
                 Enqueue(TransportEvent.Disconnected(endpoint.Id, reason));
         }
 
-        private void Enqueue(TransportEvent evt)
-        {
-            _events.Enqueue(evt);
-        }
+        private void Enqueue(TransportEvent evt) => _events.Enqueue(evt);
     }
 }

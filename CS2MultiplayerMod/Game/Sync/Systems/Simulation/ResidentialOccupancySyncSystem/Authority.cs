@@ -6,32 +6,13 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
     public partial class ResidentialOccupancySyncSystem
     {
         /// <summary>
-        /// The lifecycle systems a client must not run once the host owns residential households.
-        /// Together these systems create and split households, choose their homes, and add pets.
-        /// The host's absolute roster mirrors those decisions, the
-        /// household's daily scalar state, and its pet roster, so running the writers locally would
-        /// race the next host correction and can turn one move-out into a different family locally.
-        ///
-        /// Not on this list, deliberately:
-        ///
-        /// * <c>HouseholdBehaviorSystem</c> stays running. Besides proposing moves, it is the
-        ///   native producer for shopping needs and car demand. The every-frame lifecycle boundary
-        ///   strips its local move/seeker decisions before their consumers run, while leaving the
-        ///   traffic/economy work intact.
-        /// * <c>HouseholdMoveAwaySystem</c>, <c>HouseholdAndCitizenRemoveSystem</c>, and
-        ///   <c>HouseholdPetRemoveSystem</c> stay running. They execute and clean up removals that
-        ///   the host roster requests; they do not choose the authoritative roster.
-        /// * <c>PropertyProcessingSystem</c>, <c>PropertyRenterSystem</c>, and the job/wage systems
-        ///   stay running. They maintain native renter links, payments, and local employment; this
-        ///   authority boundary is limited to household lifecycle and mirrored household state.
-        /// * <c>SicknessCheckSystem</c> and <c>DeathCheckSystem</c> are held below. Although old-age
-        ///   death uses the citizen's stored pseudo-random value, sickness and sick/injured death
-        ///   draw from <c>RandomSeed.Next()</c>, which is a different stream in each world. Channel
-        ///   21 therefore carries HealthProblem presence/flags and the host owns those decisions.
-        ///   <c>HealthProblemSystem</c> stays running: it uses the mirrored flags to dispatch real
-        ///   local ambulances/hearses and move the pedestrian through healthcare/deathcare.
-        /// * <c>AgingSystem</c> stays running: it contains no randomness and both peers hold the
-        ///   same birthdays.
+        /// Lifecycle systems a client must not run once the host owns households: they create and split
+        /// households, choose homes and add pets, and would race the host's next correction. Sickness and
+        /// death checks are held because they draw from RandomSeed.Next(). Deliberately left running:
+        /// HouseholdBehaviorSystem (shopping and car demand; its move proposals are stripped at the
+        /// lifecycle boundary), the move-away/remove systems (they execute host removals), property,
+        /// renter, job and wage systems, HealthProblemSystem (local ambulances and hearses) and
+        /// AgingSystem (deterministic).
         /// </summary>
         private readonly LocalAuthorityHold _authority = new LocalAuthorityHold(
             "Occupancy", "residential occupancy", "who lives where", "occupancy authority",
@@ -43,15 +24,10 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             typeof(global::Game.Simulation.SicknessCheckSystem),
             typeof(global::Game.Simulation.DeathCheckSystem));
 
-        /// <summary>
-        /// Hands residential occupancy to the host. Idempotent, and re-checked every update so a
-        /// system the game re-enables on a state change does not quietly start populating houses
-        /// this peer's own way again.
-        /// </summary>
+        /// <summary>Idempotent; re-checked every update because the game can re-enable held systems.</summary>
         private void ApplyLocalAuthority(MultiplayerSession session)
         {
-            // A session hosted with simulation sync off never announces these decisions, so
-            // holding the local systems would leave this city unable to make them either.
+            // Without simulation sync the host never sends these decisions.
             if (!session.SimulationSyncEnabled)
             {
                 RestoreLocalAuthority();
@@ -60,10 +36,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             _authority.Apply(World, session);
         }
 
-        /// <summary>
-        /// Gives the local simulation its population back when the session ends. Without this a
-        /// player who leaves a session keeps a city nobody can ever move into again.
-        /// </summary>
+        /// <summary>Gives the local population back when the session ends.</summary>
         private void RestoreLocalAuthority() => _authority.Restore(World);
     }
 }

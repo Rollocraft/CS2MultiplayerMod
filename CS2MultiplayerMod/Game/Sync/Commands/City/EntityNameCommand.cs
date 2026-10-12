@@ -4,14 +4,9 @@ using CS2MultiplayerMod.Core.Sync;
 namespace CS2MultiplayerMod.Game.Sync.Commands
 {
     /// <summary>
-    /// "This is what this street / district / transport line / building is called." Carries either
-    /// the player's typed name, the auto-name draw the game made when the entity appeared, or both -
-    /// each field is optional, so a rename never overwrites an auto-name and vice versa.
-    ///
-    /// A name has two independent sources. A typed name is held by the game's naming system and
-    /// applied through it. An untouched entity is named from its prefab's name list by an index
-    /// drawn from a wall-clock seed, so every machine draws a different one for the same new street:
-    /// the draw itself has to travel. See <see cref="NameSyncSystem"/>.
+    /// A street, district, line or building name: the typed name, the auto-name draw, or both. Each
+    /// field is optional so neither overwrites the other. Auto-names are wall-clock-seeded draws, so
+    /// the draw itself travels.
     /// </summary>
     public sealed class EntityNameCommand : ISimulationCommand
     {
@@ -83,8 +78,7 @@ namespace CS2MultiplayerMod.Game.Sync.Commands
             for (int i = 0; i < count; i++)
             {
                 int index = reader.ReadInt();
-                // -1 is the game's own "this slot has no names" value; anything past the cap is
-                // either corrupt or forged, and would leave the label showing a raw locale key.
+                // -1 is the game's "no names" value; past the cap the label would show a raw locale key.
                 if (index < -1 || index > MaxRandomIndexValue)
                     throw new ProtocolException("Auto-name index " + index + " out of range.");
                 RandomIndices[i] = index;

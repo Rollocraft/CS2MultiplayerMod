@@ -1,5 +1,4 @@
 using System.Collections.Generic;
-using Colossal.Mathematics;
 using Game.Common;
 using Game.Net;
 using Game.Tools;
@@ -9,21 +8,12 @@ using Unity.Entities;
 using CS2MultiplayerMod.Game.Sync.Infrastructure;
 namespace CS2MultiplayerMod.Game.Sync.Systems.Net
 {
-    // Commit orchestration for NetSyncSystem. A remote net operation includes the objects and areas
-    // its native generation updates as side effects; the complete local preview graph is temporarily
-    // Disabled so an unrelated tool can remain selected without either transaction consuming the
-    // other one's entities.
-    // Resolving the owner a generated child belongs to. The host describes each owner it generated
-    // by prefab and position; the client matches that description against the batch it is holding,
-    // and failing that against what is already live, because the two peers never share entity ids.
-    // The describe/count helpers exist to make a failure legible in the log.
+    // Resolving the owner of a generated child. Peers share no entity ids, so the host's prefab and
+    // position description is matched against the held batch, then against what is live.
     public partial class NetSyncSystem
     {
         /// <summary>
-        /// Replace the per-frame record of which owner each described sub-element named. Written by
-        /// <see cref="OwnerDefinitionSnapshotSystem"/> in the phase before the game consumes those
-        /// descriptions; an empty pass leaves the previous record intact, because the batch being
-        /// validated has already had its descriptions taken.
+        /// Written before the game consumes the descriptions; an empty pass keeps the previous record.
         /// </summary>
         public void BeginOwnerDescriptionSnapshot(int expected)
         {
@@ -42,16 +32,14 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
         }
 
         /// <summary>
-        /// Recover the owner of a sub-element the native resolution pass left unset, in descending
-        /// order of certainty: the entity's own surviving description, the description recorded for
-        /// exactly this entity before the pass consumed it, and finally the batch's own description
-        /// when it names a single owner. Ambiguity is never guessed away.
+        /// Recovers an unset owner from, in order: the surviving description, the recorded one, or the
+        /// batch's single owner. Ambiguity is never guessed.
         /// </summary>
         private bool TryRelinkGeneratedOwner(Entity entity, HashSet<Entity> members, out Entity owner)
         {
             owner = Entity.Null;
-            ArmedOwnerDefinition described;
-            if (members == null || !TryResolveOwnerDescription(entity, out described)) return false;
+            if (members == null ||
+                !TryResolveOwnerDescription(entity, out ArmedOwnerDefinition described)) return false;
             return TryFindDescribedOwner(entity, described.Prefab, described.Position, members,
                 out owner);
         }
@@ -69,8 +57,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                 return described.Prefab != Entity.Null;
             }
             if (_describedOwners.TryGetValue(entity, out described)) return true;
-            // Two different owners in one batch cannot be told apart with no record of this entity.
-            // Re-parenting to the wrong building is worse than rejecting the batch.
+            // Two owners cannot be told apart; the wrong building is worse than a rejection.
             if (_pendingOwnerDefinitions.Count == 1)
             {
                 described = _pendingOwnerDefinitions[0];
@@ -80,11 +67,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
             return false;
         }
 
-        /// <summary>
-        /// A candidate owner must be something the apply passes can already resolve. An entity whose
-        /// own owner is still unset is another orphan: parenting one to the other would build a
-        /// chain that no pass can follow, and an entity may never own itself.
-        /// </summary>
+        /// <summary>Resolvable owners only: no orphan chains and no self-ownership.</summary>
         private bool IsResolvedOwnerCandidate(Entity candidate, Entity child)
         {
             if (candidate == child) return false;
@@ -93,10 +76,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
         }
 
         /// <summary>
-        /// Match an owner description against the armed transaction. The native pass compares the
-        /// live transform bit-exactly, which a ground-conforming or attachment pass between
-        /// generation and resolution can defeat; compare on the horizontal plane instead, where a
-        /// placement does not move, and only accept a single candidate.
+        /// Matches in the horizontal plane (the native pass is bit-exact and ground conforming can defeat
+        /// it), accepting only a single candidate.
         /// </summary>
         private bool TryFindDescribedOwner(Entity child, Entity prefab,
             Unity.Mathematics.float3 position, HashSet<Entity> members, out Entity owner)
@@ -104,8 +85,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
             owner = Entity.Null;
             if (prefab == Entity.Null) return false;
 
-            // Every sub-element of one placement names the same owner, so a single-entry memo turns
-            // a per-orphan scan of the whole transaction into one scan for the batch.
+            // One placement names one owner: memo the last lookup.
             if (prefab == _lastDescribedOwnerPrefab && position.Equals(_lastDescribedOwnerPosition) &&
                 _lastDescribedOwner != Entity.Null && _lastDescribedOwner != child &&
                 members.Contains(_lastDescribedOwner))
@@ -139,10 +119,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                 bestDistanceSq = distanceSq;
                 owner = candidate;
             }
-            // A connector re-cut beside a building that already stands names a live owner. Owner
-            // resolution only matches a Temp to a Temp, so it can never bind that pair and the
-            // transaction alone cannot supply it either. Ask what is standing at the described
-            // point instead; attaching to a live owner is the ordinary form the apply passes read.
+            // A connector re-cut beside a standing building names a live owner, which Temp-to-Temp
+            // resolution can never bind.
             if (candidates == 0) return TryFindLiveDescribedOwner(prefab, position, out owner);
             if (candidates != 1)
             {
@@ -155,15 +133,10 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
             return true;
         }
 
-        /// <summary>
-        /// How many live objects of the described prefab stand where the description says. Zero
-        /// means the description names something this machine does not have; more than one means
-        /// the point is ambiguous and re-linking deliberately refused.
-        /// </summary>
+        /// <summary>Zero: not here. More than one: ambiguous, so re-linking is refused.</summary>
         private int LiveOwnerCandidates(Entity prefab, Unity.Mathematics.float3 position)
         {
-            Entity ignored;
-            if (TryFindLiveDescribedOwner(prefab, position, out ignored)) return 1;
+            if (TryFindLiveDescribedOwner(prefab, position, out Entity ignored)) return 1;
             return _lastLiveOwnerCandidates;
         }
 
@@ -215,11 +188,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
             }
         }
 
-        /// <summary>
-        /// Name the entity a validation rule rejected. The reason string alone cannot distinguish an
-        /// owner that never resolved from one deleted mid-transaction, which left several recorded
-        /// sessions undiagnosable.
-        /// </summary>
+        /// <summary>Names the rejected entity so an unresolved owner can be told from a deleted one.</summary>
         private string DescribeOwnerFailure(Entity entity, Entity owner, HashSet<Entity> members)
         {
             var detail = new System.Text.StringBuilder("(");
@@ -232,8 +201,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                 detail.Append(" owner=#").Append(owner.Index).Append("=gone");
             else detail.Append(" owner=#").Append(owner.Index).Append("=deleted");
 
-            ArmedOwnerDefinition described;
-            if (!TryResolveOwnerDescription(entity, out described))
+            if (!TryResolveOwnerDescription(entity, out ArmedOwnerDefinition described))
             {
                 detail.Append(" wantedOwner=unknown armedOwners=")
                       .Append(_pendingOwnerDefinitions.Count);
@@ -242,9 +210,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
             {
                 detail.Append(" wantedOwner=")
                       .Append(PrefabIndex.SafeName(_prefabSystem, described.Prefab));
-                // Distinguish the two ways the search can come up empty: no such owner is in the
-                // transaction at all, or one is but sits outside the accepted distance. Only the
-                // second is a tolerance question.
+                // Not in the transaction at all, or present but beyond the accepted distance.
                 int samePrefab = 0;
                 float nearestSq = float.MaxValue;
                 if (members != null)
@@ -271,9 +237,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                     detail.Append(" liveCandidates=")
                           .Append(LiveOwnerCandidates(described.Prefab, described.Position));
             }
-            // Owner resolution ignores Disabled entities, and the isolation this commit path applies
-            // uses exactly that tag. Say so when an isolated candidate exists: it separates our own
-            // interference from a description the batch genuinely cannot satisfy.
+            // Owner resolution skips Disabled, which our isolation uses: flag our own interference.
             int isolated = IsolatedOwnerCandidates(entity);
             if (isolated > 0) detail.Append(" isolatedCandidates=").Append(isolated);
             detail.Append(')');
@@ -304,15 +268,10 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
             return detail.ToString();
         }
 
-        /// <summary>
-        /// Owners this commit path is currently hiding that could have satisfied the rejected
-        /// entity's description. Owner resolution skips Disabled entities, so a non-zero count means
-        /// our own isolation, not the world, is what the description could not reach.
-        /// </summary>
+        /// <summary>Candidates our isolation is hiding; non-zero means our interference, not the world.</summary>
         private int IsolatedOwnerCandidates(Entity entity)
         {
-            ArmedOwnerDefinition described;
-            if (!TryResolveOwnerDescription(entity, out described)) return 0;
+            if (!TryResolveOwnerDescription(entity, out ArmedOwnerDefinition described)) return 0;
             Entity prefab = described.Prefab;
             if (prefab == Entity.Null) return 0;
 

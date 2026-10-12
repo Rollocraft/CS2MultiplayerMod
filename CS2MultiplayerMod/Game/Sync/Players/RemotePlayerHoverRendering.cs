@@ -10,11 +10,7 @@ namespace CS2MultiplayerMod.Game.Sync.Players
     {
         private const long HoverStaleAfterMs = 1500;
 
-        /// <summary>
-        /// Outline width, in metres, at the closest camera. A width fixed in world units is a slab
-        /// from close up and a hairline from a zoomed-out camera - which is where a partner's
-        /// outlines are most needed - so it grows with the distance the shape is seen from.
-        /// </summary>
+        /// <summary>Outline width at the closest camera; grows with viewing distance.</summary>
         private const float HoverLineWidth = 2f;
         private const float HoverWidthPerMetre = 0.005f;
         private const float HoverMaxLineWidth = 14f;
@@ -53,8 +49,7 @@ namespace CS2MultiplayerMod.Game.Sync.Players
             trail.HoverCount = count;
         }
 
-        // The game's own hover outline is a single global shader colour, so it can say what a
-        // partner is pointing at but never which partner. Everything is drawn here instead.
+        // The game's hover outline is one global colour, so partners are drawn here instead.
         private bool HoverVisible(Trail trail, bool culling)
         {
             for (int i = 0; i < trail.HoverCount; i++)
@@ -66,10 +61,7 @@ namespace CS2MultiplayerMod.Game.Sync.Players
         private float HoverWidth(float3 point) => math.clamp(
             math.distance(_localEye, point) * HoverWidthPerMetre, HoverLineWidth, HoverMaxLineWidth);
 
-        /// <summary>
-        /// The screen-readable width, held down to a fraction of what it is outlining: a house is a
-        /// few metres across, and a line scaled for a distant camera would swallow it whole.
-        /// </summary>
+        /// <summary>Screen-readable width, capped to a fraction of the outlined object.</summary>
         private float HoverWidth(float3 point, float extent) => math.max(HoverLineWidth,
             math.min(HoverWidth(point), extent * 0.25f));
 
@@ -167,8 +159,7 @@ namespace CS2MultiplayerMod.Game.Sync.Players
             if (SurfacePoint(a).y > a.y + 0.1f || SurfacePoint(b).y > b.y + 0.1f ||
                 SurfacePoint(middle).y > middle.y + 0.1f)
             {
-                // Native projection follows the terrain between samples, including hills above
-                // buried pipes and tunnel sections. Elevated sections keep their actual height.
+                // Projected lines follow terrain between samples; elevated sections keep their height.
                 buffer.DrawLine(color, color, 0f, OverlayRenderSystem.StyleFlags.Projected,
                     new Line3.Segment(a, b), width, default(float2));
             }

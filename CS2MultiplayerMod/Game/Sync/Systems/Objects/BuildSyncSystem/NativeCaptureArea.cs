@@ -1,10 +1,6 @@
 using System.Collections.Generic;
-using Colossal.Mathematics;
 using Game.Common;
-using Game.Net;
 using Game.Prefabs;
-using Game.Tools;
-using Unity.Collections;
 using Unity.Entities;
 using Unity.Mathematics;
 using CS2MultiplayerMod.Core.Diagnostics;
@@ -13,9 +9,7 @@ using CS2MultiplayerMod.Game.Sync.Commands;
 
 namespace CS2MultiplayerMod.Game.Sync.Systems
 {
-    // Capturing a specialized area - an extractor or storage lot drawn as part of placing its
-    // building. The polygon is not known when the placement is captured, so the area is held
-    // until the game completes it, and published then.
+    // An extractor or storage lot drawn while placing its building, held until the game completes it.
     public partial class BuildSyncSystem
     {
         private bool TryBeginSpecializedAreaCapture(Entity recreate)
@@ -37,8 +31,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         {
             if (area == Entity.Null || !EntityManager.Exists(area)) return false;
 
-            Entity topOwner;
-            return TryFindTopOwner(area, out topOwner) &&
+            return TryFindTopOwner(area, out Entity topOwner) &&
                    SpecializedObjectMatchesRoot(topOwner, operation);
         }
 
@@ -82,8 +75,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 !definition.HasOwnerDefinition ||
                 definition.OwnerDefinitionPrefabName != root.PrefabName ||
                 string.IsNullOrEmpty(definition.PrefabName)) return false;
-            Entity prefab;
-            return _prefabIndex.TryResolve(definition.PrefabName, out prefab) &&
+            return _prefabIndex.TryResolve(definition.PrefabName, out Entity prefab) &&
                    IsSpecializedAreaPrefab(prefab);
         }
 
@@ -116,9 +108,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             var operation = new ObjectToolOperationCommand
             {
                 RootIndex = rootIndex,
-                // Keep the compact placement input captured before AreaToolSystem took over.
-                // Without it, landfills/extractors fall back to resolving every sender-local owner
-                // and road definition after the polygon closes and can disappear on the receiver.
+                // Keep the compact placement input, or the receiver must resolve every sender-local reference.
                 HasPlacementInput = source.HasPlacementInput,
                 ToolRandomSeed = source.ToolRandomSeed,
                 PlacementTarget = source.PlacementTarget,
@@ -200,11 +190,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             }
         }
 
-        /// <summary>
-        /// True while this lot belongs to a placement whose building has not been published yet.
-        /// The periodic owned-area scan must leave such a lot alone: sending the polygon first
-        /// gives every receiver an owner-less snapshot it can only wait on and then give up.
-        /// </summary>
+        /// <summary>The building is not published yet, so the periodic area scan must leave this lot alone.</summary>
         internal bool IsSpecializedAreaHeld(Entity area)
         {
             return area != Entity.Null && area == _pendingSpecializedArea &&
@@ -212,12 +198,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         }
 
         /// <summary>
-        /// Publish the held object half when the area tool hands a specialized-industry building
-        /// back without a drawn polygon. Cancelling the polygon, or leaving the tool, keeps the
-        /// committed building and the lot it was placed with - a complete local change that
-        /// used to be discarded with the pending capture, leaving the building on one machine.
-        /// The graph is sent exactly as the object tool emitted it, since the abandoned edit
-        /// changed nothing the receiver has to reproduce.
+        /// Publishes the held object half when the area tool returns without a polygon: the building
+        /// committed with its default lot, exactly as emitted.
         /// </summary>
         private void FinishSpecializedAreaCaptureWithoutPolygon()
         {
@@ -257,19 +239,13 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             }
         }
 
-        /// <summary>
-        /// True when the building this held graph describes is standing. The held lot is the
-        /// cheapest proof; if the abandoned edit took the lot with it, the committed root object
-        /// itself still decides. Either way a placement that never committed is not published.
-        /// </summary>
+        /// <summary>The building is standing (held lot, else the committed root); never publish an uncommitted one.</summary>
         private bool SpecializedPlacementStillCommitted(ObjectToolOperationCommand operation)
         {
             if (SpecializedAreaOwnerStillMatches(_pendingSpecializedArea, operation)) return true;
 
-            ObjectToolDefinitionIntent root;
-            Entity rootPrefab;
-            if (!TryGetNewCommittedObjectRoot(operation, out root) ||
-                !_prefabIndex.TryResolve(root.PrefabName, out rootPrefab)) return false;
+            if (!TryGetNewCommittedObjectRoot(operation, out ObjectToolDefinitionIntent root) ||
+                !_prefabIndex.TryResolve(root.PrefabName, out Entity rootPrefab)) return false;
 
             BeginPortableResolve();
             try
@@ -293,16 +269,13 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         }
 
         /// <summary>
-        /// Publish only after the area apply has reached live entities. DefinitionGateSystem can
-        /// discard local definitions while a remote transaction owns the apply slot; checking the
-        /// live polygon here prevents broadcasting an edit that was not committed on this machine.
+        /// Only once the area apply reached live entities: the gate may have discarded local definitions.
         /// </summary>
         private void CaptureCompletedSpecializedArea()
         {
             if (!_completeSpecializedAreaThisFrame) return;
             _completeSpecializedAreaThisFrame = false;
-            ObjectToolDefinitionIntent completed;
-            if (!TryCaptureCompletedSpecializedArea(out completed))
+            if (!TryCaptureCompletedSpecializedArea(out ObjectToolDefinitionIntent completed))
             {
                 SyncLog.Trace(LogTopic.Buildings, "specialized object/area apply not observed");
                 FinishSpecializedAreaCaptureWithoutPolygon();
@@ -327,8 +300,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 !EntityManager.HasComponent<PrefabRef>(area) ||
                 !EntityManager.HasBuffer<global::Game.Areas.Node>(area)) return false;
 
-            Entity topOwner;
-            if (!TryFindTopOwner(area, out topOwner) ||
+            if (!TryFindTopOwner(area, out Entity topOwner) ||
                 !SpecializedObjectMatchesRoot(topOwner, operation)) return false;
 
             global::Game.Areas.Area areaData =
@@ -351,8 +323,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             if (liveCount < 3 ||
                 liveCount >= ObjectToolOperationCommand.MaxAreaNodesPerDefinition) return false;
 
-            // A live complete area stores only its polygon vertices. GenerateAreasSystem expects a
-            // repeated first vertex in a new definition to recognize and commit a closed polygon.
+            // A new definition closes its ring with a repeated first vertex.
             var wireNodes = new ObjectAreaNodeIntent[liveCount + 1];
             for (int i = 0; i < liveCount; i++)
             {

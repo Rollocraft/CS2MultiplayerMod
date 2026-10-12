@@ -1,10 +1,8 @@
 namespace CS2MultiplayerMod.Core.Protocol.Messages
 {
     /// <summary>
-    /// Player's camera focus (ground) and eye position (air) so others draw where they're
-    /// looking and flying height, plus bounded hover outlines. Sent frequently, relayed by host.
-    /// Lossy by design -
-    /// only latest value matters, dropped updates harmless.
+    /// Camera focus and eye position plus bounded hover outlines, relayed by the host. Lossy: only the
+    /// latest value matters.
     /// </summary>
     public sealed class PlayerStateMessage : INetMessage
     {

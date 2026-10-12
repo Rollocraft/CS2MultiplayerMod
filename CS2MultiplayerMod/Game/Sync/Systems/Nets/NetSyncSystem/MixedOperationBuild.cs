@@ -1,8 +1,5 @@
 using System.Collections.Generic;
 using Colossal.Mathematics;
-using Game.Common;
-using Game.Net;
-using Game.Prefabs;
 using Game.Simulation;
 using Game.Tools;
 using Unity.Collections;
@@ -16,8 +13,6 @@ using CS2MultiplayerMod.Game.Sync.Infrastructure;
 
 namespace CS2MultiplayerMod.Game.Sync.Systems.Net
 {
-    // Building the operation's definitions and arming the commit, and reporting a preflight that
-    // could not be satisfied.
     public partial class NetSyncSystem
     {
         private bool BuildAndArmMixedOperation(SimulationCommandMessage source,
@@ -53,8 +48,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                 PrepareDefinitionFrame();
                 for (int itemIndex = 0; itemIndex < operation.Items.Length; itemIndex++)
                 {
-                    List<MixedDeleteAction> itemDeletes;
-                    if (deleteByItem.TryGetValue(itemIndex, out itemDeletes))
+                    if (deleteByItem.TryGetValue(itemIndex, out List<MixedDeleteAction> itemDeletes))
                     {
                         for (int i = 0; i < itemDeletes.Count; i++)
                         {
@@ -68,8 +62,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                         }
                     }
 
-                    List<MixedReplaceAction> itemReplacements;
-                    if (replaceByItem.TryGetValue(itemIndex, out itemReplacements))
+                    if (replaceByItem.TryGetValue(itemIndex, out List<MixedReplaceAction> itemReplacements))
                     {
                         for (int i = 0; i < itemReplacements.Count; i++)
                         {
@@ -83,8 +76,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                         }
                     }
 
-                    PreparedMixedPlacement prepared;
-                    if (!placements.TryGetValue(itemIndex, out prepared) || prepared.AlreadyBuilt)
+                    if (!placements.TryGetValue(itemIndex, out PreparedMixedPlacement prepared) ||
+                        prepared.AlreadyBuilt)
                         continue;
 
                     NetPlacementCommand command = prepared.Command;
@@ -95,10 +88,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                     CoursePos? startShared = null, endShared = null;
                     int startKind, endKind;
                     bool ignoredSurface;
-                    // Use the ordinary placement resolver for Free endpoints too. A mixed edit can
-                    // place a rail course beside a replacement that retains its original end node.
-                    // Forcing Entity.Null here creates a separate node at that same joint. The shared
-                    // resolver only reuses a live, compatible coincident node and honors DisableMerge.
+                    // The ordinary resolver for Free ends too, so a course beside a replacement shares its end node.
                     if (command.Start.Kind == NetEndpointTargetKind.Infer)
                         startSnap = ClassifyEndpointWithLocalSurface(prepared.Prefab,
                             new float3(command.Start.PosX, command.Start.PosY, command.Start.PosZ),
@@ -127,9 +117,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                         throw new System.InvalidOperationException(
                             "a preflighted end target changed before definition creation");
 
-                    // Infer endpoints are classified only while constructing the shared definition
-                    // graph. Claim them here as well, so two distinct source targets cannot collapse
-                    // onto one receiver edge after the operation-level preflight.
+                    // Claim inferred endpoints too, so two source targets cannot collapse onto one edge.
                     if (!TryClaimSplitTarget(command.Start, startSnap, startKind) ||
                         !TryClaimSplitTarget(command.End, endSnap, endKind))
                         throw new System.InvalidOperationException(
@@ -139,17 +127,16 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                         throw new System.InvalidOperationException(
                             "an inferred placement split targets an edge replaced by the same operation");
 
-                    float startCorrection, endCorrection;
                     float2 startElevation = EndElevation(prepared.Prefab, startSnap, startKind,
                         prepared.Curve.a,
                         new float2(command.Start.ElevationLeft, command.Start.ElevationRight),
                         command.Start.Flags,
-                        ref heightData, ref waterData, out startCorrection);
+                        ref heightData, ref waterData, out float startCorrection);
                     float2 endElevation = EndElevation(prepared.Prefab, endSnap, endKind,
                         prepared.Curve.d,
                         new float2(command.End.ElevationLeft, command.End.ElevationRight),
                         command.End.Flags,
-                        ref heightData, ref waterData, out endCorrection);
+                        ref heightData, ref waterData, out float endCorrection);
                     TallySurfaceCorrection(startCorrection, endCorrection);
 
                     Entity placementDefinition = CreateNativeCourse(prepared.Prefab, command,

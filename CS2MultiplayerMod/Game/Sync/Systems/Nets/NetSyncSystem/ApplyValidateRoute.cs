@@ -1,24 +1,15 @@
-using System.Collections.Generic;
-using Colossal.Mathematics;
 using Game.Common;
-using Game.Net;
 using Game.Tools;
 using Unity.Collections;
 using Unity.Entities;
 
 namespace CS2MultiplayerMod.Game.Sync.Systems.Net
 {
-    // Commit orchestration for NetSyncSystem. A remote net operation includes the objects and areas
-    // its native generation updates as side effects; the complete local preview graph is temporarily
-    // Disabled so an unrelated tool can remain selected without either transaction consuming the
-    // other one's entities.
-    // Validating an armed route transaction before it is committed.
     public partial class NetSyncSystem
     {
         /// <summary>
-        /// Verify the complete route graph immediately before its isolated apply. Route application
-        /// dereferences every root buffer entry and every non-null original, so a missing child or
-        /// stale original rejects the whole graph instead of allowing a partially connected line.
+        /// Route application dereferences every buffer entry and original, so one missing child rejects
+        /// the whole graph.
         /// </summary>
         private bool ValidateArmedRouteTransaction(out string reason)
         {

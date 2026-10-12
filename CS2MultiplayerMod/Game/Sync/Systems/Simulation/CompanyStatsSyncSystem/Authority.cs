@@ -10,27 +10,11 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
     public partial class CompanyStatsSyncSystem
     {
         /// <summary>
-        /// The host owns workplace tenancy and company accounting. The spawn/search systems
-        /// choose which business occupies a property; the accounting system only derives
-        /// CompanyStatisticData from local resources, employees and utility inputs. Channel 22
-        /// supplies those accounting fields already, so clients need not calculate them first.
-        /// Loaded-world figures remain available until their first host page arrives.
-        ///
-        /// Not on this list, deliberately:
-        ///
-        /// * <c>CompanyProfitabilitySystem</c> also updates entities outside the rented-company
-        ///   roster carried by channel 22. Holding it globally would freeze their monthly figures.
-        /// * <c>CompanyDividendSystem</c> transfers money to employee households, including
-        ///   commuters that residential occupancy does not replicate.
-        /// * <c>CompanyMoveAwaySystem</c> stays running. It executes a closure the host roster
-        ///   asked for; it does not choose who closes.
-        /// * <c>CommercialAISystem</c> and <c>IndustrialAISystem</c> stay running. Besides
-        ///   proposing that a business give up, they produce resource orders and demand signals the
-        ///   rest of the local simulation reads. The every-update lifecycle boundary strips their
-        ///   move-away and property-seeking proposals before the consumers run, which is the
-        ///   narrow part, and leaves the rest intact.
-        /// * <c>PropertyProcessingSystem</c> and <c>PropertyRenterSystem</c> stay running. They
-        ///   maintain the native renter links and execute the move-ins this system queues.
+        /// The host owns workplace tenancy and company accounting; channel 22 carries the accounting
+        /// fields. Deliberately left running: CompanyProfitabilitySystem and CompanyDividendSystem (they
+        /// touch entities outside the roster), CompanyMoveAwaySystem (it executes closures the roster
+        /// asked for), Commercial/IndustrialAISystem (their proposals are stripped at the lifecycle
+        /// boundary, the rest is needed), and PropertyProcessing/PropertyRenterSystem (renter links).
         /// </summary>
         private readonly LocalAuthorityHold _authority = new LocalAuthorityHold(
             "CompanyStats", "workplace state", "business tenancy and accounting",
@@ -41,15 +25,10 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             typeof(global::Game.Simulation.IndustrialFindPropertySystem),
             typeof(global::Game.Simulation.CompanyEconomyStatisticSystem));
 
-        /// <summary>
-        /// Hands workplace tenancy to the host. Idempotent, and re-checked every update so a
-        /// system the game re-enables on a state change does not quietly start opening businesses
-        /// this peer's own way again.
-        /// </summary>
+        /// <summary>Idempotent; re-checked every update because the game can re-enable held systems.</summary>
         private void ApplyLocalAuthority(MultiplayerSession session)
         {
-            // A session hosted with simulation sync off never announces these decisions, so
-            // holding the local systems would leave this city unable to make them either.
+            // Without simulation sync the host never sends these decisions.
             if (!session.SimulationSyncEnabled)
             {
                 RestoreLocalAuthority();
@@ -58,20 +37,12 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             _authority.Apply(World, session);
         }
 
-        /// <summary>
-        /// Gives the local simulation its economy back when the session ends. Without this a
-        /// player who leaves a session keeps a city no business can ever open in again.
-        /// </summary>
+        /// <summary>Gives the local economy back when the session ends.</summary>
         private void RestoreLocalAuthority() => _authority.Restore(World);
 
         /// <summary>
-        /// Called immediately before the native move-away executor. The systems that propose a
-        /// closure also produce figures and demand this peer still needs, so rather than holding
-        /// them their proposals are removed here, at the last point before anything acts on them.
-        /// Closures this system asked for are whitelisted and pass straight through.
-        ///
-        /// Both cancellations are issued in bulk: a busy economy proposes plenty of these, and one
-        /// structural change per business would be a sync point each.
+        /// Runs just before the native move-away executor and strips local closure and seek proposals,
+        /// in bulk. Closures this system asked for are whitelisted.
         /// </summary>
         internal void CancelClientLifecycleDecisions()
         {
@@ -116,8 +87,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 }
             }
 
-            // PropertySeeker is enableable, so this query holds exactly the businesses whose flag
-            // is set. Clearing the bits a chunk at a time replaces one main-thread call each.
+            // PropertySeeker is enableable: clear the bits a chunk at a time.
             if (!_companySeekers.IsEmptyIgnoreFilter)
                 EntityManager.SetComponentEnabled<global::Game.Agents.PropertySeeker>(
                     _companySeekers, false);
@@ -127,11 +97,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
         private void AuthorizeMoveAway(Entity company) => _authorizedMoveAways.Add(company);
 
-        /// <summary>
-        /// The whitelist only ever holds businesses this system is closing, so it is naturally
-        /// small; it is still swept once it grows, because a closure that never completes would
-        /// otherwise keep a dead entity handle alive for the rest of the session.
-        /// </summary>
+        /// <summary>Swept once it grows, so a closure that never completes cannot pin a dead handle.</summary>
         private void PruneAuthorizedMoveAways()
         {
             if (_authorizedMoveAways.Count <= 1024) return;

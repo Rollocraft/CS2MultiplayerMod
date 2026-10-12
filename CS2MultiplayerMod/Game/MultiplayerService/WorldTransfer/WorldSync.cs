@@ -42,10 +42,7 @@ namespace CS2MultiplayerMod.Game
         /// <summary>True while all gameplay traffic and local tools are quiesced for a snapshot.</summary>
         public bool WorldSyncBarrierActive => _worldSyncBarrierActive;
 
-        /// <summary>
-        /// Capture which newly connected players caused this epoch. Divergence-driven and
-        /// player-requested re-syncs pass an empty list and receive neutral "refreshing world" copy.
-        /// </summary>
+        /// <summary>Joining players behind this epoch; resyncs pass an empty list and get neutral text.</summary>
         internal void PrepareHostWorldSyncUi(IList<ConnectionId> joiningPlayers)
         {
             _hostWorldSyncJoiningName = null;
@@ -65,14 +62,11 @@ namespace CS2MultiplayerMod.Game
             }
         }
 
-        internal void SetHostWorldSyncUiStage(HostWorldSyncUiStage stage)
-        {
-            _hostWorldSyncUiStage = stage;
-        }
+        internal void SetHostWorldSyncUiStage(HostWorldSyncUiStage stage) => _hostWorldSyncUiStage = stage;
 
         /// <summary>
-        /// Host-side half of Begin. Captures the shared speed, pauses the local simulation, drops
-        /// every pre-cut inbox, and closes <see cref="GameplaySyncReady"/> synchronously.
+        /// Host half of Begin: capture speed, pause, drop pre-cut inboxes, close
+        /// <see cref="GameplaySyncReady"/>.
         /// </summary>
         internal bool TryBeginHostWorldSync(long epoch, out float resumeSpeed)
         {
@@ -87,8 +81,7 @@ namespace CS2MultiplayerMod.Game
             _worldSyncInputLocked = true;
             _hostWorldSyncUiStage = HostWorldSyncUiStage.WaitingForQuiescence;
             SyncInbox.DrainAll();
-            // Held evidence describes the world that is about to be replaced. Keeping it would let
-            // a fault from before the barrier settle a second reload after it.
+            // Evidence about the replaced world must not settle a second reload.
             Diagnostics.ResyncArbiter.Reset();
             MaintainWorldSyncBarrier();
             resumeSpeed = _worldSyncResumeSpeed;
@@ -136,11 +129,8 @@ namespace CS2MultiplayerMod.Game
 
                     if (barrierOnly)
                     {
-                        // This city is not being replaced, so the pre-cut inbox is not superseded
-                        // by anything - dropping it would lose exactly the commands the host
-                        // applied just before it suspended traffic, and only for this peer. Input
-                        // is locked immediately, but the gameplay gate stays open for two frames
-                        // so those already-queued commands land before the systems stop applying.
+                        // This city is kept, so its pre-cut commands must still apply: input locks now, the gameplay gate
+                        // stays open two more frames.
                         _worldSyncGateDelayFrames = RequiredClientQuiescenceFrames;
                         _log.Detail(LogTopic.WorldTransfer, "World sync epoch " + epoch +
                             " began as barrier-only; this city keeps its world and is paused " +
@@ -168,13 +158,10 @@ namespace CS2MultiplayerMod.Game
             if (stage == WorldSyncStage.Resume)
             {
                 _worldSyncResumeSpeed = SanitizeSpeed(resumeSpeed);
-                // Barrier-only assumes this city already holds the world. If it does not - a join
-                // epoch that aborted after the host stopped counting it as joining - fall through
-                // to the recovery below and ask for one.
+                // Barrier-only assumes this city holds the world; otherwise recover below.
                 if (_worldSyncBarrierOnly && _phase == ClientWorldPhase.InSession)
                 {
-                    // Nothing was installed and nothing is stale: lift the pause and carry on with
-                    // the world this city already had.
+                    // Nothing installed, nothing stale: lift the pause.
                     ResetWorldSyncState(restoreSpeed: true);
                     _log.Event(LogTopic.WorldTransfer, "World sync epoch " + epoch +
                         " resumed; this city held the barrier without a snapshot.");
@@ -187,12 +174,8 @@ namespace CS2MultiplayerMod.Game
                         " before this city had installed its snapshot. Asking for the world again.");
                     ResetWorldSyncState(restoreSpeed: false);
                     SetPhase(ClientWorldPhase.WaitingForMap);
-                    // Deliberately NOT the resync arbiter. Two things would swallow it: the session
-                    // is still inside its epoch at this point and coalesces the request away, and
-                    // the WaitingForMap phase set on the line above makes WorldRecoveryInFlight
-                    // true, which is read as "a reload is already running". Neither is the case -
-                    // nothing is coming - so the client sat in WaitingForMap for the rest of the
-                    // session, waiting for a world nobody had been asked for.
+                    // Not the arbiter: the session coalesces requests inside the epoch, and WaitingForMap reads as a
+                    // reload in flight, so no world would ever be requested.
                     RequestMapAgainNextTick();
                     return;
                 }
@@ -234,17 +217,15 @@ namespace CS2MultiplayerMod.Game
             }
             catch (Exception ex)
             {
-                // Worlds are replaced between UI frames. A stale World reference is expected for
-                // that one boundary frame; the next MultiplayerSystem supplies the new instance.
+                // Expected for one frame at a world boundary.
                 SyncLog.Warn(LogTopic.WorldTransfer,
                     "Could not enforce world-sync pause on this frame: " + ex.Message);
             }
         }
 
         /// <summary>
-        /// A client acknowledges Begin only after its already-scheduled native transaction has
-        /// actually left Temp state. Loading a replacement world while that graph is still being
-        /// applied would recreate the same cleanup race the distributed barrier is meant to close.
+        /// Acknowledge Begin only once the scheduled native transaction has left Temp; loading earlier
+        /// recreates the cleanup race the barrier closes.
         /// </summary>
         private void PumpClientWorldSyncQuiescence()
         {
@@ -270,8 +251,7 @@ namespace CS2MultiplayerMod.Game
             }
             catch
             {
-                // A world is replaced only after this acknowledgement. Until then, inability to
-                // inspect its native pipeline is not evidence that the pipeline is safe.
+                // An uninspectable pipeline is not a safe one.
                 quiescent = false;
             }
 

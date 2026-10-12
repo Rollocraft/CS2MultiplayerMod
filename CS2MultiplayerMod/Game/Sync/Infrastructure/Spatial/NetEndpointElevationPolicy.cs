@@ -3,14 +3,12 @@ using System;
 namespace CS2MultiplayerMod.Game.Sync.Infrastructure
 {
     /// <summary>
-    /// Selects the safe correction for a course endpoint whose height is relative to a sampled
-    /// surface. Fixed-height endpoints are deliberately excluded: their position is authoritative
-    /// and their elevation still selects how the span between the endpoints is graded.
+    /// Corrects surface-relative endpoints only; fixed-height endpoints are authoritative and still
+    /// select the span's grading.
     /// </summary>
     internal static class NetEndpointElevationPolicy
     {
-        // Endpoint elevations below this value select the terrain-only profile. Values at or above
-        // it select the terrain/water profile, so a correction must never jump across the boundary.
+        // Below this the terrain-only profile applies; a correction must not cross it.
         private const float TerrainOnlyThreshold = -1f;
 
         public static float Correction(float sourceElevation, float projectedElevation,

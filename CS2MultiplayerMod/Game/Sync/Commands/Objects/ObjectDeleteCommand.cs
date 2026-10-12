@@ -3,12 +3,7 @@ using CS2MultiplayerMod.Core.Sync;
 
 namespace CS2MultiplayerMod.Game.Sync.Commands
 {
-    /// <summary>
-    /// "A player bulldozed this object." Like <see cref="ObjectPlacementCommand"/> the
-    /// target is identified by prefab name + world position (entity ids differ per
-    /// machine); the receiver finds the matching local entity and marks it Deleted - see
-    /// <see cref="DeleteSyncSystem"/>.
-    /// </summary>
+    /// <summary>A bulldozed object by prefab name and position; the receiver marks its match Deleted.</summary>
     public sealed class ObjectDeleteCommand : ISimulationCommand
     {
         public const ushort Id = 3;

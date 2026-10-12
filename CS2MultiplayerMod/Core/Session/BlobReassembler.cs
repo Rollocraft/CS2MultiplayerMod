@@ -4,12 +4,8 @@ using CS2MultiplayerMod.Core.Protocol;
 namespace CS2MultiplayerMod.Core.Session
 {
     /// <summary>
-    /// Accumulates the chunks of one incoming blob until the final chunk arrives, then
-    /// yields the complete byte array. Every invariant a hostile sender could violate
-    /// is checked here: the announced total must never change between chunks, no chunk
-    /// may exceed the wire chunk size, the chunk count must match the announced total,
-    /// and the byte count must land exactly on it. Kept tiny and game-free so the
-    /// transfer logic is unit-testable.
+    /// Accumulates one blob's chunks. Checks a fixed announced total, chunk size, chunk count, and an
+    /// exact final byte count.
     /// </summary>
     internal sealed class BlobReassembler
     {
@@ -31,15 +27,9 @@ namespace CS2MultiplayerMod.Core.Session
         public long LastChunkAtMs { get; private set; }
 
         /// <summary>Maximum chunks this blob may consist of, derived from its announced size.</summary>
-        public int MaxChunks
-        {
-            get { return (ExpectedBytes / ProtocolConstants.BlobChunkBytes) + 2; }
-        }
+        public int MaxChunks => (ExpectedBytes / ProtocolConstants.BlobChunkBytes) + 2;
 
-        /// <summary>
-        /// Add one chunk. Throws <see cref="ProtocolException"/> on any inconsistency;
-        /// the caller drops the whole blob (and may disconnect the sender).
-        /// </summary>
+        /// <summary>Throws <see cref="ProtocolException"/> on any inconsistency; the caller drops the blob.</summary>
         public void Append(int announcedTotal, byte[] data, long nowMs)
         {
             if (announcedTotal != ExpectedBytes)
@@ -64,10 +54,7 @@ namespace CS2MultiplayerMod.Core.Session
             LastChunkAtMs = nowMs;
         }
 
-        /// <summary>
-        /// Finish the transfer: only valid when the byte count matches the announcement
-        /// exactly. A short or padded blob is a protocol violation, not a best effort.
-        /// </summary>
+        /// <summary>Only on an exact byte count; a short or padded blob is a violation.</summary>
         public byte[] Complete()
         {
             if (ReceivedBytes != ExpectedBytes)

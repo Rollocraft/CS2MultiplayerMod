@@ -2,10 +2,7 @@ using System.Collections.Generic;
 
 namespace CS2MultiplayerMod.Game.Sync.Infrastructure
 {
-    /// <summary>
-    /// Reuses membership sets during one read-only pass. Reset before the next pass so moves,
-    /// removals and recycled entity handles can never reuse an old relationship.
-    /// </summary>
+    /// <summary>Membership sets for one read-only pass; reset before the next.</summary>
     internal sealed class PassMembershipIndex<TKey, TMember>
     {
         private readonly Dictionary<TKey, HashSet<TMember>> _members =
@@ -15,8 +12,7 @@ namespace CS2MultiplayerMod.Game.Sync.Infrastructure
 
         public HashSet<TMember> GetMembers(TKey key, out bool firstVisit)
         {
-            HashSet<TMember> members;
-            firstVisit = !_members.TryGetValue(key, out members);
+            firstVisit = !_members.TryGetValue(key, out HashSet<TMember> members);
             if (!firstVisit) return members;
             if (_used == _pool.Count) _pool.Add(new HashSet<TMember>());
             members = _pool[_used++];

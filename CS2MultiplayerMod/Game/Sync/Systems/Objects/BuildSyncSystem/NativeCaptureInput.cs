@@ -1,7 +1,3 @@
-using System.Collections.Generic;
-using Colossal.Mathematics;
-using Game.Common;
-using Game.Net;
 using Game.Prefabs;
 using Game.Tools;
 using Unity.Collections;
@@ -14,15 +10,12 @@ using CS2MultiplayerMod.Game.Sync.Infrastructure;
 
 namespace CS2MultiplayerMod.Game.Sync.Systems
 {
-    // The tool input behind an operation: the control points a placement, stamp or relocation was
-    // drawn with, and the snap target it was attached to. Read from the tool while it still holds
-    // them, because they are gone by the time the definitions commit.
+    // The tool's input (control points, snap target), read while the tool still holds it.
     public partial class BuildSyncSystem
     {
         private void RememberObjectToolControlPoint(ObjectToolSystem tool)
         {
-            Unity.Jobs.JobHandle dependencies;
-            NativeList<ControlPoint> points = tool.GetControlPoints(out dependencies);
+            NativeList<ControlPoint> points = tool.GetControlPoints(out Unity.Jobs.JobHandle dependencies);
             dependencies.Complete();
             if (!points.IsCreated || points.Length == 0)
             {
@@ -37,8 +30,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
         private void RememberPlacementControlPoint(ObjectToolSystem tool)
         {
-            Unity.Jobs.JobHandle dependencies;
-            NativeList<ControlPoint> points = tool.GetControlPoints(out dependencies);
+            NativeList<ControlPoint> points = tool.GetControlPoints(out Unity.Jobs.JobHandle dependencies);
             dependencies.Complete();
             if (!points.IsCreated || points.Length == 0)
             {
@@ -52,10 +44,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         }
 
         /// <summary>
-        /// Preserve the semantic input that a finished building graph cannot safely express: which
-        /// local road/node the placement snapped to. This applies to ordinary service buildings and
-        /// specialized-industry roots alike. The latter publish later, after their area polygon
-        /// closes, but must retain the original point and seed through that hand-off.
+        /// Adds the road/node the placement snapped to, kept through the specialized-industry handoff.
         /// </summary>
         private void AttachPlacementInput(ObjectToolOperationCommand operation)
         {
@@ -82,13 +71,11 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 new float4(0f, 0f, 0f, 1f));
             float4 pointRotation = math.normalizesafe(point.m_Rotation.value,
                 new float4(0f, 0f, 0f, 1f));
-            // A standing definition may survive while the cursor moves to a new preview. Never
-            // pair that old graph with the new point merely because both use ObjectTool.Create.
+            // A standing definition may outlive the cursor's move to a new point.
             if (math.distancesq(rootPosition, point.m_Position) > 0.25f ||
                 math.abs(math.dot(rootRotation, pointRotation)) < 0.995f) return;
 
-            PortableEntityRef target;
-            if (!TryCapturePortableRef(point.m_OriginalEntity, out target))
+            if (!TryCapturePortableRef(point.m_OriginalEntity, out PortableEntityRef target))
             {
                 if (PlacementSnapTargetReachesGenerator(point.m_OriginalEntity))
                 {
@@ -108,16 +95,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         }
 
         /// <summary>
-        /// True when the definition generator would actually read the entity a placement snapped to.
-        /// It does so only for a parent it can hang the object under - one carrying
-        /// <see cref="global::Game.Objects.SubObject"/> (a road, a node, a building), a placeholder
-        /// the object fills, or an attached object a net-object placement replaces.
-        ///
-        /// A building placed along a zoned street snaps to that street's <c>Zones.Block</c>, which is
-        /// none of those: the block shaped the position, and the position is already in the root
-        /// definition. Refusing the compact input for it is what pushed every service building onto
-        /// the exact-graph path, whose hundred-plus sender-local references then have to resolve
-        /// one-for-one on the receiver.
+        /// Whether the generator reads the snap target: a parent with SubObject, a placeholder, or an
+        /// attached object. A zoned street's Block is none of these; its effect is already in the position.
         /// </summary>
         private bool PlacementSnapTargetReachesGenerator(Entity snapTarget)
         {
@@ -129,8 +108,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
         private void RememberStampControlPoint(ObjectToolSystem tool)
         {
-            Unity.Jobs.JobHandle dependencies;
-            NativeList<ControlPoint> points = tool.GetControlPoints(out dependencies);
+            NativeList<ControlPoint> points = tool.GetControlPoints(out Unity.Jobs.JobHandle dependencies);
             dependencies.Complete();
             if (!points.IsCreated || points.Length == 0)
             {
@@ -144,14 +122,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         }
 
         /// <summary>
-        /// Publish a stamp as the inputs its tool had, so the peer runs the game's own generator
-        /// over them instead of rebuilding the transaction from transmitted definitions.
-        ///
-        /// The stamp's internal junctions exist only because every course sharing a prefab node
-        /// index receives the identical computed endpoint position - the node generator merges on
-        /// an exact float comparison, with no tolerance. Regenerating on the peer recreates that
-        /// identity; replaying finished definitions depends on all of it surviving the round trip,
-        /// and a single endpoint that does not becomes a ramp connected to nothing.
+        /// Publishes a stamp as its tool's inputs. Internal junctions merge only on bit-identical endpoints,
+        /// which regeneration reproduces and a definition round trip does not.
         /// </summary>
         private bool TryPublishLocalAssetStamp(string prefabName)
         {
@@ -201,23 +173,15 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             if (!_hasLastObjectToolControlPoint) return false;
             _hasLastObjectToolControlPoint = false;
 
-            // Prevent a stale point from a previously selected object tool being attached to a
-            // later relocation. Quaternion sign is immaterial, hence the absolute dot product.
+            // Reject a stale point from an earlier tool; quaternion sign is immaterial.
             if (math.distancesq(controlPoint.m_Position, position) > 0.25f) return false;
             return math.abs(math.dot(controlPoint.m_Rotation.value, rotation.value)) >= 0.98f;
         }
 
         /// <summary>
-        /// Publish a relocation from the definition graph the tool is applying.
-        ///
-        /// A tool records definitions through <c>ToolOutputBarrier</c>, which plays back at the end of
-        /// ToolUpdate, and drops their one-frame <see cref="Updated"/> tag at Cleanup. So in the window
-        /// before <see cref="ToolOutputSystem"/> the un-tagged definitions still standing are exactly
-        /// the ones the Temps now committing were generated from - the tools' own definition query.
-        /// The root <see cref="CreationFlags.Relocate"/> definition names the moved entity in
-        /// <c>m_Original</c> and its destination in <see cref="ObjectDefinition"/>. The snapped
-        /// control point sampled while the preview stood supplies the destination road/node; the
-        /// receiver re-derives the owned graph from that compact input set.
+        /// Publishes a relocation from the untagged standing definitions: before ToolOutputSystem they are
+        /// exactly what the committing Temps came from. The Relocate root names the moved entity and its
+        /// destination; the sampled control point gives the snapped road or node.
         /// </summary>
         private void CaptureLocalRelocationForApply(NativeArray<Entity> definitions)
         {
@@ -234,12 +198,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 CreationDefinition creation =
                     EntityManager.GetComponentData<CreationDefinition>(entity);
                 if ((creation.m_Flags & CreationFlags.Relocate) == 0) continue;
-                // Owned elements carried along by a relocation - the moved building's own installed
-                // upgrades - are emitted without a prefab, taking it from the entity they name. Only
-                // the definition the tool was given carries the selected prefab, so that test finds
-                // the root whether or not this relocation has a host: an upgrade relocated from the
-                // building's upgrade list is itself owned, and its root definition therefore carries
-                // an OwnerDefinition naming that host.
+                // Carried upgrades have no prefab; only the tool's own root carries it, owned or not.
                 if (creation.m_Owner != Entity.Null || creation.m_Prefab == Entity.Null) continue;
 
                 Entity original = creation.m_Original;
@@ -249,12 +208,10 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
                 ObjectDefinition placement =
                     EntityManager.GetComponentData<ObjectDefinition>(entity);
-                ControlPoint appliedPoint;
                 if (!TryTakeRelocationControlPoint(placement.m_Position, placement.m_Rotation,
-                        out appliedPoint))
+                        out ControlPoint appliedPoint))
                 {
-                    // The final-entity detector remains available later in the frame. Do not send a
-                    // compact move without knowing whether the tool snapped it to a road.
+                    // Without the snap target, leave it to the final-entity detector.
                     SyncLog.Trace(LogTopic.Buildings,
                         "relocation control point unavailable; final-entity fallback");
                     return;
@@ -275,9 +232,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         }
 
         /// <summary>
-        /// Capture an object lifecycle action once, in the narrow phase between its tool selecting
-        /// Apply and ToolOutputSystem consuming the standing preview. Hover/movement frames never
-        /// encode the graph or build portable world indexes.
+        /// Captures a lifecycle action once, between Apply and ToolOutputSystem; hover frames never encode.
         /// </summary>
         public void CaptureLocalObjectApplyBeforeToolOutput()
         {
@@ -289,24 +244,18 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             try
             {
                 bool fromObjectLifecycleTool = _localObjectToolRanThisFrame;
-                // The structural root is authoritative. A one-shot network prefab can switch back
-                // to another tool during the same Apply frame, so active-tool identity is no longer
-                // reliable at this last pre-output hook.
+                // The structural root decides: a one-shot net prefab may already have switched tools.
                 bool fromNetOwnedObjectGraph = !fromObjectLifecycleTool &&
                     NativeObjectGraph.HasNewTopLevelObjectRoot(EntityManager, definitions);
                 if (!fromObjectLifecycleTool && !fromNetOwnedObjectGraph) return;
 
-                // A remote net transaction owns this frame's ApplyTool pass. Its isolation
-                // deliberately prevents the local preview from committing, so it must not be
-                // published as local work - unless the armed batch was stood down for this very
-                // Apply, in which case the local placement does commit and skipping it both loses
-                // the edit and trips the capture-miss world reload.
+                // An armed remote commit keeps the local preview from committing, unless it was stood down for
+                // this Apply; then the placement commits and must be published.
                 if (_nativeNetCoordinator != null && _nativeNetCoordinator.HasArmedToolCommit &&
                     !_nativeNetCoordinator.LocalToolOutputProtectedThisFrame)
                     return;
 
-                // Read a relocation from the same one-shot snapshot. The committed entity is not a
-                // reliable signal because the apply pass does not retain its old position.
+                // The apply pass does not keep the old position; read it from this snapshot.
                 if (fromObjectLifecycleTool)
                     CaptureLocalRelocationForApply(definitions);
 
@@ -314,9 +263,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 ObjectToolOperationCommand operation = _cachedLocalObjectOperation;
                 if (operation == null || operation.Definitions == null) return;
 
-                // Register the exact spawnable definition before ToolOutput applies it. The
-                // specialized-industry object half becomes Created immediately, while its native
-                // command is intentionally held until the area-tool polygon is finished.
+                // Registered before ToolOutput applies it; a specialized object half is Created before it publishes.
                 RememberPlayerPlacedSpawnables(operation,
                     Mod.Service != null ? Mod.Service.NowMs : 0);
 
@@ -327,8 +274,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     if (!string.Equals(selectedStamp, operation.AssetStampPrefabName,
                             System.StringComparison.Ordinal)) return;
 
-                    // Preferred path: ship the tool's inputs. The definition batch below stays as
-                    // the fallback for a game build whose generator we cannot reach.
+                    // Prefer the tool's inputs; the definition batch is the fallback.
                     if (TryPublishLocalAssetStamp(operation.AssetStampPrefabName))
                     {
                         _localObjectApplyThisFrame = true;
@@ -351,26 +297,17 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             }
         }
 
-        /// <summary>
-        /// Reset the one-frame native-capture marker at the front of ToolUpdate. Actual capture is
-        /// deferred to <see cref="CaptureLocalObjectApplyBeforeToolOutput"/>, where the applying
-        /// standing definitions are still available and the work happens only once per click.
-        /// </summary>
-        public void CaptureLocalObjectApply()
-        {
-            _nativeLifecycleCapturedThisFrame = false;
-        }
+        /// <summary>Resets the one-frame marker; capture happens in <see cref="CaptureLocalObjectApplyBeforeToolOutput"/>.</summary>
+        public void CaptureLocalObjectApply() => _nativeLifecycleCapturedThisFrame = false;
 
         private void PublishCachedLocalObjectOperation()
         {
             if (_cachedLocalObjectOperation == null) return;
 
-            // A new top-level object has a stronger commit signal than ApplyMode: its generated
-            // root preserves the preview definition's prefab, transform, and random seed. Keep the
-            // graph in the bounded recent set and publish it only after that root exists. This also
-            // prevents the replacement ghost generated after a click from becoming a placement.
-            ObjectToolDefinitionIntent newRoot;
-            if (TryGetNewCommittedObjectRoot(_cachedLocalObjectOperation, out newRoot)) return;
+            // Publish only once a new root exists with the preview's prefab, transform and seed; this also
+            // ignores the replacement ghost after a click.
+            if (TryGetNewCommittedObjectRoot(_cachedLocalObjectOperation,
+                out ObjectToolDefinitionIntent newRoot)) return;
 
             try
             {

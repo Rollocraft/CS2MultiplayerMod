@@ -1,5 +1,4 @@
 using System.Collections.Generic;
-using Colossal.Mathematics;
 using Game.Common;
 using Game.Net;
 using Game.Tools;
@@ -11,12 +10,7 @@ using CS2MultiplayerMod.Game.Diagnostics;
 using CS2MultiplayerMod.Game.Sync.Infrastructure;
 namespace CS2MultiplayerMod.Game.Sync.Systems.Net
 {
-    // Commit orchestration for NetSyncSystem. A remote net operation includes the objects and areas
-    // its native generation updates as side effects; the complete local preview graph is temporarily
-    // Disabled so an unrelated tool can remain selected without either transaction consuming the
-    // other one's entities.
-    // Committing an armed remote batch, recording what the transaction was made of for the log,
-    // and invalidating a batch that cannot be committed.
+    // Committing an armed remote batch, logging its composition, and invalidating one that cannot commit.
     public partial class NetSyncSystem
     {
         private void CommitRemoteTemps(EntityQuery transactionQuery, int count)
@@ -51,8 +45,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
             {
                 if (IsObjectGraphTransaction(_pendingTransactionKind))
                 {
-                    // Preserve the native ApplyTool domain order. Owner resolution in the object
-                    // pass must run before its owned connector nets and lot areas are committed.
+                    // Native ApplyTool domain order: object owner resolution before its owned nets and areas.
                     _applyObjectsSystem.Update();
                     _applyNetSystem.Update();
                     _applyAreasSystem.Update();
@@ -64,9 +57,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                 }
                 else
                 {
-                    // Net generation creates update Temps for objects attached to every touched
-                    // node/edge. Apply them first so their parent references resolve while the Temp
-                    // net graph is intact, matching the normal ApplyTool domain order.
+                    // Attached-object updates first, while the Temp net graph their parents reference is intact.
                     if (hasObjectTemps) _applyObjectsSystem.Update();
                     _applyNetSystem.Update();
                     if (hasAreaTemps) _applyAreasSystem.Update();
@@ -80,9 +71,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                 return;
             }
 
-            // A moving tool commonly drives the global Clear pass every frame to replace its
-            // preview. The isolated apply jobs have already consumed this remote graph; hide it
-            // until ToolOutputBarrier so the later generic clear cannot cancel the same transaction.
+            // A moving tool runs Clear every frame; hide this consumed graph until ToolOutputBarrier so that
+            // clear cannot cancel it.
             global::Game.Tools.ToolBaseSystem active = _toolSystem != null ? _toolSystem.activeTool : null;
             if (active != null && active.applyMode == global::Game.Tools.ApplyMode.Clear)
             {
@@ -126,14 +116,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
         private const int MaxNotedTransactionMembers = 64;
 
         /// <summary>
-        /// Record what an isolated apply pass is about to consume - shape, <see cref="TempFlags"/>
-        /// and original per member - immediately before the native call. That call can end the
-        /// process without unwinding, so this line is the only surviving description of the batch.
-        ///
-        /// The apply passes dereference the originals that nodes and edges name; lanes are the bulk
-        /// of a large batch and explain nothing. Name the structural members first, so a batch far
-        /// over the cap still describes the part a crash would have come from. A commit of 732
-        /// members spent its whole budget on lanes and left every edge and node unnamed.
+        /// Logs what an isolated apply pass is about to consume, just before the native call that can end
+        /// the process. Structural members come first; lanes explain nothing.
         /// </summary>
         private void NoteTransactionComposition(RemoteToolTransactionKind kind, List<Entity> members)
         {
@@ -173,9 +157,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                     original = temp.m_Original;
                     flags = temp.m_Flags;
                 }
-                // Two members naming one original is the shape the apply passes dereference without
-                // a liveness check. Nothing rejects the batch for it yet - count it so a crash here
-                // can be read off the log instead of reconstructed.
+                // Two members sharing one original is the shape the apply passes dereference unchecked; counted.
                 if (original != Entity.Null && !originals.Add(original)) sharedOriginals++;
 
                 System.Text.StringBuilder sink = isStructural ? structural : rest;
@@ -204,22 +186,14 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                 " sharedOriginal=" + sharedOriginals + " members=[" + detail + "]");
         }
 
-        /// <summary>
-        /// How many of the committed batch's entities are still Temp.
-        ///
-        /// The count, not just "any": it is what tells a stuck pipeline apart from a slow one, and
-        /// it is what the quarantine line used to be missing - it reported the batch size, so a
-        /// graph that was one entity from done and one that had not moved at all logged the same
-        /// number.
-        /// </summary>
+        /// <summary>How many committed entities are still Temp: tells a stuck pipeline from a slow one.</summary>
         private int CountCommittedRemoteTempsRemaining()
         {
             int remaining = 0;
             for (int i = 0; i < _committingRemoteNetTemps.Count; i++)
             {
                 Entity entity = _committingRemoteNetTemps[i];
-                // Deleted is only a request to the deferred cleanup pipeline. Treating that tag as
-                // "gone" allowed the next native transaction to reuse a graph still being torn down.
+                // Deleted is only a request; the graph is still being torn down.
                 if (EntityManager.Exists(entity) && EntityManager.HasComponent<Temp>(entity))
                     remaining++;
             }
@@ -241,11 +215,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
             _committingRemoteNetTemps.Clear();
             ReleaseTrackedTemps(_isolatedLocalTemps);
 
-            // A replay rebuilds the identical command against an unchanged world. Once an attempt
-            // has already been spent and the rejection repeats, the remaining attempts are latency
-            // in front of an unavoidable recovery, not another chance. Compare the reason alone:
-            // the member count comes from a world-wide Temp query, so unrelated concurrent work
-            // (a growable spawning, another peer's edit) moves it between two identical rejections.
+            // A repeated rejection of an identical replay cannot succeed. Compare the reason only: the member
+            // count comes from a world-wide Temp query.
             string identity = RejectionIdentity(reason);
             bool repeatsPreviousAttempt = _applyReplayBudget.AttemptsUsed > 0 &&
                                           identity == _lastInvalidReason;

@@ -8,10 +8,8 @@ using CS2MultiplayerMod.Game.Diagnostics;
 namespace CS2MultiplayerMod.Game
 {
     /// <summary>
-    /// ECS heartbeat for multiplayer. Runs at <see cref="global::Game.SystemUpdatePhase.UIUpdate"/>
-    /// (every frame, even when paused/in menu) pumping <see cref="MultiplayerService"/>. Also enforces
-    /// the "Enable Mod" setting: turning it off closes any active session. Declared <c>partial</c>
-    /// because Unity's Entities source generators extend system types.
+    /// Pumps <see cref="MultiplayerService"/> at <see cref="global::Game.SystemUpdatePhase.UIUpdate"/>
+    /// (every frame, paused or in menus) and closes the session when the mod is disabled.
     /// </summary>
     public partial class MultiplayerSystem : GameSystemBase
     {
@@ -30,20 +28,14 @@ namespace CS2MultiplayerMod.Game
             _simulation = World.GetOrCreateSystemManaged<global::Game.Simulation.SimulationSystem>();
             SyncLog.Detail(LogTopic.Startup, nameof(MultiplayerSystem) + " created.");
 
-            // Trend counters for the flight log: live preview Temps and definition
-            // entities should both hover near zero between edits - either climbing
-            // steadily during a session is a leak.
+            // Flight-log trends: Temps and definitions should hover near zero; steady growth is a leak.
             _tempEntities = GetEntityQuery(ComponentType.ReadOnly<global::Game.Tools.Temp>());
             _definitionEntities = GetEntityQuery(ComponentType.ReadOnly<global::Game.Tools.CreationDefinition>());
         }
 
         /// <summary>
-        /// The game is about to replace the world - exiting to the main menu, loading
-        /// another city, starting a new one. This fires while the outgoing world (and its
-        /// sockets) are still alive, which is the moment a session has to be closed
-        /// properly. Failures are swallowed on purpose: the base class disables a system
-        /// that throws here, and losing the multiplayer pump is worse than a missed leave
-        /// notice (the per-frame watcher covers it).
+        /// The world is about to be replaced while its sockets are still alive: close the session properly.
+        /// Failures are swallowed, since a throwing system gets disabled and the per-frame watcher backs this up.
         /// </summary>
         protected override void OnGamePreload(Colossal.Serialization.Entities.Purpose purpose,
             global::Game.GameMode mode)
@@ -75,9 +67,7 @@ namespace CS2MultiplayerMod.Game
                     service.Disconnect();
                 }
 
-                // Disconnecting a client can queue a safe return to the main menu while
-                // its streamed world is still loading. Keep the lifecycle pump alive even
-                // with gameplay sync disabled so that deferred close and cleanup can finish.
+                // Keep pumping with gameplay sync off, so a deferred client close and cleanup can finish.
                 service.Update(World);
                 PumpHealth(service);
                 return;
@@ -86,19 +76,15 @@ namespace CS2MultiplayerMod.Game
             service.Update(World);
             PumpHealth(service);
 
-            // This system runs at UIUpdate, which the game drives once per rendered frame, so it
-            // is the honest place to time one. Only while gameplay is live: a world load would
-            // otherwise report its own multi-second frames as the session's.
+            // Once per rendered frame; only while gameplay is live, so load frames are not counted.
             if (service.GameplaySyncReady)
                 FrameProbe.Sample(_simulation.selectedSpeed, _simulation.frameIndex);
             else FrameProbe.Reset();
         }
 
         /// <summary>
-        /// One flight-log line every 10 s while multiplayer is active (60 s while idle):
-        /// process memory/CPU/GC, entity trends, transport/blob progress, peer latency,
-        /// world-load state and the most recently applied command. After a crash the tail
-        /// distinguishes a resource ramp, stalled transfer and operation-specific native CTD.
+        /// A flight-log health line every 10 s while active (60 s idle): memory, CPU, GC, entity trends,
+        /// transfer progress, latency, load state, last applied command.
         /// </summary>
         private void PumpHealth(MultiplayerService service)
         {

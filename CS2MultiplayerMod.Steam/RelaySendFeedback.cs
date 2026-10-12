@@ -15,9 +15,9 @@ namespace CS2MultiplayerMod.Core.Networking.Steam
             return moved;
         }
 
-        // A growing wire rate can be retransmissions. Probe only when useful delivery
-        // is keeping up with the current pace, including before quality reports arrive.
-        public static bool CanProbe(long goodput, int sendRate) =>
-            sendRate > 0 && goodput >= sendRate * 3L / 4L;
+        // Quality and ping describe a window seconds old; a rate acknowledged near its own pace is not
+        // congested now, so the complaint holds the rate instead of cutting it.
+        public static bool IsDelivering(long goodput, int sendRate, float share) =>
+            sendRate > 0 && goodput >= (long)(sendRate * share);
     }
 }

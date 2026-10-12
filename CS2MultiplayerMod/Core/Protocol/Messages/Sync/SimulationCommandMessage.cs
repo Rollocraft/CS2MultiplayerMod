@@ -1,14 +1,8 @@
 namespace CS2MultiplayerMod.Core.Protocol.Messages
 {
     /// <summary>
-    /// Transport envelope for a simulation command (see
-    /// <see cref="Sync.ISimulationCommand"/>). The core never interprets the body; it
-    /// carries the command id, the simulation tick the command is scheduled for, and
-    /// the opaque serialized command bytes. The game layer encodes/decodes the body.
-    ///
-    /// Tagging each command with a target <see cref="Tick"/> is what enables
-    /// deterministic, lockstep-style application: every peer applies a given command
-    /// on the same simulation frame.
+    /// Envelope for a <see cref="Sync.ISimulationCommand"/>: command id, target <see cref="Tick"/> and
+    /// the opaque body, which only the game layer encodes and decodes.
     /// </summary>
     public sealed class SimulationCommandMessage : INetMessage
     {
@@ -34,9 +28,7 @@ namespace CS2MultiplayerMod.Core.Protocol.Messages
             writer.WriteInt(OriginPlayerId);
             writer.WriteLong(Tick);
             writer.WriteShort((short)CommandId);
-            writer.WriteInt(Body != null ? Body.Length : 0);
-            if (Body != null && Body.Length > 0)
-                writer.WriteBytes(Body, 0, Body.Length);
+            writer.WriteLengthPrefixedBytes(Body);
         }
 
         public void Read(NetworkReader reader)
@@ -44,8 +36,7 @@ namespace CS2MultiplayerMod.Core.Protocol.Messages
             OriginPlayerId = reader.ReadInt();
             Tick = reader.ReadLong();
             CommandId = (ushort)reader.ReadShort();
-            int length = reader.ReadInt();
-            Body = length > 0 ? reader.ReadBytes(length) : System.Array.Empty<byte>();
+            Body = reader.ReadRemainingLengthPrefixedBytes("Simulation command");
         }
     }
 }

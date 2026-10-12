@@ -14,6 +14,7 @@ static class Program
     {
         CheckWireBytes();
         CheckReplayWindow();
+        OccupancyContentTests.Run(Assert);
         bool baseline = args.Contains("--baseline");
         MeasureWrites(baseline);
         MeasurePruning(baseline);

@@ -1,7 +1,5 @@
-using System.Collections.Concurrent;
 using System.Collections.Generic;
 using Colossal.Mathematics;
-using Game;
 using Game.Common;
 using Game.Net;
 using Game.Prefabs;
@@ -10,7 +8,6 @@ using Unity.Collections;
 using Unity.Entities;
 using Unity.Mathematics;
 using CS2MultiplayerMod.Core.Diagnostics;
-using CS2MultiplayerMod.Core.Protocol.Messages;
 using CS2MultiplayerMod.Core.Session;
 using CS2MultiplayerMod.Game.Diagnostics;
 using CS2MultiplayerMod.Game.Sync.Infrastructure;
@@ -19,88 +16,43 @@ using CS2MultiplayerMod.Game.Sync.Systems.Net;
 namespace CS2MultiplayerMod.Game.Sync.Systems
 {
     /// <summary>
-    /// Replicates in-place road REPLACEMENTS - drawing a different net prefab over an existing edge
-    /// (a one-lane road becomes two-lane, an asphalt road becomes a highway of the same footprint ...)
-    /// and in-place DIRECTION FLIPS (replacing a one-way against its direction commits the same edge
-    /// with an inverted curve and swapped ends). The game commits both as a <c>TempFlags.Modify</c>:
-    /// the edge KEEPS its identity and only its <see cref="PrefabRef"/> and/or orientation change,
-    /// surfacing as a bare <see cref="Updated"/> tag - so placement sync (needs <see cref="Created"/>),
-    /// delete sync (needs <see cref="Deleted"/>) and composition-upgrade sync (only reads
-    /// <c>CompositionFlags</c>) all miss it. (The other, rarer outcome - a replacement whose
-    /// zoning/electricity capability differs - the game does as delete+create, which the placement and
-    /// delete systems already replicate.)
-    ///
-    ///   detect (ModificationEnd): an <see cref="Updated"/>, non-<see cref="Created"/> edge whose
-    ///           prefab OR curve direction differs from a per-Entity baseline -> broadcast a
-    ///           <see cref="NetReplaceCommand"/> carrying the (new) prefab + the edge's BASELINE
-    ///           Bézier (where the receiver's copy still lies) + its COMMITTED Bézier (where it must
-    ///           end up - a width-changing replacement shifts the committed centerline sideways by
-    ///           half the width difference, and its orientation encodes the direction).
-    ///   realize (ToolUpdate, via <see cref="SyncRealizeSystem"/>): find every local edge lying on the
-    ///           OLD curve and rebuild it on (its sub-span of) the NEW curve through the game's own
-    ///           replacement definition - inverted when the local edge runs against the command's
-    ///           direction - committed on <see cref="NetSyncSystem"/>'s ApplyTool pipeline (same path
-    ///           as a bulldoze) so lanes, composition and connections rebuild natively - see
-    ///           <c>Realize</c>.
-    ///
-    /// The per-Entity baseline is exact (an in-place replace keeps the edge entity), which both detects
-    /// the change and, updated the instant we realize one, suppresses the echo without a spatial guard.
-    /// Edges are entered into the baseline at sync start AND as they are Created, so a road built
-    /// mid-session has its later replacement detected too (adopting it on its first Updated event
-    /// instead would swallow exactly that replacement). A just-built road can race its own placement
-    /// command, so unmatched replacements retry briefly.
+    /// Replicates in-place road replacements and direction flips. The game commits both as
+    /// <c>TempFlags.Modify</c>: the edge keeps its identity and only its prefab or orientation changes,
+    /// so placement, delete and upgrade sync all miss it. Capture compares Updated edges with a
+    /// per-entity baseline and sends the prefab with the old and committed curves; the receiver rebuilds
+    /// every local edge on the old curve through the game's replacement definition on NetSync's commit.
+    /// The baseline also suppresses echoes; unmatched replacements retry briefly.
     /// </summary>
-    public partial class NetReplaceSyncSystem : GameSystemBase
+    public partial class NetReplaceSyncSystem : CommandSyncSystem, IRealizeStage
     {
         private const long RetryWindowMs = 10000;
         private const long PruneIntervalMs = 5000;
 
-        // Endpoint-to-curve match tolerance (metres, XZ) — an edge whose both ends lie this close to the
-        // replaced curve is one of its (possibly re-subdivided) sub-segments. Matches DeleteSyncSystem;
-        // a lane is wider than this, so a match never reaches a parallel road.
+        // Both ends within this of the replaced curve (XZ): a sub-segment. A lane is wider.
         private const float EdgeMatchCurveTol = 4f;
 
-        // Max height difference for that match — a bridge stacked directly above the replaced road on
-        // the same XZ line is a different LEVEL and must never be re-typed. Matches DeleteSyncSystem.
+        // A bridge above the replaced road is another level.
         private const float EdgeMatchCurveTolY = 4f;
 
-        // Endpoint tolerance (metres, XZ) for the reversal check: an in-place direction flip swaps the
-        // committed curve's endpoints exactly, while node adjustments from neighbouring work only nudge
-        // them. Edges shorter than a few times this are skipped as ambiguous.
+        // A flip swaps the endpoints exactly; neighbouring work only nudges them. Short stubs are ambiguous.
         private const float EndpointMatchTol = 2f;
 
-        /// <summary>
-        /// Set by <see cref="SyncRealizeSystem"/> while a remote placement is still waiting for the
-        /// road it anchors to. A replacement can only change or remove that road out from under the
-        /// placement, so it waits - and its own retry windows are extended by the time it waited,
-        /// because a replacement dropped for "not resolving" while it was not allowed to look is
-        /// the same divergence, one step later.
-        /// </summary>
-        public bool DeferForPendingPlacement;
-
-        private readonly ConcurrentQueue<SimulationCommandMessage> _incoming =
-            new ConcurrentQueue<SimulationCommandMessage>();
         private readonly List<(NetReplaceCommand command, long deadline)> _retry =
             new List<(NetReplaceCommand, long)>();
 
         /// <summary>When this system last got to run a match pass. See RealizePending.</summary>
         private long _lastReplaceRealizeMs;
 
-        // Replacements whose armed commit was destroyed before it ran (the player's tool cleared the
-        // Temps — see NetSyncSystem's commit-lost handling). Unlike _retry these carry no deadline:
-        // the target edge exists, the commit just couldn't run yet. Replayed first next idle cycle.
+        // Replacements whose armed commit was destroyed; no deadline, replayed first.
         private readonly List<NetReplaceCommand> _replayCommands = new List<NetReplaceCommand>();
 
-        // Edges named as originals by a mixed local net-tool graph whose plain courses have to use
-        // final-edge fallback. Normal replacement detection only watches prefab/direction changes;
-        // this one-frame set also makes an in-place curve update portable instead of losing it.
-        private readonly HashSet<Entity> _expectedMixedGeometryChanges = new HashSet<Entity>();
+        // Originals of a mixed graph using final-edge fallback: also send their in-place curve updates.
+        // Move It writes curves throughout a drag; publish the final geometry once it lets go.
+        private readonly HashSet<Entity> _pendingMoveItEdges = new HashSet<Entity>();
+        private ToolSystem _toolSystem;
 
-        // Last-seen state of each live edge entity: prefab + the full committed curve. An in-place
-        // replacement keeps the edge entity, so a change of prefab IS a replacement, a swap of the
-        // endpoints IS a direction flip, and a curve that GREW beyond its old span is the survivor of
-        // a node reduction (see TrySendExtensions); realize writes the post-commit state here
-        // immediately so the resulting Updated tag is not re-detected as a fresh change.
+        // Last-seen prefab and curve per edge: a prefab change is a replacement, swapped ends a flip, a grown
+        // span a node-reduction survivor. Realize writes the post-commit state here to suppress the echo.
         private struct EdgeBaseline
         {
             public Entity Prefab;
@@ -117,7 +69,6 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         private EntityQuery _updatedEdges;
         private EntityQuery _createdEdges;
         private EntityQuery _liveEdges;
-        private CommandObserver _observer;
 
         protected override void OnCreate()
         {
@@ -127,21 +78,16 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             _prefabIndex = new PrefabIndex(_prefabSystem, GetEntityQuery(ComponentType.ReadOnly<PrefabData>()));
             // Replacements are committed through NetSync's ApplyTool pipeline (see Realize).
             _netSync = World.GetOrCreateSystemManaged<NetSyncSystem>();
+            _toolSystem = World.GetOrCreateSystemManaged<ToolSystem>();
 
-            // Detect: an edge whose composition/prefab was touched this frame. Created is EXCLUDED — a
-            // freshly created edge is a placement (or the create-half of a zoning-differ replacement),
-            // both handled by NetSyncSystem; only an in-place PrefabRef change on a surviving edge is
-            // ours. Temp/Deleted/Owner excluded so we never look at previews, dying edges or sub-nets.
+            // In-place changes only: Created edges are placements; previews, dying edges and sub-nets excluded.
             _updatedEdges = GetEntityQuery(new EntityQueryDesc
             {
                 All = SyncQuery.ReadOnly<Updated, Edge, Curve, PrefabRef>(),
                 None = SyncQuery.ReadOnly<Created, Temp, Deleted, Owner>(),
             });
 
-            // Edges built this frame (locally drawn or realized from a remote command). They enter the
-            // baseline immediately so a LATER replacement of a mid-session road is detected as a change
-            // — waiting for its first Updated event would adopt the post-replacement prefab as the
-            // baseline and swallow exactly that replacement.
+            // Enter new edges immediately, or their later replacement becomes the baseline.
             _createdEdges = GetEntityQuery(new EntityQueryDesc
             {
                 All = SyncQuery.ReadOnly<Created, Edge, Curve, PrefabRef>(),
@@ -155,31 +101,18 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 None = SyncQuery.ReadOnly<Temp, Owner, Deleted>(),
             });
 
-            _observer = SyncObserverBinding.Bind(
-                () => new CommandObserver(_incoming, NetReplaceCommand.Id), DrainQueue);
+            ListenFor(new[] { NetReplaceCommand.Id });
         }
 
-        protected override void OnDestroy()
-        {
-            SyncObserverBinding.Unbind(_observer, DrainQueue);
-            base.OnDestroy();
-        }
-
-        private void DrainQueue()
+        protected override void DrainQueue()
         {
             SyncInbox.Clear(_incoming);
             _edgeBaseline.Clear();
             _retry.Clear();
             _replayCommands.Clear();
-            _expectedMixedGeometryChanges.Clear();
+            _pendingMoveItEdges.Clear();
             _lastReplaceRealizeMs = 0;
-            DeferForPendingPlacement = false;
             _seeded = false;
-        }
-
-        public void ExpectMixedLocalGeometryChange(Entity edge)
-        {
-            if (edge != Entity.Null) _expectedMixedGeometryChanges.Add(edge);
         }
 
         protected override void OnUpdate()
@@ -200,9 +133,65 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 long now = service.NowMs;
                 if (!_seeded) SeedBaseline();
                 SeedCreatedEdges();
-                CaptureReplacements(session, now);
+                if (IsMoveItDragging())
+                    RememberMoveItEdges();
+                else
+                {
+                    FlushMoveItEdges(session);
+                    CaptureReplacements(session, now);
+                }
                 PruneDeadBaseline(now);
             }
+        }
+
+        private bool IsTool(string fullName) =>
+            _toolSystem != null && _toolSystem.activeTool != null &&
+            _toolSystem.activeTool.GetType().FullName == fullName;
+
+        private bool IsMoveItDragging()
+        {
+            if (!IsTool("MoveIt.Tool.MIT")) return false;
+            // If MITState disappears, hold geometry until the tool closes.
+            var state = _toolSystem.activeTool.GetType().GetProperty("MITState");
+            if (state == null) return true;
+            object value = state.GetValue(_toolSystem.activeTool, null);
+            return value == null || value.ToString() == "ApplyButtonHeld" ||
+                   value.ToString() == "SecondaryButtonHeld";
+        }
+
+        private void RememberMoveItEdges()
+        {
+            if (_updatedEdges.IsEmptyIgnoreFilter) return;
+            NativeArray<Entity> entities = _updatedEdges.ToEntityArray(Allocator.Temp);
+            try
+            {
+                for (int i = 0; i < entities.Length; i++)
+                    if (_edgeBaseline.ContainsKey(entities[i])) _pendingMoveItEdges.Add(entities[i]);
+            }
+            finally { entities.Dispose(); }
+        }
+
+        private void FlushMoveItEdges(MultiplayerSession session)
+        {
+            if (_pendingMoveItEdges.Count == 0) return;
+            // Let a native tool transaction finish its own capture first.
+            BuildSyncSystem build = World.GetExistingSystemManaged<BuildSyncSystem>();
+            if ((build != null && build.NativeLifecycleCapturedThisFrame) ||
+                (_netSync != null && (_netSync.DidCommitObjectGraphThisFrame ||
+                                      _netSync.LocalAtomicNetApplyCapturedThisFrame))) return;
+            foreach (Entity edge in _pendingMoveItEdges)
+            {
+                if (!_edgeBaseline.TryGetValue(edge, out EdgeBaseline before) || !EntityManager.Exists(edge) ||
+                    EntityManager.HasComponent<Deleted>(edge) ||
+                    !EntityManager.HasComponent<Curve>(edge) ||
+                    !EntityManager.HasComponent<PrefabRef>(edge)) continue;
+                EdgeBaseline after = BaselineOf(edge);
+                if (before.Prefab != after.Prefab || !SameCurveBits(before.Curve, after.Curve))
+                    SendReplacement(session, after.Prefab, before.Curve, after.Curve,
+                        "Move It committed geometry", true);
+                _edgeBaseline[edge] = after;
+            }
+            _pendingMoveItEdges.Clear();
         }
 
         private EdgeBaseline BaselineOf(Entity e)
@@ -215,10 +204,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         }
 
         /// <summary>
-        /// Record the current state of every live edge once, at sync start, so a later in-place
-        /// replacement of a pre-existing (world-loaded) road is detected as a change rather than
-        /// silently adopted as the baseline. ContainsKey-guarded so it never clobbers an entry a
-        /// same-frame realize already advanced to the new state.
+        /// Records every live edge at sync start, without overwriting an entry a realize already advanced.
         /// </summary>
         private void SeedBaseline()
         {
@@ -241,10 +227,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 " edge(s).");
         }
 
-        /// <summary>
-        /// Enter edges built this frame into the baseline with their as-built state (see the
-        /// <c>_createdEdges</c> query for why waiting for their first Updated event is wrong).
-        /// </summary>
+        /// <summary>Enters this frame's new edges as built.</summary>
         private void SeedCreatedEdges()
         {
             if (_createdEdges.IsEmptyIgnoreFilter) return;
@@ -278,10 +261,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         }
 
         /// <summary>
-        /// True when the committed curve's endpoints are the baseline's SWAPPED - an in-place direction
-        /// flip. Requires both cross-matches and no straight match, so a node nudged by neighbouring
-        /// work (same orientation, one end moved) is a geometry update, not a flip; stubs too short to
-        /// tell apart are skipped.
+        /// Both ends cross-match the baseline and neither matches straight: a flip, not a nudged node.
+        /// Stubs too short to tell are skipped.
         /// </summary>
         private static bool IsReversed(in EdgeBaseline before, Bezier4x3 now)
         {
@@ -300,24 +281,15 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 (_netSync != null && (_netSync.DidCommitObjectGraphThisFrame ||
                                       _netSync.LocalAtomicNetApplyCapturedThisFrame)))
             {
-                // A native object graph or atomic mixed net-tool envelope already carries these
-                // mutations. Advance the baseline so a later unrelated Updated tag cannot
-                // rediscover them as a delayed replacement.
+                // Already carried by a native graph or mixed envelope: adopt as baseline.
                 AdoptUpdatedEdges();
-                _expectedMixedGeometryChanges.Clear();
                 return;
             }
 
-            if (_updatedEdges.IsEmptyIgnoreFilter)
-            {
-                _expectedMixedGeometryChanges.Clear();
-                return;
-            }
+            if (_updatedEdges.IsEmptyIgnoreFilter) return;
 
-            // Two passes: detect against the UNCHANGED baselines first, then advance them all. The
-            // extension test below checks whether a grown span was previously covered by a
-            // NEIGHBOUR's old curve — advancing baselines while detecting would make that test
-            // depend on iteration order (a node-move pair updates two edges in one frame).
+            // Detect against unchanged baselines first, then advance, so the extension test does not depend
+            // on iteration order.
             var changes = new List<(Entity e, EdgeBaseline previous, Entity current, Bezier4x3 b)>();
             NativeArray<Entity> entities = _updatedEdges.ToEntityArray(Allocator.Temp);
             try
@@ -328,8 +300,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     Entity current = EntityManager.GetComponentData<PrefabRef>(e).m_Prefab;
                     Bezier4x3 b = EntityManager.GetComponentData<Curve>(e).m_Bezier;
 
-                    EdgeBaseline previous;
-                    if (!_edgeBaseline.TryGetValue(e, out previous))
+                    if (!_edgeBaseline.TryGetValue(e, out EdgeBaseline previous))
                     {
                         // First sight (edge predates the created-edge seeding) -> baseline, not a change.
                         _edgeBaseline[e] = BaselineOf(e);
@@ -348,52 +319,54 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 (Entity e, EdgeBaseline previous, Entity current, Bezier4x3 b) = changes[i];
                 bool prefabChanged = previous.Prefab != current;
                 bool reversed = IsReversed(previous, b);
-                bool expectedGeometryChange = _expectedMixedGeometryChanges.Contains(e) &&
-                                              !SameCurveBits(previous.Curve, b);
+                bool expectedGeometryChange =
+                    !SameCurveBits(previous.Curve, b) &&
+                    (IsTool("MoveIt.Tool.MIT") ||
+                     IsTool("NodeController.Main.Tools.NodeControllerTool"));
 
                 if (!prefabChanged && !reversed && !expectedGeometryChange)
                 {
-                    // Updated for some other reason — unless the curve GREW beyond its old span,
-                    // which is the survivor of a node reduction. If nothing else ever covered the
-                    // grown part, it is a road the player just drew that the game merged straight
-                    // into this edge (a collinear continuation) — the merge swallows the Created
-                    // edge, so this is the only place that work still surfaces. Send it.
+                    // A grown curve is a node-reduction survivor; an uncovered growth is a road the game merged in
+                    // before it surfaced as Created.
                     TrySendExtensions(session, e, current, previous.Curve, b);
                     continue;
                 }
 
-                string name = _prefabSystem.GetPrefabName(current);
-                if (string.IsNullOrEmpty(name) || name.StartsWith("Invisible")) continue;
-
-                // Both curves go out: the receiver finds its edges on the OLD (baseline) curve and
-                // re-commits them on the NEW one — a width-changing replacement can shift the
-                // committed centerline by half the width difference, and matching the new curve
-                // against edges still on the old line is a coin flip at the match tolerance.
-                Bezier4x3 old = previous.Curve;
-                var command = new NetReplaceCommand
-                {
-                    PrefabName = name,
-                    Ax = b.a.x, Ay = b.a.y, Az = b.a.z,
-                    Bx = b.b.x, By = b.b.y, Bz = b.b.z,
-                    Cx = b.c.x, Cy = b.c.y, Cz = b.c.z,
-                    Dx = b.d.x, Dy = b.d.y, Dz = b.d.z,
-                    OldAx = old.a.x, OldAy = old.a.y, OldAz = old.a.z,
-                    OldBx = old.b.x, OldBy = old.b.y, OldBz = old.b.z,
-                    OldCx = old.c.x, OldCy = old.c.y, OldCz = old.c.z,
-                    OldDx = old.d.x, OldDy = old.d.y, OldDz = old.d.z,
-                };
-                session.SendCommand(0, NetReplaceCommand.Id, command.Encode());
-                SyncLog.Detail(LogTopic.Nets, "NetReplaceSync captured " +
-                    (prefabChanged ? "replacement -> '" + name + "'" : reversed ? "direction flip of '" + name + "'" : "mixed-operation geometry update of '" + name + "'") +
-                    ".");
+                SendReplacement(session, current, previous.Curve, b,
+                    prefabChanged ? "replacement" : reversed ? "direction flip" :
+                    expectedGeometryChange ? "mod geometry" : "mixed geometry",
+                    expectedGeometryChange &&
+                    (IsTool("MoveIt.Tool.MIT") ||
+                     IsTool("NodeController.Main.Tools.NodeControllerTool")));
             }
 
-            // Advance every touched baseline to the committed state — whether we sent or not — so a
-            // change is never re-detected and (on the receiver) a realized replacement never echoes
-            // back. Endpoint drift from neighbouring work lands here too.
+            // Always advance, so a change is never re-detected or echoed.
             for (int i = 0; i < changes.Count; i++)
                 _edgeBaseline[changes[i].e] = new EdgeBaseline { Prefab = changes[i].current, Curve = changes[i].b };
-            _expectedMixedGeometryChanges.Clear();
+        }
+
+        private void SendReplacement(MultiplayerSession session, Entity prefab,
+            Bezier4x3 old, Bezier4x3 current, string reason,
+            bool exactGeometry = false)
+        {
+            string name = _prefabSystem.GetPrefabName(prefab);
+            if (string.IsNullOrEmpty(name) || name.StartsWith("Invisible")) return;
+            var command = new NetReplaceCommand
+            {
+                PrefabName = name,
+                Ax = current.a.x, Ay = current.a.y, Az = current.a.z,
+                Bx = current.b.x, By = current.b.y, Bz = current.b.z,
+                Cx = current.c.x, Cy = current.c.y, Cz = current.c.z,
+                Dx = current.d.x, Dy = current.d.y, Dz = current.d.z,
+                OldAx = old.a.x, OldAy = old.a.y, OldAz = old.a.z,
+                OldBx = old.b.x, OldBy = old.b.y, OldBz = old.b.z,
+                OldCx = old.c.x, OldCy = old.c.y, OldCz = old.c.z,
+                OldDx = old.d.x, OldDy = old.d.y, OldDz = old.d.z,
+                ExactGeometry = exactGeometry,
+            };
+            session.SendCommand(0, NetReplaceCommand.Id, command.Encode());
+            SyncLog.Detail(LogTopic.Nets, "NetReplaceSync captured " + reason + " of '" +
+                name + "'.");
         }
 
         private static bool SameCurveBits(Bezier4x3 left, Bezier4x3 right)
@@ -417,33 +390,24 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             }
         }
 
-        // Shortest extension worth replicating (metres). Node snapping and neighbouring work nudge
-        // endpoints by less; a road piece the player actually drew is longer.
+        // Snapping nudges endpoints by less; a drawn piece is longer.
         private const float MinExtensionLength = 3f;
 
         /// <summary>
-        /// Detect and replicate the part(s) of <paramref name="now"/> that lie BEYOND the edge's
-        /// previous span. The game's node reduction merges a collinear same-prefab neighbour into
-        /// this edge in place; when that neighbour was a real edge (a bulldoze freed the node) or the
-        /// node merely moved, the receiver reproduces the change locally and the grown span is
-        /// covered by some baseline - nothing is sent. When it was only ever a Temp (the player drew
-        /// a straight continuation and the game merged it before a Created edge could surface), the
-        /// extension is new work that would otherwise never reach the wire; it goes out as an
-        /// ordinary placement and the receiver's own reduction merges it back.
+        /// Sends the part of <paramref name="now"/> beyond its previous span when no baseline covers it: a
+        /// continuation the game merged before it surfaced as Created. Merges of real edges are reproduced
+        /// by the receiver and not sent.
         /// </summary>
         private void TrySendExtensions(MultiplayerSession session, Entity edge, Entity prefab,
             Bezier4x3 before, Bezier4x3 now)
         {
-            // The old span must still lie on the new curve — otherwise the edge was reshaped
-            // wholesale (not a reduction survivor) and there is nothing safe to infer.
-            float tA, tD;
-            if (MathUtils.Distance(now.xz, before.a.xz, out tA) > EdgeMatchCurveTol) return;
-            if (MathUtils.Distance(now.xz, before.d.xz, out tD) > EdgeMatchCurveTol) return;
+            // The old span must still lie on the new curve, or nothing can be inferred.
+            if (MathUtils.Distance(now.xz, before.a.xz, out float tA) > EdgeMatchCurveTol) return;
+            if (MathUtils.Distance(now.xz, before.d.xz, out float tD) > EdgeMatchCurveTol) return;
             float tMin = math.min(tA, tD);
             float tMax = math.max(tA, tD);
 
-            // Each piece keeps the elevation of the merged edge end it grew from - a piece that
-            // travelled as elevation 0 would be rebuilt as a ground net and snapped to the terrain.
+            // Each piece keeps its merged end's elevation, or it rebuilds as a ground net.
             Edge ends = EntityManager.GetComponentData<Edge>(edge);
             TrySendExtensionPiece(session, edge, prefab, MathUtils.Cut(now, new float2(0f, tMin)),
                 NodeElevation(ends.m_Start));
@@ -457,15 +421,13 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             float length = MathUtils.Length(piece);
             if (length < MinExtensionLength) return;
 
-            // Covered by another same-prefab edge's last-known span → the geometry only moved BETWEEN
-            // existing edges (reduction victim / node move); the receiver reproduces that locally.
+            // Covered by another edge's baseline: geometry moved between existing edges.
             foreach (KeyValuePair<Entity, EdgeBaseline> pair in _edgeBaseline)
             {
                 if (pair.Key == edge || pair.Value.Prefab != prefab) continue;
                 if (SplitMatch.IsSubCurve3D(piece, pair.Value.Curve)) return;
             }
-            // A span this machine just realized from a remote command, re-surfacing through a local
-            // merge — remote work, never echoed back.
+            // Remote work re-surfacing through a local merge.
             if (_netSync != null && _netSync.WasRecentlyRealized(piece)) return;
 
             string name = _prefabSystem.GetPrefabName(prefab);

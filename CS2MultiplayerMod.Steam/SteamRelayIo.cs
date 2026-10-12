@@ -1,26 +1,21 @@
 using System;
-using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Runtime.InteropServices;
-using System.Threading;
 using CS2MultiplayerMod.Core.Diagnostics;
 using CS2MultiplayerMod.Core.Protocol;
 using Steamworks;
 
 namespace CS2MultiplayerMod.Core.Networking.Steam
 {
-    // The wire itself: length-prefixed frames out through Steam's send queue, and frames in,
-    // reassembled per peer and handed up as transport events.
+    // Framing: length-prefixed frames out through Steam's send queue, reassembled per peer on the way in.
     public sealed partial class SteamRelayTransport
     {
         // ---- sending --------------------------------------------------------------
 
         /// <summary>
-        /// Queue a payload. Frames go into the endpoint's outbox and are handed to Steam as
-        /// fast as it will take them, which is the whole point: the session hands a world
-        /// over as ~200 chunks in a single frame, and a Steam connection's send buffer is
-        /// bounded, so pushing them all straight in earns k_EResultLimitExceeded and drops
-        /// the peer. TCP never showed this because its transport queues without limit.
+        /// Queues into the endpoint's outbox, fed to Steam as it takes them: a world arrives as ~200 chunks
+        /// in one frame, and overfilling Steam's bounded buffer returns k_EResultLimitExceeded and drops the
+        /// peer.
         /// </summary>
         public void Send(ConnectionId target, byte[] payload)
         {
@@ -32,9 +27,7 @@ namespace CS2MultiplayerMod.Core.Networking.Steam
                 if (!_byId.TryGetValue(target.Value, out endpoint)) return;
             }
 
-            // Header carries the whole payload's length so the receiver can rejoin the
-            // frames; Steam delivers them reliably and in order, so no other bookkeeping
-            // is needed on the wire.
+            // The header carries the whole payload length; Steam delivers reliably and in order.
             int firstBody = Math.Min(payload.Length, FrameBytes - FrameHeaderBytes);
             var first = new byte[FrameHeaderBytes + firstBody];
             first[0] = (byte)payload.Length;
@@ -61,8 +54,7 @@ namespace CS2MultiplayerMod.Core.Networking.Steam
         /// <summary>Hand queued frames to Steam until it pushes back or the outbox empties.</summary>
         private void PumpSends(Endpoint endpoint)
         {
-            byte[] frame;
-            while (endpoint.TryPeek(out frame))
+            while (endpoint.TryPeek(out byte[] frame))
             {
                 SendOutcome outcome = SendFrame(endpoint, frame);
                 if (outcome == SendOutcome.Backpressure) return; // retry next frame
@@ -98,18 +90,14 @@ namespace CS2MultiplayerMod.Core.Networking.Steam
             GCHandle pin = GCHandle.Alloc(frame, GCHandleType.Pinned);
             try
             {
-                // NoNagle: every frame we hand over is already a complete unit, so there is
-                // nothing to coalesce and the delay would only sit between pumps.
-                long messageNumber;
+                // NoNagle: every frame is already a complete unit.
                 EResult result = SteamNetworkingSockets.SendMessageToConnection(
                     endpoint.Handle, pin.AddrOfPinnedObject(), (uint)frame.Length,
-                    Constants.k_nSteamNetworkingSend_ReliableNoNagle, out messageNumber);
+                    Constants.k_nSteamNetworkingSend_ReliableNoNagle, out long messageNumber);
 
                 if (result == EResult.k_EResultOK) return SendOutcome.Sent;
 
-                // Not a failure: the connection is healthy and simply has as much queued as
-                // it will hold. Everything else means the peer is gone or the message was
-                // rejected, and a half-delivered payload can never be completed.
+                // Full, not failed. Any other error means the peer is gone or the message was refused.
                 if (result == EResult.k_EResultLimitExceeded) return SendOutcome.Backpressure;
 
                 _log.Warn(LogTopic.Transport, "Steam relay send to " + endpoint.Id + " failed (" +
@@ -136,16 +124,14 @@ namespace CS2MultiplayerMod.Core.Networking.Steam
         {
             if (_active)
             {
-                // Drain the outbox first: a world transfer is carried entirely by these
-                // per-frame pumps once the initial burst filled Steam's buffer.
+                // Drain the outbox first: after the initial burst, transfers move only through these pumps.
                 PumpAllSends();
                 Govern();
                 Receive();
             }
 
             int count = 0;
-            TransportEvent evt;
-            while (_events.TryDequeue(out evt))
+            while (_events.TryDequeue(out TransportEvent evt))
             {
                 sink.Add(evt);
                 count++;
@@ -182,7 +168,8 @@ namespace CS2MultiplayerMod.Core.Networking.Steam
                         var frame = new byte[message.m_cbSize];
                         if (message.m_cbSize > 0)
                             Marshal.Copy(message.m_pData, frame, 0, message.m_cbSize);
-                        Accept(message.m_conn.m_HSteamNetConnection, frame);
+                        Accept(message.m_conn.m_HSteamNetConnection, frame,
+                            ArrivalOf(message.m_usecTimeReceived));
                     }
                     finally
                     {
@@ -204,11 +191,33 @@ namespace CS2MultiplayerMod.Core.Networking.Steam
             return SteamNetworkingSockets.ReceiveMessagesOnConnection(endpoint.Handle, _receiveBuffer, ReceiveBatch);
         }
 
+        /// <summary>
+        /// Steam's arrival time on the mod's event clock. This transport reads only inside Poll on the game
+        /// thread, so without it a stalled frame's backlog would meter as one instant. The clocks differ by a
+        /// fixed offset; the smallest observed offset is the best estimate.
+        /// </summary>
+        private long ArrivalOf(SteamNetworkingMicroseconds usecTimeReceived)
+        {
+            long steamMs = (long)usecTimeReceived / 1000;
+            long now = MonotonicClock.NowMs;
+
+            long candidate = now - steamMs;
+            if (!_steamClockAligned || candidate < _steamClockOffsetMs)
+            {
+                _steamClockAligned = true;
+                _steamClockOffsetMs = candidate;
+            }
+
+            long arrived = steamMs + _steamClockOffsetMs;
+            return arrived > now ? now : arrived;
+        }
+
         /// <summary>Rejoin frames into whole payloads and publish each completed one.</summary>
-        private void Accept(uint handle, byte[] frame)
+        private void Accept(uint handle, byte[] frame, long receivedAtMs)
         {
             Endpoint endpoint = Find(handle);
             if (endpoint == null) return;
+            if (receivedAtMs > endpoint.LastInboundMs) endpoint.LastInboundMs = receivedAtMs;
 
             int offset = 0;
             while (offset < frame.Length)
@@ -236,7 +245,7 @@ namespace CS2MultiplayerMod.Core.Networking.Steam
 
                     if (total == 0)
                     {
-                        Enqueue(TransportEvent.Data(endpoint.Id, Array.Empty<byte>()));
+                        Enqueue(TransportEvent.Data(endpoint.Id, Array.Empty<byte>(), receivedAtMs));
                         continue;
                     }
 
@@ -255,7 +264,7 @@ namespace CS2MultiplayerMod.Core.Networking.Steam
                     byte[] payload = endpoint.Incoming;
                     endpoint.Incoming = null;
                     endpoint.Filled = 0;
-                    Enqueue(TransportEvent.Data(endpoint.Id, payload));
+                    Enqueue(TransportEvent.Data(endpoint.Id, payload, receivedAtMs));
                 }
             }
         }

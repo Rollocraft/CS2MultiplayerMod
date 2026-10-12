@@ -8,7 +8,6 @@ using Game.Buildings;
 using Game.Common;
 using Game.Net;
 using Game.Prefabs;
-using Game.Simulation;
 using Game.Tools;
 using Unity.Collections;
 using Unity.Entities;
@@ -16,10 +15,8 @@ using Unity.Mathematics;
 
 namespace CS2MultiplayerMod.Game.Sync.Systems
 {
-    // Completing a remote building's native integration after its creation transaction drained.
-    // Observation happens at ModificationEnd, after the road/lane/reference passes. Any repair tag
-    // is applied from ToolUpdate on the following frame so those passes can actually consume it
-    // before Cleanup removes the one-frame marker.
+    // Completing a remote building's integration after its transaction drained: observed at
+    // ModificationEnd, repaired from the next ToolUpdate so the native passes consume the tag.
     public partial class BuildSyncSystem
     {
         private const long BuildingIntegrationWindowMs = 15000;
@@ -80,15 +77,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         private Entity _lastIntegrationOwner;
 
         /// <summary>
-        /// Set by <see cref="SyncRealizeSystem"/> while roads or terrain needed by remote
-        /// buildings are deliberately held in the realization pipeline.
-        /// </summary>
-        public bool NetworkDependenciesHeld;
-
-        /// <summary>
-        /// Registers a building produced by another machine. The first refresh is unconditional:
-        /// native connection warnings may have sampled the owned graph while it was still settling,
-        /// even when every durable link is correct by the end of the frame.
+        /// Registers a remote building. The first refresh is unconditional: connection warnings may have
+        /// sampled the graph while it settled.
         /// </summary>
         public void TrackRemoteBuilding(Entity building, Entity prefab, float3 position,
             quaternion rotation, bool roadConnectionExpected, string source)
@@ -99,10 +89,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             roadConnectionExpected = PrefabRequiresRoad(prefab) &&
                                      (roadConnectionExpected ||
                                       expectedRoad != Entity.Null);
-            bool expectsElectricityConsumer;
-            bool expectsWaterConsumer;
-            GetExpectedUtilityConsumers(prefab, out expectsElectricityConsumer,
-                out expectsWaterConsumer);
+            GetExpectedUtilityConsumers(prefab, out bool expectsElectricityConsumer,
+                out bool expectsWaterConsumer);
 
             for (int i = 0; i < _buildingIntegrations.Count; i++)
             {
@@ -161,7 +149,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 _buildingIntegrationClock.Reset();
                 _buildingIntegrationClock.Observe(
                     Mod.Service != null ? Mod.Service.NowMs : 0,
-                    NetworkDependenciesHeld || DeferForTerrain);
+                    RealizeGate.WorldBuildingHeld);
             }
             long activeNow = _buildingIntegrationClock.NowMs;
             _buildingIntegrations.Add(new PendingBuildingIntegration
@@ -237,8 +225,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         {
             if (_buildingIntegrations.Count == 0) return;
             long activeNow = _buildingIntegrationClock.Observe(wallNow,
-                NetworkDependenciesHeld || DeferForTerrain);
-            if (NetworkDependenciesHeld || DeferForTerrain) return;
+                RealizeGate.WorldBuildingHeld);
+            if (RealizeGate.WorldBuildingHeld) return;
 
             int refreshed = 0;
             for (int i = 0; i < _buildingIntegrations.Count &&
@@ -265,7 +253,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         private void ObserveBuildingIntegrations(long wallNow)
         {
             if (_buildingIntegrations.Count == 0) return;
-            bool held = NetworkDependenciesHeld || DeferForTerrain;
+            bool held = RealizeGate.WorldBuildingHeld;
             long activeNow = _buildingIntegrationClock.Observe(wallNow, held);
             if (held) return;
 
@@ -308,8 +296,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                         pending.ExpectedRoad = observedRoad;
                     }
 
-                    // Every tracked building gets one ToolUpdate refresh. Merely observing a
-                    // settled graph is insufficient because a warning may already be stale.
+                    // Every tracked building gets one refresh; a settled graph can carry a stale warning.
                     if (!pending.AwaitingObservation) continue;
 
                     BuildingIntegrationState state = InspectBuildingIntegration(pending);
@@ -361,16 +348,11 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 matches++;
                 match = candidate;
             }
-            // Height can settle during native creation. XZ is sufficient only when it identifies
-            // one live root; vertically stacked or duplicate candidates deliberately stay unresolved.
+            // XZ only when it identifies one root; stacked or duplicate candidates stay unresolved.
             return matches == 1 ? match : Entity.Null;
         }
 
-        /// <summary>
-        /// Restores a generated child's owner while its one-frame owner description is still
-        /// available. This is limited to a building already registered by a remote realize; local
-        /// placement and simulation entities never enter this path.
-        /// </summary>
+        /// <summary>Restores a child's owner from its one-frame description; remote buildings only.</summary>
         internal bool TryRelinkExpectedBuildingOwner(Entity child, Entity ownerPrefab,
             float3 ownerPosition, quaternion ownerRotation)
         {
@@ -432,11 +414,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             return true;
         }
 
-        /// <summary>
-        /// Keeps every owner-description lookup in one fresh candidate snapshot. Several children
-        /// can describe the same owner in this pass, so the last-owner cache remains useful inside
-        /// the scope and is discarded before another frame can reuse it.
-        /// </summary>
+        /// <summary>One candidate snapshot per pass; the last-owner memo is discarded afterwards.</summary>
         internal void BeginExpectedBuildingOwnerRelinks()
         {
             BeginPortableResolve();
@@ -533,8 +511,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             if (_buildingIntegrationGraphBoundReached) return true;
             if (_buildingIntegrationVisited.Count >= MaxBuildingIntegrationGraphEntities)
             {
-                // The remaining graph is unknown rather than broken. Once the cap is reached,
-                // stop the whole traversal so a repeated unchecked entity cannot look like a cycle.
+                // Past the cap the graph is unknown, not broken; stop so it cannot look like a cycle.
                 _buildingIntegrationGraphBoundReached = true;
                 return true;
             }
@@ -580,9 +557,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     reason = "a SubObject entry is stale or has no reciprocal owner";
                     return false;
                 }
-                // An attached child is a separate object with its own lifecycle - the hub a
-                // resource-area placeholder spawns is rebuilt whenever its lot changes. Its link
-                // is what this placement owns; its interior is not.
+                // An attached child has its own lifecycle; only its link belongs to this placement.
                 if (!EntityManager.HasComponent<Owner>(child)) continue;
                 Entity childPrefab = EntityManager.GetComponentData<PrefabRef>(child).m_Prefab;
                 if (!IsOwnedIntegrationGraphReady(child, childPrefab, out reason)) return false;
@@ -653,12 +628,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         }
 
         /// <summary>
-        /// A sub-object is linked back to its owner by <see cref="Owner"/> OR by
-        /// <see cref="global::Game.Objects.Attached"/>: an attached object (the level-one hub on a
-        /// resource-area placeholder, a roadside prop, a turn-restriction sign) is added to the
-        /// parent's <see cref="global::Game.Objects.SubObject"/> buffer by the attachment pass and
-        /// never receives an Owner. Requiring Owner alone reported every specialized-industry
-        /// placement as a broken graph.
+        /// Linked by <see cref="Owner"/> or by <see cref="global::Game.Objects.Attached"/>: attached objects
+        /// join the parent's SubObject buffer without an Owner.
         /// </summary>
         private bool IsLiveOwnedEntity(Entity owner, Entity child)
         {
@@ -752,9 +723,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         }
 
         /// <summary>
-        /// Restore the missing reciprocal of a live Building.m_RoadEdge. The null-to-road event is
-        /// the same transition published when a created building first joins its road; Updated on
-        /// both sides still lets the native connection and secondary-lane passes refresh the graph.
+        /// Restores the reciprocal of a live Building.m_RoadEdge; Updated on both sides lets the native
+        /// connection passes refresh.
         /// </summary>
         private void RepairOneSidedRoadConnections()
         {
@@ -832,10 +802,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             if (!EntityManager.HasComponent<ConsumptionData>(prefab) ||
                 !EntityManager.HasComponent<ObjectData>(prefab)) return;
 
-            // ConsumptionData alone does not imply both consumers. Native initialization restores
-            // exactly the consumer types in the prefab's durable object archetype; generators and
-            // resource-area placeholders legitimately carry consumption metadata without one or
-            // both consumer components.
+            // Consumption metadata does not imply consumers; the prefab's archetype decides.
             EntityArchetype archetype = EntityManager.GetComponentData<ObjectData>(prefab).m_Archetype;
             if (!archetype.Valid) return;
             NativeArray<ComponentType> components = archetype.GetComponentTypes();
@@ -898,7 +865,6 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             _oneSidedRoadConnections.Clear();
             _buildingIntegrationClock.Reset();
             ResetExpectedBuildingOwnerCache();
-            NetworkDependenciesHeld = false;
         }
     }
 }

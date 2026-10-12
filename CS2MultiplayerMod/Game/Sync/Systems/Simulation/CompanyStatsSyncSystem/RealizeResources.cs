@@ -11,10 +11,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         private readonly int[] _localResourceAmounts = new int[EconomyUtils.ResourceCount];
         private readonly bool[] _seenLocalResources = new bool[EconomyUtils.ResourceCount];
 
-        /// <summary>
-        /// Compare sparse inventories in linear time. Absent host resources still become zero,
-        /// but unchanged inventories never acquire a writable buffer or dirty their ECS chunk.
-        /// </summary>
+        /// <summary>Linear sparse compare; unchanged inventories never dirty their chunk.</summary>
         private void ApplyResources(Entity company, CompanyStatsEntry entry)
         {
             if (!EntityManager.HasBuffer<Resources>(company)) return;
@@ -26,8 +23,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 for (int i = 0; i < wanted.Length; i++)
                 {
                     int index = wanted[i].Index;
-                    // Wire slots can outlive a game version's resource catalogue. The former
-                    // catalogue walk ignored unknown slots; preserve that behavior.
+                    // Wire slots can outlive a game version's resource catalogue.
                     if (index >= 0 && index < _wantedResourceAmounts.Length)
                         _wantedResourceAmounts[index] = wanted[i].Amount;
                 }

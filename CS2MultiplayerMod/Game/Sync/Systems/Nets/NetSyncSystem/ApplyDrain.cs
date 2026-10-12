@@ -1,7 +1,4 @@
 using System.Collections.Generic;
-using Colossal.Mathematics;
-using Game.Common;
-using Game.Net;
 using Game.Tools;
 using Unity.Collections;
 using Unity.Entities;
@@ -11,23 +8,15 @@ using CS2MultiplayerMod.Game.Diagnostics;
 using CS2MultiplayerMod.Game.Sync.Infrastructure;
 namespace CS2MultiplayerMod.Game.Sync.Systems.Net
 {
-    // Commit orchestration for NetSyncSystem. A remote net operation includes the objects and areas
-    // its native generation updates as side effects; the complete local preview graph is temporarily
-    // Disabled so an unrelated tool can remain selected without either transaction consuming the
-    // other one's entities.
-    // What happens after a batch is invalidated: the temps it left are tracked until the game has
-    // drained them, the resync report is held while that is still in progress and withdrawn if the
-    // drain completes, and isolation is released once the tool's own output is through.
+    // After invalidation: track the leftover Temps until drained, hold the resync report meanwhile
+    // and withdraw it on completion, then release isolation.
     public partial class NetSyncSystem
     {
         /// <summary>The reason a stalled drain reports, shared by the report and its withdrawal.</summary>
         internal const string DrainFailedReason = "remote transaction failed to drain";
 
         /// <summary>
-        /// What the outstanding "failed to drain" reports are about, so each can be withdrawn by
-        /// name. A list, not one field: a graph that misses its commit window and then misses its
-        /// quarantine window raises two, and withdrawing only the second would still reload the
-        /// world for the first after the graph had actually finished.
+        /// Outstanding "failed to drain" reports; a graph can raise one per window, and all are withdrawn.
         /// </summary>
         private readonly List<string> _outstandingDrainSubjects = new List<string>();
 
@@ -37,10 +26,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                 _outstandingDrainSubjects.Add(subject);
         }
 
-        /// <summary>
-        /// Take back every outstanding "failed to drain" report. A drain that finishes late is a
-        /// window that was too short, and the log should say so instead of the world reloading.
-        /// </summary>
+        /// <summary>A late drain means the window was too short, not a reason to reload.</summary>
         private void WithdrawDrainReport(string outcome)
         {
             if (_outstandingDrainSubjects.Count == 0) return;
@@ -51,10 +37,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
             _outstandingDrainSubjects.Clear();
         }
 
-        /// <summary>
-        /// The comparable part of a rejection. A replay regenerates the graph, so the appended
-        /// entity detail can differ between two attempts that failed for exactly the same reason.
-        /// </summary>
+        /// <summary>The comparable part of a rejection; the entity detail differs between replays.</summary>
         private static string RejectionIdentity(string reason)
         {
             if (string.IsNullOrEmpty(reason)) return reason;
@@ -135,8 +118,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                 return;
             }
 
-            // Require two observations with no surviving Temp. This keeps the cleanup structural
-            // changes and the new definition graph in different native update frames.
+            // Two clean observations keep cleanup and the next graph in different native frames.
             if (++_invalidatedCleanFrames < RequiredCleanDrainFrames) return;
 
             System.Action replay = allowReplay ? _replayAfterInvalidatedDrain : null;
@@ -147,8 +129,6 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
             _invalidatedDrainTimedOut = false;
             _drainReleasedThisFrame = true;
             SyncLog.Trace(LogTopic.Nets, "invalidated net transaction fully drained");
-            // It drained after all. Withdraw the report before its hold matures: the window was
-            // too short for this batch, which is a tuning fact, not a reason to reload a world.
             WithdrawDrainReport("the game's apply pass finished the batch after the window expired");
             if (replay != null) replay();
         }
@@ -188,8 +168,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
             get
             {
                 if (IsCommitBusy) return false;
-                // Match ToolOutputSystem's own dispatch source. Clear only cleans Temp previews and
-                // is safe after the isolated brush pass; Apply would run ApplyBrushesSystem again.
+                // ToolOutputSystem's own dispatch: Clear is safe after the isolated brush pass, Apply would rerun it.
                 return _toolSystem == null ||
                        _toolSystem.applyMode != global::Game.Tools.ApplyMode.Apply;
             }

@@ -1,9 +1,8 @@
+import { GROUP } from "mods/ui-helpers";
 import { bindValue, trigger, useValue } from "cs2/api";
 import { useLocalization } from "cs2/l10n";
 import { ConfirmationDialog, DialogStack } from "cs2/ui";
 import { useContext, useEffect, useRef } from "react";
-
-const GROUP = "cs2mp";
 
 const LOC = {
     closeTitle: "CS2MP.UI.CloseSessionTitle",

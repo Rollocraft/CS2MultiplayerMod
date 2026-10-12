@@ -35,15 +35,14 @@ namespace CS2MultiplayerMod.Core.Session
             byte[] proof = HandshakeAuth.ComputeProof(_config.Password, challenge.Nonce, binding);
             SendTo(connection, new HandshakeRequest(
                 ProtocolConstants.ProtocolVersion, _config.ModVersion, _config.GameVersion,
-                LocalPlayerName, proof, _config.DlcList));
+                LocalPlayerName, proof, _config.DlcList, _config.BuildId, _config.ModManifest));
         }
 
         private void HandleHandshakeRequest(ConnectionId connection, Peer peer, HandshakeRequest request, long nowUnixMs)
         {
             if (Role != SessionRole.Host || peer == null) return;
 
-            // A connection only gets one handshake; re-handshaking would mint a fresh
-            // player id mid-session and confuse every origin check built on it.
+            // One handshake per connection: a second would mint a new player id.
             if (peer.Handshaked)
             {
                 Punt(connection, peer, "repeated handshake", "HandshakeRequest");
@@ -53,9 +52,11 @@ namespace CS2MultiplayerMod.Core.Session
             _log.Detail(LogTopic.Session, "Handshake request from " + connection + " (" +
                 (peer.RemoteAddress ?? "?") + "): name='" +
                 WireGuard.SanitizePlayerName(request.PlayerName) + "' protocol=" +
-                request.ProtocolVersion + " mod=" + (request.ModVersion ?? "?") + " game=" +
+                request.ProtocolVersion + " mod=" + (request.ModVersion ?? "?") + " build=" +
+                (string.IsNullOrEmpty(request.BuildId) ? "?" : request.BuildId) + " game=" +
                 (request.GameVersion ?? "?") + " dlcs=[" +
                 string.Join(", ", request.DlcList ?? Array.Empty<string>()) + "]" +
+                " mods=[" + string.Join(", ", request.ModManifest ?? Array.Empty<string>()) + "]" +
                 " passwordProof=" +
                 (request.PasswordProof != null && request.PasswordProof.Length > 0 ? "present" : "missing") +
                 ".");
@@ -67,12 +68,8 @@ namespace CS2MultiplayerMod.Core.Session
                 return;
             }
 
-            // Password FIRST, before any build-detail check: the mod/game/DLC reject
-            // reasons below describe the host's setup, and an unauthenticated prober
-            // must not be able to enumerate it. Challenge-response, in fixed time. The
-            // expected proof is bound to this connection's nonce and TLS certificate,
-            // so neither replaying an old handshake nor relaying through a
-            // man-in-the-middle helps.
+            // Password first, so an unauthenticated prober cannot enumerate the host's setup from the reject
+            // reasons below. The proof is bound to this nonce and TLS certificate, compared in fixed time.
             if (PasswordProtected)
             {
                 byte[] binding = _transport.GetChannelBinding(connection);
@@ -90,8 +87,7 @@ namespace CS2MultiplayerMod.Core.Session
             }
             peer.ChallengeNonce = null; // single use
 
-            // Build compatibility: a different mod build (or game build) means command
-            // layouts, prefab names and simulation behavior can silently diverge.
+            // A different mod or game build can silently diverge in layouts, prefab names and behaviour.
             if (!string.IsNullOrEmpty(_config.ModVersion) &&
                 !string.Equals(_config.ModVersion, request.ModVersion, StringComparison.Ordinal))
             {
@@ -116,16 +112,25 @@ namespace CS2MultiplayerMod.Core.Session
                 return;
             }
 
-            // DLC preconditions (idea from CS2M): differing DLC ownership means
-            // differing prefab catalogues — a placement of a DLC building would desync
-            // or crash the other side. Both lists are canonical (sorted, client-side
-            // content excluded). Empty is a valid set (no content DLC), not a wildcard:
-            // accepting a client with six DLCs into a zero-DLC host still desynchronizes.
+            // DLC preconditions (idea from CS2M): differing ownership means differing prefab catalogues.
+            // Empty is a real set, not a wildcard.
             string dlcMismatch = DescribeDlcMismatch(_config.DlcList, request.DlcList);
             if (dlcMismatch != null)
             {
                 Reject(connection, "DLC mismatch - " + dlcMismatch);
                 return;
+            }
+
+            string modMismatch = DescribeModMismatch(_config.ModManifest, request.ModManifest);
+            if (modMismatch != null)
+            {
+                if (!_config.IgnoreModCompatibilityChecks)
+                {
+                    Reject(connection, ModMismatchMarker + modMismatch);
+                    return;
+                }
+                _log.Warn(LogTopic.Session, ModMismatchMarker + modMismatch +
+                    " The host chose to ignore this check at their own risk.");
             }
 
             // Player cap (host counts as one seat).
@@ -138,17 +143,22 @@ namespace CS2MultiplayerMod.Core.Session
                 return;
             }
 
-            // Names key chat lines and join/leave notices, so two players with the same
-            // name would be indistinguishable everywhere; FinalizeJoin de-duplicates by
-            // suffixing "(2)" rather than rejecting, keeping the join frictionless.
+            // FinalizeJoin de-duplicates names with a "(2)" suffix rather than rejecting.
             peer.Name = WireGuard.SanitizePlayerName(request.PlayerName);
             peer.ModVersion = request.ModVersion;
+            peer.BuildId = request.BuildId;
             peer.GameVersion = request.GameVersion;
 
-            // Optional manual gate: hold the join and let the host admit it by hand. The
-            // player is given an id now so the host UI can reference this exact request,
-            // but stays un-Handshaked (no seat, no traffic) until FinalizeJoin runs.
-            if (_config.RequireJoinApproval)
+            // Manual approval: the id is assigned now for the host UI, but the peer stays un-Handshaked until
+            // FinalizeJoin.
+            bool friendAutoApproved = false;
+            if (_config.RequireJoinApproval && _config.AutoApprovePlatformFriends)
+            {
+                friendAutoApproved = _transport is IPlatformFriendLookup friendLookup &&
+                                     friendLookup.IsPlatformFriend(connection);
+            }
+
+            if (_config.RequireJoinApproval && !friendAutoApproved)
             {
                 peer.PlayerId = _nextPlayerId++;
                 peer.AwaitingApproval = true;
@@ -158,45 +168,41 @@ namespace CS2MultiplayerMod.Core.Session
                 return;
             }
 
+            if (friendAutoApproved)
+                _log.Event(LogTopic.Session, "Auto-approved Steam friend " + peer + ".");
+
             FinalizeJoin(connection, peer, nowUnixMs);
         }
 
         /// <summary>
-        /// Complete a join: reserve an id if one was not already assigned, make the name
-        /// unique, mark the peer authenticated, and announce the arrival to everyone. Shared
-        /// by the immediate-accept path and the host's manual approval.
+        /// Completes a join (id, unique name, authenticated, announced) for both the immediate and the
+        /// approved path.
         /// </summary>
         private void FinalizeJoin(ConnectionId connection, Peer peer, long nowUnixMs)
         {
             if (peer.PlayerId == 0) peer.PlayerId = _nextPlayerId++;
             peer.Name = UniquePlayerName(peer.Name);
-            // A manually approved peer may have been silent for longer than the normal
-            // post-handshake timeout while waiting at the approval gate. Start its live
-            // liveness window at admission, before the next reaper pass can classify the
-            // old handshake timestamp as an immediate timeout.
+            // An approved peer may have waited longer than the timeout; its liveness starts at admission.
             peer.LastSeenUnixMs = nowUnixMs;
             peer.AwaitingApproval = false;
             peer.Handshaked = true;
 
             SendTo(connection, HandshakeResponse.Accept(peer.PlayerId, _config.SimulationSync));
             _log.Event(LogTopic.Session, "Accepted " + peer + ": mod " +
-                (string.IsNullOrEmpty(peer.ModVersion) ? "?" : peer.ModVersion) + ", game " +
+                (string.IsNullOrEmpty(peer.ModVersion) ? "?" : peer.ModVersion) + " build " +
+                (string.IsNullOrEmpty(peer.BuildId) ? "?" : peer.BuildId) + ", game " +
                 (string.IsNullOrEmpty(peer.GameVersion) ? "?" : peer.GameVersion) + ".");
             NotifyPeerJoined(peer);
 
-            // Surface a "joined" system line to everyone — the clients over the wire and
-            // the host locally — so every machine's UI shows the same notice. Clients do
-            // not get OnPeerJoined for each other, so this line is how they learn of joins.
+            // Clients get no OnPeerJoined for each other; this line is how they learn of joins.
             string notice = peer.Name + " joined.";
             BroadcastToAll(new ChatMessage(null, notice), ConnectionId.None);
             NotifyChat(null, notice);
         }
 
         /// <summary>
-        /// Host-only: admit a join that is waiting for manual approval. The seat cap is
-        /// re-checked at admit time (players may have joined since the request arrived); if
-        /// the session filled up in between, the waiting player is declined with that reason
-        /// instead. Returns false when no pending join carries this id.
+        /// Host only: admits a waiting join, re-checking the seat cap (declined if full). False when no
+        /// pending join has this id.
         /// </summary>
         public bool ApproveJoin(int playerId, long nowUnixMs)
         {
@@ -217,10 +223,7 @@ namespace CS2MultiplayerMod.Core.Session
             return true;
         }
 
-        /// <summary>
-        /// Host-only: refuse a join that is waiting for manual approval, delivering a clear
-        /// reason before the socket closes. Returns false when no pending join carries this id.
-        /// </summary>
+        /// <summary>Host only: refuses a waiting join with a reason. False when no pending join has this id.</summary>
         public bool DeclineJoin(int playerId)
         {
             if (Role != SessionRole.Host) return false;
@@ -242,8 +245,7 @@ namespace CS2MultiplayerMod.Core.Session
 
         private void HandleHandshakePending(ConnectionId connection, Peer peer)
         {
-            // Host -> client only. Anyone else sending it (a client to the host) is speaking
-            // out of turn and is disconnected.
+            // Host -> client only; anyone else is disconnected.
             if (Role != SessionRole.Client)
             {
                 Punt(connection, peer, "sent a host-only handshake-pending", "HandshakePending");
@@ -255,12 +257,7 @@ namespace CS2MultiplayerMod.Core.Session
                 "The host received the join request; waiting for the host to approve it.");
         }
 
-        /// <summary>
-        /// Compare host and client DLC sets. Returns null when compatible; otherwise
-        /// returns a human-readable summary
-        /// naming exactly what differs - so the rejected player knows what to change
-        /// instead of staring at a generic "incompatible" error.
-        /// </summary>
+        /// <summary>Null when compatible, otherwise a summary naming exactly which DLCs differ.</summary>
         internal static string DescribeDlcMismatch(string[] hostDlcs, string[] clientDlcs)
         {
             if (hostDlcs == null) hostDlcs = Array.Empty<string>();
@@ -290,10 +287,84 @@ namespace CS2MultiplayerMod.Core.Session
             return sb.ToString();
         }
 
+        /// <summary>Starts a mod-set rejection; the status screen classifies the fault by it.</summary>
+        public const string ModMismatchMarker = "Mod playset mismatch - ";
+
         /// <summary>
-        /// Make a joining player's name unique among the host and current peers by
-        /// suffixing " (2)", " (3)", ... when taken.
+        /// Null when both sides run the same other mods, otherwise which ones differ. Versions are compared
+        /// only between entries from the same source: a platform version and an assembly version never agree.
         /// </summary>
+        internal static string DescribeModMismatch(string[] hostMods, string[] clientMods)
+        {
+            var unmatched = new List<ModManifestEntry>();
+            foreach (string line in clientMods ?? Array.Empty<string>())
+                unmatched.Add(ModManifestEntry.Parse(line));
+
+            var clientMissing = new List<string>();
+            var versions = new List<string>();
+            foreach (string line in hostMods ?? Array.Empty<string>())
+            {
+                ModManifestEntry mod = ModManifestEntry.Parse(line);
+                int at = FindMod(unmatched, mod);
+                if (at < 0)
+                {
+                    clientMissing.Add(mod.ToString());
+                    continue;
+                }
+                ModManifestEntry other = unmatched[at];
+                unmatched.RemoveAt(at);
+                if ((mod.Id.Length > 0) == (other.Id.Length > 0) &&
+                    !string.Equals(mod.Version, other.Version, StringComparison.Ordinal))
+                    versions.Add(mod.Name + " (host " + mod.Version + ", yours " + other.Version + ")");
+            }
+            if (clientMissing.Count == 0 && versions.Count == 0 && unmatched.Count == 0) return null;
+
+            var hostMissing = new List<string>();
+            foreach (ModManifestEntry mod in unmatched) hostMissing.Add(mod.ToString());
+
+            var sb = new System.Text.StringBuilder();
+            AppendModList(sb, "you are missing: ", clientMissing);
+            AppendModList(sb, "the host is missing: ", hostMissing);
+            AppendModList(sb, "different versions: ", versions);
+            sb.Append(". Both players need the same mods enabled.");
+            return sb.ToString();
+        }
+
+        /// <summary>
+        /// By platform id first, since titles change between versions; by name only without one. An assembly
+        /// name drops the title's spaces ("RoadSpeedAdjuster"), so names compare by letters and digits.
+        /// </summary>
+        private static int FindMod(List<ModManifestEntry> pool, ModManifestEntry mod)
+        {
+            if (mod.Id.Length > 0)
+                for (int i = 0; i < pool.Count; i++)
+                    if (string.Equals(pool[i].Id, mod.Id, StringComparison.Ordinal)) return i;
+            string name = NameKey(mod.Name);
+            for (int i = 0; i < pool.Count; i++)
+                if ((mod.Id.Length == 0 || pool[i].Id.Length == 0) &&
+                    string.Equals(NameKey(pool[i].Name), name, StringComparison.Ordinal)) return i;
+            return -1;
+        }
+
+        private static string NameKey(string name)
+        {
+            var sb = new System.Text.StringBuilder(name.Length);
+            foreach (char c in name)
+                if (char.IsLetterOrDigit(c)) sb.Append(char.ToLowerInvariant(c));
+            return sb.ToString();
+        }
+
+        private static void AppendModList(System.Text.StringBuilder sb, string label, List<string> mods)
+        {
+            const int listed = 6;
+            if (mods.Count == 0) return;
+            if (sb.Length > 0) sb.Append("; ");
+            int shown = mods.Count < listed ? mods.Count : listed;
+            sb.Append(label).Append(string.Join(", ", mods.GetRange(0, shown).ToArray()));
+            if (mods.Count > shown) sb.Append(" (+").Append(mods.Count - shown).Append(')');
+        }
+
+        /// <summary>Suffixes " (2)", " (3)", ... to a taken name.</summary>
         private string UniquePlayerName(string name)
         {
             string candidate = name;
@@ -318,8 +389,7 @@ namespace CS2MultiplayerMod.Core.Session
         private void Reject(ConnectionId connection, string reason)
         {
             SendTo(connection, HandshakeResponse.Reject(reason));
-            // Deliver the rejection reason before hanging up — an immediate disconnect would
-            // race the asynchronous send and the client would only see "remote closed".
+            // Flush the reason first, or the client only sees "remote closed".
             _transport.DisconnectAfterFlush(connection);
             _peers.Remove(connection.Value);
             _log.Warn(LogTopic.Session, "Rejected " + connection + ": " + reason);
@@ -329,8 +399,7 @@ namespace CS2MultiplayerMod.Core.Session
         {
             if (Role != SessionRole.Client) return;
 
-            // The wait is over either way — accepted below, or rejected (which includes a
-            // manual decline) into a fault.
+            // Accepted below or rejected into a fault; either way the wait is over.
             _awaitingHostApproval = false;
 
             if (!response.Accepted)
@@ -348,6 +417,5 @@ namespace CS2MultiplayerMod.Core.Session
             SetStatus(SessionStatus.Connected, "Joined as player #" + LocalPlayerId);
             if (peer != null) NotifyPeerJoined(peer);
         }
-
     }
 }

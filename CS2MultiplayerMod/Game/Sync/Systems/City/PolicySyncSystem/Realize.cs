@@ -27,14 +27,13 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                            KindName(pending.cmd.TargetKind) + " '" + pending.cmd.TargetPrefabName + "'")
                     .Tried("retried for 15 s of eligible time, excluding dependency holds")));
 
-            SimulationCommandMessage message;
-            while (_incoming.TryDequeue(out message))
+            while (_incoming.TryDequeue(out SimulationCommandMessage message))
             {
                 if (message.OriginPlayerId == session.LocalPlayerId) continue;
 
-                EntityPolicyCommand command;
-                try { command = EntityPolicyCommand.Decode(message.Body); }
-                catch (System.Exception ex) { SyncLog.Warn(LogTopic.City, "PolicySync: dropping malformed command: " + ex.Message); continue; }
+                if (!CommandDecode.TryDecode(message, EntityPolicyCommand.Decode, LogTopic.City,
+                        "PolicySync", out EntityPolicyCommand command))
+                    continue;
 
                 if (!TryApplyPolicy(command, message.OriginPlayerId, now))
                     QueuePolicyRetry(command, message.OriginPlayerId);
@@ -42,14 +41,10 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             }
         }
 
-        /// <summary>
-        /// Returns false only when the target can still appear after an ordered building/route
-        /// transaction. Unknown policy prefabs and application failures are hard drops.
-        /// </summary>
+        /// <summary>False only while the target can still appear; unknown policies and failures are dropped.</summary>
         private bool TryApplyPolicy(EntityPolicyCommand command, int origin, long now)
         {
-            Entity policy;
-            if (!_prefabIndex.TryResolve(command.PolicyPrefabName, out policy))
+            if (!_prefabIndex.TryResolve(command.PolicyPrefabName, out Entity policy))
             {
                 SyncLog.Warn(LogTopic.City, "PolicySync: unknown policy '" +
                     command.PolicyPrefabName + "'; skipping.");
@@ -105,8 +100,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
         private Entity FindTarget(byte kind, string prefabName, float3 anchor)
         {
-            Entity prefab;
-            if (!_prefabIndex.TryResolve(prefabName, out prefab)) return Entity.Null;
+            if (!_prefabIndex.TryResolve(prefabName, out Entity prefab)) return Entity.Null;
 
             EntityQuery query = kind == EntityPolicyCommand.KindDistrict ? _districts :
                                 kind == EntityPolicyCommand.KindRoute ? _routes : _buildings;
@@ -117,8 +111,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             Entity best = Entity.Null;
             float bestSq = maxSq;
             SearchTargets(query, prefab, kind, anchor, ref best, ref bestSq);
-            // An owned service upgrade shares the building kind; try those too when no top-level
-            // building answers (see the query's comment in PolicySyncSystem).
+            // Owned upgrades share the building kind (see the query in PolicySyncSystem).
             if (best == Entity.Null && kind == EntityPolicyCommand.KindBuilding)
                 SearchTargets(_ownedUpgrades, prefab, kind, anchor, ref best, ref bestSq);
             return best;
@@ -134,8 +127,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 for (int i = 0; i < entities.Length; i++)
                 {
                     if (EntityManager.GetComponentData<PrefabRef>(entities[i]).m_Prefab != prefab) continue;
-                    float3 candidate;
-                    if (!TryAnchor(kind, entities[i], out candidate)) continue;
+                    if (!TryAnchor(kind, entities[i], out float3 candidate)) continue;
                     float d = math.distancesq(candidate, anchor);
                     if (d > bestSq) continue;
                     bestSq = d;
@@ -182,13 +174,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         }
 
         /// <summary>
-        /// An owned upgrade's on/off state, read where the game itself reads it.
-        ///
-        /// Turning an extension off goes through the "Out of Service" policy, but the resulting state
-        /// does not live in the entity's <see cref="Policy"/> buffer - the building's own properties
-        /// panel reads <c>Extension.m_Flags</c> / <c>Building.m_OptionMask</c>, and those are what the
-        /// simulation acts on. Diffing the buffer therefore never saw the toggle at all. The synthetic
-        /// entry below puts that flag into the same shape as a real policy so one diff covers both.
+        /// An upgrade's on/off state lives in <c>Extension.m_Flags</c> / <c>Building.m_OptionMask</c>, not
+        /// the policy buffer; a synthetic entry puts it in the same diff.
         /// </summary>
         private List<PolicyEntry> ReadUpgradePolicies(Entity entity)
         {
@@ -196,11 +183,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             Entity outOfService = OutOfServicePolicy();
             if (outOfService == Entity.Null) return policies;
 
-            // The flag is reported unconditionally, including while the upgrade is destroyed or
-            // burning (the simulation switches it off then). Both machines derive that state from
-            // their own copy, so at worst each sends one redundant command that the other applies as
-            // a no-op. Dropping the entry instead would read as "it disappeared" - which the diff
-            // reports as switched off, silently re-enabling it on the peer.
+            // Reported even while destroyed or burning: at worst a redundant no-op, whereas dropping it would
+            // read as switched off.
             bool disabled = IsUpgradeDisabled(entity);
             for (int i = 0; i < policies.Count; i++)
             {
@@ -226,16 +210,12 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             return false;
         }
 
-        /// <summary>
-        /// The shared "Out of Service" policy prefab, resolved by name the same way the building's
-        /// properties panel resolves it.
-        /// </summary>
+        /// <summary>Resolved by name, as the properties panel does.</summary>
         private Entity OutOfServicePolicy()
         {
             if (_outOfServicePolicy != Entity.Null &&
                 EntityManager.Exists(_outOfServicePolicy)) return _outOfServicePolicy;
-            Entity policy;
-            _outOfServicePolicy = _prefabIndex.TryResolve(OutOfServicePolicyName, out policy)
+            _outOfServicePolicy = _prefabIndex.TryResolve(OutOfServicePolicyName, out Entity policy)
                 ? policy
                 : Entity.Null;
             return _outOfServicePolicy;
@@ -243,8 +223,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
         private List<PolicyEntry> ReadPolicies(Entity entity)
         {
-            // No buffer yet is a real state, not an error: it is what an upgrade looks like before it
-            // is ever toggled, and comparing against it is what makes the first toggle replicate.
+            // No buffer is the untoggled baseline, which lets the first toggle replicate.
             if (!EntityManager.HasBuffer<Policy>(entity)) return new List<PolicyEntry>(0);
 
             DynamicBuffer<Policy> buffer = EntityManager.GetBuffer<Policy>(entity, true);
@@ -258,6 +237,5 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 });
             return list;
         }
-
     }
 }

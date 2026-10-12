@@ -16,23 +16,23 @@ Xbox App, Microsoft Store and Game Pass copies cannot use the relay. Those playe
 ## Hosting with a relay
 
 1. Open Multiplayer and click Host Game.
-![](assets/img/ui-menu-multiplayer.png)
-![](assets/img/ui-menu-choice-host.png)
+![](assets/img/ui-menu-multiplayer.webp)
+![](assets/img/ui-menu-choice-host.webp)
 2. Set the connection type to Steam Relay.
 3. Your join code appears there. Click it to select it, then press <kbd>Ctrl</kbd>+<kbd>C</kbd>.
-![](assets/img/ui-host-world.png)
+![](assets/img/ui-host-world.webp)
 4. Load or create your world as usual. The session starts once the city has loaded.
 5. Send the code to your friends.
 
 ## Joining with a code
 
 1. Open Multiplayer and click Join Game.
-![](assets/img/ui-menu-multiplayer.png)
-![](assets/img/ui-menu-choice-join.png)
+![](assets/img/ui-menu-multiplayer.webp)
+![](assets/img/ui-menu-choice-join.webp)
 2. Set the connection type to Steam Relay.
 3. Paste the code into the join code field, enter your player name and the password if the
    host set one.
-![](assets/img/ui-join-relay.png)
+![](assets/img/ui-join-relay.webp)
 4. Click Join and wait while the host's city downloads.
 
 ## When the code is unavailable

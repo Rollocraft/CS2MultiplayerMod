@@ -9,11 +9,8 @@ using CS2MultiplayerMod.Game.Diagnostics;
 namespace CS2MultiplayerMod.Game.Sync.Players
 {
     /// <summary>
-    /// Publishes the local player's map focus (the camera pivot - the point on the
-    /// ground the player is looking at) a few times a second, and lets the service
-    /// collect the other players' positions and display-only hover shapes. Unlike the
-    /// city-state channels this is per-player and lossy: only the newest position
-    /// matters. Rendering the remote cursors is handled separately.
+    /// Publishes the local camera focus a few times a second and collects the other players' positions
+    /// and hover shapes. Per-player and lossy: only the newest position matters.
     /// </summary>
     public partial class PlayerCursorSyncSystem : GameSystemBase
     {
@@ -52,10 +49,8 @@ namespace CS2MultiplayerMod.Game.Sync.Players
                     if (_camera == null) return;
                 }
 
-                // The ground focus (pivot) is where the player is looking; the eye is where
-                // their camera actually is, up in the air - both travel so markers can show
-                // height. Fall back to the raw camera position when no gameplay camera is
-                // active (menus, cinematic mode), which collapses the marker to a ground point.
+                // Focus is where they look, eye where the camera is (for height); without a gameplay camera the
+                // marker collapses to a ground point.
                 float3 eye = _camera.position;
                 float3 focus = eye;
                 float yaw = 0f;

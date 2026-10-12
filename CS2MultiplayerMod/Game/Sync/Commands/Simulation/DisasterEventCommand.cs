@@ -14,25 +14,15 @@ namespace CS2MultiplayerMod.Game.Sync.Commands
     }
 
     /// <summary>
-    /// "A natural disaster started, here, like this." Carries only the state the receiving game
-    /// cannot derive for itself - where, how big, how long, how strong - and never the per-frame
-    /// path. Each machine then runs the event with its own simulation, so one small message covers
-    /// a disaster of any length.
-    ///
-    /// Timings are frame counts relative to the receiver's own <c>frameIndex</c>, never absolute
-    /// frames: each machine keeps an independent simulation frame counter (the in-game clock is
-    /// aligned by re-anchoring <c>TimeData.m_FirstFrame</c> instead), so a sender's absolute
-    /// start/end frame would land anywhere on the receiver.
+    /// A disaster start: where, size, duration, strength; each machine then runs it. Timings are
+    /// relative to the receiver's <c>frameIndex</c>, since frame counters differ per machine.
     /// </summary>
     public sealed class DisasterEventCommand : ISimulationCommand
     {
         public const ushort Id = 24;
         public const int MaxEncodedBytes = 512;
 
-        /// <summary>
-        /// Ceiling on the start delay and the duration: one in-game day of simulation frames.
-        /// Real events run for seconds to minutes; this only stops a forged "never ends" event.
-        /// </summary>
+        /// <summary>One in-game day of frames; stops a forged event that never ends.</summary>
         public const int MaxFrames = 262144;
 
         /// <summary>Ceiling on radii and timers, in metres and seconds respectively.</summary>

@@ -1,21 +1,16 @@
-using System;
 using CS2MultiplayerMod.Core.Protocol;
 using CS2MultiplayerMod.Core.Sync;
 
 namespace CS2MultiplayerMod.Game.Sync.Commands
 {
     /// <summary>
-    /// Exact, portable output of one native object-tool Apply. All definitions are encoded in one
-    /// command, preserving source order and preventing a building, relocation, service extension,
-    /// driveway, utility connector, or lot area from being received as a partial prefix.
+    /// One object-tool Apply, all definitions in source order, so no part of it arrives as a partial
+    /// prefix.
     /// </summary>
     public sealed class ObjectToolOperationCommand : ISimulationCommand
     {
         public const ushort Id = 20;
-        /// <summary>
-        /// Asset stamps deliberately have no persistent root object definition. Their prefab emits
-        /// its complete transformed subnet/subobject/area graph directly in one tool transaction.
-        /// </summary>
+        /// <summary>Asset stamps have no root definition; the prefab emits its whole graph directly.</summary>
         public const short AssetStampRootIndex = -1;
         public const int MaxDefinitions = 1024;
         public const int MaxAreaNodesPerDefinition = 1024;
@@ -32,10 +27,8 @@ namespace CS2MultiplayerMod.Game.Sync.Commands
         public long OperationId;
         public short RootIndex;
         /// <summary>
-        /// The compact input for a rooted object placement. The exact definition graph remains in
-        /// <see cref="Definitions"/> as a compatibility fallback, while receivers that can reach
-        /// the native generator rebuild ordinary and specialized-industry buildings against their
-        /// own road subdivision.
+        /// Compact input for a rooted placement, regenerated against the receiver's own roads;
+        /// <see cref="Definitions"/> is the fallback.
         /// </summary>
         public bool HasPlacementInput;
         public uint ToolRandomSeed;
@@ -403,8 +396,7 @@ namespace CS2MultiplayerMod.Game.Sync.Commands
             value.ElevationLeft = ReadBounded(reader, -100000f, 100000f, "endpoint elevation");
             value.ElevationRight = ReadBounded(reader, -100000f, 100000f, "endpoint elevation");
             value.CourseDelta = ReadBounded(reader, -2f, 3f, "course delta");
-            // Not 0..1: a node-snapped endpoint carries the control point's extended curve
-            // parameter, which runs past 1 by however far the snap sat beyond the curve's end.
+            // Not 0..1: a node-snapped endpoint carries an extended curve parameter.
             value.SplitPosition = ReadBounded(reader, -WireGuard.MaxSplitPosition,
                 WireGuard.MaxSplitPosition, "split position");
             value.Flags = unchecked((uint)reader.ReadInt());

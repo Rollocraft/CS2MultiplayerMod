@@ -1,12 +1,8 @@
 namespace CS2MultiplayerMod.Core.Sync.ModSync
 {
     /// <summary>
-    /// The leaf types a replicated third-party component can be broken down into.
-    ///
-    /// A component travels as its flattened leaves rather than as a block of memory: the same
-    /// struct can sit at a different offset in another process, and an <see cref="EntityRef"/>
-    /// leaf has to be translated on arrival rather than copied. Anything that cannot be reduced
-    /// to this list is not replicated, and the catalogue says so by name.
+    /// Leaf types a replicated component flattens to; memory layout differs per process and
+    /// <see cref="EntityRef"/> leaves are translated. Anything else is not replicated.
     /// </summary>
     public enum ModValueKind : byte
     {

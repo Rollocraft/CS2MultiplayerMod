@@ -9,7 +9,6 @@ using Game.Tools;
 using Unity.Entities;
 using Unity.Mathematics;
 using CS2MultiplayerMod.Core.Diagnostics;
-using CS2MultiplayerMod.Core.Protocol.Messages;
 using CS2MultiplayerMod.Core.Session;
 using CS2MultiplayerMod.Core.Sync;
 using CS2MultiplayerMod.Game.Diagnostics;
@@ -19,31 +18,16 @@ using CS2MultiplayerMod.Game.Sync.Infrastructure;
 namespace CS2MultiplayerMod.Game.Sync.Systems
 {
     /// <summary>
-    /// Replicates the buildings the zoning simulation grows on its own - houses, shops, factories,
-    /// offices - rather than the ones a player places.
-    ///
-    /// These cannot be kept in step by running the same simulation on both machines. The spawner
-    /// draws its building, its variant and its level-up target from a random stream seeded from the
-    /// machine's own clock, so two cities with identical roads, zoning and demand still grow
-    /// different buildings. Replication is therefore one-way: the host's simulation is the only one
-    /// allowed to decide, and the peers are told what it decided.
-    ///
-    /// That also removes the whole class of simultaneous-creation conflicts. Two players cannot both
-    /// grow a building on one lot, because only one machine grows anything. What remains is a lot
-    /// whose state moved on before the host's decision arrived - handled in Realize.cs by refusing a
-    /// spawn that would overlap something already standing.
+    /// Replicates the buildings zoning grows on its own. The spawner draws building, variant and level
+    /// from a clock-seeded random stream, so the host alone decides and peers are told. A spawn that
+    /// would overlap something already standing is refused (see Realize.cs).
     /// </summary>
-    public partial class GrowableSyncSystem : GameSystemBase
+    public partial class GrowableSyncSystem : GameSystemBase, IRealizeStage
     {
         /// <summary>How often the host looks for level changes. They are rare; the query is small.</summary>
         private const long LevelScanIntervalMs = 500;
 
-        /// <summary>
-        /// Buildings the rolling abandonment/condemnation scan examines per pass. It exists to
-        /// notice a state the host never announced, so a very large city may take longer to come
-        /// all the way round without anything being missed; every real transition still reaches
-        /// the wire through its own event-driven capture.
-        /// </summary>
+        /// <summary>Per-pass ceiling of the rolling state scan; real transitions are event-driven.</summary>
         private const int MaxStateBuildingsPerScan = 256;
 
         private const int MaxPendingStateCorrections = 512;
@@ -51,22 +35,13 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         private const int MaxStateRetriesPerFrame = 16;
         private int _stateRetryCursor;
 
-        /// <summary>
-        /// How long a completed sequence number is remembered. Long enough to cover a reconnect
-        /// burst, short enough that the set stays small on a city that grows for hours.
-        /// </summary>
+        /// <summary>Covers a reconnect burst while keeping the set small.</summary>
         private const long ReplayWindowMs = 120000;
 
-        /// <summary>
-        /// Structural lifecycle work per frame. Routine condition/progress samples have their
-        /// own budget and coalesce at ingress; they must not compete with building creation.
-        /// </summary>
+        /// <summary>Structural work per frame; condition/progress samples have their own budget.</summary>
         private const int MaxRealizePerFrame = 8;
 
-        /// <summary>
-        /// How long a building this client asked for stays recognisable as ours. A definition
-        /// becomes an entity a phase or two later, so the window only has to outlast that.
-        /// </summary>
+        /// <summary>A definition becomes an entity a phase or two later; this only has to outlast that.</summary>
         private const long SelfRealizedWindowMs = 15000;
 
         private const int MaxSelfRealized = 256;
@@ -81,16 +56,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         /// <summary>Idempotence: a redelivered command must not build a second house.</summary>
         private readonly OperationReplayWindow<uint> _applied = new OperationReplayWindow<uint>();
 
-        /// <summary>
-        /// Positions this client has asked the build pipeline for, so the building that appears
-        /// there is recognised as the host's rather than as one this machine grew.
-        /// </summary>
-        /// <summary>
-        /// Set by <see cref="SyncRealizeSystem"/> while the net pipeline cannot deliver roads. A
-        /// growable waiting to join its road graph is waiting on exactly that pipeline.
-        /// </summary>
-        public bool NetworkDependenciesHeld;
-
+        /// <summary>Positions this client asked for, so the building that appears there counts as the host's.</summary>
         private sealed class PendingRealizedSpawn
         {
             public Entity Prefab;
@@ -113,9 +79,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         private readonly HashSet<uint> _pendingStateSequences = new HashSet<uint>();
 
         /// <summary>
-        /// Spawnable-prefab entities proven to have come from a player's object tool. The prefab
-        /// alone cannot make that distinction: specialized-industry facilities deliberately use a
-        /// level-one SpawnableBuildingData building inside their placed object/area graph.
+        /// Spawnable entities placed by a player's tool: specialized industry uses level-one spawnable
+        /// buildings, so the prefab alone cannot tell.
         /// </summary>
         private readonly HashSet<Entity> _playerPlacedGrowables = new HashSet<Entity>();
         private readonly List<Entity> _stalePlayerPlacedGrowables = new List<Entity>();
@@ -151,9 +116,6 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         private long _lastStatsMs;
         private long _lastPlayerPlacedPruneMs;
 
-        // Counters behind the periodic summary. Individual events are breadcrumbs in the flight
-        // log; the summary is what the readable log carries, so a desync report always shows the
-        // shape of the traffic without one line per building.
         private int _sentSpawn, _sentLevel, _sentRemove, _sentState;
         private int _gotSpawn, _gotLevel, _gotRemove, _gotState;
         private int _duplicates, _conflicts, _unmatched, _unknownPrefab, _rejectedLocal;
@@ -172,9 +134,6 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         private EntityQuery _levelChanging;
         private EntityQuery _stateBuildings;
 
-        /// <summary>Set by <see cref="SyncRealizeSystem"/> while remote terrain edits are backlogged.</summary>
-        public bool DeferForTerrain;
-
         protected override void OnCreate()
         {
             base.OnCreate();
@@ -186,8 +145,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             _buildSync = World.GetOrCreateSystemManaged<BuildSyncSystem>();
             _deleteSync = World.GetOrCreateSystemManaged<DeleteSyncSystem>();
 
-            // Loading a world does not tag its entities Created, so a join never re-broadcasts the
-            // city the client just downloaded. Owner excludes lot content owned by a building.
+            // A loaded world is not tagged Created, so a join never re-broadcasts the city.
             _createdBuildings = GetEntityQuery(new EntityQueryDesc
             {
                 All = SyncQuery.ReadOnly<Created, Building, PrefabRef,
@@ -202,8 +160,6 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 None = SyncQuery.ReadOnly<Temp, Owner>(),
             });
 
-            // A building only carries UnderConstruction while it is being built or re-levelled, so
-            // this query holds a handful of entities even in a large city.
             _levelChanging = GetEntityQuery(new EntityQueryDesc
             {
                 All = SyncQuery.ReadOnly<UnderConstruction, Building, PrefabRef,
@@ -211,8 +167,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 None = SyncQuery.ReadOnly<Temp, Deleted>(),
             });
 
-            // Building state is ordinary component data, not a Created/Deleted lifecycle edge.
-            // Scan one native UpdateFrame partition at a time and announce absolute transitions.
+            // Plain component data: scan one UpdateFrame partition at a time.
             _stateBuildings = GetEntityQuery(new EntityQueryDesc
             {
                 All = SyncQuery.ReadOnly<Building, BuildingCondition, PrefabRef,
@@ -244,10 +199,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             _lastGrowableRealizeMs = 0;
             _stateRetryCursor = 0;
             _stateDataOnly = _stateRefreshes = _stateRetryChecks = 0;
-            NetworkDependenciesHeld = false;
-            // A replaced world arrives complete. Anything still queued for the old one refers to
-            // buildings that no longer exist, and every sequence number belongs to a city that is
-            // gone: keeping either would apply a stale decision to a fresh world.
+            // A replaced world arrives complete; old queued decisions and sequences are stale.
             _applied.Clear();
             _announcedLevelChange.Clear();
             _hostConstruction.Clear();
@@ -258,10 +210,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             _stateScanCursor = 0;
         }
 
-        /// <summary>
-        /// Capture only. Realization runs from <see cref="SyncRealizeSystem"/> in ToolUpdate, the
-        /// one phase where a creation definition becomes a building.
-        /// </summary>
+        /// <summary>Capture only; realization runs in ToolUpdate.</summary>
         protected override void OnUpdate()
         {
             using (Diagnostics.SyncProfiler.Measure("Growable"))
@@ -283,9 +232,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
                 if (session.Role != SessionRole.Host)
                 {
-                    // ModificationEnd, not the ToolUpdate realize pass: the Created tag this reads is
-                    // written by the object pipeline during the Modification phases and is gone again
-                    // by the next frame's ToolUpdate.
+                    // Here, not in ToolUpdate: the Created tag it reads is gone by then.
                     RejectLocallyGrownBuildings(now);
                     return;
                 }
@@ -302,20 +249,15 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             }
         }
 
-        /// <summary>
-        /// True for a prefab eligible for simulation growth. This is only the prefab half of the
-        /// decision: specialized-industry placements can use the same data, so their live entity
-        /// origin is resolved by <see cref="IsAutonomousGrowable"/>.
-        /// </summary>
+        /// <summary>The prefab half only; see <see cref="IsAutonomousGrowable"/> for origin.</summary>
         private bool IsGrowablePrefab(Entity prefab) =>
             prefab != Entity.Null && EntityManager.Exists(prefab) &&
             EntityManager.HasComponent<SpawnableBuildingData>(prefab) &&
             !EntityManager.HasComponent<SignatureBuildingData>(prefab);
 
         /// <summary>
-        /// True only for a simulation-authored zoned building. A specialized-industry placement
-        /// can use the same SpawnableBuildingData as a growable, so origin and the committed
-        /// attachment/area graph decide before either capture or client-side rejection runs.
+        /// A simulation-grown zoned building; specialized-industry placements share the data, so origin
+        /// and the committed graph decide.
         /// </summary>
         private bool IsAutonomousGrowable(Entity entity, long now)
         {
@@ -371,11 +313,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             session.SendCommand(0, GrowableLifecycleCommand.Id, command.Encode());
         }
 
-        /// <summary>
-        /// A periodic one-liner rather than a line per building: at full speed the simulation can
-        /// grow eleven buildings a second, and logging each of those individually is what turns a
-        /// desync report into an unreadable file.
-        /// </summary>
+        /// <summary>One periodic line rather than one per building.</summary>
         private void ReportStats(MultiplayerSession session, long now)
         {
             if (_lastStatsMs == 0) { _lastStatsMs = now; return; }

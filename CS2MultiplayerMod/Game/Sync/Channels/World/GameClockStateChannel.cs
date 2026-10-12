@@ -8,13 +8,9 @@ using CS2MultiplayerMod.Game.Sync.Infrastructure;
 namespace CS2MultiplayerMod.Game.Sync.Channels
 {
     /// <summary>
-    /// Replicates the in-game calendar/clock (date and time of day) so both players read
-    /// the same date and see the same day/night cycle. The game derives its clock from
-    /// <c>frameIndex - TimeData.m_FirstFrame</c>, so instead of forcing the client's
-    /// frame counter (which schedules the whole simulation and must never jump), the
-    /// client re-anchors its own <see cref="TimeData.m_FirstFrame"/> so that its elapsed
-    /// frames equal the host's. A small tolerance avoids rewriting the anchor every
-    /// snapshot over network jitter.
+    /// The in-game date and time. The clock is <c>frameIndex - TimeData.m_FirstFrame</c>; the client
+    /// re-anchors <see cref="TimeData.m_FirstFrame"/> rather than its frame counter, which schedules the
+    /// simulation. A tolerance absorbs jitter.
     /// </summary>
     public sealed class GameClockStateChannel : IStateChannel
     {

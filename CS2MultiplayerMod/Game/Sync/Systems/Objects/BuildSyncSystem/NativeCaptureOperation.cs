@@ -1,26 +1,16 @@
-using System.Collections.Generic;
-using Colossal.Mathematics;
-using Game.Common;
-using Game.Net;
 using Game.Prefabs;
 using Game.Tools;
-using Unity.Collections;
 using Unity.Entities;
 using Unity.Mathematics;
 using CS2MultiplayerMod.Game.Sync.Commands;
 
 namespace CS2MultiplayerMod.Game.Sync.Systems
 {
-    // Recognising what an operation is - which of its definitions is the root, whether a course
-    // was cut at a fixed element, whether it is a new service upgrade - and keeping the short
-    // list of operations recently emitted locally, so a commit can be matched back to one.
     public partial class BuildSyncSystem
     {
         /// <summary>
-        /// True when this course is one element of a fixed-element net that the receiver would
-        /// divide again. The network tool always emits <c>-1</c> for a course it draws; a
-        /// non-negative element index means the division has already happened. A course that names
-        /// an original is exempt on both machines, so it is not treated as divided.
+        /// One element of a fixed-element net the receiver would divide again. The tool emits -1 for a
+        /// drawn course; a course naming an original is exempt.
         /// </summary>
         private static bool CourseCarriesFixedElementCut(ObjectToolDefinitionIntent definition)
         {
@@ -39,23 +29,19 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         }
 
         /// <summary>
-        /// Find the undivided graph already held for the same root. Preview frames are observed
-        /// before the division runs, so the newest held graph for a root is its own ancestor.
-        /// Returns false when there is none, in which case the caller keeps the divided graph
-        /// rather than dropping the placement.
+        /// The undivided held graph for the same root (previews are seen before division). False keeps the
+        /// divided graph.
         /// </summary>
         private bool TryFindUndividedFixedNetOperation(ObjectToolOperationCommand divided,
             out ObjectToolOperationCommand result)
         {
             result = null;
-            ObjectToolDefinitionIntent root;
-            if (!TryGetNewCommittedObjectRoot(divided, out root)) return false;
+            if (!TryGetNewCommittedObjectRoot(divided, out ObjectToolDefinitionIntent root)) return false;
 
             for (int i = _recentLocalObjectOperations.Count - 1; i >= 0; i--)
             {
                 ObjectToolOperationCommand candidate = _recentLocalObjectOperations[i].Operation;
-                ObjectToolDefinitionIntent candidateRoot;
-                if (!TryGetNewCommittedObjectRoot(candidate, out candidateRoot) ||
+                if (!TryGetNewCommittedObjectRoot(candidate, out ObjectToolDefinitionIntent candidateRoot) ||
                     !SameRootSignature(root, candidateRoot) ||
                     ContainsFixedElementCut(candidate.Definitions)) continue;
                 result = candidate;
@@ -67,9 +53,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         private int ObjectOperationRootScore(ObjectToolDefinitionIntent definition)
         {
             int score = 0;
-            // An upgrade preview also contains an update definition for the existing building.
-            // That definition has no prefab and used to outrank the newly-created extension,
-            // leaving the complete preview graph without a committed entity it could bind to.
+            // The prefab-less host update must not outrank the new extension.
             if (IsNewServiceUpgradeRoot(definition)) score |= 16;
             if (!definition.HasOwnerDefinition) score |= 4;
             if (definition.Original.Kind == PortableEntityKind.None) score |= 2;
@@ -89,18 +73,14 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             if ((flags & (CreationFlags.Delete | CreationFlags.Relocate |
                           CreationFlags.Recreate | CreationFlags.Permanent)) != 0) return false;
 
-            Entity prefab;
-            if (!_prefabIndex.TryResolve(definition.PrefabName, out prefab) ||
+            if (!_prefabIndex.TryResolve(definition.PrefabName, out Entity prefab) ||
                 (!EntityManager.HasComponent<ServiceUpgradeData>(prefab) &&
                  !EntityManager.HasComponent<BuildingExtensionData>(prefab)))
                 return false;
 
-            // Service-upgrade definitions identify their existing building through
-            // OwnerDefinition. They do not necessarily carry CreationFlags.Upgrade. Requiring the
-            // owner to be live distinguishes this action from integral owned objects emitted while
-            // a brand-new building is still only a preview.
-            Entity ownerPrefab;
-            if (!_prefabIndex.TryResolve(definition.OwnerDefinitionPrefabName, out ownerPrefab))
+            // Identified through OwnerDefinition, not necessarily Upgrade; a live owner rules out a new
+            // building's integral objects.
+            if (!_prefabIndex.TryResolve(definition.OwnerDefinitionPrefabName, out Entity ownerPrefab))
                 return false;
             return FindPortableObject(ownerPrefab,
                        new float3(definition.OwnerDefinitionX, definition.OwnerDefinitionY,
@@ -108,17 +88,14 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                        default(PortableEntityRef)) != Entity.Null;
         }
 
-        private void RememberSelectedAssetStampPrefab(global::Game.Tools.ToolBaseSystem active)
-        {
+        private void RememberSelectedAssetStampPrefab(global::Game.Tools.ToolBaseSystem active) =>
             _selectedAssetStampPrefabName = GetSelectedAssetStampPrefabName(active);
-        }
 
         private string GetSelectedAssetStampPrefabName(global::Game.Tools.ToolBaseSystem active)
         {
             PrefabBase selected = active != null ? active.GetPrefab() : null;
             if (!(selected is AssetStampPrefab)) return null;
-            Entity prefab;
-            if (!_prefabSystem.TryGetEntity(selected, out prefab) || prefab == Entity.Null ||
+            if (!_prefabSystem.TryGetEntity(selected, out Entity prefab) || prefab == Entity.Null ||
                 !EntityManager.Exists(prefab) || !EntityManager.HasComponent<AssetStampData>(prefab))
                 return null;
             return _prefabSystem.GetPrefabName(prefab);
@@ -126,16 +103,14 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
         private void RememberRecentLocalObjectOperation(ObjectToolOperationCommand operation)
         {
-            ObjectToolDefinitionIntent root;
-            if (!TryGetNewCommittedObjectRoot(operation, out root)) return;
+            if (!TryGetNewCommittedObjectRoot(operation, out ObjectToolDefinitionIntent root)) return;
 
             long now = Mod.Service != null ? Mod.Service.NowMs : 0;
             PruneRecentLocalObjectOperations(now);
             for (int i = _recentLocalObjectOperations.Count - 1; i >= 0; i--)
             {
                 RecentLocalObjectOperation recent = _recentLocalObjectOperations[i];
-                ObjectToolDefinitionIntent recentRoot;
-                if (!TryGetNewCommittedObjectRoot(recent.Operation, out recentRoot) ||
+                if (!TryGetNewCommittedObjectRoot(recent.Operation, out ObjectToolDefinitionIntent recentRoot) ||
                     !SameRootSignature(root, recentRoot)) continue;
 
                 recent.Operation = operation;
@@ -218,9 +193,6 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     _recentLocalObjectOperations.RemoveAt(i);
         }
 
-        private void ClearRecentLocalObjectOperations()
-        {
-            _recentLocalObjectOperations.Clear();
-        }
+        private void ClearRecentLocalObjectOperations() => _recentLocalObjectOperations.Clear();
     }
 }

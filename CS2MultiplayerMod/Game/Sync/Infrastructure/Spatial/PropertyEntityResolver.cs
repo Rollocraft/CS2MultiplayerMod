@@ -56,9 +56,8 @@ namespace CS2MultiplayerMod.Game.Sync.Infrastructure
             for (int i = 0; i < candidates.Length; i++)
             {
                 Entity entity = candidates[i];
-                PropertyEntitySnapshot snapshot;
                 bool live = PropertySpatialPass.Current != null
-                    ? PropertySpatialPass.Current.TryRead(manager, entity, out snapshot)
+                    ? PropertySpatialPass.Current.TryRead(manager, entity, out PropertyEntitySnapshot snapshot)
                     : PropertyEntitySnapshot.TryRead(manager, entity, out snapshot);
                 if (!live ||
                     !eligible(entity) || (canClaim != null && !canClaim(entity))) continue;

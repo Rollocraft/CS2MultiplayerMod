@@ -5,12 +5,8 @@ using System.Text;
 namespace CS2MultiplayerMod.Core.Protocol
 {
     /// <summary>
-    /// Minimal, allocation-light binary writer over a growable byte buffer.
-    ///
-    /// All multi-byte values are written little-endian (every supported platform is
-    /// little-endian, so this stays consistent across host and clients). Strings are
-    /// length-prefixed UTF-8. Deliberately dependency-free so the protocol layer can
-    /// be reused and tested outside the game.
+    /// Little-endian binary writer over a growable buffer; strings are length-prefixed UTF-8.
+    /// Dependency-free.
     /// </summary>
     public sealed class NetworkWriter
     {
@@ -68,10 +64,7 @@ namespace CS2MultiplayerMod.Core.Protocol
             }
         }
 
-        public void WriteFloat(float value)
-        {
-            WriteInt(new FloatBits { Value = value }.Bits);
-        }
+        public void WriteFloat(float value) => WriteInt(new FloatBits { Value = value }.Bits);
 
         public void WriteString(string value)
         {
@@ -96,6 +89,14 @@ namespace CS2MultiplayerMod.Core.Protocol
             EnsureCapacity(count);
             Buffer.BlockCopy(source, offset, _buffer, _length, count);
             _length += count;
+        }
+
+        /// <summary>Write an opaque payload with its byte count, treating null as empty.</summary>
+        public void WriteLengthPrefixedBytes(byte[] value)
+        {
+            int count = value != null ? value.Length : 0;
+            WriteInt(count);
+            if (count > 0) WriteBytes(value, 0, count);
         }
 
         /// <summary>Copy the written bytes into a fresh array sized exactly to the content.</summary>

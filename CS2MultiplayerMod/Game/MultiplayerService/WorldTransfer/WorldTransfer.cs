@@ -8,7 +8,6 @@ using CS2MultiplayerMod.Core.Diagnostics;
 using CS2MultiplayerMod.Core.Networking;
 using CS2MultiplayerMod.Core.Protocol.Messages;
 using CS2MultiplayerMod.Core.Session;
-using CS2MultiplayerMod.Game.Diagnostics;
 using Game;
 using Game.Assets;
 using Game.PSI.PdxSdk;
@@ -30,9 +29,8 @@ namespace CS2MultiplayerMod.Game
         private byte[] _deferredMapData;
 
         /// <summary>
-        /// Serialize one authoritative world snapshot in an isolated temporary database. This
-        /// deliberately avoids AutoSaveSystem: multiplayer snapshots are transport artifacts,
-        /// not user autosaves, and must never participate in the game's retention pruning.
+        /// Serializes one snapshot in a temporary database, not through AutoSaveSystem, so it never enters
+        /// autosave retention.
         /// </summary>
         internal async Task<BlobSource> CreateWorldSnapshot(World world, long epoch, CancellationToken cancellation)
         {
@@ -96,10 +94,9 @@ namespace CS2MultiplayerMod.Game
                 if (!completed)
                     throw new InvalidOperationException("The game did not complete the world snapshot save.");
 
-                PackageAsset package;
                 AssetDataPath packagePath = SaveHelpers.GetAssetDataPath<SaveGameMetadata>(
                     snapshotDatabase, WorldSnapshotName);
-                if (!snapshotDatabase.Exists<PackageAsset>(packagePath, out package) || package == null)
+                if (!snapshotDatabase.Exists<PackageAsset>(packagePath, out PackageAsset package) || package == null)
                     throw new InvalidOperationException("The game did not create the world snapshot package.");
 
                 BlobSource data = ReadWorldSnapshotPackage(package, cancellation);
@@ -111,8 +108,7 @@ namespace CS2MultiplayerMod.Game
             {
                 try
                 {
-                    // GameManager.Save always updates Continue Game, even for a temporary target.
-                    // Put the player's previous save back before destroying that target database.
+                    // GameManager.Save always updates Continue Game; restore the player's previous save.
                     if (ReferenceEquals(manager, GameManager.instance) &&
                         ReferenceEquals(userState, manager.settings.userState))
                     {
@@ -187,9 +183,7 @@ namespace CS2MultiplayerMod.Game
                 return;
             }
 
-            // GameManager.Load is not part of the game's serialized SaveLoadGame task
-            // queue. Hold the received replacement until a user-requested local copy has
-            // finished, otherwise the load could tear down the world while it is saving.
+            // GameManager.Load is outside the SaveLoadGame queue; wait for a local copy to finish saving.
             if (ClientWorldSaveInProgress)
             {
                 _deferredMapTransferId = transferId;
@@ -229,12 +223,10 @@ namespace CS2MultiplayerMod.Game
 
         private void InstallReceivedMap(long transferId, byte[] data)
         {
-            // The completed blob is the causal cut: commands received before it are represented by
-            // the save, while every later command must survive the ECS world replacement.
+            // The causal cut: earlier commands are in the save, later ones must survive the replacement.
             _log.Event(LogTopic.WorldTransfer, "Map blob delivered to game layer (" +
                 (data != null ? data.Length / 1024 : 0) + " KB); staging and loading.");
-            // Purge every sync inbox before the reload: queued commands describe the pre-reload
-            // world and would apply stale edits (or reference vanished entities) on the new one.
+            // Queued commands describe the old world.
             Sync.Infrastructure.SyncInbox.DrainAll();
             Diagnostics.ResyncArbiter.Reset();
             SetPhase(ClientWorldPhase.LoadingMap);
@@ -250,9 +242,7 @@ namespace CS2MultiplayerMod.Game
             }
             else
             {
-                // From this point onward a disconnect must unload this disposable host
-                // world. The preload callback normally marks it synchronously as well;
-                // keeping the marker here covers runtimes which publish that callback later.
+                // From here a disconnect must unload this world; the preload callback may mark it late.
                 MarkClientHostWorldActive();
             }
         }
@@ -286,6 +276,5 @@ namespace CS2MultiplayerMod.Game
             player.Hover = state.Hover;
             player.LastUpdateMs = _clock.ElapsedMilliseconds;
         }
-
     }
 }

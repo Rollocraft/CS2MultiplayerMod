@@ -10,35 +10,10 @@ using CS2MultiplayerMod.Core.Diagnostics;
 
 namespace CS2MultiplayerMod.Core.Networking
 {
-    /// <summary>What the router had to say about opening the port.</summary>
-    public enum PortForwardState
-    {
-        /// <summary>Still asking. The host is already listening either way.</summary>
-        Working,
-
-        /// <summary>The router opened the port and confirmed the mapping back to us.</summary>
-        Open,
-
-        /// <summary>Nothing on the network answered. Almost always UPnP switched off.</summary>
-        NoRouter,
-
-        /// <summary>A router answered and declined. The port has to be forwarded by hand.</summary>
-        Refused,
-    }
-
     /// <summary>
-    /// Asks the router to forward the host's port automatically (UPnP IGD), so a player
-    /// hosting on the internet does not have to configure anything.
-    ///
-    /// There is no way to ask a router whether it *would* allow this - the only honest test
-    /// is to request the mapping and then read it back, which is what <see cref="Verify"/>
-    /// is for. A router that answers and refuses is reported as such rather than as success,
-    /// because a host who believes the port is open has no reason to look at their router
-    /// when nobody can connect.
-    ///
-    /// Every step runs on its own thread: SSDP discovery alone waits seconds, and hosting
-    /// must not be delayed by it. The listener is already accepting connections before this
-    /// finishes; a successful mapping only adds reachability from outside the network.
+    /// Automatic UPnP port forwarding. The only real test is to map and read the mapping back
+    /// (<see cref="Verify"/>); a refusal is reported as one. Runs on its own thread; the listener is
+    /// already accepting, a mapping only adds outside reach.
     /// </summary>
     public sealed class PortForward : IDisposable
     {
@@ -55,11 +30,7 @@ namespace CS2MultiplayerMod.Core.Networking
 
         private const int HttpTimeoutMs = 4000;
 
-        /// <summary>
-        /// Routers disagree about lease lifetimes: most treat 0 as "until deleted", a few
-        /// reject it and want a finite one. Asking for 0 first and falling back covers both
-        /// without needing to know which kind is on the other end.
-        /// </summary>
+        /// <summary>Most routers take 0 as "until deleted", some want a finite lease; try both.</summary>
         private static readonly int[] LeaseSeconds = { 0, 604800 };
 
         private readonly IModLogger _log;
@@ -71,7 +42,7 @@ namespace CS2MultiplayerMod.Core.Networking
         private volatile string _localAddress;
         private volatile string _externalAddress;
         private volatile bool _disposed;
-        private int _state = (int)PortForwardState.Working;
+        private int _mapped;
 
         private PortForward(IModLogger log, int port)
         {
@@ -88,27 +59,6 @@ namespace CS2MultiplayerMod.Core.Networking
             return forward;
         }
 
-        public PortForwardState State
-        {
-            get { return (PortForwardState)Thread.VolatileRead(ref _state); }
-        }
-
-        /// <summary>The public address the router reports, or null until one is known.</summary>
-        public string ExternalAddress
-        {
-            get { return _externalAddress; }
-        }
-
-        public int Port
-        {
-            get { return _port; }
-        }
-
-        private void Settle(PortForwardState state)
-        {
-            Interlocked.Exchange(ref _state, (int)state);
-        }
-
         private void Run()
         {
             try
@@ -118,7 +68,6 @@ namespace CS2MultiplayerMod.Core.Networking
                 {
                     _log.Warn(LogTopic.Transport,
                         "UPnP: No local network address to forward to; skipping automatic port forwarding.");
-                    Settle(PortForwardState.NoRouter);
                     return;
                 }
 
@@ -128,7 +77,6 @@ namespace CS2MultiplayerMod.Core.Networking
                         "UPnP: No router answered. If players outside your network cannot " +
                         "connect, forward TCP port " + _port + " to " + _localAddress +
                         " by hand.");
-                    Settle(PortForwardState.NoRouter);
                     return;
                 }
 
@@ -140,9 +88,7 @@ namespace CS2MultiplayerMod.Core.Networking
                     failure = AddMapping(lease);
                     if (failure == null) break;
 
-                    // A conflicting entry is usually this mod's own mapping from a previous
-                    // session that outlived the process. Clearing it is safe precisely
-                    // because it points at this machine and this port.
+                    // Usually our own mapping from an earlier session; safe to clear, it points here.
                     if (failure.Contains("718"))
                     {
                         DeleteMapping(announce: false);
@@ -156,7 +102,6 @@ namespace CS2MultiplayerMod.Core.Networking
                     _log.Warn(LogTopic.Transport, "UPnP: The router refused to open TCP port " +
                         _port + " (" + failure + "). Forward it to " + _localAddress +
                         " by hand, or host over the Steam relay.");
-                    Settle(PortForwardState.Refused);
                     return;
                 }
 
@@ -165,17 +110,15 @@ namespace CS2MultiplayerMod.Core.Networking
                     _log.Warn(LogTopic.Transport,
                         "UPnP: The router accepted the request for TCP port " + _port +
                         " but does not report the mapping back. Treating it as not forwarded.");
-                    Settle(PortForwardState.Refused);
                     return;
                 }
 
-                Settle(PortForwardState.Open);
+                Interlocked.Exchange(ref _mapped, 1);
                 _log.Event(LogTopic.Transport, "UPnP: TCP port " + _port + " forwarded to " +
                     _localAddress + " automatically." +
                     (_externalAddress != null ? " Players outside your network connect to " + _externalAddress + ":" + _port + "." : ""));
 
-                // Disposed while we were still negotiating: the mapping exists now and has
-                // to come back down, because nothing else knows about it.
+                // Disposed while negotiating: nothing else knows about this mapping.
                 if (_disposed) DeleteMapping(announce: true);
             }
             catch (Exception ex)
@@ -183,17 +126,14 @@ namespace CS2MultiplayerMod.Core.Networking
                 _log.Warn(LogTopic.Transport, "UPnP: Automatic port forwarding failed (" +
                     ex.Message + "). Forward TCP port " + _port +
                     " by hand if players cannot reach you.");
-                Settle(PortForwardState.Refused);
             }
         }
 
         // ---- discovery ------------------------------------------------------------
 
         /// <summary>
-        /// Multicast a search on every live interface and keep the first gateway that
-        /// exposes a WAN connection service. One socket per address rather than one on
-        /// Any: a machine with a VPN adapter routes multicast out of whichever interface
-        /// the stack prefers, which is regularly not the one the router is on.
+        /// Searches every live interface and keeps the first WAN gateway. One socket per address: with a
+        /// VPN adapter, multicast on Any often leaves through the wrong interface.
         /// </summary>
         private bool Discover()
         {
@@ -250,10 +190,8 @@ namespace CS2MultiplayerMod.Core.Networking
         }
 
         /// <summary>
-        /// Fetch a device description and keep its WAN connection control endpoint. Both
-        /// service flavours appear in the wild - IP for ethernet-style uplinks, PPP for
-        /// DSL - and the exact service type has to be carried forward, because it is also
-        /// the namespace every later request is addressed to.
+        /// Keeps the WAN control endpoint (IP or PPP flavour) and its exact service type, the namespace for
+        /// every later request.
         /// </summary>
         private bool ReadServices(string location, string viaLocal)
         {
@@ -268,8 +206,7 @@ namespace CS2MultiplayerMod.Core.Networking
                 if (type.IndexOf("WANIPConnection", StringComparison.OrdinalIgnoreCase) < 0 &&
                     type.IndexOf("WANPPPConnection", StringComparison.OrdinalIgnoreCase) < 0) continue;
 
-                Uri controlUri;
-                if (!Uri.TryCreate(new Uri(location), control, out controlUri)) continue;
+                if (!Uri.TryCreate(new Uri(location), control, out Uri controlUri)) continue;
 
                 _controlUrl = controlUri.ToString();
                 _serviceType = type;
@@ -287,7 +224,6 @@ namespace CS2MultiplayerMod.Core.Networking
         /// <summary>Returns null on success, or a short description of the refusal.</summary>
         private string AddMapping(int leaseSeconds)
         {
-            string error;
             Soap("AddPortMapping",
                  "<NewRemoteHost></NewRemoteHost>" +
                  "<NewExternalPort>" + _port + "</NewExternalPort>" +
@@ -297,22 +233,18 @@ namespace CS2MultiplayerMod.Core.Networking
                  "<NewEnabled>1</NewEnabled>" +
                  "<NewPortMappingDescription>" + MappingDescription + "</NewPortMappingDescription>" +
                  "<NewLeaseDuration>" + leaseSeconds + "</NewLeaseDuration>",
-                 out error);
+                 out string error);
             return error;
         }
 
-        /// <summary>
-        /// Read the mapping back. This is the whole "is UPnP actually allowed" question:
-        /// some routers answer AddPortMapping politely and forward nothing.
-        /// </summary>
+        /// <summary>Reads the mapping back: some routers accept AddPortMapping and forward nothing.</summary>
         private bool Verify()
         {
-            string error;
             string response = Soap("GetSpecificPortMappingEntry",
                                    "<NewRemoteHost></NewRemoteHost>" +
                                    "<NewExternalPort>" + _port + "</NewExternalPort>" +
                                    "<NewProtocol>TCP</NewProtocol>",
-                                   out error);
+                                   out string error);
             if (error != null) return false;
 
             string client = Tag(response, "NewInternalClient");
@@ -321,31 +253,27 @@ namespace CS2MultiplayerMod.Core.Networking
 
         private string ExternalIp()
         {
-            string error;
-            string response = Soap("GetExternalIPAddress", "", out error);
+            string response = Soap("GetExternalIPAddress", "", out string error);
             if (error != null) return null;
 
             string address = Tag(response, "NewExternalIPAddress");
             if (string.IsNullOrEmpty(address)) return null;
 
-            IPAddress parsed;
-            return IPAddress.TryParse(address.Trim(), out parsed) ? parsed.ToString() : null;
+            return IPAddress.TryParse(address.Trim(), out IPAddress parsed) ? parsed.ToString() : null;
         }
 
         /// <summary>
-        /// Remove the mapping. Clearing a stale entry before retrying passes
-        /// <paramref name="announce"/> false: nothing of ours has been released yet, and
-        /// saying so would read as the session ending.
+        /// Removes the mapping. <paramref name="announce"/> is false when clearing a stale entry before a
+        /// retry.
         /// </summary>
         private void DeleteMapping(bool announce)
         {
             if (_controlUrl == null) return;
-            string error;
             Soap("DeletePortMapping",
                  "<NewRemoteHost></NewRemoteHost>" +
                  "<NewExternalPort>" + _port + "</NewExternalPort>" +
                  "<NewProtocol>TCP</NewProtocol>",
-                 out error);
+                 out string error);
             if (!announce) return;
 
             _log.Detail(LogTopic.Transport,
@@ -394,8 +322,7 @@ namespace CS2MultiplayerMod.Core.Networking
             }
             catch (WebException ex)
             {
-                // A refusal arrives as HTTP 500 carrying a UPnP error code, which is far
-                // more use than "the remote server returned an error".
+                // A refusal is HTTP 500 carrying a UPnP error code.
                 error = ex.Message;
                 try
                 {
@@ -438,16 +365,13 @@ namespace CS2MultiplayerMod.Core.Networking
         // ---- addresses and parsing ------------------------------------------------
 
         /// <summary>
-        /// Interfaces to search, the one carrying the default route first. Machines with
-        /// Hyper-V, WSL or Docker have several virtual adapters that enumerate ahead of the
-        /// real one, and whichever interface answers decides where the mapping will point -
-        /// a router can only forward to an address on its own subnet.
+        /// Default-route interface first: virtual adapters (Hyper-V, WSL, Docker) enumerate ahead, and the
+        /// answering interface decides where the mapping points.
         /// </summary>
         private IEnumerable<IPAddress> SearchOrder()
         {
             var ordered = new List<IPAddress>();
-            IPAddress preferred;
-            if (_localAddress != null && IPAddress.TryParse(_localAddress, out preferred))
+            if (_localAddress != null && IPAddress.TryParse(_localAddress, out IPAddress preferred))
                 ordered.Add(preferred);
 
             foreach (IPAddress address in LocalAddresses())
@@ -472,11 +396,7 @@ namespace CS2MultiplayerMod.Core.Networking
             return found;
         }
 
-        /// <summary>
-        /// The address the router would forward to. Taken from a UDP socket "connected" to
-        /// a public address - no packet is sent, but the stack picks the interface it would
-        /// route through, which is the one the gateway is on.
-        /// </summary>
+        /// <summary>The interface a UDP socket "connected" to a public address would use; sends nothing.</summary>
         private static string RoutableLocalAddress()
         {
             try
@@ -484,8 +404,8 @@ namespace CS2MultiplayerMod.Core.Networking
                 using (var probe = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp))
                 {
                     probe.Connect(new IPEndPoint(IPAddress.Parse("203.0.113.1"), 9));
-                    var local = probe.LocalEndPoint as IPEndPoint;
-                    if (local != null && !IPAddress.IsLoopback(local.Address)) return local.Address.ToString();
+                    if (probe.LocalEndPoint is IPEndPoint local &&
+                        !IPAddress.IsLoopback(local.Address)) return local.Address.ToString();
                 }
             }
             catch (Exception) { /* fall through to the first usable address */ }
@@ -507,11 +427,7 @@ namespace CS2MultiplayerMod.Core.Networking
             return null;
         }
 
-        /// <summary>
-        /// Inner text of the first element with this local name. Deliberately not an XML
-        /// parser: the values wanted here are flat leaves, and every one of them arrives
-        /// under a namespace prefix that varies by router.
-        /// </summary>
+        /// <summary>First element with this local name; namespace prefixes vary by router.</summary>
         private static string Tag(string xml, string name)
         {
             if (string.IsNullOrEmpty(xml)) return null;
@@ -561,17 +477,13 @@ namespace CS2MultiplayerMod.Core.Networking
             return blocks;
         }
 
-        /// <summary>
-        /// Take the mapping back down. Runs on its own thread: this is called from the game
-        /// thread when hosting stops, and a router that has stopped answering must not turn
-        /// that into a frame hitch.
-        /// </summary>
+        /// <summary>On its own thread, so an unresponsive router cannot hitch the game thread.</summary>
         public void Dispose()
         {
             if (_disposed) return;
             _disposed = true;
 
-            if (State != PortForwardState.Open) return;
+            if (Thread.VolatileRead(ref _mapped) == 0) return;
             var closer = new Thread(() => DeleteMapping(announce: true))
             {
                 IsBackground = true,

@@ -3,10 +3,7 @@ using CS2MultiplayerMod.Core.Sync;
 
 namespace CS2MultiplayerMod.Game.Sync.Commands
 {
-    /// <summary>
-    /// "A player deleted this transport line" - matched by prefab + route number, with the
-    /// first waypoint retained as a guarded fallback for zero-number or temporarily divergent state.
-    /// </summary>
+    /// <summary>A deleted line by prefab + number; the first waypoint is a guarded fallback.</summary>
     public sealed class RouteDeleteCommand : ISimulationCommand
     {
         public const ushort Id = 13;

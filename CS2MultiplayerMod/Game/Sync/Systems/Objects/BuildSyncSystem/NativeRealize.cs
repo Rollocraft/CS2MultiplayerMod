@@ -1,7 +1,5 @@
 using System.Collections.Generic;
-using Colossal.Mathematics;
 using Game.Common;
-using Game.Net;
 using Game.Prefabs;
 using Game.Tools;
 using Unity.Collections;
@@ -15,15 +13,8 @@ using CS2MultiplayerMod.Game.Sync.Infrastructure;
 
 namespace CS2MultiplayerMod.Game.Sync.Systems
 {
-    // Reproducing a remote peer's object-tool operation locally, by feeding the game's own tool
-    // the same definitions the sender's tool had. An operation that cannot be resolved yet is
-    // blocked and retried rather than dropped, because the entity it refers to may still be on
-    // its way.
-    //
-    // This file holds the state, the candidate index that keeps resolution off a full query walk,
-    // and the queue-and-retry loop. The realizing itself is split across the sibling
-    // NativeRealize*.cs files: the operations, the specialized-industry rules that decide what a
-    // client may reproduce, resolving an operation, building the definitions, and portable refs.
+    // Reproducing a remote object-tool operation with the same definitions; an unresolved one is held
+    // and retried. The work is split across the NativeRealize*.cs siblings.
     public partial class BuildSyncSystem
     {
         private const long NativeObjectTargetRetryMs = 10000;
@@ -58,11 +49,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             public Entity EndEntity;
         }
 
-        /// <summary>
-        /// Spacing between attempts on a blocked operation. Resolution is cheap now but not free, and
-        /// the geometry it waits for arrives on its own schedule - retrying every frame only burned
-        /// the retry window at frame rate.
-        /// </summary>
+        /// <summary>Spacing between attempts on a blocked operation.</summary>
         private const long NativeObjectRetryIntervalMs = 200;
 
         private bool _hasBlockedNativeObject;
@@ -70,9 +57,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         private long _blockedNativeObjectDeadline;
         private long _blockedNativeObjectNextAttemptMs;
         private string _lastUnresolvedObjectReason;
-        // Commit validation can reject an operation after it left the network inbox. Replays must
-        // return ahead of later commands, and more than one can become ready while another ordered
-        // target is retrying. A bounded prefix avoids the former single-slot collision/drop.
+        // Replays rejected after leaving the inbox return ahead of later commands; bounded.
         private readonly List<SimulationCommandMessage> _nativeObjectReplayPrefix =
             new List<SimulationCommandMessage>(MaxNativeObjectReplayPrefix);
         private readonly CS2MultiplayerMod.Core.Sync.OperationReplayWindow<NativeObjectOperationKey>
@@ -81,15 +66,17 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         private EntityQuery _portableObjects;
         private EntityQuery _portableAreas;
         private Net.NetSyncSystem _nativeNetCoordinator;
+        private ObjectSearch _objectSearch;
 
         /// <summary>
-        /// Candidates for one resolution pass, bucketed by prefab.
-        ///
-        /// A relocation names every element of a building's owned graph plus a stretch of road - 280+
-        /// references for a large plant. Walking the whole city's objects/nodes/edges/areas once per
-        /// reference took seconds of main-thread time per attempt, and a blocked operation repeated
-        /// that every frame for its whole retry window. Snapshotting each domain once and grouping by
-        /// prefab turns those thousands of city walks into four.
+        /// Object references and replays match within 2 m of their anchor; the wider box absorbs geometry
+        /// offset from the pivot, since the search tree indexes bounds rather than positions.
+        /// </summary>
+        private const float PortableObjectSearchRadius = 8f;
+
+        /// <summary>
+        /// Candidates for one resolution pass, bucketed by prefab: one snapshot per domain instead of a
+        /// city walk per reference.
         /// </summary>
         private sealed class PortableCandidateIndex
         {
@@ -121,8 +108,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                         Entity candidate = entities[i];
                         if (!entityManager.HasComponent<PrefabRef>(candidate)) continue;
                         Entity prefab = entityManager.GetComponentData<PrefabRef>(candidate).m_Prefab;
-                        List<Entity> bucket;
-                        if (!_byPrefab.TryGetValue(prefab, out bucket))
+                        if (!_byPrefab.TryGetValue(prefab, out List<Entity> bucket))
                         {
                             bucket = new List<Entity>();
                             _byPrefab[prefab] = bucket;
@@ -134,11 +120,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 _filled = true;
             }
 
-            public List<Entity> Of(Entity prefab)
-            {
-                List<Entity> bucket;
-                return _byPrefab.TryGetValue(prefab, out bucket) ? bucket : Empty;
-            }
+            public List<Entity> Of(Entity prefab) =>
+                _byPrefab.TryGetValue(prefab, out List<Entity> bucket) ? bucket : Empty;
         }
 
         private readonly PortableCandidateIndex _objectCandidates = new PortableCandidateIndex();
@@ -148,10 +131,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         private int _portableIndexDepth;
 
         /// <summary>
-        /// Prepare candidate domains for one resolution pass. Each domain is snapshotted lazily on
-        /// its first lookup, so a plain building placement does not walk unrelated nodes, edges, and
-        /// areas. Nothing inside a pass creates or destroys world entities, so each snapshot stays
-        /// correct throughout it.
+        /// Starts a resolution pass; each domain is snapshotted lazily on first lookup and stays valid,
+        /// since nothing in a pass changes world entities.
         /// </summary>
         private void BeginPortableResolve()
         {
@@ -167,11 +148,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             if (_portableIndexDepth > 0) _portableIndexDepth--;
         }
 
-        /// <summary>
-        /// Same-prefab candidates for <paramref name="prefab"/>. Outside a resolution pass the domain
-        /// is snapshotted for this one lookup, so callers that resolve a single reference behave
-        /// exactly as before.
-        /// </summary>
+        /// <summary>Same-prefab candidates; outside a pass the domain is snapshotted for this lookup.</summary>
         private List<Entity> Candidates(PortableCandidateIndex index, EntityQuery query, Entity prefab)
         {
             if (_portableIndexDepth == 0) index.Invalidate();
@@ -179,9 +156,44 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             return index.Of(prefab);
         }
 
+        /// <summary>
+        /// Objects of <paramref name="prefab"/> in <see cref="_portableObjects"/>'s domain near
+        /// <paramref name="position"/>, from the static search tree instead of a city-wide snapshot. The tree
+        /// prunes in XZ only; callers keep their own distance tests.
+        /// </summary>
+        private List<Entity> PortableObjectsNear(Entity prefab, float3 position)
+        {
+            var results = new List<Entity>();
+            var near = new NativeList<Entity>(32, Allocator.Temp);
+            try
+            {
+                _objectSearch.CollectNear(position, PortableObjectSearchRadius, near);
+                for (int i = 0; i < near.Length; i++)
+                {
+                    Entity candidate = near[i];
+                    if (!EntityManager.Exists(candidate) ||
+                        !EntityManager.HasComponent<global::Game.Objects.Object>(candidate) ||
+                        !EntityManager.HasComponent<global::Game.Objects.Transform>(candidate) ||
+                        !EntityManager.HasComponent<PrefabRef>(candidate) ||
+                        EntityManager.HasComponent<Temp>(candidate) ||
+                        EntityManager.HasComponent<Deleted>(candidate) ||
+                        EntityManager.HasComponent<global::Game.Objects.Moving>(candidate) ||
+                        EntityManager.HasComponent<global::Game.Vehicles.Vehicle>(candidate) ||
+                        EntityManager.HasComponent<global::Game.Creatures.Creature>(candidate) ||
+                        EntityManager.GetComponentData<PrefabRef>(candidate).m_Prefab != prefab ||
+                        results.Contains(candidate)) continue;
+                    results.Add(candidate);
+                }
+            }
+            finally { near.Dispose(); }
+            return results;
+        }
+
         private void InitializeNativeObjectOperations()
         {
             _nativeNetCoordinator = World.GetOrCreateSystemManaged<Net.NetSyncSystem>();
+            _objectSearch = new ObjectSearch(
+                World.GetOrCreateSystemManaged<global::Game.Objects.SearchSystem>());
             _portableObjects = GetEntityQuery(new EntityQueryDesc
             {
                 All = SyncQuery.ReadOnly<global::Game.Objects.Object,
@@ -207,10 +219,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             _recentNativeObjectOperations.Clear();
         }
 
-        private void PruneNativeObjectOperations(long now)
-        {
-            _recentNativeObjectOperations.Prune(now);
-        }
+        private void PruneNativeObjectOperations(long now) => _recentNativeObjectOperations.Prune(now);
 
         private bool TryRealizeBlockedNativeObject(long now)
         {
@@ -223,12 +232,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             if (result == NativeObjectResult.Retry)
             {
                 if (now < _blockedNativeObjectDeadline) return false;
-                string placementPrefab;
-                bool compactPlacement = TryDescribeBlockedPlacement(out placementPrefab);
-                // The road/building/area this edit references never arrived on this machine. A
-                // placement should normally take the compact local-regeneration path; reaching this
-                // deadline means either its one snapped target is absent or a legacy/edit graph is
-                // incompatible. In both cases silently dropping it leaves known world divergence.
+                bool compactPlacement = TryDescribeBlockedPlacement(out string placementPrefab);
+                // Its referenced target never arrived; dropping it silently would leave known divergence.
                 if (compactPlacement)
                 {
                     SyncLog.Warn(LogTopic.Buildings, "BuildSync: building placement '" +
@@ -299,10 +304,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             SyncLog.Trace(LogTopic.Buildings, "object operation target retrying");
         }
 
-        /// <summary>
-        /// Route one remote object-domain message. Both shapes share the single ordered retry slot,
-        /// so a stamp waiting for its prefab cannot be overtaken by a later placement.
-        /// </summary>
+        /// <summary>Both shapes share the single ordered retry slot, so nothing overtakes a waiting stamp.</summary>
         private NativeObjectResult TryRealizeRemoteObjectMessage(SimulationCommandMessage message,
             long now)
         {

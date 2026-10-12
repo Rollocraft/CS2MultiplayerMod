@@ -5,10 +5,8 @@ using CS2MultiplayerMod.Core.Protocol;
 namespace CS2MultiplayerMod.Game.Sync.Commands
 {
     /// <summary>
-    /// Complete host service-accounting state consumed by the budget and service-detail panels.
-    /// Service prefab entities are process-local, so every record travels under its stable prefab
-    /// name. The payload contains the terminal records produced by all fee and upkeep paths rather
-    /// than event deltas; losing one snapshot is therefore repaired by the next one.
+    /// Host service accounting for the budget panels, by service prefab name. Terminal records, not
+    /// deltas, so the next snapshot repairs a lost one.
     /// </summary>
     internal sealed class ServiceAccountingSnapshot
     {
@@ -22,8 +20,7 @@ namespace CS2MultiplayerMod.Game.Sync.Commands
         private const int PlayerResourceCount = 13;
         private const long ResourceLast = 1L << 41;
 
-        // Native enum values are part of this protocol layout. Keeping the codec game-free lets
-        // the standalone hostile-payload harness compile and fuzz it without loading the game.
+        // Native enum values, kept game-free so the hostile-payload harness compiles without the game.
         internal static readonly int[] FeeIncomeSources =
         {
             3,  // FeeHealthcare
