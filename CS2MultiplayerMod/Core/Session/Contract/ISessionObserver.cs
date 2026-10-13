@@ -23,6 +23,7 @@ namespace CS2MultiplayerMod.Core.Session
 
         /// <summary>Another player's position update arrived.</summary>
         void OnPlayerStateReceived(PlayerStateMessage state);
+        void OnMapPingReceived(MapPingMessage ping);
 
         /// <summary>A complete blob (all chunks reassembled) arrived on a named channel.</summary>
         void OnBlobReceived(string channel, byte[] data);
@@ -54,6 +55,7 @@ namespace CS2MultiplayerMod.Core.Session
         public virtual void OnStateReceived(StateSnapshotMessage snapshot) { }
         public virtual void OnStateEditReceived(StateEditMessage edit) { }
         public virtual void OnPlayerStateReceived(PlayerStateMessage state) { }
+        public virtual void OnMapPingReceived(MapPingMessage ping) { }
         public virtual void OnBlobReceived(string channel, byte[] data) { }
         public virtual void OnBlobReceived(string channel, long transferId, byte[] data) =>
             OnBlobReceived(channel, data);

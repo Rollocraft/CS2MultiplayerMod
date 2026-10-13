@@ -40,6 +40,7 @@ namespace CS2MultiplayerMod.Core.Protocol
             codec.Register(MessageType.ResyncRequest, () => new ResyncRequestMessage(), 1024);
             codec.Register(MessageType.WorldSyncControl, () => new WorldSyncControlMessage(), 64);
             codec.Register(MessageType.DisconnectNotice, () => new DisconnectNoticeMessage(), 1024);
+            codec.Register(MessageType.MapPing, () => new MapPingMessage(), 1024);
             return codec;
         }
 

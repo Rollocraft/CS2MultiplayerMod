@@ -235,6 +235,9 @@ namespace CS2MultiplayerMod.Core.Session
                 case MessageType.StateEdit:
                     HandleStateEdit(peer, (StateEditMessage)message);
                     break;
+                case MessageType.MapPing:
+                    HandleMapPing(connection, peer, (MapPingMessage)message, nowUnixMs);
+                    break;
                 case MessageType.PlayerState:
                     HandlePlayerState(connection, peer, (PlayerStateMessage)message);
                     break;

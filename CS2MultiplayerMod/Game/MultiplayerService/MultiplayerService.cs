@@ -459,6 +459,7 @@ namespace CS2MultiplayerMod.Game
                     _service.ResetWorldSyncState(restoreSpeed: true);
                     _service.SetPhase(ClientWorldPhase.None);
                     _service._remotePlayers.Clear();
+                    _service._mapPings.Clear();
                 }
 
                 // Hub lifecycle lines stay English (shared diagnostics). Stop() always fires Offline, so
@@ -516,6 +517,7 @@ namespace CS2MultiplayerMod.Game
             }
             public override void OnCommandReceived(SimulationCommandMessage command) =>
                 _service.RecordAppliedCommand(command);
+            public override void OnMapPingReceived(MapPingMessage ping) => _service.RecordMapPing(ping);
             public override void OnPlayerStateReceived(PlayerStateMessage state) => _service.RecordRemotePlayer(state);
             public override void OnBlobReceived(string channel, long transferId, byte[] data)
             {
