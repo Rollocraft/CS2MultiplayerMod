@@ -26,6 +26,7 @@ namespace CS2MultiplayerMod.Core.Networking
 
         /// <summary>Optional human-readable reason, e.g. a disconnect cause. May be null.</summary>
         public readonly string Detail;
+        public readonly bool ProtocolViolation;
 
         /// <summary>
         /// Stamped on the I/O thread at arrival: budgets measure the wire, not a stalled frame.
@@ -33,12 +34,13 @@ namespace CS2MultiplayerMod.Core.Networking
         public readonly long ReceivedAtMs;
 
         private TransportEvent(TransportEventType type, ConnectionId connection, byte[] payload,
-            string detail, long receivedAtMs)
+            string detail, long receivedAtMs, bool protocolViolation = false)
         {
             Type = type;
             Connection = connection;
             Payload = payload;
             Detail = detail;
+            ProtocolViolation = protocolViolation;
             ReceivedAtMs = receivedAtMs;
         }
 
@@ -47,6 +49,9 @@ namespace CS2MultiplayerMod.Core.Networking
 
         public static TransportEvent Disconnected(ConnectionId connection, string detail) =>
             new TransportEvent(TransportEventType.Disconnected, connection, null, detail, MonotonicClock.NowMs);
+
+        public static TransportEvent Disconnected(ConnectionId connection, string detail, bool protocolViolation) =>
+            new TransportEvent(TransportEventType.Disconnected, connection, null, detail, MonotonicClock.NowMs, protocolViolation);
 
         public static TransportEvent Data(ConnectionId connection, byte[] payload) =>
             new TransportEvent(TransportEventType.Data, connection, payload, null, MonotonicClock.NowMs);

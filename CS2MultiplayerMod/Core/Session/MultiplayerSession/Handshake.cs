@@ -408,6 +408,8 @@ namespace CS2MultiplayerMod.Core.Session
                 return;
             }
 
+            _reconnect.Reset();
+            _reconnectEligible = true;
             LocalPlayerId = response.AssignedPlayerId;
             _hostSimulationSync = response.SimulationSync;
             if (peer != null) peer.Handshaked = true;

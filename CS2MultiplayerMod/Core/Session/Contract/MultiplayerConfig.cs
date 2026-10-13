@@ -13,6 +13,7 @@ namespace CS2MultiplayerMod.Core.Session
     public sealed class MultiplayerConfig
     {
         public readonly string PlayerName;
+        public readonly bool AutoReconnect;
 
         /// <summary>Direct mode: the host's address. Relay mode: unused.</summary>
         public readonly string HostAddress;
@@ -88,8 +89,9 @@ namespace CS2MultiplayerMod.Core.Session
                                  bool simulationSync = true,
                                  bool autoApprovePlatformFriends = false,
                                  ClientResyncPolicy clientResyncPolicy = ClientResyncPolicy.Allow,
-                                 string buildId = "", string[] modManifest = null)
+                                 string buildId = "", string[] modManifest = null, bool autoReconnect = false)
         {
+            AutoReconnect = autoReconnect;
             Transport = transport;
             JoinCode = joinCode ?? string.Empty;
             PlayerName = string.IsNullOrEmpty(playerName) ? "Player" : playerName;

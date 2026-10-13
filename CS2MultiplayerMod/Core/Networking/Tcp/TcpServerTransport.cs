@@ -200,10 +200,10 @@ namespace CS2MultiplayerMod.Core.Networking.Tcp
                 connection.Close("event queue overflow");
         }
 
-        private void HandleClosed(ConnectionId id, string reason)
+        private void HandleClosed(ConnectionId id, string reason, bool protocolViolation)
         {
             _connections.TryRemove(id.Value, out FramedConnection removed);
-            _events.EnqueueAlways(TransportEvent.Disconnected(id, reason));
+            _events.EnqueueAlways(TransportEvent.Disconnected(id, reason, protocolViolation));
         }
 
         public void Send(ConnectionId target, byte[] payload)

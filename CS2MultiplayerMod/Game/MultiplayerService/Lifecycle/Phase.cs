@@ -382,7 +382,8 @@ namespace CS2MultiplayerMod.Game
                     ? settings.SelectedClientResyncPolicy()
                     : Core.Session.ClientResyncPolicy.Allow,
                 buildId: Mod.BuildCommit,
-                modManifest: ModsCheck.Manifest);
+                modManifest: ModsCheck.Manifest,
+                autoReconnect: !hosting);
         }
     }
 }

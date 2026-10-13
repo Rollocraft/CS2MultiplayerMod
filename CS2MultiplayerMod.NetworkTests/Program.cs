@@ -51,6 +51,7 @@ else Console.WriteLine("IPv6 unavailable on this machine; skipped the IPv6 loopb
 host.Shutdown();
 
 MapPingChecks.Run();
+ReconnectChecks.Run();
 Console.WriteLine("Network regression checks passed.");
 
 static void CheckSplit(string text, string host, int port)
