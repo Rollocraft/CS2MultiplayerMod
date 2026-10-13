@@ -9,10 +9,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 {
     public partial class GrowableSyncSystem
     {
-        /// <summary>
-        /// Writes the host's condition and abandonment state onto a building. Condition is the
-        /// level-up progress bar, so leaving it local would have the peer level at its own pace.
-        /// </summary>
+        /// <summary>Host condition and abandonment; condition is the level-up progress.</summary>
         private bool ApplyConditionAndState(Entity building, GrowableLifecycleCommand command)
         {
             if (EntityManager.HasComponent<BuildingCondition>(building))
@@ -55,8 +52,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             }
             else if (localConstructing)
             {
-                // Let BuildingConstructionSystem perform its native completion side effects on its
-                // next pass rather than removing the marker by hand.
+                // BuildingConstructionSystem performs the completion side effects.
                 UnderConstruction construction =
                     EntityManager.GetComponentData<UnderConstruction>(building);
                 if (construction.m_Progress != byte.MaxValue)
@@ -70,10 +66,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         }
 
         /// <summary>
-        /// A completion state is also an absolute statement of what prefab now stands at this
-        /// anchor. If the earlier level command was dropped or arrived before its building, route
-        /// that correction through BuildingConstructionSystem instead of directly replacing
-        /// PrefabRef, preserving all native level-completion side effects.
+        /// Completion also states the prefab; a missed level is repaired through BuildingConstructionSystem
+        /// rather than by replacing PrefabRef.
         /// </summary>
         private bool RepairCompletedPrefab(Entity building, Entity hostPrefab,
             GrowableLifecycleCommand command)

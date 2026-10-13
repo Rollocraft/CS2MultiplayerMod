@@ -1,13 +1,8 @@
-import { useLocalization } from "cs2/l10n";
+import { useT } from "mods/ui-helpers";
 import { CSSProperties, useEffect, useState } from "react";
 
 const LOC = {
     worldTransfer: "CS2MP.UI.WorldTransfer",
-};
-
-const useT = () => {
-    const { translate } = useLocalization();
-    return (id: string, fallback: string) => translate(id, fallback) ?? fallback;
 };
 
 const styles: Record<string, CSSProperties> = {

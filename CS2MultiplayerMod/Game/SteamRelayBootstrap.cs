@@ -7,20 +7,9 @@ using CS2MultiplayerMod.Core.Networking;
 namespace CS2MultiplayerMod.Game
 {
     /// <summary>
-    /// Brings up the Steam relay backend, which ships as its own assembly next to the
-    /// mod.
-    ///
-    /// The game resolves every assembly reference a mod declares before it loads it and
-    /// refuses the whole mod when one is missing. Steamworks ships only with the Steam
-    /// build, so while the relay code sat in the mod assembly, Microsoft Store and Game
-    /// Pass copies rejected the mod outright with "com.rlabrecque.steamworks.net" as a
-    /// missing dependency - nothing of it ran, multiplayer included. Keeping that code
-    /// in an assembly nothing links at build time means the game never has to resolve
-    /// Steamworks; this loads it by hand, and only where Steam actually exists.
-    ///
-    /// When it is not loaded, <see cref="RelayProvider.Current"/> stays null, which
-    /// reads everywhere as "no relay on this machine" and leaves direct connections
-    /// untouched.
+    /// Loads the Steam relay backend from its own assembly. The game refuses a mod whose declared
+    /// references it cannot resolve, and only Steam copies ship Steamworks, so nothing links it at build
+    /// time. Unloaded, <see cref="RelayProvider.Current"/> stays null: no relay, direct unaffected.
     /// </summary>
     internal static class SteamRelayBootstrap
     {
@@ -52,8 +41,7 @@ namespace CS2MultiplayerMod.Game
                     return;
                 }
 
-                // The probe runs before the assignment: a backend that answers with an
-                // exception must not be left registered as if it worked.
+                // Probe before registering: a backend that throws must not stay registered.
                 string reason = provider.UnavailableReason;
                 RelayProvider.Current = provider;
 
@@ -75,11 +63,7 @@ namespace CS2MultiplayerMod.Game
             }
         }
 
-        /// <summary>
-        /// Whether this installation has Steamworks at all. The game loads it during its
-        /// own startup on a Steam copy, so the loaded set usually answers this; the
-        /// explicit load covers the case where it has not been touched yet.
-        /// </summary>
+        /// <summary>A Steam copy usually has Steamworks loaded already; the explicit load covers the rest.</summary>
         private static bool HasSteamworks()
         {
             foreach (Assembly loaded in AppDomain.CurrentDomain.GetAssemblies())
@@ -101,8 +85,7 @@ namespace CS2MultiplayerMod.Game
 
             InstallSelfResolver();
 
-            // Loaded from bytes, the way the game loads mods: the file stays unlocked and
-            // the symbols come along, so relay faults still report file and line.
+            // From bytes, like the game loads mods: the file stays unlocked and symbols keep line numbers.
             string symbols = Path.ChangeExtension(path, ".pdb");
             Assembly backend = File.Exists(symbols)
                 ? Assembly.Load(File.ReadAllBytes(path), File.ReadAllBytes(symbols))
@@ -112,9 +95,8 @@ namespace CS2MultiplayerMod.Game
         }
 
         /// <summary>
-        /// The backend is built against this assembly, and this one was itself loaded
-        /// from bytes - it has no file on disk to be found by. Handing it back by name
-        /// is what keeps both sides talking about the same <see cref="IRelayProvider"/>.
+        /// This assembly was loaded from bytes and has no file; resolving it by name keeps both sides on the
+        /// same <see cref="IRelayProvider"/>.
         /// </summary>
         private static void InstallSelfResolver()
         {

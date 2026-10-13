@@ -5,13 +5,8 @@ using CS2MultiplayerMod.Core.Diagnostics;
 namespace CS2MultiplayerMod.Game.Diagnostics
 {
     /// <summary>
-    /// Frame times, sampled from a system that runs once per rendered frame.
-    ///
-    /// Performance reports were previously reconstructed from whatever periodic log line happened
-    /// to be gated per frame - a heartbeat's overshoot past its own deadline, a position send's
-    /// rate limiter. Those are indirect, they disagree with each other, and neither distinguishes
-    /// "slow every frame" from "one long frame a second", which is exactly the distinction that
-    /// says which system is at fault. This reports the distribution directly.
+    /// Frame time distribution, sampled once per rendered frame; separates "slow every frame" from
+    /// "one long frame a second".
     /// </summary>
     public static class FrameProbe
     {
@@ -103,13 +98,10 @@ namespace CS2MultiplayerMod.Game.Diagnostics
                           (1000.0 * _simulationTicks / (now - _lastReportMs))
                               .ToString("F1", CultureInfo.InvariantCulture);
 
-            // Trace, not Detail: the flight log keeps both lines whether or not the switch is on,
-            // because a performance report is exactly the case where the log was already captured
-            // before anyone thought to turn one on.
+            // Trace: always in the flight log, which is already captured when a report arrives.
             SyncLog.Trace(LogTopic.Performance, line);
 
-            // Immediately after the frame times, so a slow window and the mod's share of it are
-            // always read together.
+            // Right after the frame times, so a slow window and the mod's share read together.
             string cost = SyncProfiler.Report(now - _lastReportMs);
             if (cost != null) SyncLog.Trace(LogTopic.Performance, cost);
 

@@ -24,20 +24,13 @@ namespace CS2MultiplayerMod.Core.Sync.ModSync
         Prefab = 5,
 
         /// <summary>
-        /// An entity the mod made for its own bookkeeping, with no place in the world. It has no
-        /// identity of its own: it exists as part of one carrier's state and is rebuilt with it,
-        /// which is why it travels as an index into the transaction rather than as a world lookup.
+        /// A mod's bookkeeping entity with no place in the world; rebuilt with its carrier, so it travels as a
+        /// transaction index.
         /// </summary>
         Satellite = 6,
     }
 
-    /// <summary>
-    /// A reference to an entity that means the same thing on both machines.
-    ///
-    /// Entity indices do not survive the trip - they are positions in one process's arrays, and a
-    /// client keeps creating entities of its own the whole time it is connected. Everything that
-    /// crosses the wire is therefore described by something the receiver can look up for itself.
-    /// </summary>
+    /// <summary>An entity reference both machines can resolve; entity indices do not travel.</summary>
     public struct ModEntityRef
     {
         public ModRefKind Kind;
@@ -56,15 +49,11 @@ namespace CS2MultiplayerMod.Core.Sync.ModSync
 
         public static readonly ModEntityRef Null = new ModEntityRef { Kind = ModRefKind.Null };
 
-        public static ModEntityRef Satellite(int index)
-        {
-            return new ModEntityRef { Kind = ModRefKind.Satellite, SatelliteIndex = index };
-        }
+        public static ModEntityRef Satellite(int index) =>
+            new ModEntityRef { Kind = ModRefKind.Satellite, SatelliteIndex = index };
 
-        public static ModEntityRef Node(float x, float y, float z)
-        {
-            return new ModEntityRef { Kind = ModRefKind.NetNode, X = x, Y = y, Z = z };
-        }
+        public static ModEntityRef Node(float x, float y, float z) =>
+            new ModEntityRef { Kind = ModRefKind.NetNode, X = x, Y = y, Z = z };
 
         public static ModEntityRef Edge(float ax, float ay, float az, float bx, float by, float bz)
         {
@@ -76,20 +65,13 @@ namespace CS2MultiplayerMod.Core.Sync.ModSync
             };
         }
 
-        public static ModEntityRef Object(float x, float y, float z, string prefab)
-        {
-            return new ModEntityRef { Kind = ModRefKind.Object, X = x, Y = y, Z = z, Name = prefab };
-        }
+        public static ModEntityRef Object(float x, float y, float z, string prefab) =>
+            new ModEntityRef { Kind = ModRefKind.Object, X = x, Y = y, Z = z, Name = prefab };
 
-        public static ModEntityRef Area(float x, float y, float z)
-        {
-            return new ModEntityRef { Kind = ModRefKind.Area, X = x, Y = y, Z = z };
-        }
+        public static ModEntityRef Area(float x, float y, float z) =>
+            new ModEntityRef { Kind = ModRefKind.Area, X = x, Y = y, Z = z };
 
-        public static ModEntityRef Prefab(string name)
-        {
-            return new ModEntityRef { Kind = ModRefKind.Prefab, Name = name };
-        }
+        public static ModEntityRef Prefab(string name) => new ModEntityRef { Kind = ModRefKind.Prefab, Name = name };
 
         /// <summary>A stable, comparable identity - the echo guard and the shadow state key on it.</summary>
         public string Key()
@@ -112,10 +94,7 @@ namespace CS2MultiplayerMod.Core.Sync.ModSync
         }
 
         /// <summary>Half-metre buckets: enough to survive float noise, far below anything's spacing.</summary>
-        private static long Round(float value)
-        {
-            return (long)System.Math.Round(value * 2f);
-        }
+        private static long Round(float value) => (long)System.Math.Round(value * 2f);
 
         public void Write(NetworkWriter writer)
         {

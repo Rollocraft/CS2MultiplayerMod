@@ -20,8 +20,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             if (now - _lastDistrictRepairMs < EditScanIntervalMs) return;
             _lastDistrictRepairMs = now;
 
-            // Run before area geometry/search updates so repaired borders become selectable.
-            // This also covers districts restored from a host save when a player joins again.
+            // Before area geometry/search updates, so repaired borders become selectable.
             NativeArray<Entity> entities = _districtAreas.ToEntityArray(Allocator.Temp);
             try
             {
@@ -55,12 +54,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 }
 
                 _ownedAreaRetry.RemoveAt(i);
-                // Dropping this snapshot is not a divergence worth reloading the world for. The
-                // atomic object graph already carried the building and its declared lot, this
-                // channel only refines the polygon, and the sender's periodic redraw scan keeps
-                // offering another snapshot. Escalating instead cost a full save-stream-reload for
-                // a lot outline, and did so on a fixed ten-second timer after any placement whose
-                // owner this machine could not match.
+                // Not worth a world reload: the object graph already carried the lot, and the sender keeps
+                // offering snapshots.
                 SyncLog.Warn(LogTopic.Land, "AreaSync: owner '" + pending.command.OwnerPrefabName +
                     "' did not appear in time for its owned area " +
                     DescribeOwnedAreaOwnerSearch(pending.command) +
@@ -85,17 +80,14 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         }
 
         /// <summary>
-        /// Apply a complete extractor/storage polygon to its stable owner. If an older partial
-        /// placement produced only the building, create the missing owned area and let the normal
-        /// reference system add it to the owner's SubArea buffer.
+        /// Applies a complete extractor/storage polygon to its owner, creating the owned area if only the
+        /// building exists.
         /// </summary>
         private bool TryRealizeOwnedAreaSnapshot(OwnedAreaSnapshotCommand command,
             int originPlayerId, long now)
         {
-            Entity areaPrefab;
-            Entity ownerPrefab;
-            if (!_prefabIndex.TryResolve(command.AreaPrefabName, out areaPrefab) ||
-                !_prefabIndex.TryResolve(command.OwnerPrefabName, out ownerPrefab) ||
+            if (!_prefabIndex.TryResolve(command.AreaPrefabName, out Entity areaPrefab) ||
+                !_prefabIndex.TryResolve(command.OwnerPrefabName, out Entity ownerPrefab) ||
                 !IsSpecializedAreaPrefab(areaPrefab) ||
                 !PrefabDeclaresOwnedArea(ownerPrefab, areaPrefab))
             {
@@ -150,20 +142,13 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             return true;
         }
 
-        /// <summary>
-        /// Vertical slack for the owner match. Wide enough to absorb a building conformed to this
-        /// machine's own ground, narrow enough that a genuinely different level cannot match.
-        /// </summary>
+        /// <summary>Vertical slack for the owner match: absorbs local ground, rejects another level.</summary>
         private const float MaxOwnedAreaOwnerHeightGap = 40f;
 
-        /// <summary>
-        /// What the owner search actually saw, for a snapshot that never bound. Separates "this
-        /// machine has no such building" from "it has one but outside the accepted distance".
-        /// </summary>
+        /// <summary>What the owner search saw: no such building, or one outside the accepted distance.</summary>
         private string DescribeOwnedAreaOwnerSearch(OwnedAreaSnapshotCommand command)
         {
-            Entity ownerPrefab;
-            if (!_prefabIndex.TryResolve(command.OwnerPrefabName, out ownerPrefab))
+            if (!_prefabIndex.TryResolve(command.OwnerPrefabName, out Entity ownerPrefab))
                 return "(owner prefab unavailable)";
 
             var wanted = new float3(command.OwnerX, command.OwnerY, command.OwnerZ);
@@ -213,11 +198,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     global::Game.Objects.Transform transform =
                         EntityManager.GetComponentData<global::Game.Objects.Transform>(
                             candidate);
-                    // Horizontal only: the wire Y is the sender's, while this machine conforms the
-                    // building to its own ground, so on sloped terrain the vertical difference can
-                    // exceed the whole budget on its own and reject the right owner. Nothing stacks
-                    // two lot owners over one point, so the plane is the discriminator; the loose
-                    // vertical bound below only rules out a different level entirely.
+                    // Horizontal only: the building sits on this machine's ground, so Y can differ a lot on slopes.
                     float distance = math.distancesq(transform.m_Position.xz, position.xz);
                     if (distance >= bestDistance ||
                         math.abs(transform.m_Position.y - position.y) > MaxOwnedAreaOwnerHeightGap ||
@@ -245,8 +226,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     Entity candidate = areas[i];
                     if (EntityManager.GetComponentData<PrefabRef>(candidate).m_Prefab !=
                         areaPrefab) continue;
-                    Entity topOwner;
-                    if (TryFindTopAreaOwner(candidate, out topOwner) &&
+                    if (TryFindTopAreaOwner(candidate, out Entity topOwner) &&
                         topOwner == owner) return candidate;
                 }
             }
@@ -273,8 +253,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     command.NodeY[i], command.NodeZ[i]),
                     command.NodeElevation[i]));
 
-            // New area definitions close the ring by repeating the first vertex. Generation strips
-            // that sentinel and sets AreaFlags.Complete on the live entity.
+            // Closing sentinel; generation strips it and marks the area Complete.
             nodes.Add(nodes[0]);
             EntityManager.AddComponent<Updated>(definition);
             EntityManager.AddComponent<Deleted>(definition);
@@ -305,8 +284,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     childAreas[i] = subAreas[i].m_Area;
             }
 
-            // Area edits rebuild prefab-owned slave surfaces in the same transaction. Those
-            // surfaces derive their nodes from the parent only when they are tagged Updated.
+            // Prefab-owned slave surfaces rebuild from the parent only when it is Updated.
             MarkAreaUpdated(area);
             if (childAreas == null) return;
             for (int i = 0; i < childAreas.Length; i++)
@@ -336,8 +314,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
         private void RealizeUpdate(AreaUpdateCommand command, int originPlayerId, long now)
         {
-            Entity prefab;
-            if (!_prefabIndex.TryResolve(command.PrefabName, out prefab))
+            if (!_prefabIndex.TryResolve(command.PrefabName, out Entity prefab))
             {
                 SyncLog.Warn(LogTopic.Land, "AreaSync update: unknown prefab '" + command.PrefabName +
                     "'; skipping.");
@@ -345,8 +322,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             }
             if (command.NodeX == null || command.NodeX.Length < 3) return;
 
-            // The anchor is the polygon's centroid BEFORE the edit — exactly what our
-            // not-yet-edited copy still has. Nearest same-prefab area within 500 m wins.
+            // The pre-edit centroid, which our unedited copy still has.
             var anchor = new float3(command.AnchorX, 0f, command.AnchorZ);
             Entity best = Entity.Null;
             float bestSq = 250000f;
@@ -378,8 +354,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
             try
             {
-                // Rewrite the ring in place — the entity (and with it district policies,
-                // citizen assignments, …) keeps its identity; Updated retriangulates.
+                // In place, so the area keeps its identity (policies, assignments).
                 DynamicBuffer<Node> nodes = EntityManager.GetBuffer<Node>(best);
                 nodes.Clear();
                 var newRing = new float3[command.NodeX.Length];
@@ -407,8 +382,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
         private void RealizeCreate(AreaCreateCommand command, int originPlayerId, long now)
         {
-            Entity prefab;
-            if (!_prefabIndex.TryResolve(command.PrefabName, out prefab))
+            if (!_prefabIndex.TryResolve(command.PrefabName, out Entity prefab))
             {
                 SyncLog.Warn(LogTopic.Land, "AreaSync realize: unknown prefab '" +
                     command.PrefabName + "'; skipping.");
@@ -420,8 +394,6 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             _guard.Mark(AreaKey(command.PrefabName, first), now);
             try
             {
-                // CreateAreasJob (GenerateAreasSystem) consumes CreationDefinition + a Node
-                // ring buffer — same Updated/Deleted definition lifecycle as objects/nets.
                 Entity definition = EntityManager.CreateEntity();
                 EntityManager.AddComponentData(definition, new CreationDefinition
                 {
@@ -454,8 +426,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             var targets = new List<(Entity prefab, float3 first, int count, string name)>();
             for (int i = 0; i < commands.Count; i++)
             {
-                Entity prefab;
-                if (_prefabIndex.TryResolve(commands[i].PrefabName, out prefab))
+                if (_prefabIndex.TryResolve(commands[i].PrefabName, out Entity prefab))
                     targets.Add((prefab,
                         new float3(commands[i].NodeX, commands[i].NodeY, commands[i].NodeZ),
                         commands[i].NodeCount, commands[i].PrefabName));
@@ -495,6 +466,5 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 SyncLog.Detail(LogTopic.Land, "AreaSync: removed " + deleted + " area(s); " +
                     targets.Count + " already gone (no local match).");
         }
-
     }
 }

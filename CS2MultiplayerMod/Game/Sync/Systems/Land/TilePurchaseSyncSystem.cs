@@ -1,5 +1,3 @@
-using System.Collections.Concurrent;
-using Game;
 using Game.Areas;
 using Game.Common;
 using Game.Simulation;
@@ -16,21 +14,16 @@ using CS2MultiplayerMod.Game.Sync.Commands;
 namespace CS2MultiplayerMod.Game.Sync.Systems
 {
     /// <summary>
-    /// Replicates map tile purchases live: detect Updated <see cref="MapTile"/> with no
-    /// <see cref="Native"/>, broadcast <see cref="TilePurchaseCommand"/> (centroids + price).
-    /// Realize by finding tile by centroid, remove Native, host charges shared treasury
-    /// pro-rated. Echo guard marks realized tiles.
+    /// Replicates map tile purchases. The receiver finds each tile by centroid and unlocks it; the
+    /// host charges the shared treasury, pro-rated for tiles already owned.
     /// </summary>
-    public partial class TilePurchaseSyncSystem : GameSystemBase
+    public partial class TilePurchaseSyncSystem : CommandSyncSystem, IRealizeStage
     {
-        private readonly ConcurrentQueue<SimulationCommandMessage> _incoming =
-            new ConcurrentQueue<SimulationCommandMessage>();
         private readonly ReplicationGuard _guard = new ReplicationGuard();
 
         private MapTilePurchaseSystem _purchase;
         private EntityQuery _flippedTiles;
         private EntityQuery _nativeTiles;
-        private CommandObserver _observer;
         private int _lastSelectionCost;
 
         protected override void OnCreate()
@@ -53,14 +46,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 None = SyncQuery.ReadOnly<Temp, Deleted>(),
             });
 
-            _observer = SyncObserverBinding.Bind(
-                () => new CommandObserver(_incoming, TilePurchaseCommand.Id));
-        }
-
-        protected override void OnDestroy()
-        {
-            SyncObserverBinding.Unbind(_observer);
-            base.OnDestroy();
+            ListenFor(new[] { TilePurchaseCommand.Id }, drainOnReload: false);
         }
 
         protected override void OnUpdate()
@@ -73,8 +59,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 MultiplayerSession session = service.Session;
                 if (!service.GameplaySyncReady) return;
 
-                // The exact price disappears with the selection the moment the purchase
-                // lands, so remember the last quoted cost while the player is selecting.
+                // The quoted price disappears with the selection when the purchase lands.
                 if (_purchase.selecting && _purchase.cost > 0) _lastSelectionCost = _purchase.cost;
 
                 long now = service.NowMs;
@@ -149,14 +134,13 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
         private void RealizeIncoming(MultiplayerSession session, long now)
         {
-            SimulationCommandMessage message;
-            while (_incoming.TryDequeue(out message))
+            while (_incoming.TryDequeue(out SimulationCommandMessage message))
             {
                 if (message.OriginPlayerId == session.LocalPlayerId) continue;
 
-                TilePurchaseCommand command;
-                try { command = TilePurchaseCommand.Decode(message.Body); }
-                catch (System.Exception ex) { SyncLog.Warn(LogTopic.Land, "TilePurchaseSync: dropping malformed command: " + ex.Message); continue; }
+                if (!CommandDecode.TryDecode(message, TilePurchaseCommand.Decode, LogTopic.Land,
+                        "TilePurchaseSync", out TilePurchaseCommand command))
+                    continue;
                 if (command.CenterX == null || command.CenterX.Length == 0) continue;
 
                 int unlocked = 0;
@@ -170,8 +154,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                         {
                             if (!EntityManager.HasComponent<Native>(tiles[i])) continue; // unlocked earlier this loop
                             float3 center = Centroid(tiles[i]);
-                            // Tiles are hundreds of meters apart; 32 m catches float noise
-                            // without ever matching a neighbour.
+                            // Tiles are hundreds of metres apart.
                             if (math.distancesq(center, wanted) > 1024f) continue;
 
                             _guard.Mark(TileKey(center), now);
@@ -187,8 +170,6 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     tiles.Dispose();
                 }
 
-                // Charge what the buyer's game quoted, pro-rated when part of the batch
-                // was already owned here (echo/replay) — host only, inside the charger.
                 if (unlocked > 0 && command.TotalCost > 0)
                     ConstructionCharger.ChargeAmount(EntityManager,
                         (long)command.TotalCost * unlocked / command.CenterX.Length,
@@ -201,6 +182,5 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         }
 
         private static string TileKey(float3 centroid) => ReplicationGuard.Key("maptile", centroid);
-
     }
 }

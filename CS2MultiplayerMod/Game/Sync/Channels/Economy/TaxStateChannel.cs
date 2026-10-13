@@ -7,14 +7,8 @@ using CS2MultiplayerMod.Game.Sync.Infrastructure;
 namespace CS2MultiplayerMod.Game.Sync.Channels
 {
     /// <summary>
-    /// Replicates the complete native tax-rate table. The first version of this channel sent only
-    /// the four area totals; Cities: Skylines II stores those as offsets into a 92-entry table whose
-    /// remaining entries contain the residential education-level and commercial/industrial/office
-    /// resource rates. Consequently two panels could show the same four headings while every
-    /// expanded row - and every demand calculation using it - still differed.
-    ///
-    /// This remains player-editable. A client proposes one complete, bounded table, the host applies
-    /// it atomically and the next snapshot confirms the result to everyone.
+    /// The complete 92-entry native tax-rate table (area offsets plus education and resource rates).
+    /// Editable: a client proposes a whole bounded table, the host applies it atomically.
     /// </summary>
     public sealed class TaxStateChannel : IStateChannel
     {
@@ -53,9 +47,7 @@ namespace CS2MultiplayerMod.Game.Sync.Channels
             for (int i = 0; i < count; i++)
             {
                 int value = reader.ReadInt();
-                // These are offsets, not the displayed final percentages. Vanilla's limits are
-                // much narrower; this generous bound admits current/future game settings while a
-                // forged editable payload cannot install overflow-sized values into native jobs.
+                // Raw offsets, not percentages; a generous bound stops overflow-sized forged values.
                 if (value < -MaxRawTaxOffset || value > MaxRawTaxOffset)
                     throw new ProtocolException("Invalid raw tax-rate value " + value + ".");
                 incoming[i] = value;
@@ -69,8 +61,7 @@ namespace CS2MultiplayerMod.Game.Sync.Channels
                 throw new ProtocolException("Tax-rate table length differs from this game build (" +
                     count + " on wire, " + (rates.IsCreated ? rates.Length : 0) + " locally).");
 
-            // Copy only after the complete payload has passed validation, so a malformed edit can
-            // never leave the host with a half-updated table.
+            // Copy only after the whole payload validated.
             for (int i = 0; i < count; i++) rates[i] = incoming[i];
         }
     }

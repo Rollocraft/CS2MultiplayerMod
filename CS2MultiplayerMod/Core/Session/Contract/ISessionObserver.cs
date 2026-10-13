@@ -4,10 +4,8 @@ using CS2MultiplayerMod.Core.Protocol.Messages;
 namespace CS2MultiplayerMod.Core.Session
 {
     /// <summary>
-    /// Receives session events. All callbacks are invoked on the game thread (from
-    /// <see cref="MultiplayerSession.Update"/>), so implementations may safely touch
-    /// game/UI state. Derive from <see cref="SessionObserver"/> to override only what
-    /// you need.
+    /// Session events, all on the game thread (<see cref="MultiplayerSession.Update"/>). Derive from
+    /// <see cref="SessionObserver"/> to override only what is needed.
     /// </summary>
     public interface ISessionObserver
     {
@@ -20,10 +18,7 @@ namespace CS2MultiplayerMod.Core.Session
         /// <summary>A replicated state snapshot arrived (clients only). Apply it to the world.</summary>
         void OnStateReceived(StateSnapshotMessage snapshot);
 
-        /// <summary>
-        /// A client's edit of a player-editable state channel arrived (host only).
-        /// Apply it to the world; the next snapshot broadcast confirms it to everyone.
-        /// </summary>
+        /// <summary>Host only: apply the edit; the next snapshot confirms it.</summary>
         void OnStateEditReceived(StateEditMessage edit);
 
         /// <summary>Another player's position update arrived.</summary>
@@ -32,10 +27,7 @@ namespace CS2MultiplayerMod.Core.Session
         /// <summary>A complete blob (all chunks reassembled) arrived on a named channel.</summary>
         void OnBlobReceived(string channel, byte[] data);
 
-        /// <summary>
-        /// A complete epoch-tagged blob arrived. The base observer forwards this to the
-        /// legacy two-argument callback so observers that do not care about epochs keep working.
-        /// </summary>
+        /// <summary>A complete epoch-tagged blob; the base forwards to the two-argument overload.</summary>
         void OnBlobReceived(string channel, long transferId, byte[] data);
 
         /// <summary>An atomic world-sync control stage arrived.</summary>
@@ -43,9 +35,8 @@ namespace CS2MultiplayerMod.Core.Session
             ConnectionId connection);
 
         /// <summary>
-        /// A manual or automatic world sync was requested (host only). Stream the current world to
-        /// <paramref name="connection"/>, or to everyone when it is
-        /// <see cref="ConnectionId.None"/> (the host itself asked).
+        /// Host only: stream the world to <paramref name="connection"/>, or everyone for
+        /// <see cref="ConnectionId.None"/>.
         /// </summary>
         void OnResyncRequested(int playerId, ConnectionId connection);
 

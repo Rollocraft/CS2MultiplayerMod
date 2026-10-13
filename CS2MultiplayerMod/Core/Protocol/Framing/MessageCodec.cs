@@ -5,14 +5,8 @@ using CS2MultiplayerMod.Core.Protocol.Messages;
 namespace CS2MultiplayerMod.Core.Protocol
 {
     /// <summary>
-    /// Translates between <see cref="INetMessage"/> instances and the byte payloads the
-    /// transport delivers. The wire layout is: [1 byte MessageType][message body].
-    ///
-    /// Decoding is table-driven: each known <see cref="MessageType"/> maps to a factory
-    /// producing a fresh, empty instance to read into, plus a per-type payload size cap.
-    /// The cap is the first line of defense: a chat line claiming to be 10 MB is
-    /// rejected before a single body byte is parsed, so the blanket
-    /// <see cref="ProtocolConstants.MaxPayloadBytes"/> only matters for blob chunks.
+    /// [1 byte MessageType][body]. Each type has a factory and a size cap checked before any body byte
+    /// is parsed; <see cref="ProtocolConstants.MaxPayloadBytes"/> only matters for blob chunks.
     /// </summary>
     public sealed class MessageCodec
     {
@@ -28,8 +22,8 @@ namespace CS2MultiplayerMod.Core.Protocol
         public static MessageCodec CreateDefault()
         {
             var codec = new MessageCodec();
-            // Sized for the DLC list (≤64 entries of ≤64 chars) on top of the fixed fields.
-            codec.Register(MessageType.HandshakeRequest, () => new HandshakeRequest(), 32 * 1024);
+            // Sized for the DLC list (≤64 of ≤64 chars) and the mod list (≤128 of ≤128 chars), UTF-8.
+            codec.Register(MessageType.HandshakeRequest, () => new HandshakeRequest(), 96 * 1024);
             codec.Register(MessageType.HandshakeResponse, () => new HandshakeResponse(), 1024);
             codec.Register(MessageType.HandshakeChallenge, () => new HandshakeChallenge(), 256);
             codec.Register(MessageType.HandshakePending, () => new HandshakePendingMessage(), 64);
@@ -79,8 +73,7 @@ namespace CS2MultiplayerMod.Core.Protocol
             var reader = new NetworkReader(payload);
             var type = (MessageType)reader.ReadByte();
 
-            Entry entry;
-            if (!_entries.TryGetValue(type, out entry))
+            if (!_entries.TryGetValue(type, out Entry entry))
                 throw new ProtocolException("Unknown message type: " + (byte)type + ".");
 
             if (payload.Length > entry.MaxPayloadBytes)

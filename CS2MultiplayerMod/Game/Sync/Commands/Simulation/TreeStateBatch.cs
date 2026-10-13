@@ -14,10 +14,7 @@ namespace CS2MultiplayerMod.Game.Sync.Commands
         public byte Growth;
     }
 
-    /// <summary>
-    /// Bounded payload used by the tree state channel. Prefab names are interned once per batch;
-    /// a large planted forest therefore costs 18 bytes per tree rather than repeating names.
-    /// </summary>
+    /// <summary>Tree state payload; prefab names are interned per batch.</summary>
     public sealed class TreeStateBatch
     {
         public const int MaxRecords = 2048;

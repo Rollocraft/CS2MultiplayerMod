@@ -9,29 +9,20 @@ namespace CS2MultiplayerMod.Game.Sync.Commands
         /// <summary>A free-standing object: buildings, props, trees.</summary>
         None = 0,
 
-        /// <summary>
-        /// A net object parented to a road node - roundabout central islands. The node
-        /// travels as a world position; entity indices differ per machine.
-        /// </summary>
+        /// <summary>Parented to a road node (roundabout islands), sent as its world position.</summary>
         NetNode = 1,
 
         /// <summary>
-        /// A net object parented to a road edge - turn restrictions, signs, markings. Travels
-        /// as the point on the edge's centreline the object hangs at, so a receiver that
-        /// subdivided the road differently still finds the piece under it.
+        /// Parented to a road edge (turn restrictions, signs), sent as the centreline point it hangs at so
+        /// differently subdivided roads still match.
         /// </summary>
         NetEdge = 2,
     }
 
     /// <summary>
-    /// "A player placed this object here." Identifies the prefab by its stable name
-    /// (entity indices differ per machine, names do not) plus a world transform. The
-    /// receiver resolves the name back to a local prefab and lets the game's own
-    /// object-creation systems realize it - see <see cref="BuildSyncSystem"/>.
-    ///
-    /// Objects that attach to the net carry an anchor on their parent as well. That link is
-    /// what turns a roundabout island into an actual roundabout, or a sign into a real turn
-    /// restriction, and it cannot be recovered from the object's own transform.
+    /// A placed object by prefab name and world transform, realized by the game's own creation systems.
+    /// Net-attached objects also carry their parent anchor, which makes an island a roundabout and a
+    /// sign a restriction.
     /// </summary>
     public sealed class ObjectPlacementCommand : ISimulationCommand
     {

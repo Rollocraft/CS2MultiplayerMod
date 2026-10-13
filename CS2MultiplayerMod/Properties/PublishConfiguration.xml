@@ -4,17 +4,81 @@
 	<!--Name of the mod to display to players-->
 	<DisplayName Value="CS2 Multiplayer Mod" />
 	<!--Short description of the mod-->
-	<ShortDescription Value="Cities: Skylines 2 Multiplayer mod, build one shared city with a friend" />
+	<ShortDescription Value="Cities: Skylines 2 Multiplayer mod, build your city with your friendc" />
 	<!--Long description of the mod. Single line or multi line. Supports minimal markdown subset-->
 	<LongDescription>
-		Play Cities: Skylines II together.
+Build one city together.
 
-		CS2 Multiplayer is a client-server multiplayer mod that allows multiple players to build and manage the same city in real time.
-		**Mods currently do not work in Multiplayer!**
-		The mod is currently experimental. Please back up your saves and expect bugs, missing features or crashes while development continues.
-		To host a game, start a multiplayer world, optionally protect it with a password, and share your IP address with your friends or share ur steamcode.
-		If you encounter any issues or have feedback, our Discord server ( https://discord.gg/KFZTW2YSJt ) is the preferred place to get support and report bugs.
-		This project is not affiliated with, endorsed by, or sponsored by Colossal Order, Paradox Interactive, or Iceflake Studio.	
+CS2 Multiplayer Mod is a cooperative multiplayer mod for Cities: Skylines II. One player hosts the city, everyone else joins and downloads it, and from that moment roads, zoning, services, finances, progression, time and weather stay in sync while you build together. The goal of the project is a shared city that feels like normal Cities: Skylines II - the same tools, the same city, just with your friends in it.
+		
+## Included features
+
+- Cooperative sessions in one shared city, started from a brand new world or from a city you already built.
+- Steam Relay hosting: the host shares a join code, no router setup, no address to type. Works for everyone who owns the game on Steam.
+- Direct connection hosting: automatic port opening through UPnP, a LAN Only mode for local play, and support for every copy of the game, including Xbox App, Microsoft Store and Game Pass.
+- Host controls: password, max players, player approval with optional auto-approval for Steam friends, kick and ban, and a client resync policy (Allow, Ask Host, Host Only).
+- Synchronized building: roads, rails and other networks, upgrades, replacements and elevation, zoning, buildings, services, terrain, trees and props, transport lines and routes, city and street names.
+- Synchronized city state: money and loans, milestones and unlocks, time of day, game speed and pause, and weather.
+- Optional detailed simulation sync: growable buildings, household occupancy, company tenancy and production, rent and zone demand - with a host switch to turn it off in very large cities where the extra work costs frames.
+- Partner markers: every player gets a colour, and you see where they are, what they hover and what they are about to place.
+- In-game multiplayer panel and chat, with /sync for a one-click world sync whenever two screens disagree.
+- Save Copy: keep the shared city on your own PC and continue it later in single-player.
+- Compatibility checks before anyone connects: mod version, game version, DLC and active mods, each with a plain error message and a help link.
+- Nine languages, following your game language: English, German, French, Spanish, Italian, Polish, Russian, Japanese and Simplified Chinese.
+
+## Usage
+
+Hosting:
+
+1. Open Options, CS2 Multiplayer Mod, and set your player name. Port, password, max players and LAN Only live there too.
+2. On the main menu click Multiplayer, then Host Game.
+3. Pick a connection. Steam Relay needs no setup. Direct connection is faster but the host's port has to be reachable, and it is the only option on Xbox App, Microsoft Store and Game Pass copies.
+4. Share the join code (Steam Relay), or your address and port (direct connection).
+5. Choose Load World for an existing city or Create World for a new one.
+6. The session starts on its own once the city has finished loading. You can also start hosting from the in-game multiplayer panel while a city is already open.
+
+Joining:
+
+1. Click Multiplayer, then Join Game.
+2. Enter the join code, or the host address and port, plus your player name and the password.
+3. Click Join Session and wait while the host's city is transferred. Large cities take longer, and the dialog closes itself once you are in.
+
+Full guides, including port forwarding and every error message: https://cs2multiplayer.rollocraft.me/
+
+## Known issues and limitations (in the current version)
+
+- Citizens, vehicles, tourists and pets are not replicated one by one. Each PC runs its own agents, so traffic and crowds can look different on each screen while the city, its buildings and its finances stay in sync.
+- The host owns the session save. A joining player plays in a temporary downloaded copy of the city, and changes made after the connection ends cannot be sent back. Use Save Copy to keep it.
+- Every player needs the same mod version, the same game version and the same gameplay DLC. Radio station DLC does not matter, and CS1 Treasure Hunt is ignored because it cannot be disabled.
+- Steam Relay hosting needs the Steam copy of the game, launched through Steam and online. Microsoft Store, Game Pass and Xbox App copies host over a direct connection instead.
+- Joining a very large city takes a while, because the whole world is transferred first.
+- The session can still decide to resync a player: the world reloads from the host and play continues. Reducing the remaining causes is ongoing work.
+
+## Compatibility with other modifications
+
+- Hosting and joining are blocked while any unsupported mod is active in your playset, including asset-only mods such as maps, prop packs and prefab packs. Nothing in the sync layer accounts for an unverified mod changing prefabs, tools or the simulation, so one unsupported mod on one PC is enough to desync or crash the session.
+- Officially supported, tested and maintained: Traffic, Road Speed Adjuster, Anarchy, Find It and Asset Icon Library. These never block a session.
+- Durable state belonging to compatible mods, such as Traffic's custom lane connections, is synchronized between players.
+- Options, CS2 Multiplayer Mod, General, Ignore Mod Compatibility Checks (Own Risk) lifts the local block for advanced users. It does not bypass the network protocol, game version or DLC checks, and it does not make another mod multiplayer-aware.
+- Every player needs the same mod list. The safest playset is this mod plus the supported ones above.
+
+## Saving
+
+The host saves the city exactly as in single-player, and that save is the session. A city built in multiplayer stays an ordinary Cities: Skylines II save and keeps working without the mod.
+
+A joining player's copy is temporary and is closed when the session ends. Save Copy in the multiplayer panel writes the current shared city to your own PC so you can continue it alone.
+
+## Plans
+
+Wider tested-mod compatibility, fewer resyncs, better performance in very large cities, and keeping pace with every Cities: Skylines II patch. Playtests and the bug reports that come out of them drive what gets fixed first, so joining one is the fastest way to shape the next version.
+
+## Feedback, feature ideas, support
+
+The Discord server is the preferred place for support, bug reports and playtests: https://discord.gg/KFZTW2YSJt
+
+Larger feature requests and anything that needs a longer discussion are easier to track as GitHub Issues: https://github.com/Rollocraft/CS2MultiplayerMod
+		
+This project is not affiliated with, endorsed by, or sponsored by Colossal Order, Paradox Interactive, or Iceflake Studios.
 	</LongDescription>
 	<!--Thumbnail-->
 	<Thumbnail Value="Properties/Thumbnail.png" />
@@ -28,7 +92,7 @@
 	<!--Link to the forum post where the mod can be discussed-->
 	<ForumLink Value="" />
 	<!--Version of the mod-->
-	<ModVersion Value="0.1.7" />
+	<ModVersion Value="0.1.7.1" />
 	<!--Recommended version of the base game to use the mod-->
 	<GameVersion Value="1.6.*" />
 	<!--Dependency for the mod, can be set multiple times-->
@@ -37,8 +101,18 @@
 	<RequiredDLC Value="" />
 	<!--Change log for new version. Single line or multi line. Supports minimal markdown subset-->
 	<ChangeLog>
-		Version 0.1.7
-		Added Traffic Mod support aswell as 1.6.2f1 support
+		Version 0.1.7.1
+		Much better performance in large cities: hosts and clients do far less work keeping the city in sync, the host no longer stutters once a second, and painting trees no longer slows down the other players.
+		Steam Relay copes better with slow connections and no longer drops players during world downloads.
+		Move It and Node Controller edits are now synchronized.
+		Fires and traffic accidents now happen the same way for every player.
+		Terraforming now gives the same heights for every player, and roads on freshly terraformed ground no longer turn into a different road.
+		Direct Connection now supports IPv6. Hosting a Direct Connection over the internet now requires a password of at least 8 characters.
+		New host options: Approve Players, Auto-Approve Steam Friends, and who may request a world sync (Allow, Ask Host, Host Only).
+		Milestone popups close by themselves after 10 seconds, so an AFK player can no longer keep the session paused.
+		Save Diagnostics and /diag create one file for bug reports.
+		This update changes the network protocol: all players must update.
+		Full changelog: https://cs2multiplayer.rollocraft.me/changelog/
 	</ChangeLog>
 	<!--External link, can be set multiple times. supported types are "discord", "github", "youtube", "twitch", "x", "paypal", "patreon", "buymeacoffee", "kofi", "crowdin", "gitlab", "gofundme"-->
 	<ExternalLink Type="discord" Url="https://discord.gg/KFZTW2YSJt" />

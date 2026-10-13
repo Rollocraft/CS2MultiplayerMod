@@ -7,15 +7,10 @@ using CS2MultiplayerMod.Game.Sync.Infrastructure;
 
 namespace CS2MultiplayerMod.Game.Sync.Systems.Net
 {
-    // One realize cycle's read-only view of the pools an incoming course can connect to, each with
-    // the grid that makes a lookup local. Taken once per cycle and released in the same frame.
+    // One cycle's read-only connectable pools, each with its grid; released in the same frame.
     public partial class NetSyncSystem
     {
-        /// <summary>
-        /// Take this cycle's connectable pools. <paramref name="ownedNodes"/> holds the building
-        /// sub-net stubs a utility endpoint may connect to (see FindUtilityNodeAt); owned edges are
-        /// only reachable through captured native intent.
-        /// </summary>
+        /// <summary>Owned nodes are for utility connections; owned edges only via captured intent.</summary>
         private void TakeNetSnapshot(out NodePool nodes, out EdgePool edges,
             out NodePool ownedNodes, out EdgePool ownedEdges)
         {

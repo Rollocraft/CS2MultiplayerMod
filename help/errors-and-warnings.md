@@ -20,6 +20,12 @@ Possible internal details:
 
 The joining player must enter the host's password exactly; it is case-sensitive. Repeated failures can temporarily block the joining address. Confirm the password privately with the host and retry.
 
+### Hosting over the internet needs a server password
+
+Possible internal detail: `Public direct hosting requires a server password of at least 8 characters.`
+
+A Direct Connection host that is not LAN Only accepts connections from the internet, and everyone who joins downloads a copy of the city. Hosting therefore stops before anything is opened. Set a server password of at least 8 characters (on the main menu's Host Game screen, in the in-game multiplayer panel or on the Host tab of the options), switch LAN Only on, or host over [Steam Relay](steam-relay.md), which needs no password.
+
 ### Your multiplayer mod versions do not match
 
 Possible internal details:
@@ -49,7 +55,17 @@ See [Disabling DLC](disable_dlc.md).
 
 The detail lists the other active mods that were detected. By default, hosting and joining are blocked because additional mods can change simulation behavior, tools, or prefab catalogs.
 
-Disable every other mod in the active playset and restart if the message says those mods are still loaded. Advanced users can enable Ignore Mod Compatibility Checks (Own Risk) while offline, but that can cause desyncs, broken cities, or crashes.
+Disable every other mod in the active playset and restart if the message says those mods are still loaded. Advanced users can enable Ignore Mod Compatibility Checks (Own Risk) on the mod's **Advanced** options tab while offline, but that can cause desyncs, broken cities, or crashes.
+
+See [Mod Support and Compatibility](mods.md).
+
+### The host and this player have different mods enabled
+
+Possible internal detail: `Mod playset mismatch - you are missing: <mods>; the host is missing: <mods>; different versions: <mod> (host <version>, yours <version>).`
+
+When a player joins, the host compares the other active mods of both computers, including their versions, and names every difference. Enable the same mods in the same versions on both computers and restart the game. Find It and Asset Icon Library only change what one player sees and are not compared.
+
+A host with Ignore Mod Compatibility Checks (Own Risk) enabled admits a differing set anyway and writes the difference to its log. That can cause desyncs, broken cities or crashes.
 
 See [Mod Support and Compatibility](mods.md).
 
@@ -79,7 +95,14 @@ See [Diagnose issues with port forwarding](forwarding_troubleshoot.md).
 
 Possible internal details include `TimedOut`, `timed out`, or a handshake timeout.
 
-Verify that the host is still online and that the address and port are correct. Allow the port through the host firewall. Direct internet sessions also need a TCP port forward. If the join was waiting for approval, the host must respond before the approval timeout.
+The connection attempt got no reply at all. The usual causes, most common first:
+
+- The host's router did not open the port. The host's log has a `UPnP:` line saying the router refused or did not answer - see [Let the mod open the port](forwarding.md#upnp).
+- The address is wrong or out of date. Over the internet it has to be the host's current public IP; many providers change it from time to time.
+- The host's firewall drops the connection. Allow Cities: Skylines II through the Windows Firewall on the network type in use.
+- Over Hamachi, a Hamachi connection is not green yet, or the game is not allowed through the firewall on public networks - see [Hamachi and other VPNs](hamachi.md#troubleshooting).
+
+If the join was waiting for approval, the host must respond before the approval timeout. [Steam Relay](steam-relay.md) avoids all of the above when everyone has the Steam copy.
 
 See [Diagnose issues with port forwarding](forwarding_troubleshoot.md).
 
@@ -175,7 +198,7 @@ Clients normally pause autosave while using the host's temporary world and resto
 
 ### Untested game version
 
-The installed game build is not in the mod's tested-version list. Multiplayer may still work, but a game update can change simulation or UI behavior. Keep backups and check for a mod update.
+The installed game build is not in the mod's tested-version list. Multiplayer may still work, but a game update can change simulation or UI behavior. Check for a mod update.
 
 ### Other mods enabled
 
@@ -194,17 +217,17 @@ Recognizable log text:
 
 Correct the value in Options before the next session.
 
-### Public hosting with no password
+### Public hosting enabled
 
-Recognizable log text begins `[security] Hosting PUBLICLY with NO PASSWORD` or `PUBLIC HOSTING ENABLED`.
+Recognizable log text begins `PUBLIC HOSTING ENABLED`.
 
-A direct public host accepts internet connections to the forwarded port, and joined players receive the city. Set a strong password, keep it private, or use Steam Relay/LAN-only mode.
+A direct public host accepts internet connections to the forwarded port, and joined players receive the city. A server password of at least 8 characters is required for it; keep the password private, or use Steam Relay/LAN-only mode.
 
 ### Automatic port forwarding failed
 
-Recognizable log lines begin `[upnp]` and may say no local address was found, the router refused the request, verification failed, or automatic forwarding failed.
+Recognizable log lines contain `UPnP:` and say that no local address was found, that the router refused the request, that no router answered, that the router did not report the mapping back, or that automatic forwarding failed.
 
-Hosting is still active locally. Configure the TCP port manually or use Steam Relay. See [Port Forwarding](forwarding.md) and [Port Forwarding Troubleshooting](forwarding_troubleshoot.md).
+Hosting is still active, and players on your network or on a VPN can still join, but players over the internet cannot reach the port. Allow UPnP on your router, forward the TCP port by hand, or use Steam Relay. See [Let the mod open the port](forwarding.md#upnp) and [Port Forwarding Troubleshooting](forwarding_troubleshoot.md).
 
 ### Multiplayer UI did not load
 
@@ -230,7 +253,7 @@ Messages such as `Cannot host`, `Cannot join`, `Cannot choose a host world`, or 
 
 Recognizable text includes `session is LAN-only`, `too many open connections`, `Transport event queue full`, `Peer timed out`, `Handshake timed out`, or `connection(s) still draining`.
 
-- A LAN-only refusal is expected when an internet address reaches a host that deliberately accepts only private-network clients.
+- A LAN-only refusal is expected when an internet address reaches a host that deliberately accepts only private-network clients. Hamachi (`25.x.x.x`) and Radmin VPN (`26.x.x.x`) addresses count as internet addresses, so switch LAN Only off for them - see [Hamachi and other VPNs](hamachi.md).
 - Too many connections can be a burst of pending joins or unwanted traffic. Keep a public host password-protected.
 - A full transport queue or timeout means the game/network could not process traffic fast enough. Stop the session if it repeats, reduce load, and retry.
 - Connections still draining during a deliberate shutdown are forcibly closed after the farewell timeout; no manual cleanup is needed.
@@ -264,7 +287,7 @@ These messages normally appear only in logs. A single recovered warning does not
 | `RouteSync` | A route create/update/delete could not resolve or apply. Recreate the route after Sync World. |
 | `GrowableSync`, `Occupancy`, `PropertyRent`, `ZoneDemand` | Simulation state drifted or a population/economy correction could not be captured/applied. Let the host run briefly and Sync World if visible values remain different. |
 | `CityState`, `Statistics`, `PolicySync`, `NameSync`, `DevTree` | A city-state page or edit was malformed, deferred, skipped, or failed. Retry the action once; Sync World if the result differs. |
-| `DisasterSync`, `TreeState`, weather/clock/speed channel warnings | A world-simulation event or state page could not be resolved. Sync World and avoid retriggering the same event if it repeats. |
+| `DisasterSync`, `FireSync`, `AccidentSync`, `TreeState`, weather/clock/speed channel warnings | A world-simulation event or state page could not be resolved. Sync World and avoid retriggering the same event if it repeats. |
 | `realize FAILED`, `channel pump failed`, `queue overflowed`, `retry budget` | A bounded recovery path was exhausted. This is report-worthy, especially when repeated or visible in the city. |
 | `Observer crashed` | One multiplayer observer threw an exception; the session continues, but part of synchronization may be impaired. Preserve the complete exception and flight log. |
 
@@ -276,6 +299,8 @@ These messages normally appear only in logs. A single recovered warning does not
 - A one-time recovery message followed by a successful world sync means the safety system did its job.
 
 ## Reporting a problem
+
+The quickest way to collect the files is **Save Diagnostics** on the mod's **General** options tab, or `/diag` in the multiplayer chat, right after the problem. It writes one `CS2MP-diagnostic-<date>-<time>.txt` file into the game's `Logs` folder with the versions, the session state, the active mods and the whole flight log. It also works after a join that failed. Send that file in place of item 5 below.
 
 Include:
 

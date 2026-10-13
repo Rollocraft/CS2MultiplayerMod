@@ -1,7 +1,6 @@
+import { GROUP, tryModule, useT } from "mods/ui-helpers";
 import { bindValue, trigger, useValue } from "cs2/api";
 import { AutoNavigationScope, BackConsumer, NavigationDirection } from "cs2/input";
-import { useLocalization } from "cs2/l10n";
-import { getModule } from "cs2/modding";
 import { Button, DialogContext, DialogStack, MenuButton } from "cs2/ui";
 import { CSSProperties, ReactNode, useContext, useEffect, useRef, useState } from "react";
 import {
@@ -10,21 +9,20 @@ import {
     CONNECTION_RELAY,
     ConnectionDropdown,
     JoinCodeDisplay,
+    publicPasswordMinLength$,
+    publicPasswordMissing,
+    usePublicPasswordHint,
 } from "mods/connection-picker";
 import { DisclaimerModal, disclaimerAccepted$ } from "mods/disclaimer";
 import { MultiplayerJoinLoadingScreen } from "mods/loading-screen";
 import { OtherModsBanner, useModsBlocked } from "mods/mods-banner";
+import { FormField, FormFieldProps } from "mods/form-field";
 import { MULTIPLAYER_BLUE } from "mods/multiplayer-theme";
+import { RESYNC_ALLOW, RESYNC_LOC, ResyncPolicyDropdown } from "mods/resync-policy";
 import { VersionWarningBanner } from "mods/version-banner";
 
-// Binding group shared with MultiplayerUISystem on the C# side. The field values
-// live in the mod's Setting object, so this screen, the in-game hub and Options
-// all share the same multiplayer data.
-const GROUP = "cs2mp";
-
-// Locale keys served by the mod's LocaleEN/LocaleDE dictionary sources (constants
-// in L10n.Key on the C# side). The game resolves them against its active language;
-// the inline fallbacks only cover a dictionary that has not loaded yet.
+// Keys from the mod's locales/<lang>.properties; the inline fallbacks only cover a dictionary that
+// has not loaded yet.
 const LOC = {
     multiplayer: "CS2MP.UI.Multiplayer",
     joinGame: "CS2MP.UI.JoinGame",
@@ -37,17 +35,15 @@ const LOC = {
     hostAddress: "CS2MP.UI.HostAddress",
     port: "CS2MP.UI.Port",
     password: "CS2MP.UI.Password",
+    lanOnly: "CS2MP.UI.LanOnly",
+    requireApproval: "CS2MP.UI.RequireApproval",
+    autoApproveSteamFriends: "CS2MP.UI.AutoApproveSteamFriends",
+    simulationSync: "CS2MP.UI.SimulationSync",
     join: "CS2MP.UI.Join",
     disconnect: "CS2MP.UI.Disconnect",
     closeSession: "CS2MP.UI.CloseSession",
     ...CONNECTION_LOC,
-};
-
-// translate() is typed string | null; this narrows it to the English fallback so
-// JSX/props that require a string stay clean.
-const useT = () => {
-    const { translate } = useLocalization();
-    return (id: string, fallback: string) => translate(id, fallback) ?? fallback;
+    ...RESYNC_LOC,
 };
 
 const playerName$ = bindValue<string>(GROUP, "playerName", "Player");
@@ -62,6 +58,13 @@ const isHost$ = bindValue<boolean>(GROUP, "isHost", false);
 const savedGames$ = bindValue<unknown[]>("menu", "saves", []);
 const multiplayerMenuActive$ = bindValue<boolean>(GROUP, "multiplayerMenuActive", false);
 const hostConnection$ = bindValue<string>(GROUP, "hostConnection", CONNECTION_RELAY);
+const hostPort$ = bindValue<string>(GROUP, "hostPort", "25001");
+const hostPassword$ = bindValue<string>(GROUP, "hostPassword", "");
+const lanOnly$ = bindValue<boolean>(GROUP, "lanOnly", false);
+const requireApproval$ = bindValue<boolean>(GROUP, "requireApproval", true);
+const autoApproveSteamFriends$ = bindValue<boolean>(GROUP, "autoApproveSteamFriends", false);
+const resyncPolicy$ = bindValue<string>(GROUP, "resyncPolicy", RESYNC_ALLOW);
+const simulationSync$ = bindValue<boolean>(GROUP, "simulationSync", true);
 const joinCode$ = bindValue<string>(GROUP, "joinCode", "");
 const relayAvailable$ = bindValue<boolean>(GROUP, "relayAvailable", false);
 // False on copies of the game that ship no Steam library (Microsoft Store / Game
@@ -80,13 +83,7 @@ const openMultiplayerScreen = () => trigger(GROUP, "openMultiplayerScreen");
 // sizing and layout identical to those screens. The paths are vanilla-internal and
 // can move on a game update, hence the inline fallbacks that replicate the same
 // geometry.
-const tryModule = (path: string, exportName: string): any => {
-    try {
-        return getModule(path, exportName);
-    } catch {
-        return null;
-    }
-};
+
 const VanillaSubScreen = tryModule("game-ui/menu/components/shared/sub-screen/sub-screen.tsx", "SubScreen");
 const VanillaTransitionGroup = tryModule(
     "game-ui/common/animations/transition-group-coordinator.tsx",
@@ -106,8 +103,6 @@ const subScreenClasses: Record<string, string> | null =
 const childOpacityTransitionClass = subScreenClasses?.header
     ?.split(/\s+/)
     .find((className) => className.startsWith("child-opacity-transition"));
-// The game scales its UI by adjusting the root font size, so rem behaves like
-// resolution-independent pixels; all sizes below follow that convention.
 const styles: Record<string, CSSProperties> = {
     pageHost: {
         width: "100%",
@@ -310,6 +305,50 @@ const styles: Record<string, CSSProperties> = {
     connectionSpacer: {
         height: "12rem",
     },
+    hostOptions: {
+        display: "flex",
+        alignItems: "center",
+        marginTop: "14rem",
+        paddingTop: "14rem",
+        borderTop: "1rem solid rgba(157, 193, 222, 0.22)",
+    },
+    hostOption: {
+        flex: "1 1 0%",
+        minWidth: 0,
+        display: "flex",
+        alignItems: "center",
+        cursor: "pointer",
+    },
+    hostSetting: {
+        flex: "1 1 0%",
+        minWidth: 0,
+        display: "flex",
+        alignItems: "center",
+    },
+    hostOptionLabel: {
+        flex: "0 1 auto",
+        minWidth: 0,
+        paddingRight: "10rem",
+        fontSize: "16rem",
+        color: "#9dc1de",
+        textTransform: "uppercase",
+    },
+    toggleBox: {
+        width: "24rem",
+        height: "24rem",
+        flexShrink: 0,
+        borderRadius: "3rem",
+        backgroundColor: "rgba(0, 0, 0, 0.35)",
+        border: "1rem solid rgba(157, 193, 222, 0.35)",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+    },
+    toggleCheck: {
+        width: "15rem",
+        height: "15rem",
+        filter: "brightness(0) invert(1)",
+    },
     dropdownToggle: {
         minWidth: "260rem",
     },
@@ -344,53 +383,8 @@ const styles: Record<string, CSSProperties> = {
     },
 };
 
-interface FieldProps {
-    label: string;
-    value: string;
-    secret?: boolean;
-    disabled?: boolean;
-    onChange: (value: string) => void;
-}
-
-const Field = ({ label, value, secret, disabled, onChange }: FieldProps) => {
-    const [draft, setDraft] = useState(value);
-    const [editing, setEditing] = useState(false);
-
-    useEffect(() => {
-        if (!editing) setDraft(value);
-    }, [value]);
-
-    const updateValue = (next: string) => {
-        setDraft(next);
-        onChange(next);
-    };
-
-    return (
-        <div style={styles.row}>
-            <div style={styles.label}>{label}</div>
-            <input
-                type={secret ? "password" : "text"}
-                style={disabled ? { ...styles.input, ...styles.inputDisabled } : styles.input}
-                value={draft}
-                disabled={disabled}
-                spellCheck={false}
-                autoComplete="off"
-                onFocus={() => setEditing(true)}
-                onBlur={() => {
-                    setEditing(false);
-                    if (draft !== value) onChange(draft);
-                }}
-                onMouseDown={(e) => e.stopPropagation()}
-                onKeyDown={(e) => {
-                    // Let Escape reach the native BackConsumer even while a text
-                    // field is active; keep gameplay/menu shortcuts out otherwise.
-                    if (e.key !== "Escape") e.stopPropagation();
-                }}
-                onChange={(e) => updateValue((e.target as HTMLInputElement).value)}
-            />
-        </div>
-    );
-};
+// Escape still reaches the native BackConsumer while a field is focused.
+const Field = (props: FormFieldProps) => <FormField {...props} styles={styles} escapeBubbles />;
 
 interface ChoiceTileProps {
     focusKey: string;
@@ -418,6 +412,29 @@ const ChoiceTile = ({ focusKey, icon, label, disabled, onSelect }: ChoiceTilePro
     </Button>
 );
 
+const HostOption = ({ label, value, onChange }: {
+    label: string;
+    value: boolean;
+    onChange: (value: boolean) => void;
+}) => (
+    <div style={styles.hostOption} onClick={() => onChange(!value)}>
+        <div style={styles.hostOptionLabel}>{label}</div>
+        <div style={styles.toggleBox}>
+            {value ? <img src="Media/Glyphs/Checkmark.svg" style={styles.toggleCheck} /> : null}
+        </div>
+    </div>
+);
+
+/** Direct internet hosting the session would refuse; Load/Create stay closed until it is fixed. */
+const useHostPasswordMissing = () => {
+    const relaySupported = useValue(relaySupported$);
+    const mode = useValue(hostConnection$);
+    const lanOnly = useValue(lanOnly$);
+    const password = useValue(hostPassword$);
+    const minLength = useValue(publicPasswordMinLength$);
+    return publicPasswordMissing(relaySupported && mode !== CONNECTION_DIRECT, lanOnly, password, minLength);
+};
+
 /**
  * Host connection picker: relay (default) or a direct port. In relay mode the code
  * players need is shown right here, because that is the only thing they have to be
@@ -430,6 +447,15 @@ const ConnectionPicker = () => {
     const relayAvailable = useValue(relayAvailable$);
     const relaySupported = useValue(relaySupported$);
     const relayReason = useValue(relayUnavailableReason$);
+    const requireApproval = useValue(requireApproval$);
+    const autoApproveSteamFriends = useValue(autoApproveSteamFriends$);
+    const resyncPolicy = useValue(resyncPolicy$);
+    const simulationSync = useValue(simulationSync$);
+    const hostPort = useValue(hostPort$);
+    const hostPassword = useValue(hostPassword$);
+    const lanOnly = useValue(lanOnly$);
+    const passwordMissing = useHostPasswordMissing();
+    const passwordHint = usePublicPasswordHint(hostPassword, useValue(publicPasswordMinLength$));
 
     const relay = relaySupported && mode !== CONNECTION_DIRECT;
 
@@ -463,6 +489,67 @@ const ConnectionPicker = () => {
                         ? `${t(LOC.joinCodeHint, "Send this code to your friends. They pick Steam Relay on their Join screen and enter it.")} ${t(LOC.joinCodeSelectHint, "Click the code to select it, then press Ctrl+C.")}`
                         : `${t(LOC.relayUnavailableHint, "Steam is not available right now, so relay hosting cannot start. Use a direct connection instead.")}${relayReason ? ` (${relayReason})` : ""}`
                     : t(LOC.directHint, "Players connect to your address and port. Needs the port forwarded on your router.")}
+            </div>
+            {/* Direct hosting opens a port, so its port and password are set here
+                rather than only in Options or the in-game hub. */}
+            {!relay && (
+                <>
+                    <div style={styles.connectionSpacer} />
+                    <Field
+                        label={t(LOC.port, "Port")}
+                        value={hostPort}
+                        onChange={(v) => trigger(GROUP, "setHostPort", v)}
+                    />
+                    <Field
+                        label={t(LOC.password, "Password")}
+                        secret
+                        value={hostPassword}
+                        onChange={(v) => trigger(GROUP, "setHostPassword", v)}
+                    />
+                    {passwordMissing ? <div style={styles.hintWarning}>{passwordHint}</div> : null}
+                </>
+            )}
+            <div style={styles.hostOptions}>
+                <HostOption
+                    label={t(LOC.requireApproval, "Approve Players")}
+                    value={requireApproval}
+                    onChange={(value) => trigger(GROUP, "setRequireApproval", value)}
+                />
+                <div style={{ width: "28rem", flexShrink: 0 }} />
+                <HostOption
+                    label={t(LOC.simulationSync, "Simulation Sync")}
+                    value={simulationSync}
+                    onChange={(value) => trigger(GROUP, "setSimulationSync", value)}
+                />
+            </div>
+            <div style={styles.hostOptions}>
+                {!relay ? (
+                    <>
+                        <HostOption
+                            label={t(LOC.lanOnly, "LAN Only")}
+                            value={lanOnly}
+                            onChange={(value) => trigger(GROUP, "setLanOnly", value)}
+                        />
+                        <div style={{ width: "28rem", flexShrink: 0 }} />
+                    </>
+                ) : requireApproval ? (
+                    <>
+                        <HostOption
+                            label={t(LOC.autoApproveSteamFriends, "Auto-Approve Steam Friends")}
+                            value={autoApproveSteamFriends}
+                            onChange={(value) => trigger(GROUP, "setAutoApproveSteamFriends", value)}
+                        />
+                        <div style={{ width: "28rem", flexShrink: 0 }} />
+                    </>
+                ) : null}
+                <div style={styles.hostSetting}>
+                    <div style={styles.hostOptionLabel}>{t(LOC.policy, "Client Resyncs")}</div>
+                    <ResyncPolicyDropdown
+                        value={resyncPolicy}
+                        style={{ minWidth: "150rem" }}
+                        onChange={(value) => trigger(GROUP, "setResyncPolicy", value)}
+                    />
+                </div>
             </div>
         </div>
         </div>
@@ -538,6 +625,7 @@ export const MultiplayerScreenRenderer = ({ focusKey, className, onClose }: Nati
     const modsBlocked = useModsBlocked();
     const relaySupported = useValue(relaySupported$);
     const joinIsRelay = relaySupported && joinConnection !== CONNECTION_DIRECT;
+    const hostPasswordMissing = useHostPasswordMissing();
     const [view, setView] = useState<MultiplayerView>("choice");
 
     // Keep the multiplayer marker alive through the native exit animation. Once
@@ -700,14 +788,14 @@ export const MultiplayerScreenRenderer = ({ focusKey, className, onClose }: Nati
                 focusKey="load-world"
                 icon="Media/Glyphs/Progress.svg"
                 label={t(LOC.loadWorld, "Load World")}
-                disabled={!hasSavedGame || inSession || modsBlocked}
+                disabled={!hasSavedGame || inSession || modsBlocked || hostPasswordMissing}
                 onSelect={() => openHostWorld("hostLoadWorld")}
             />
             <ChoiceTile
                 focusKey="create-world"
                 icon="Media/Glyphs/Plus.svg"
                 label={t(LOC.createWorld, "Create World")}
-                disabled={inSession || modsBlocked}
+                disabled={inSession || modsBlocked || hostPasswordMissing}
                 onSelect={() => openHostWorld("hostCreateWorld")}
             />
         </ChoiceScreen>

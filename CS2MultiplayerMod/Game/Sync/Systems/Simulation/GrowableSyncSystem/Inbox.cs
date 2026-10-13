@@ -29,8 +29,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     message.OriginPlayerId == _session.LocalPlayerId) return;
                 if (_session.Role == SessionRole.Host)
                 {
-                    // Local echoes are excluded above. Retain visibility of foreign authors
-                    // at ingress without queuing them or producing a warning per packet.
+                    // Count foreign authors without queuing them or warning per packet.
                     long foreignCount;
                     int now = System.Environment.TickCount;
                     lock (_authorityGate)

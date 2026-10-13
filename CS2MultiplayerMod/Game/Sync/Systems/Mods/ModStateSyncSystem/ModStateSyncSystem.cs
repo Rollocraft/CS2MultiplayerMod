@@ -15,19 +15,11 @@ using Unity.Entities;
 namespace CS2MultiplayerMod.Game.Sync.Systems.Mods
 {
     /// <summary>
-    /// Replicates the state other mods keep in the world, without knowing which mods are installed.
-    ///
-    /// Everything here is decided by the kind of state, never by a mod's name. A type is replicated
-    /// because the runtime would write it to a savegame; an entity is found again because it is a
-    /// place in the city; a change is noticed because the engine says that chunk was written to.
-    /// One mod's lane connections and another's road speeds travel through the same mechanism for
-    /// the same reason, and a mod nobody has written yet will travel through it too.
-    ///
-    /// A joining player needs nothing from this system: durable state is in the savegame they
-    /// download, by the same definition that puts it on this wire. What this covers is the rest of
-    /// the session - the edits made after that point, in both directions.
+    /// Replicates other mods' world state without knowing which mods exist: a type travels because the
+    /// runtime saves it, an entity is found because it is a place in the city, and a change is noticed
+    /// because its chunk was written. Joiners get the state from the savegame; this covers later edits.
     /// </summary>
-    public partial class ModStateSyncSystem : GameSystemBase
+    public partial class ModStateSyncSystem : GameSystemBase, IRealizeStage
     {
         private readonly ConcurrentQueue<SimulationCommandMessage> _incomingState =
             new ConcurrentQueue<SimulationCommandMessage>();
@@ -47,12 +39,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Mods
         /// <summary>The closure hash last seen for a carrier, keyed the portable way.</summary>
         private readonly Dictionary<string, ulong> _shadow =
             new Dictionary<string, ulong>(System.StringComparer.Ordinal);
+        private readonly HashSet<Entity> _roadSpeedActive = new HashSet<Entity>();
 
-        /// <summary>
-        /// Carriers this machine has published state for, so that one going empty can be noticed.
-        /// A query on a type cannot report that the type was removed - the entity simply stops
-        /// matching - so the only way a removal is ever seen is by remembering what was there.
-        /// </summary>
+        /// <summary>Carriers we published state for: a removal can only be seen by remembering it.</summary>
         private readonly Dictionary<string, ModEntityRef> _knownCarriers =
             new Dictionary<string, ModEntityRef>(System.StringComparer.Ordinal);
 
@@ -100,16 +89,14 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Mods
             while (_incomingState.TryDequeue(out ignored)) { }
             while (_incomingTable.TryDequeue(out ignored)) { }
 
-            // A world replacement invalidates every portable key at once: the carriers they named
-            // belong to a world that is gone.
             _shadow.Clear();
+            _roadSpeedActive.Clear();
             _knownCarriers.Clear();
             _sweepOrder.Clear();
             _sweepCursor = 0;
             _held.Clear();
             _awaitingSettle.Clear();
-            Entity pending;
-            while (_pendingCandidates.TryDequeue(out pending)) { }
+            while (_pendingCandidates.TryDequeue(out Entity pending)) { }
             _queuedCandidates.Clear();
             _candidates.Clear();
             _lastOrderVersion = 0;
@@ -118,8 +105,6 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Mods
             _tablePublished = false;
             _binding = null;
 
-            // A replaced world is a fresh subject: a condition that was worth saying once about the
-            // old one is worth saying once about this one.
             _reportedOnce.Clear();
             _saidWaitingForTable = false;
             _lastReceivedTable = null;
@@ -153,11 +138,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Mods
             }
         }
 
-        /// <summary>
-        /// Called by <see cref="Systems.SyncRealizeSystem"/> during ToolUpdate. Arriving state is
-        /// written there for the same reason every other replicated edit is: it is the phase where
-        /// a structural change still reaches the systems that have to see it this frame.
-        /// </summary>
+        /// <summary>ToolUpdate, so structural changes reach the systems that must see them this frame.</summary>
         public void RealizePending()
         {
             MultiplayerService service = Mod.Service;
@@ -170,17 +151,10 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Mods
             }
         }
 
-        /// <summary>
-        /// Finds every third-party type in the world once per session. Deliberately not in
-        /// OnCreate: mods register their types as they load, and this system is created early.
-        /// </summary>
+        /// <summary>Once per session, not in OnCreate: mods register their types as they load.</summary>
         private void EnsureCatalog()
         {
-            // A player can switch a mod on while the game is running - it takes effect without a
-            // restart - and its components only enter the engine's registry when its own systems
-            // first touch them. A catalogue taken before that moment saw a world without the mod,
-            // and would go on replicating nothing for the rest of the session while looking
-            // perfectly healthy. The registry's size is the cheap signal that this happened.
+            // A mod enabled at runtime registers its types when first used; the registry size is the signal.
             if (_catalog != null && TypeManager.GetTypeCount() == _catalog.TypeCountAtBuild) return;
 
             ModComponentCatalog previous = _catalog;
@@ -188,8 +162,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Mods
 
             _catalog = ModComponentCatalog.Build();
 
-            // The count moved but nothing this session replicates did - a type registered somewhere
-            // else in the game. Keep the table and every recorded hash.
+            // Nothing replicated changed: keep the table and hashes.
             if (previous != null && _catalog.ReplicatesSameAs(previous))
             {
                 _catalog = previous;
@@ -202,8 +175,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Mods
 
             if (previous != null)
             {
-                // Type indices are positions in the table, so everything built on the old one goes:
-                // the query and its handles, the binding, and every recorded hash.
+                // Indices are table positions: rebuild the query, binding and hashes.
                 _queryBuilt = false;
                 _typeHandles = null;
                 _capture = null;
@@ -211,6 +183,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Mods
                 _binding = null;
                 _tablePublished = false;
                 _shadow.Clear();
+                _roadSpeedActive.Clear();
                 _knownCarriers.Clear();
                 _sweepOrder.Clear();
                 _sweepCursor = 0;
@@ -237,18 +210,14 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Mods
                 SyncLog.Detail(LogTopic.ModSync, "  excluded: " + _catalog.Exclusions[i]);
         }
 
-        /// <summary>
-        /// Agrees the type table. The host owns the order and everyone binds their own types to it,
-        /// so a payload can never be read against a different type than it was written from.
-        /// </summary>
+        /// <summary>The host owns the type order and everyone binds to it.</summary>
         private void NegotiateTable(MultiplayerSession session)
         {
             if (session.Role == SessionRole.Host)
             {
                 if (_binding == null) _binding = ModTypeBinding.ForHost(_catalog);
 
-                // Republished whenever somebody joins, because the table is what makes every
-                // later transaction readable and a joiner has not seen the first one.
+                // Republished on every join: a joiner has not seen it.
                 if (_tablePublished && !_observer.TakePeerJoined()) return;
                 _tablePublished = true;
 
@@ -259,9 +228,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Mods
                 return;
             }
 
-            // The host only re-sends on a join or when its own table changed. A client that enabled
-            // a mod after the table arrived would otherwise wait for a resend that never comes, so
-            // it rebinds against the one it already has.
+            // A client that enabled a mod after the table arrived rebinds against it.
             if (_binding == null && _lastReceivedTable != null)
             {
                 _binding = ModTypeBinding.ForClient(_catalog, _lastReceivedTable);
@@ -271,8 +238,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Mods
                 _shadow.Clear();
             }
 
-            SimulationCommandMessage message;
-            while (_incomingTable.TryDequeue(out message))
+            while (_incomingTable.TryDequeue(out SimulationCommandMessage message))
             {
                 if (message.OriginPlayerId == session.LocalPlayerId) continue;
 
@@ -295,17 +261,11 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Mods
                 for (int i = 0; i < _binding.Missing.Count; i++)
                     SyncLog.Warn(LogTopic.ModSync, "  missing: " + _binding.Missing[i]);
 
-                // The world was just replaced or this is a fresh join: nothing that was captured
-                // against an older table can be compared against this one.
                 _shadow.Clear();
             }
         }
 
-        /// <summary>
-        /// Says something the first time it is true and never again. These are conditions that hold
-        /// for a whole session once they hold at all - a type that is not in the table, an entity
-        /// shape nothing can describe - so repeating them per frame would bury everything else.
-        /// </summary>
+        /// <summary>Reports a session-long condition once.</summary>
         private void ReportOnce(string key, string message)
         {
             if (!_reportedOnce.Add(key)) return;
@@ -317,8 +277,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Mods
             if (now - _lastReportMs < 30000) return;
             _lastReportMs = now;
 
-            // Silence while idle is the point - a line every 30 s saying nothing happened is what
-            // makes the lines that matter unreadable.
+            // Silent while idle.
             if (_capturedTransactions == 0 && _appliedTransactions == 0 && _held.Count == 0 &&
                 _unresolvedGaveUp == 0 && _rejectedClosures == 0 && _noCarrier == 0) return;
 
@@ -337,10 +296,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Mods
             _noCarrier = 0;
         }
 
-        /// <summary>
-        /// Funnels both mod-sync commands and remembers that somebody joined, which is the moment
-        /// the host has to say again what this session replicates.
-        /// </summary>
+        /// <summary>Both mod-sync commands, plus a join signal: the host must resend its table.</summary>
         private sealed class ModSyncObserver : SessionObserver
         {
             private readonly ModStateSyncSystem _owner;
@@ -357,16 +313,10 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Mods
                 _table = table;
             }
 
-            public override void OnPeerJoined(Peer peer)
-            {
-                System.Threading.Interlocked.Exchange(ref _peerJoined, 1);
-            }
+            public override void OnPeerJoined(Peer peer) => System.Threading.Interlocked.Exchange(ref _peerJoined, 1);
 
             /// <summary>Reads and clears the flag - the network thread sets it, this reads it.</summary>
-            public bool TakePeerJoined()
-            {
-                return System.Threading.Interlocked.Exchange(ref _peerJoined, 0) != 0;
-            }
+            public bool TakePeerJoined() => System.Threading.Interlocked.Exchange(ref _peerJoined, 0) != 0;
 
             public override void OnCommandReceived(SimulationCommandMessage command)
             {

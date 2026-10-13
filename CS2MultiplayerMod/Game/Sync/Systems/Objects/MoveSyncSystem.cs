@@ -1,5 +1,4 @@
-using System.Collections.Concurrent;
-using Game;
+using System.Collections.Generic;
 using Game.Buildings;
 using Game.Common;
 using Game.Objects;
@@ -21,19 +20,28 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
     /// anything with owned geometry, a transport lifecycle, or a net attachment is re-derived on the
     /// receiver by the game's own definition generator from the same inputs the move tool had.
     /// </summary>
-    public partial class MoveSyncSystem : GameSystemBase
+    public partial class MoveSyncSystem : CommandSyncSystem, IRealizeStage
     {
         private const long MoveRetryWindowMs = 10000;
-        public bool DeferForTerrain;
-        private readonly ConcurrentQueue<SimulationCommandMessage> _incoming =
-            new ConcurrentQueue<SimulationCommandMessage>();
         private readonly ReplicationGuard _guard = new ReplicationGuard();
 
         private PrefabSystem _prefabSystem;
         private PrefabIndex _prefabIndex;
         private EntityQuery _movedObjects;
+        private EntityQuery _directObjects;
+        private EntityQuery _updatedDirectObjects;
+        private EntityQuery _createdDirectObjects;
+        private ToolSystem _toolSystem;
+        private struct DirectBaseline
+        {
+            public Transform Transform;
+            public float Elevation;
+        }
+        private readonly Dictionary<Entity, DirectBaseline> _directBaseline =
+            new Dictionary<Entity, DirectBaseline>();
+        private readonly HashSet<Entity> _pendingMoveItObjects = new HashSet<Entity>();
+        private bool _directSeeded;
         private ObjectSearch _objectSearch;
-        private CommandObserver _observer;
         private bool _hasBlockedMove;
         private SimulationCommandMessage _blockedMove;
         private long _blockedMoveDeadline;
@@ -43,38 +51,47 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             base.OnCreate();
 
             _prefabSystem = World.GetOrCreateSystemManaged<PrefabSystem>();
+            _toolSystem = World.GetOrCreateSystemManaged<ToolSystem>();
             _prefabIndex = new PrefabIndex(_prefabSystem, GetEntityQuery(ComponentType.ReadOnly<PrefabData>()));
 
-            // Top-level objects relocated this frame. Updated narrows MovedLocation (which
-            // can persist) to the frame the move actually happened.
+            // Updated narrows the persistent MovedLocation to the frame of the move.
             _movedObjects = GetEntityQuery(new EntityQueryDesc
             {
                 All = SyncQuery.ReadOnly<Updated, MovedLocation, PrefabRef, Transform>(),
                 None = SyncQuery.ReadOnly<Temp, Owner, Deleted, Created>(),
             });
 
-            // A blocked move re-runs FindAt every frame until its retry window closes; that lookup
-            // goes through the game's object search tree, not a query over the object domain.
+            _directObjects = GetEntityQuery(new EntityQueryDesc
+            {
+                All = SyncQuery.ReadOnly<PrefabRef, Transform>(),
+                None = SyncQuery.ReadOnly<Temp, Owner, Deleted>(),
+            });
+            _updatedDirectObjects = GetEntityQuery(new EntityQueryDesc
+            {
+                All = SyncQuery.ReadOnly<Updated, PrefabRef, Transform>(),
+                None = SyncQuery.ReadOnly<Temp, Owner, Deleted, Created>(),
+            });
+            _createdDirectObjects = GetEntityQuery(new EntityQueryDesc
+            {
+                All = SyncQuery.ReadOnly<Created, PrefabRef, Transform>(),
+                None = SyncQuery.ReadOnly<Temp, Owner, Deleted>(),
+            });
+
             _objectSearch = new ObjectSearch(
                 World.GetOrCreateSystemManaged<global::Game.Objects.SearchSystem>());
 
-            _observer = SyncObserverBinding.Bind(
-                () => new CommandObserver(_incoming, ObjectMoveCommand.Id), DrainQueue);
+            ListenFor(new[] { ObjectMoveCommand.Id });
         }
 
-        protected override void OnDestroy()
-        {
-            SyncObserverBinding.Unbind(_observer, DrainQueue);
-            base.OnDestroy();
-        }
-
-        private void DrainQueue()
+        protected override void DrainQueue()
         {
             SyncInbox.Clear(_incoming);
             _hasBlockedMove = false;
             _blockedMove = null;
             _blockedMoveDeadline = 0;
-            DeferForTerrain = false;
+            _directBaseline.Clear();
+            _pendingMoveItObjects.Clear();
+            _directSeeded = false;
         }
 
         protected override void OnUpdate()
@@ -89,7 +106,10 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
                 long now = service.NowMs;
                 _guard.Prune(now);
+                if (!_directSeeded) SeedDirectObjects();
+                SeedCreatedDirectObjects();
                 CaptureMoves(session, now);
+                CaptureMoveItObjects(session, now);
             }
         }
 
@@ -101,7 +121,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
             MultiplayerSession session = service.Session;
             if (!service.GameplaySyncReady) return;
-            if (DeferForTerrain) return;
+            if (RealizeGate.TerrainBacklog) return;
             Net.NetSyncSystem coordinator = World.GetOrCreateSystemManaged<Net.NetSyncSystem>();
             if (!coordinator.CanBuildDefinitions) return;
             RealizeIncoming(session, service.NowMs);
@@ -131,12 +151,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     if (math.distancesq(oldPos, transform.m_Position) < 0.01f) continue;
                     if (_guard.Consume(MoveKey(name, transform.m_Position), now)) continue;
 
-                    // A building's lot, driveways and installed upgrades move with it, and the move
-                    // tool carries them as explicit definitions rather than re-deriving them. The
-                    // receiver reproduces that by re-running the game's own generator over the same
-                    // inputs, so the whole owned graph follows from prefab + old position + new
-                    // transform + snapped parent - no need to ship the sender's several-hundred-
-                    // definition batch.
+                    // The owned graph follows from prefab, old position, new transform and snapped parent: the receiver
+                    // re-runs the game's generator over them.
                     float elevation = EntityManager.HasComponent<Elevation>(entity)
                         ? EntityManager.GetComponentData<Elevation>(entity).m_Elevation
                         : 0f;
@@ -170,10 +186,140 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             }
         }
 
+        private DirectBaseline DirectState(Entity entity) => new DirectBaseline
+        {
+            Transform = EntityManager.GetComponentData<Transform>(entity),
+            Elevation = EntityManager.HasComponent<Elevation>(entity)
+                ? EntityManager.GetComponentData<Elevation>(entity).m_Elevation : 0f,
+        };
+
+        private void SeedDirectObjects()
+        {
+            NativeArray<Entity> entities = _directObjects.ToEntityArray(Allocator.Temp);
+            try
+            {
+                for (int i = 0; i < entities.Length; i++)
+                    _directBaseline[entities[i]] = DirectState(entities[i]);
+            }
+            finally { entities.Dispose(); }
+            _directSeeded = true;
+        }
+
+        private void SeedCreatedDirectObjects()
+        {
+            if (_createdDirectObjects.IsEmptyIgnoreFilter) return;
+            NativeArray<Entity> entities = _createdDirectObjects.ToEntityArray(Allocator.Temp);
+            try
+            {
+                for (int i = 0; i < entities.Length; i++)
+                    if (!_directBaseline.ContainsKey(entities[i]))
+                        _directBaseline[entities[i]] = DirectState(entities[i]);
+            }
+            finally { entities.Dispose(); }
+        }
+
+        private bool IsMoveItTool() => _toolSystem != null &&
+            _toolSystem.activeTool != null &&
+            _toolSystem.activeTool.GetType().FullName == "MoveIt.Tool.MIT";
+
+        private bool IsMoveItDragging()
+        {
+            if (!IsMoveItTool()) return false;
+            var property = _toolSystem.activeTool.GetType().GetProperty("MITState");
+            if (property == null) return true;
+            object value = property.GetValue(_toolSystem.activeTool, null);
+            return value == null || value.ToString() == "ApplyButtonHeld" ||
+                   value.ToString() == "SecondaryButtonHeld";
+        }
+
+        private void CaptureMoveItObjects(MultiplayerSession session, long now)
+        {
+            bool moveIt = IsMoveItTool();
+            if (moveIt && !_updatedDirectObjects.IsEmptyIgnoreFilter)
+            {
+                NativeArray<Entity> changed = _updatedDirectObjects.ToEntityArray(Allocator.Temp);
+                try
+                {
+                    for (int i = 0; i < changed.Length; i++)
+                        if (_directBaseline.ContainsKey(changed[i]))
+                            _pendingMoveItObjects.Add(changed[i]);
+                }
+                finally { changed.Dispose(); }
+            }
+            if (IsMoveItDragging()) return;
+            if (_pendingMoveItObjects.Count == 0)
+            {
+                if (!moveIt) AdoptUpdatedDirectObjects();
+                return;
+            }
+
+            BuildSyncSystem buildSync = World.GetOrCreateSystemManaged<BuildSyncSystem>();
+            if (buildSync.NativeLifecycleCapturedThisFrame ||
+                World.GetOrCreateSystemManaged<Net.NetSyncSystem>()
+                    .DidCommitObjectGraphThisFrame) return;
+
+            foreach (Entity entity in _pendingMoveItObjects)
+            {
+                if (!_directBaseline.TryGetValue(entity, out DirectBaseline before) ||
+                    !EntityManager.Exists(entity) || EntityManager.HasComponent<Deleted>(entity) ||
+                    !EntityManager.HasComponent<Transform>(entity) ||
+                    !EntityManager.HasComponent<PrefabRef>(entity)) continue;
+                DirectBaseline after = DirectState(entity);
+                _directBaseline[entity] = after;
+                if (math.all(before.Transform.m_Position == after.Transform.m_Position) &&
+                    math.all(before.Transform.m_Rotation.value == after.Transform.m_Rotation.value) &&
+                    before.Elevation == after.Elevation) continue;
+
+                Entity prefab = EntityManager.GetComponentData<PrefabRef>(entity).m_Prefab;
+                string name = _prefabSystem.GetPrefabName(prefab);
+                if (string.IsNullOrEmpty(name)) continue;
+                if (_guard.Consume(MoveKey(name, after.Transform.m_Position), now)) continue;
+
+                var command = new ObjectMoveCommand
+                {
+                    PrefabName = name,
+                    OldX = before.Transform.m_Position.x,
+                    OldY = before.Transform.m_Position.y,
+                    OldZ = before.Transform.m_Position.z,
+                    NewX = after.Transform.m_Position.x,
+                    NewY = after.Transform.m_Position.y,
+                    NewZ = after.Transform.m_Position.z,
+                    RotX = after.Transform.m_Rotation.value.x,
+                    RotY = after.Transform.m_Rotation.value.y,
+                    RotZ = after.Transform.m_Rotation.value.z,
+                    RotW = after.Transform.m_Rotation.value.w,
+                    Elevation = after.Elevation,
+                };
+                CaptureFinalEntityIdentity(command, entity, prefab, before.Transform.m_Position);
+                if (HasOwnedLifecycle(entity, prefab))
+                {
+                    // Move It changes dependants directly; re-deriving with a guessed seed would differ.
+                    SyncLog.Warn(LogTopic.Buildings, "MoveSync: Move It changed owned object '" +
+                        name + "'; no portable dependent-graph transaction is available.");
+                    continue;
+                }
+                session.SendCommand(0, ObjectMoveCommand.Id, command.Encode());
+                SyncLog.Detail(LogTopic.Buildings, "MoveSync captured Move It transform of '" +
+                    name + "'.");
+            }
+            _pendingMoveItObjects.Clear();
+            if (!moveIt) AdoptUpdatedDirectObjects();
+        }
+
+        private void AdoptUpdatedDirectObjects()
+        {
+            if (_updatedDirectObjects.IsEmptyIgnoreFilter) return;
+            NativeArray<Entity> entities = _updatedDirectObjects.ToEntityArray(Allocator.Temp);
+            try
+            {
+                for (int i = 0; i < entities.Length; i++)
+                    _directBaseline[entities[i]] = DirectState(entities[i]);
+            }
+            finally { entities.Dispose(); }
+        }
+
         /// <summary>
-        /// Publish a relocation observed in the applying tool's own definitions (see
-        /// <c>BuildSyncSystem.CaptureLocalRelocationForApply</c>). That is the reliable signal: the
-        /// apply pass records no "came from" marker on the moved entity itself.
+        /// Publishes a relocation seen in the applying tool's definitions; the moved entity keeps no marker.
         /// </summary>
         public void PublishLocalRelocation(Entity prefab, Entity original, float3 oldPosition,
             float3 newPosition, quaternion rotation, float elevation, uint toolSeed,
@@ -199,8 +345,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             CaptureOriginalIdentity(command, original);
             if (!CaptureOwnerIdentity(command, original))
             {
-                // An owned upgrade is found on the peer through its host. Without that identity the
-                // move would name an object the peer cannot look up, so drop it here instead.
+                // An owned upgrade is found on the peer through its host; without it, drop the move.
                 SyncLog.Warn(LogTopic.Buildings, "MoveSync: relocation of owned '" + name +
                     "' could not describe its host building; skipping this move.");
                 return;
@@ -213,8 +358,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     "relocation destination attachment could not be encoded");
                 return;
             }
-            // Also stops the MovedLocation sweep below from sending this same move again. Mark only
-            // once encoding succeeded so the final-entity fallback remains available on failure.
+            // Only once encoded, so the fallback stays available on failure.
             _guard.Mark(MoveKey(name, newPosition), service.NowMs);
             service.Session.SendCommand(0, ObjectMoveCommand.Id, command.Encode());
             SyncLog.Detail(LogTopic.Buildings, "MoveSync captured relocation of '" + name +
@@ -228,8 +372,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 if (!TryRealizeMove(_blockedMove, now))
                 {
                     if (now < _blockedMoveDeadline) return;
-                    // The object to relocate never arrived here. Drop the relocation rather than
-                    // loop the whole world through recovery (which re-failed every reload).
+                    // The object never arrived here; drop the move rather than loop through recovery.
                     SyncLog.Warn(LogTopic.Buildings,
                         "MoveSync: relocation target did not resolve within the retry " +
                         "window; dropping this move (use /sync if the city drifts).");
@@ -241,8 +384,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 _blockedMove = null;
             }
 
-            SimulationCommandMessage message;
-            while (_incoming.TryDequeue(out message))
+            while (_incoming.TryDequeue(out SimulationCommandMessage message))
             {
                 if (message.OriginPlayerId == session.LocalPlayerId) continue;
 
@@ -257,40 +399,30 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
         private bool TryRealizeMove(SimulationCommandMessage message, long now)
         {
-            ObjectMoveCommand command;
-            try { command = ObjectMoveCommand.Decode(message.Body); }
-            catch (System.Exception ex)
-            {
-                // A malformed peer command is not local corruption; drop it, do not resync.
-                SyncLog.Warn(LogTopic.Buildings, "MoveSync: dropping malformed command: " +
-                    ex.Message);
+            if (!CommandDecode.TryDecode(message, ObjectMoveCommand.Decode, LogTopic.Buildings,
+                    "MoveSync", out ObjectMoveCommand command))
                 return true;
-            }
 
-            Entity prefab;
             if (!_prefabIndex.TryResolve(command.PrefabName,
                     candidate => EntityManager.HasComponent<ObjectData>(candidate),
-                    out prefab)) return false;
+                    out Entity prefab)) return false;
 
-            // An owned relocation is anchored on its host: the upgrade may not have realized here
-            // yet, and once it has, its host is what tells two identical upgrades apart.
+            // Anchored on its host, which also tells identical upgrades apart.
             Entity host = Entity.Null;
             if (command.HasOwnerIdentity && !TryResolveOwner(command, out host)) return false;
 
             var oldPos = new float3(command.OldX, command.OldY, command.OldZ);
             var newPos = new float3(command.NewX, command.NewY, command.NewZ);
             BuildSyncSystem buildSync = World.GetOrCreateSystemManaged<BuildSyncSystem>();
-            Entity sourceParent;
             if (!TryResolveAttachment(buildSync, command.SourceAttachmentKnown,
                     command.SourceAttachKind,
                     new float3(command.SourceAttachX, command.SourceAttachY,
-                        command.SourceAttachZ), out sourceParent))
+                        command.SourceAttachZ), out Entity sourceParent))
                 return false;
-            Entity destinationParent;
             if (!TryResolveAttachment(buildSync, command.DestinationAttachmentKnown,
                     command.DestinationAttachKind,
                     new float3(command.DestinationAttachX, command.DestinationAttachY,
-                        command.DestinationAttachZ), out destinationParent))
+                        command.DestinationAttachZ), out Entity destinationParent))
                 return false;
 
             Entity original = FindAt(prefab, oldPos, command.HasOriginalRandomSeed,
@@ -319,8 +451,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
             if (requiresCompleteLifecycle)
             {
-                // Native derivation is required for small attached objects such as mailboxes too:
-                // their route lanes and PathTargetMoved event are part of the normal transaction.
+                // Small attached objects need native derivation too: route lanes and PathTargetMoved.
                 SimulationCommandMessage retained = message;
                 BuildSyncSystem.NativeDeriveResult derived = buildSync.TryDeriveObjectTransaction(
                     prefab, Entity.Null, original, destinationParent, newPos, rotation,
@@ -338,8 +469,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 }
                 if (derived == BuildSyncSystem.NativeDeriveResult.Failed) return true;
 
-                // A root-only compatibility move would strand an owned graph or bypass attachment /
-                // transport-stop lifecycle events, so unsupported native derivation is a hard stop.
+                // A root-only move would strand the owned graph or skip lifecycle events.
                 SyncLog.Warn(LogTopic.Buildings, "MoveSync: relocation of '" + command.PrefabName +
                     "' needs the game's object lifecycle generator; dropping this move.");
                 return true;
@@ -348,9 +478,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             _guard.Mark(MoveKey(command.PrefabName, newPos), now);
             try
             {
-                    // The move tool's commit definition: m_Original points at the existing
-                    // entity, Relocate tells GenerateObjectsSystem to move it instead of
-                    // spawning a copy.
+                    // The move tool's commit definition: Relocate moves m_Original instead of spawning a copy.
                     Entity definition = EntityManager.CreateEntity();
                     EntityManager.AddComponentData(definition, new CreationDefinition
                     {
@@ -382,8 +510,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             }
             catch (System.Exception ex)
             {
-                // The definition was rejected before commit; drop this move rather than freeze
-                // the world (the placer can /sync if the object looks out of place).
+                // Rejected before commit; drop it rather than freeze the world.
                 SyncLog.Error(LogTopic.Buildings, "MoveSync realize FAILED for '" +
                     command.PrefabName + "'; dropping this move: " + ex);
             }
@@ -397,9 +524,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             Entity bestSeedMatch = Entity.Null;
             float bestDistanceSq = float.MaxValue;
             float bestSeedDistanceSq = float.MaxValue;
-            // The distance test below rejects past 2 m, so the tree only has to be asked about
-            // that neighbourhood. The tree carries owned sub-objects the old query excluded, so
-            // the Owner/Edge/liveness filtering that query did moves into the loop.
+            // Only the 2 m neighbourhood; the tree includes owned sub-objects, filtered in the loop.
             var candidates = new NativeList<Entity>(16, Allocator.Temp);
             try
             {
@@ -435,8 +560,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             {
                 candidates.Dispose();
             }
-            // Seed is a strong discriminator for adjacent identical props, but position remains a
-            // compatibility fallback for old/save-created entities whose seed drifted historically.
+            // Seed distinguishes adjacent identical props; position is the fallback.
             return bestSeedMatch != Entity.Null ? bestSeedMatch : best;
         }
 
@@ -444,9 +568,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         private const float FindRadius = 2f;
 
         /// <summary>
-        /// The live objects a relocation may name. Free-standing moves accept top-level objects
-        /// only; an owned move accepts exactly the objects the named host owns, which is what keeps
-        /// a neighbouring building's identical upgrade out of the candidate set.
+        /// Free-standing moves accept top-level objects; owned moves only what the named host owns.
         /// </summary>
         private bool IsMoveCandidate(Entity entity, Entity expectedOwner)
         {
@@ -467,17 +589,13 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                    EntityManager.HasComponent<Transform>(entity);
         }
 
-        /// <summary>
-        /// Find the host named by an owned relocation. False means it is not here (yet), which the
-        /// caller treats as "retry", not as a bad command.
-        /// </summary>
+        /// <summary>False means not here yet: retry.</summary>
         private bool TryResolveOwner(ObjectMoveCommand command, out Entity owner)
         {
             owner = Entity.Null;
-            Entity ownerPrefab;
             if (!_prefabIndex.TryResolve(command.OwnerPrefabName,
                     candidate => EntityManager.HasComponent<ObjectData>(candidate),
-                    out ownerPrefab)) return false;
+                    out Entity ownerPrefab)) return false;
 
             var ownerPosition = new float3(command.OwnerX, command.OwnerY, command.OwnerZ);
             var candidates = new NativeList<Entity>(16, Allocator.Temp);
@@ -523,9 +641,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         private bool RequiresCompleteLifecycle(Entity entity, Entity prefab,
             ObjectMoveCommand command)
         {
-            // Moving an installed upgrade re-commits its host, re-lays the host's sub-nets around
-            // the vacated and newly covered ground, and re-derives the host's road junction. A
-            // root-only move would slide the upgrade off its driveways.
+            // Moving an upgrade re-commits its host and re-lays its sub-nets; a root-only move strands it.
             return command.HasOwnerIdentity ||
                    HasOwnedLifecycle(entity, prefab) ||
                    (command.SourceAttachmentKnown &&
@@ -554,11 +670,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         }
 
         /// <summary>
-        /// Describe the host of an owned relocation. Relocating an installed upgrade or sub-building
-        /// from a building's upgrade list is the base game's only relocation, and it moves an owned
-        /// entity: the peer finds it through its host, since a free-standing lookup by position can
-        /// answer with a neighbouring building's identical upgrade. False means the object is owned
-        /// but its host cannot be described - the caller must not publish a move nobody can resolve.
+        /// Describes the host of an owned relocation (the base game's only kind), so the peer does not
+        /// match a neighbour's identical upgrade. False: owned but undescribable, so nothing is published.
         /// </summary>
         private bool CaptureOwnerIdentity(ObjectMoveCommand command, Entity original)
         {
@@ -600,9 +713,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 return;
             }
 
-            bool isNode;
-            float3 anchor;
-            if (!NetAttachment.TryGetAttachment(EntityManager, original, out isNode, out anchor))
+            if (!NetAttachment.TryGetAttachment(EntityManager, original, out bool isNode, out float3 anchor))
                 return;
             SetSourceAttachment(command, isNode, anchor);
         }
@@ -618,10 +729,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 return true;
             }
 
-            bool isNode;
-            float3 anchor;
             if (!NetAttachment.TryDescribeParent(EntityManager, parent, newPosition,
-                    out isNode, out anchor))
+                    out bool isNode, out float3 anchor))
             {
                 command.DestinationAttachmentKnown = false;
                 return false;
@@ -636,8 +745,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             CaptureOriginalIdentity(command, original);
             if (!EntityManager.HasComponent<global::Game.Objects.Attached>(original))
             {
-                // For complex objects the final entity does not retain the snapped road control
-                // point, so pretending "None" would detach it. Their pre-apply capture supplies it.
+                // Complex objects lose the snapped road on the final entity; pre-apply capture supplies it.
                 if (!HasOwnedLifecycle(original, prefab))
                 {
                     command.SourceAttachmentKnown = true;
@@ -690,6 +798,5 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
         private static string MoveKey(string prefabName, float3 newPosition) =>
             "mov|" + ReplicationGuard.Key(prefabName, newPosition);
-
     }
 }

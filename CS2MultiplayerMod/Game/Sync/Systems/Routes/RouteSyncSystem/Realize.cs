@@ -1,10 +1,7 @@
 using System;
 using System.Collections.Generic;
 using Game.Common;
-using Game.Prefabs;
-using Game.Routes;
 using Game.Tools;
-using Unity.Collections;
 using Unity.Entities;
 using Unity.Mathematics;
 using CS2MultiplayerMod.Core.Diagnostics;
@@ -14,17 +11,9 @@ using CS2MultiplayerMod.Game.Sync.Infrastructure;
 
 namespace CS2MultiplayerMod.Game.Sync.Systems
 {
-    // Realizing a peer's route command: create, update or delete a transport line by driving the
-    // game's own route tool with the waypoints the sender used.
-    //
-    // Resolving those waypoints against local stops is in RealizeConnections.cs, finding the route
-    // a command refers to in RealizeMatch.cs, and the commit that finishes a create or update in
-    // RealizeCommit.cs.
     public partial class RouteSyncSystem
     {
-        // Horizontal identity stays tight, because distinct stops of one prefab are metres apart.
-        // The vertical band is wide: two machines can hold the same stop at different heights after
-        // independent terrain grading, and a stacked platform is still separated horizontally.
+        // Tight horizontally (stops are metres apart), wide vertically (independent terrain grading).
         private const float StopMatchRadiusSq = 16f;
         private const float StopMatchHeight = 10f;
         private const float OwnerMatchRadiusSq = 64f;
@@ -45,8 +34,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             if (_netSync == null || !_netSync.CanBuildDefinitions)
                 return RealizeResult.Retry;
 
-            Entity prefab;
-            if (!_prefabIndex.TryResolve(command.PrefabName, out prefab))
+            if (!_prefabIndex.TryResolve(command.PrefabName, out Entity prefab))
             {
                 SyncInbox.RequestResync(CS2MultiplayerMod.Game.Diagnostics.ResyncReport
                     .Create("unknown route prefab during creation", "route",
@@ -83,14 +71,12 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                         command.RouteNumber + " for '" + command.PrefabName + "'.");
                     return RealizeResult.Rejected;
                 }
-                // Two distinct lines may legitimately use the same stops. Serialize that shape so
-                // the newly generated route can be distinguished from the already-finalized one.
+                // Two lines may share stops; serialize so the new route is distinguishable.
                 if (sameShape) return RealizeResult.Retry;
             }
 
-            bool numberConflict;
             Entity existing = FindExistingCreate(prefab, command.RouteNumber,
-                command.Waypoints, out numberConflict);
+                command.Waypoints, out bool numberConflict);
             if (numberConflict)
             {
                 SyncInbox.RequestResync(CS2MultiplayerMod.Game.Diagnostics.ResyncReport
@@ -122,10 +108,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 return RealizeResult.Applied;
             }
 
-            Entity[] connections;
-            float3[] positions;
-            if (!TryResolveConnections(prefab, command.Waypoints, out connections,
-                    out positions, out _lastRealizeFailure))
+            if (!TryResolveConnections(prefab, command.Waypoints, out Entity[] connections,
+                    out float3[] positions, out _lastRealizeFailure))
                 return RealizeResult.Retry;
             if (_pendingCreateMetadata.Count >= MaxPendingCommands)
                 return RealizeResult.Retry;
@@ -209,8 +193,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
         private RealizeResult RealizeUpdate(RouteUpdateCommand command, int originPlayerId, long now)
         {
-            Entity prefab;
-            if (!_prefabIndex.TryResolve(command.PrefabName, out prefab))
+            if (!_prefabIndex.TryResolve(command.PrefabName, out Entity prefab))
             {
                 SyncInbox.RequestResync(CS2MultiplayerMod.Game.Diagnostics.ResyncReport
                     .Create("unknown route prefab during update", "route",
@@ -224,10 +207,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             if (!ValidateRouteContract(prefab, command.Waypoints, command.PrefabName))
                 return RealizeResult.Rejected;
 
-            bool ambiguous;
             Entity route = FindRoute(prefab, command.AnchorRouteNumber,
                 new float3(command.AnchorX, command.AnchorY, command.AnchorZ),
-                RouteAnchorMatchDistanceSq, out ambiguous);
+                RouteAnchorMatchDistanceSq, out bool ambiguous);
             if (route == Entity.Null)
             {
                 if (ambiguous)
@@ -240,14 +222,11 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             if (_mutatedRoutesThisFrame.Contains(route))
                 return RealizeResult.Retry;
 
-            Entity[] connections;
-            float3[] positions;
-            if (!TryResolveConnections(prefab, command.Waypoints, out connections,
-                    out positions, out _lastRealizeFailure))
+            if (!TryResolveConnections(prefab, command.Waypoints, out Entity[] connections,
+                    out float3[] positions, out _lastRealizeFailure))
                 return RealizeResult.Retry;
 
-            RouteSnapshot local;
-            if (!TryCaptureSnapshot(route, out local)) return RealizeResult.Retry;
+            if (!TryCaptureSnapshot(route, out RouteSnapshot local)) return RealizeResult.Retry;
             uint rgba = PackColor(command.ColorR, command.ColorG,
                 command.ColorB, command.ColorA);
             if (!RouteNumberAvailable(route, prefab, command.RouteNumber))
@@ -298,8 +277,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                         m_Flags = CreationFlags.Permanent,
                     });
 
-                    // Modified routes already close their last segment back to index zero. Only a
-                    // brand-new route uses a repeated first definition as the completion signal.
+                    // Only a brand-new route uses a repeated first definition as its completion signal.
                     AddWaypointDefinitions(definition, connections, positions,
                         route, appendClosure: false);
                     EntityManager.AddComponent<Updated>(definition);
@@ -318,8 +296,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     }
                 }
 
-                // GenerateRoutesSystem retains the original route color during an edit, so metadata
-                // is applied explicitly even when the waypoint graph is rebuilt in the same frame.
+                // Generation keeps the old color during an edit.
                 if (!TryApplyMetadata(route, prefab, command.RouteNumber, rgba))
                 {
                     SyncInbox.RequestResync(CS2MultiplayerMod.Game.Diagnostics.ResyncReport
@@ -340,11 +317,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     command.Waypoints), now);
                 if (!rebuildGraph)
                 {
-                    // Record what this world actually holds, not what was asked for: its waypoints
-                    // sit on its own stops, and a synthesized snapshot would read as a local edit
-                    // on the next scan.
-                    RouteSnapshot applied;
-                    _knownRoutes[route] = TryCaptureSnapshot(route, out applied)
+                    // Record what this world holds, or the next scan reads it as a local edit.
+                    _knownRoutes[route] = TryCaptureSnapshot(route, out RouteSnapshot applied)
                         ? applied
                         : new RouteSnapshot
                         {
@@ -388,8 +362,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
         private RealizeResult RealizeDelete(RouteDeleteCommand command, long now)
         {
-            Entity prefab;
-            if (!_prefabIndex.TryResolve(command.PrefabName, out prefab))
+            if (!_prefabIndex.TryResolve(command.PrefabName, out Entity prefab))
             {
                 SyncInbox.RequestResync(CS2MultiplayerMod.Game.Diagnostics.ResyncReport
                     .Create("unknown route prefab during deletion", "route",
@@ -403,9 +376,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
             float3 first = new float3(command.WaypointX, command.WaypointY,
                 command.WaypointZ);
-            bool ambiguous;
             Entity route = FindRoute(prefab, command.RouteNumber, first,
-                RouteAnchorMatchDistanceSq, out ambiguous);
+                RouteAnchorMatchDistanceSq, out bool ambiguous);
             if (route == Entity.Null)
             {
                 if (ambiguous)

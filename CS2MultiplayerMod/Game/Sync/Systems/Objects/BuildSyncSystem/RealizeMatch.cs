@@ -2,8 +2,6 @@ using System.Text;
 using Colossal.Mathematics;
 using Game.Common;
 using Game.Prefabs;
-using Game.Simulation;
-using Game.Tools;
 using Unity.Collections;
 using Unity.Entities;
 using Unity.Mathematics;
@@ -11,15 +9,11 @@ using CS2MultiplayerMod.Game.Sync.Commands;
 
 namespace CS2MultiplayerMod.Game.Sync.Systems
 {
-    // Telling a placement this peer has already realized from one it has not, and resolving the
-    // node or edge a placement is attached to. Both match on position, because the sender's entity
-    // ids mean nothing here.
     public partial class BuildSyncSystem
     {
         /// <summary>
-        /// True when a live same-prefab object (or one spawned earlier this frame) has the same
-        /// replay identity inside <see cref="DuplicateRadiusSq"/>, or occupies the exact transform.
-        /// The world snapshot is taken once per frame, only on frames that realize something.
+        /// A same-prefab object (or one spawned this frame) with the same replay identity within
+        /// <see cref="DuplicateRadiusSq"/>, or at the exact transform.
         /// </summary>
         private bool AlreadyStandsAt(ObjectPlacementCommand command, Entity prefab,
             float3 position, quaternion rotation)
@@ -31,8 +25,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 float3 p = _rzRealizedThisFrame[i].position;
                 float rotationDot = math.abs(math.dot(
                     _rzRealizedThisFrame[i].rotation.value, rotation.value));
-                // If both players chose the identical transform before seeing one another, keeping
-                // one object is safer than bypassing the game's overlap validation and stacking two.
+                // Both players picked the identical transform: keep one rather than stack two.
                 if (math.distancesq(p, position) <= ExactDuplicateDistanceSq &&
                     (command.AttachKind != ObjectAttachKind.None || rotationDot >= 0.99999f))
                     return true;
@@ -44,54 +37,61 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 return true;
             }
 
-            if (!_dupSnapshotTaken)
+            // The neighbourhood from the static search tree; a city-wide copy per realizing frame cost tens of
+            // milliseconds in a large city.
+            var near = new NativeList<Entity>(32, Allocator.Temp);
+            try
             {
-                _dupEntities = _liveStaticObjects.ToEntityArray(Allocator.Temp);
-                _dupTransforms = _liveStaticObjects.ToComponentDataArray<global::Game.Objects.Transform>(Allocator.Temp);
-                _dupPrefabs = _liveStaticObjects.ToComponentDataArray<PrefabRef>(Allocator.Temp);
-                _dupSnapshotTaken = true;
-            }
-            for (int i = 0; i < _dupTransforms.Length; i++)
-            {
-                if (_dupPrefabs[i].m_Prefab != prefab) continue;
-                float3 p = _dupTransforms[i].m_Position;
-                if (math.distancesq(p.xz, position.xz) >= DuplicateRadiusSq ||
-                    math.abs(p.y - position.y) > DuplicateMaxDy) continue;
-
-                Entity candidate = _dupEntities[i];
-                bool attached = EntityManager.HasComponent<global::Game.Objects.Attached>(candidate);
-                if ((command.AttachKind != ObjectAttachKind.None) != attached) continue;
-                if (attached)
+                _objectSearch.CollectNear(position, PortableObjectSearchRadius, near);
+                for (int i = 0; i < near.Length; i++)
                 {
-                    Entity parent = EntityManager
-                        .GetComponentData<global::Game.Objects.Attached>(candidate).m_Parent;
-                    bool parentMatchesKind = parent != Entity.Null && EntityManager.Exists(parent) &&
-                        (command.AttachKind == ObjectAttachKind.NetNode
-                            ? EntityManager.HasComponent<global::Game.Net.Node>(parent)
-                            : EntityManager.HasComponent<global::Game.Net.Edge>(parent));
-                    if (!parentMatchesKind) continue;
+                    Entity candidate = near[i];
+                    if (!EntityManager.Exists(candidate) ||
+                        !EntityManager.HasComponent<global::Game.Objects.Static>(candidate) ||
+                        !EntityManager.HasComponent<global::Game.Objects.Transform>(candidate) ||
+                        !EntityManager.HasComponent<PrefabRef>(candidate) ||
+                        EntityManager.HasComponent<global::Game.Tools.Temp>(candidate) ||
+                        EntityManager.HasComponent<Owner>(candidate) ||
+                        EntityManager.HasComponent<Deleted>(candidate) ||
+                        EntityManager.GetComponentData<PrefabRef>(candidate).m_Prefab != prefab) continue;
+
+                    global::Game.Objects.Transform transform =
+                        EntityManager.GetComponentData<global::Game.Objects.Transform>(candidate);
+                    float3 p = transform.m_Position;
+                    if (math.distancesq(p.xz, position.xz) >= DuplicateRadiusSq ||
+                        math.abs(p.y - position.y) > DuplicateMaxDy) continue;
+
+                    bool attached = EntityManager.HasComponent<global::Game.Objects.Attached>(candidate);
+                    if ((command.AttachKind != ObjectAttachKind.None) != attached) continue;
+                    if (attached)
+                    {
+                        Entity parent = EntityManager
+                            .GetComponentData<global::Game.Objects.Attached>(candidate).m_Parent;
+                        bool parentMatchesKind = parent != Entity.Null && EntityManager.Exists(parent) &&
+                            (command.AttachKind == ObjectAttachKind.NetNode
+                                ? EntityManager.HasComponent<global::Game.Net.Node>(parent)
+                                : EntityManager.HasComponent<global::Game.Net.Edge>(parent));
+                        if (!parentMatchesKind) continue;
+                    }
+
+                    float rotationDot = attached ? 1f : math.abs(math.dot(
+                        math.normalizesafe(transform.m_Rotation.value,
+                            new float4(0f, 0f, 0f, 1f)), rotation.value));
+                    if (math.distancesq(p, position) <= ExactDuplicateDistanceSq &&
+                        rotationDot >= 0.99999f) return true;
+
+                    // Proximity alone is not a replay; without a seed, keep the command.
+                    if (!EntityManager.HasComponent<PseudoRandomSeed>(candidate) ||
+                        unchecked((ushort)EntityManager
+                            .GetComponentData<PseudoRandomSeed>(candidate).m_Seed) !=
+                        unchecked((ushort)command.RandomSeed)) continue;
+
+                    // Attachment can rotate a prop; free-standing ones must also match orientation.
+                    if (!attached && rotationDot < 0.9999f) continue;
+                    return true;
                 }
-
-                float rotationDot = attached ? 1f : math.abs(math.dot(
-                    math.normalizesafe(_dupTransforms[i].m_Rotation.value,
-                        new float4(0f, 0f, 0f, 1f)), rotation.value));
-                if (math.distancesq(p, position) <= ExactDuplicateDistanceSq &&
-                    rotationDot >= 0.99999f) return true;
-
-                // Proximity is not enough to prove a replay. If the standing entity has no variant
-                // identity, keep the new command instead of suppressing a legitimate close build.
-                if (!EntityManager.HasComponent<PseudoRandomSeed>(candidate) ||
-                    unchecked((ushort)EntityManager
-                        .GetComponentData<PseudoRandomSeed>(candidate).m_Seed) !=
-                    unchecked((ushort)command.RandomSeed)) continue;
-
-                // Attached props can be rotated by the attachment pass after placement. Their
-                // prefab, variant seed and bounded position still form the replay identity. For
-                // free-standing props, require the original orientation as well so two intentional
-                // close placements are not mistaken for one another.
-                if (!attached && rotationDot < 0.9999f) continue;
-                return true;
             }
+            finally { near.Dispose(); }
             return false;
         }
 
@@ -128,10 +128,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 new float3(command.AttachX, command.AttachY, command.AttachZ));
         }
 
-        /// <summary>
-        /// Resolve a portable node/edge anchor for placement and relocation commands. Keeping one
-        /// resolver ensures both paths make the same choice when roads are subdivided differently.
-        /// </summary>
+        /// <summary>One resolver for placement and relocation, so both choose the same piece of road.</summary>
         internal Entity ResolveNetAttachment(ObjectAttachKind kind, float3 anchor)
         {
             switch (kind)
@@ -143,9 +140,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         }
 
         /// <summary>
-        /// The live edge whose centreline passes closest to <paramref name="anchor"/>. The anchor sits
-        /// exactly on the sender's parent centreline, so a receiver that subdivided the road differently
-        /// still finds the piece under it; 3D distance keeps a bridge overhead from winning.
+        /// The edge whose centreline is closest to the anchor; 3D distance keeps a bridge overhead out.
         /// </summary>
         private Entity FindAttachEdge(float3 anchor)
         {
@@ -159,18 +154,14 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 {
                     Bezier4x3 curve = EntityManager.GetComponentData<global::Game.Net.Curve>(entities[i]).m_Bezier;
 
-                    // Solving for the closest point on a cubic is far too costly to run against every
-                    // edge in the city; the control hull bounds the curve, so this rejects almost all.
+                    // The control hull bounds the curve and rejects almost every edge cheaply.
                     Bounds3 bounds = MathUtils.Bounds(curve);
                     if (math.any(anchor < bounds.min - AttachEdgeTol) ||
                         math.any(anchor > bounds.max + AttachEdgeTol)) continue;
 
-                    float t;
-                    float dist = MathUtils.Distance(curve, anchor, out t);
+                    float dist = MathUtils.Distance(curve, anchor, out float t);
 
-                    // A driveway meets its road on the road's centreline, so right at that point the
-                    // two tie. Road markings belong to the road, so an owned sub-net only ever wins
-                    // when nothing else is in range.
+                    // A driveway ties with its road at the centreline; owned sub-nets win only when nothing else is near.
                     if (EntityManager.HasComponent<Owner>(entities[i]))
                     {
                         if (dist >= bestOwnedDist) continue;

@@ -1,13 +1,8 @@
 namespace CS2MultiplayerMod.Core.Protocol.Messages
 {
     /// <summary>
-    /// Client -> host: "stream current world now." Sent when the player runs <c>/sync</c>
-    /// due to suspected city drift, and when the client's own sync pipeline settles on a
-    /// world reload. Host saves and streams its live world - a full re-baseline, on demand.
-    ///
-    /// <see cref="Reason"/> carries WHY, so the host's log distinguishes a player pressing
-    /// the button from a client that could not apply an edit. It is untrusted display text:
-    /// the reader sanitizes it, and nothing branches on its content.
+    /// Client -> host: stream the current world now, from <c>/sync</c> or a settled pipeline fault.
+    /// <see cref="Reason"/> is untrusted log text; nothing branches on it.
     /// </summary>
     public sealed class ResyncRequestMessage : INetMessage
     {

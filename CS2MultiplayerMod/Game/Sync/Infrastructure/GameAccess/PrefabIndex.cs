@@ -9,10 +9,8 @@ using Unity.Entities;
 namespace CS2MultiplayerMod.Game.Sync.Infrastructure
 {
     /// <summary>
-    /// Resolves a prefab's stable name back to its local prefab <see cref="Entity"/>.
-    /// Prefab entity indices differ between machines, so placements travel by name and
-    /// each receiver maps the name to its own prefab here. The name -> entity table is
-    /// built lazily and rebuilt once on a miss (prefabs can load late).
+    /// Prefab name to local prefab entity (indices differ per machine). Built lazily, rebuilt once on a
+    /// miss since prefabs can load late.
     /// </summary>
     public sealed class PrefabIndex
     {
@@ -21,9 +19,7 @@ namespace CS2MultiplayerMod.Game.Sync.Infrastructure
         private readonly Dictionary<string, Entity> _byName = new Dictionary<string, Entity>();
         private readonly Dictionary<string, List<Entity>> _allByName =
             new Dictionary<string, List<Entity>>();
-        // Reading PrefabBase.name is a native call that returns a freshly allocated string every
-        // time. Capture paths ask for the same few thousand prefab names thousands of times a
-        // second, so hold the answer for as long as the name -> entity table itself is valid.
+        // PrefabBase.name allocates on every native read; cache it while the table is valid.
         private readonly Dictionary<Entity, string> _namesByPrefab =
             new Dictionary<Entity, string>();
         private bool _built;
@@ -41,20 +37,13 @@ namespace CS2MultiplayerMod.Game.Sync.Infrastructure
             if (!_built) Build();
             if (_byName.TryGetValue(name, out prefab)) return true;
 
-            // Late-loaded prefabs are the one legitimate reason for a miss; rebuild only
-            // when the prefab table actually changed. Without this gate, a stream of
-            // unknown names (a content mismatch between machines, or a hostile peer)
-            // would force a full rescan of every prefab per message.
+            // Rebuild only when the prefab table changed, or unknown names force a rescan per message.
             if (_allPrefabs.CalculateEntityCount() == _builtCount) return false;
             Build();
             return _byName.TryGetValue(name, out prefab);
         }
 
-        /// <summary>
-        /// Resolve a name to a prefab of the required category. Multiple prefab collections can
-        /// expose the same display name; callers that know whether they need an object, net, area,
-        /// or stamp must not depend on entity iteration order.
-        /// </summary>
+        /// <summary>Resolves within a category: collections can share a display name.</summary>
         public bool TryResolve(string name, Predicate<Entity> compatible, out Entity prefab)
         {
             if (!_built) Build();
@@ -66,47 +55,32 @@ namespace CS2MultiplayerMod.Game.Sync.Infrastructure
         }
 
         /// <summary>
-        /// The cached form of <see cref="SafeName(PrefabSystem, Entity)"/>. Entity handles carry a
-        /// version, so a recycled prefab index cannot read another prefab's cached name, and the
-        /// table is dropped whenever the catalogue is rebuilt. A miss is never cached: a name that
-        /// could not be read is either a retired prefab or a torn-down asset, and both can change.
+        /// Cached <see cref="SafeName(PrefabSystem, Entity)"/>; handles are versioned and misses are never
+        /// cached.
         /// </summary>
         public string NameOf(Entity prefab)
         {
             if (prefab == Entity.Null) return null;
-            string name;
-            if (_namesByPrefab.TryGetValue(prefab, out name)) return name;
+            if (_namesByPrefab.TryGetValue(prefab, out string name)) return name;
             name = SafeName(_prefabs, prefab);
             if (!string.IsNullOrEmpty(name)) _namesByPrefab[prefab] = name;
             return name;
         }
 
         /// <summary>
-        /// The prefab's name, or null when nothing usable stands behind the entity.
-        /// The catalogue outlives its assets: switching game mode (editor, map, main menu)
-        /// tears down content that no world entity holds, and the prefab entity survives
-        /// pointing at an asset that is already gone. Reading the name off one of those
-        /// faults inside the engine, so ask whether the asset is alive first - the null
-        /// test sees a torn-down asset, the name property does not.
+        /// The prefab's name, or null. A prefab entity can outlive its torn-down asset (after a mode switch),
+        /// and reading <c>.name</c> then faults natively, so the asset is null-checked first.
         /// </summary>
-        public static string SafeName(PrefabSystem prefabs, Entity prefab)
-        {
-            bool tornDown;
-            return SafeName(prefabs, prefab, out tornDown);
-        }
+        public static string SafeName(PrefabSystem prefabs, Entity prefab) =>
+            SafeName(prefabs, prefab, out bool tornDown);
 
-        /// <summary>
-        /// <paramref name="tornDown"/> separates the two ways a name can be missing: a prefab
-        /// the game retired properly (harmless, it is simply gone) versus one still registered
-        /// with a destroyed asset behind it - only the second faults on <c>.name</c>.
-        /// </summary>
+        /// <summary><paramref name="tornDown"/>: registered with a destroyed asset, the case that faults.</summary>
         public static string SafeName(PrefabSystem prefabs, Entity prefab, out bool tornDown)
         {
             tornDown = false;
             try
             {
-                PrefabBase asset;
-                if (!prefabs.TryGetPrefab(prefab, out asset)) return null;
+                if (!prefabs.TryGetPrefab(prefab, out PrefabBase asset)) return null;
                 if (asset != null) return asset.name;
                 tornDown = true;
                 return null;
@@ -130,8 +104,7 @@ namespace CS2MultiplayerMod.Game.Sync.Infrastructure
                 int retired = 0, tornDownCount = 0, firstTornDown = -1;
                 for (int i = 0; i < prefabs.Length; i++)
                 {
-                    bool tornDown;
-                    string name = SafeName(_prefabs, prefabs[i], out tornDown);
+                    string name = SafeName(_prefabs, prefabs[i], out bool tornDown);
                     if (string.IsNullOrEmpty(name))
                     {
                         if (tornDown)
@@ -144,8 +117,7 @@ namespace CS2MultiplayerMod.Game.Sync.Infrastructure
                     }
                     _byName[name] = prefabs[i];
                     _namesByPrefab[prefabs[i]] = name;
-                    List<Entity> matches;
-                    if (!_allByName.TryGetValue(name, out matches))
+                    if (!_allByName.TryGetValue(name, out List<Entity> matches))
                     {
                         matches = new List<Entity>(1);
                         _allByName[name] = matches;
@@ -174,8 +146,7 @@ namespace CS2MultiplayerMod.Game.Sync.Infrastructure
         {
             prefab = Entity.Null;
             if (compatible == null) return _byName.TryGetValue(name, out prefab);
-            List<Entity> matches;
-            if (!_allByName.TryGetValue(name, out matches)) return false;
+            if (!_allByName.TryGetValue(name, out List<Entity> matches)) return false;
             for (int i = 0; i < matches.Count; i++)
             {
                 if (!compatible(matches[i])) continue;

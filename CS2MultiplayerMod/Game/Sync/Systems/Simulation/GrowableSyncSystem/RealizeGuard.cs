@@ -1,29 +1,17 @@
-using Game.Buildings;
 using Game.Common;
-using Game.Objects;
 using Game.Prefabs;
-using Game.Tools;
 using Unity.Collections;
 using Unity.Entities;
 using Unity.Mathematics;
 using CS2MultiplayerMod.Core.Diagnostics;
-using CS2MultiplayerMod.Core.Protocol.Messages;
 using CS2MultiplayerMod.Game.Diagnostics;
 using CS2MultiplayerMod.Game.Sync.Commands;
-using CS2MultiplayerMod.Game.Sync.Infrastructure;
 
 namespace CS2MultiplayerMod.Game.Sync.Systems
 {
-    // Keeping a client's own simulation from writing zoned buildings: rejecting the ones it grew
-    // locally, and checking that the ones the host asked for actually landed with the road and
-    // utility connections they need.
     public partial class GrowableSyncSystem
     {
-        /// <summary>
-        /// Remembers that a building was just asked for at this spot. The definition does not
-        /// become an entity until a later phase, so the only way to recognise our own building when
-        /// it appears is the position we asked for it at.
-        /// </summary>
+        /// <summary>The definition becomes an entity later, so our building is recognised by position.</summary>
         private void NoteSelfRealized(Entity prefab, float3 position,
             GrowableLifecycleCommand command, long now)
         {
@@ -56,13 +44,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         }
 
         /// <summary>
-        /// Removes zoned buildings this client grew by itself. Its spawner is held for as long as
-        /// the session is synchronized, so in normal running this finds nothing - but authority is
-        /// handed back whenever sync drops (a resync, a world reload), and anything grown in that
-        /// window would otherwise stand forever on a lot the host has its own plans for.
-        ///
-        /// Catching them as they appear is what keeps the invariant simple: on a client, every
-        /// zoned building came from the host.
+        /// Removes zoned buildings this client grew itself, e.g. while authority was briefly returned
+        /// during a resync. On a client every zoned building comes from the host.
         /// </summary>
         private void RejectLocallyGrownBuildings(long now)
         {
@@ -80,11 +63,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     global::Game.Objects.Transform transform = EntityManager
                         .GetComponentData<global::Game.Objects.Transform>(entity);
                     float3 position = transform.m_Position;
-                    GrowableLifecycleCommand command;
-                    if (TryTakeSelfRealized(prefab, position, now, out command))
+                    if (TryTakeSelfRealized(prefab, position, now, out GrowableLifecycleCommand command))
                     {
-                        // The definition is now a real native building. This is the first point at
-                        // which its construction clock and state payload can be applied safely.
+                        // Now a real building: the first safe point for its clock and state.
                         ApplyConditionAndState(entity, command);
                         if (_buildSync != null)
                             _buildSync.TrackRemoteBuilding(entity, prefab, position,
@@ -105,6 +86,5 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 entities.Dispose();
             }
         }
-
     }
 }

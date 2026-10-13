@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using Game.City;
 using Game.Simulation;
 using Unity.Entities;
@@ -9,19 +10,17 @@ using CS2MultiplayerMod.Game.Sync.Infrastructure;
 namespace CS2MultiplayerMod.Game.Sync.Channels
 {
     /// <summary>
-    /// Replicates the cumulative life-event counters - deaths, births, move-ins,
-    /// move-aways, crime, mail - host -> clients, so both players' statistics panels show
-    /// the same numbers between full-world resyncs.
-    /// Mechanism: the host snapshots each counter's lifetime value and the client feeds it
-    /// through the game's own event pipeline, the same path the deathcare/crime systems use,
-    /// so the statistics buffers stay internally consistent and serializable.
+    /// Cumulative event counters (deaths, births, moves, crime, mail, transport passengers and cargo), fed
+    /// through the game's own statistics event pipeline so the buffers stay consistent.
     /// </summary>
     public sealed class StatisticsStateChannel : IStateChannel
     {
         public const byte Id = 10;
         public byte ChannelId => Id;
 
-        private static readonly StatisticType[] Synced =
+        private const int MaxEntriesPerSnapshot = 64;
+
+        private static readonly StatisticType[] Totals =
         {
             StatisticType.DeathRate,          // "deaths" — cumulative count of citizen deaths
             StatisticType.BirthRate,
@@ -31,18 +30,57 @@ namespace CS2MultiplayerMod.Game.Sync.Channels
             StatisticType.EscapedArrestCount,
             StatisticType.CollectedMail,
             StatisticType.DeliveredMail,
+            StatisticType.CargoCountTruck,
+            StatisticType.CargoCountTrain,
+            StatisticType.CargoCountShip,
+            StatisticType.CargoCountAirplane,
         };
+
+        // Boardings are counted per PassengerType: parameter 0 citizens, 1 tourists.
+        private static readonly StatisticType[] Passengers =
+        {
+            StatisticType.PassengerCountBus,
+            StatisticType.PassengerCountSubway,
+            StatisticType.PassengerCountTram,
+            StatisticType.PassengerCountTrain,
+            StatisticType.PassengerCountTaxi,
+            StatisticType.PassengerCountAirplane,
+            StatisticType.PassengerCountShip,
+            StatisticType.PassengerCountFerry,
+        };
+
+        private static readonly int[] Synced = BuildTable();
+        private static readonly HashSet<int> SyncedKeys = new HashSet<int>(Synced);
 
         private CityStatisticsSystem _stats;
         private bool _warned;
 
-        // What each counter will read once the events we already queued have been processed.
-        // The game drains that queue from its own statistics job, which runs minutes apart (and
-        // not at all while paused) - so the naive "host value minus current value" delta gets
-        // re-queued every snapshot and applies dozens of times over. Tracking the in-flight
-        // target instead makes each snapshot queue only the part not already on its way.
-        private readonly System.Collections.Generic.Dictionary<StatisticType, long> _inFlightTarget =
-            new System.Collections.Generic.Dictionary<StatisticType, long>();
+        // The game commits queued events only when it samples, so until the sample count or the counter
+        // moves, the last correction is still queued and the counter is headed for its target.
+        private readonly Dictionary<int, Pending> _pending = new Dictionary<int, Pending>();
+
+        private struct Pending
+        {
+            public long Target;
+            public long LocalAtEnqueue;
+            public int Sample;
+        }
+
+        private static int Key(StatisticType type, int parameter) => ((int)type << 8) | parameter;
+        private static StatisticType TypeOf(int key) => (StatisticType)(key >> 8);
+        private static int ParameterOf(int key) => key & 0xFF;
+
+        private static int[] BuildTable()
+        {
+            var keys = new List<int>();
+            foreach (StatisticType type in Totals) keys.Add(Key(type, 0));
+            foreach (StatisticType type in Passengers)
+            {
+                keys.Add(Key(type, (int)PassengerType.Citizen));
+                keys.Add(Key(type, (int)PassengerType.Tourist));
+            }
+            return keys.ToArray();
+        }
 
         private CityStatisticsSystem Resolve(EntityManager em) =>
             _stats ?? (_stats = em.World.GetOrCreateSystemManaged<CityStatisticsSystem>());
@@ -55,8 +93,11 @@ namespace CS2MultiplayerMod.Game.Sync.Channels
                 writer.WriteByte((byte)Synced.Length);
                 for (int i = 0; i < Synced.Length; i++)
                 {
-                    writer.WriteByte((byte)Synced[i]);
-                    writer.WriteLong(stats.GetStatisticValueLong(Synced[i], 0));
+                    StatisticType type = TypeOf(Synced[i]);
+                    int parameter = ParameterOf(Synced[i]);
+                    writer.WriteByte((byte)type);
+                    writer.WriteByte((byte)parameter);
+                    writer.WriteLong(stats.GetStatisticValueLong(type, parameter));
                 }
                 return true;
             }
@@ -71,40 +112,51 @@ namespace CS2MultiplayerMod.Game.Sync.Channels
         {
             CityStatisticsSystem stats = Resolve(em);
             int count = reader.ReadByte();
+            if (count > MaxEntriesPerSnapshot)
+            {
+                WarnOnce("apply", new System.IO.InvalidDataException(
+                    "Implausible statistics entry count: " + count + "."));
+                return;
+            }
             try
             {
                 for (int i = 0; i < count; i++)
                 {
                     var type = (StatisticType)reader.ReadByte();
+                    int parameter = reader.ReadByte();
                     long hostValue = reader.ReadLong();
-                    long localValue = stats.GetStatisticValueLong(type, 0);
+                    int key = Key(type, parameter);
+                    if (!SyncedKeys.Contains(key)) continue;
 
-                    // Where this counter is headed: the value it will hold once the events already
-                    // queued are processed. Once the local value has caught up to that target the
-                    // queue has drained and the target is simply the current value again.
-                    long target;
-                    if (!_inFlightTarget.TryGetValue(type, out target) || target == localValue)
-                        target = localValue;
+                    // Reconciling against the committed value also takes back this machine's own events,
+                    // which it simulates as well (every ride is counted on both sides).
+                    long localValue = stats.GetStatisticValueLong(type, parameter);
+                    long baseline = localValue;
+                    if (_pending.TryGetValue(key, out Pending pending) &&
+                        pending.Sample == stats.sampleCount && pending.LocalAtEnqueue == localValue)
+                        baseline = pending.Target;
 
-                    long delta = hostValue - target;
+                    long delta = hostValue - baseline;
                     if (delta == 0) continue;
 
-                    JobHandle deps;
-                    CityStatisticsSystem.SafeStatisticQueue queue = stats.GetSafeStatisticsQueue(out deps);
+                    CityStatisticsSystem.SafeStatisticQueue queue = stats.GetSafeStatisticsQueue(out JobHandle deps);
                     deps.Complete();
                     queue.Enqueue(new StatisticsEvent
                     {
                         m_Statistic = type,
-                        m_Parameter = 0,
+                        m_Parameter = parameter,
                         m_Change = delta,
                     });
-                    _inFlightTarget[type] = hostValue;
+                    _pending[key] = new Pending
+                    {
+                        Target = hostValue,
+                        LocalAtEnqueue = localValue,
+                        Sample = stats.sampleCount,
+                    };
                 }
             }
             catch (System.Exception ex)
             {
-                // Drain the remaining payload is unnecessary — channel payloads are
-                // per-message, the next snapshot starts fresh.
                 WarnOnce("apply", ex);
             }
         }

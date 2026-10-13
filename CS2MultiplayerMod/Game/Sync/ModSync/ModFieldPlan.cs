@@ -9,14 +9,8 @@ using Unity.Entities;
 namespace CS2MultiplayerMod.Game.Sync.ModSync
 {
     /// <summary>
-    /// A third-party struct reduced to an ordered list of leaves, and the reflection needed to read
-    /// and write them.
-    ///
-    /// Copying the struct's memory would be shorter, and wrong twice over: field offsets are a
-    /// property of one process's layout decisions, and an <see cref="Entity"/> inside the struct is
-    /// an index into one world's arrays that means something else in another. Walking declared
-    /// fields costs reflection, which the measured traffic - a few hundred values on the frames
-    /// where anything happens at all, none in between - can easily afford.
+    /// A third-party struct as an ordered list of leaves plus the reflection to read and write them.
+    /// Not a memory copy: field offsets and embedded <see cref="Entity"/> values are process-local.
     /// </summary>
     internal sealed class ModFieldPlan
     {
@@ -30,17 +24,14 @@ namespace CS2MultiplayerMod.Game.Sync.ModSync
 
         /// <summary>The leaf kinds, in the same order as <see cref="_paths"/>.</summary>
         public ModValueKind[] Kinds { get; private set; }
+        public string[] FieldPaths { get; private set; }
 
-        public int Count { get { return Kinds.Length; } }
+        public int Count => Kinds.Length;
 
         /// <summary>True when at least one leaf is a reference that has to be translated.</summary>
         public bool HasReferences { get; private set; }
 
-        /// <summary>
-        /// Flattens <paramref name="type"/>, or explains in one phrase why it cannot be replicated.
-        /// The reason is written into the catalogue listing, because "this mod is not synchronized"
-        /// is only actionable when it says which type and what about it was the problem.
-        /// </summary>
+        /// <summary>Flattens <paramref name="type"/>, or gives a one-phrase reason for the catalogue listing.</summary>
         public static bool TryBuild(Type type, out ModFieldPlan plan, out string reason)
         {
             plan = null;
@@ -62,9 +53,16 @@ namespace CS2MultiplayerMod.Game.Sync.ModSync
             {
                 _paths = paths.ToArray(),
                 Kinds = kinds.ToArray(),
+                FieldPaths = new string[paths.Count],
             };
             for (int i = 0; i < plan.Kinds.Length; i++)
+            {
+                FieldInfo[] fields = plan._paths[i];
+                var names = new string[fields.Length];
+                for (int j = 0; j < fields.Length; j++) names[j] = fields[j].Name;
+                plan.FieldPaths[i] = string.Join(".", names);
                 if (plan.Kinds[i] == ModValueKind.EntityRef) plan.HasReferences = true;
+            }
             return true;
         }
 
@@ -87,8 +85,7 @@ namespace CS2MultiplayerMod.Game.Sync.ModSync
                 path.Add(field);
                 try
                 {
-                    ModValueKind kind;
-                    if (TryScalarKind(fieldType, out kind))
+                    if (TryScalarKind(fieldType, out ModValueKind kind))
                     {
                         paths.Add(path.ToArray());
                         kinds.Add(kind);
@@ -101,10 +98,8 @@ namespace CS2MultiplayerMod.Game.Sync.ModSync
                         return false;
                     }
 
-                    // A fixed-size buffer ("fixed byte x[16]") compiles to a nested struct holding
-                    // one field that stands for the first element, so walking it would quietly
-                    // describe one byte and carry away fifteen. Refused by name instead. The
-                    // engine's fixed-capacity strings are the common case and are handled above.
+                    // A fixed buffer compiles to a struct with one field for the first element; walking it would
+                    // carry one byte of sixteen. Fixed strings are handled above.
                     if (field.IsDefined(typeof(FixedBufferAttribute), false))
                     {
                         reason = "field " + field.Name + " is a fixed buffer";
@@ -146,10 +141,7 @@ namespace CS2MultiplayerMod.Game.Sync.ModSync
             return false;
         }
 
-        /// <summary>
-        /// The engine's fixed-capacity strings, recognised by the interfaces they carry rather than
-        /// by listing the five sizes - a sixth would otherwise silently stop a mod being supported.
-        /// </summary>
+        /// <summary>The engine's fixed strings, by their interfaces rather than a list of sizes.</summary>
         private static bool IsFixedString(Type type)
         {
             return typeof(IUTF8Bytes).IsAssignableFrom(type) &&
@@ -189,8 +181,7 @@ namespace CS2MultiplayerMod.Game.Sync.ModSync
                 return owner;
             }
 
-            // Each level has to be read out, written into and put back: a boxed struct's nested
-            // struct is a copy, so setting a field on it would otherwise be thrown away.
+            // A boxed struct's nested struct is a copy: read out, write, put back.
             object child = field.GetValue(owner);
             child = SetPath(child, path, index + 1, value);
             field.SetValue(owner, child);
@@ -258,11 +249,7 @@ namespace CS2MultiplayerMod.Game.Sync.ModSync
             return fieldType.IsEnum ? Enum.ToObject(fieldType, scalar) : scalar;
         }
 
-        /// <summary>
-        /// Builds a fixed-capacity string, shortening the text rather than throwing if it does not
-        /// fit. A refused transaction over a name that is one character too long would strand the
-        /// whole carrier, and the capacity is the receiving type's, so it cannot be checked here.
-        /// </summary>
+        /// <summary>Truncates rather than throws: one long name must not strand the whole carrier.</summary>
         private static object MakeFixedString(Type type, string text)
         {
             if (text == null) text = string.Empty;

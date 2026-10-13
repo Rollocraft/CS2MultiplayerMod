@@ -1,26 +1,14 @@
 using System;
 using System.Collections.Generic;
-using System.Diagnostics;
 using CS2MultiplayerMod.Game.Sync.Commands;
-using Game.Agents;
 using Game.Buildings;
 using Game.Citizens;
 using Game.Common;
-using Game.Companies;
-using Game.Economy;
-using Game.Prefabs;
-using Game.Simulation;
-using Game.Vehicles;
 using Unity.Collections;
 using Unity.Entities;
-using Unity.Jobs;
-using Unity.Mathematics;
 
 namespace CS2MultiplayerMod.Game.Sync.Systems
 {
-    // Two sweeps that run alongside the apply pass: keeping a household staged mid-transfer
-    // linked to somewhere it can live, and retiring the citizens and households the host's
-    // roster no longer accounts for.
     public partial class ResidentialOccupancySyncSystem
     {
         private void RepairStagedTransfers()
@@ -33,11 +21,10 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             {
                 ulong householdId = pair.Key;
                 StagedTransfer staged = pair.Value;
-                Entity mapped, desiredDestination;
-                bool mappingValid = TryResolveHousehold(householdId, out mapped) &&
+                bool mappingValid = TryResolveHousehold(householdId, out Entity mapped) &&
                                     mapped == staged.Household;
                 bool destinationValid = TryGetDesiredProperty(householdId,
-                    out desiredDestination) && desiredDestination == staged.Destination;
+                    out Entity desiredDestination) && desiredDestination == staged.Destination;
                 if (!mappingValid || !destinationValid)
                 {
                     RepairStagedTransferLink(staged);
@@ -66,10 +53,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         }
 
         /// <summary>
-        /// A staged swap removes the source buffer entry while retaining PropertyRenter until the
-        /// native rent action commits. If that action never commits, repair whichever live property
-        /// PropertyRenter currently names. This avoids both a missing source entry and restoring an
-        /// obsolete source after the native action already selected a different valid property.
+        /// If a staged swap's rent action never commits, repair whichever live property PropertyRenter
+        /// names now.
         /// </summary>
         private void RepairStagedTransferLink(StagedTransfer staged)
         {
@@ -89,8 +74,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 }
                 else
                 {
-                    // A dangling one-way link cannot be completed. Removing it lets the ordinary
-                    // desired-location reconciler enqueue a clean rent action on its next pass.
+                    // A dangling one-way link cannot be completed; the reconciler enqueues a clean one.
                     EntityManager.RemoveComponent<PropertyRenter>(staged.Household);
                 }
             }
@@ -105,10 +89,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 RepairStagedTransferLink(pair.Value);
         }
 
-        private void StartStagedTransferCooldown(ulong householdId, uint now)
-        {
+        private void StartStagedTransferCooldown(ulong householdId, uint now) =>
             _stagedTransferCooldownUntil[householdId] = now + UnreachableGraceFrames;
-        }
 
         private void PruneStagedTransferCooldowns(uint now)
         {
@@ -124,8 +106,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         private bool TrackStagedTransfer(ulong householdId, Entity household, Entity source,
             Entity destination)
         {
-            StagedTransfer existing;
-            if (_stagedTransfers.TryGetValue(householdId, out existing))
+            if (_stagedTransfers.TryGetValue(householdId, out StagedTransfer existing))
             {
                 existing.Household = household;
                 existing.Source = source;
@@ -133,8 +114,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 return true;
             }
             uint now = _simulationSystem.frameIndex;
-            uint cooldownUntil;
-            if (_stagedTransferCooldownUntil.TryGetValue(householdId, out cooldownUntil))
+            if (_stagedTransferCooldownUntil.TryGetValue(householdId, out uint cooldownUntil))
             {
                 if (FramePrecedes(now, cooldownUntil)) return false;
                 _stagedTransferCooldownUntil.Remove(householdId);
@@ -159,22 +139,17 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             while (remaining-- > 0 && _pendingCitizenRetirements.TryDequeue(out ulong citizenId))
             {
                 _pendingCitizenRetirementIds.Remove(citizenId);
-                DesiredCitizenLocation desired;
-                if (!_desiredCitizens.TryGetValue(citizenId, out desired) || desired.Active)
+                if (!_desiredCitizens.TryGetValue(citizenId, out DesiredCitizenLocation desired) || desired.Active)
                     continue;
 
-                Entity citizen;
-                if (!TryResolveCitizen(citizenId, out citizen)) continue;
+                if (!TryResolveCitizen(citizenId, out Entity citizen)) continue;
 
-                // A whole-household departure is executed by HouseholdMoveAwaySystem. Leave a
-                // resident still linked to that family for the native emigration transaction; the
-                // exact-person path below is for death/individual departure and detached strays.
-                DesiredHouseholdLocation householdLocation;
-                Entity household;
+                // Whole-household departures belong to HouseholdMoveAwaySystem.
                 if (desired.HouseholdId != 0 &&
-                    _desiredHouseholds.TryGetValue(desired.HouseholdId, out householdLocation) &&
+                    _desiredHouseholds.TryGetValue(desired.HouseholdId,
+                        out DesiredHouseholdLocation householdLocation) &&
                     !householdLocation.Active &&
-                    TryResolveHousehold(desired.HouseholdId, out household) &&
+                    TryResolveHousehold(desired.HouseholdId, out Entity household) &&
                     CitizenBelongsToHousehold(citizen, household))
                 {
                     if (EntityManager.HasComponent<PropertyRenter>(household))
@@ -195,16 +170,16 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         }
 
         /// <summary>
-        /// On a client every household that belongs in the city is a renter the host reported.
-        /// Nothing re-houses the rest: the system that would is held, so a family whose building
-        /// was demolished would otherwise stay in the city forever with no home and no way out.
-        /// After a grace period they take the game's ordinary emigration path.
+        /// The system that re-houses families is held on a client, so a homeless household emigrates
+        /// after a grace period. The grace is timed in frames, so one slice per update still visits every
+        /// family once per rolling rotation.
         /// </summary>
         private void SweepUnreachableHouseholds()
         {
             if (_unreachableHouseholds.IsEmptyIgnoreFilter)
             {
                 if (_unreachableSince.Count > 0) _unreachableSince.Clear();
+                _unreachableCursor = 0;
                 return;
             }
             uint now = _simulationSystem.frameIndex;
@@ -212,32 +187,30 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             try
             {
                 households = _unreachableHouseholds.ToEntityArray(Allocator.Temp);
-                _unreachableSeen.Clear();
+                if (_unreachableCursor >= households.Length) _unreachableCursor = 0;
+                int slice = Math.Max(MinUnreachableSlice,
+                    (households.Length + UpdatePartitions - 1) / UpdatePartitions);
+                int end = Math.Min(households.Length, _unreachableCursor + slice);
                 int retired = 0;
-                for (int i = 0; i < households.Length; i++)
+                for (int i = _unreachableCursor; i < end; i++)
                 {
                     Entity household = households[i];
-                    _unreachableSeen.Add(household);
                     if (IsSettling(household)) continue;
-                    ulong householdId;
-                    PropertyRentIdentity desiredIdentity;
-                    bool bound = TryGetBoundHouseholdId(household, out householdId);
+                    bool bound = TryGetBoundHouseholdId(household, out ulong householdId);
                     if (bound && IsHouseholdDesiredUnhoused(householdId))
                     {
                         _unreachableSince.Remove(household);
                         continue;
                     }
-                    if (bound && TryGetDesiredPropertyIdentity(householdId, out desiredIdentity) &&
+                    if (bound && TryGetDesiredPropertyIdentity(householdId, out PropertyIdentity desiredIdentity) &&
                         (TryGetDesiredProperty(householdId, out Entity desiredProperty) ||
                          _pending.ContainsKey(desiredIdentity)))
                     {
-                        // The destination may still be unresolved or its native rent action may be
-                        // pending. A positive host location always outranks the local homeless scan.
+                        // A positive host location outranks the local homeless scan.
                         _unreachableSince.Remove(household);
                         continue;
                     }
-                    uint since;
-                    if (!_unreachableSince.TryGetValue(household, out since))
+                    if (!_unreachableSince.TryGetValue(household, out uint since))
                     {
                         _unreachableSince[household] = now;
                         continue;
@@ -250,12 +223,14 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     retired++;
                     _retiredHouseholds++;
                 }
+                _unreachableCursor = end;
+                if (end < households.Length) return;
+                _unreachableCursor = 0;
                 PruneUnreachable();
             }
             finally
             {
                 if (households.IsCreated) households.Dispose();
-                _unreachableSeen.Clear();
             }
         }
 
@@ -265,7 +240,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             if (_unreachableSince.Count == 0) return;
             _settlingScratch.Clear();
             foreach (KeyValuePair<Entity, uint> pair in _unreachableSince)
-                if (!_unreachableSeen.Contains(pair.Key)) _settlingScratch.Add(pair.Key);
+                if (!EntityManager.Exists(pair.Key) ||
+                    !_unreachableHouseholds.MatchesIgnoreFilter(pair.Key))
+                    _settlingScratch.Add(pair.Key);
             for (int i = 0; i < _settlingScratch.Count; i++)
                 _unreachableSince.Remove(_settlingScratch[i]);
             _settlingScratch.Clear();

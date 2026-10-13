@@ -8,15 +8,8 @@ using Unity.Entities;
 namespace CS2MultiplayerMod.Game.Sync.Infrastructure
 {
     /// <summary>
-    /// Holds a set of native simulation systems off on a client, so the host's messages are the
-    /// only thing that decides the part of the world those systems own.
-    ///
-    /// Growables, company tenancy, residential occupancy, tax collection and demand authority use
-    /// this same boundary. Each used to carry its own copy of the hold, differing only in which
-    /// systems it names and how it reports the hand-off.
-    ///
-    /// The hold is idempotent and meant to be re-applied every update: a system the game re-enables
-    /// on a state change would otherwise quietly start deciding again.
+    /// Holds native systems off on a client so the host alone decides what they own. Idempotent and
+    /// re-applied every update, since the game can re-enable a system.
     /// </summary>
     internal sealed class LocalAuthorityHold
     {
@@ -28,12 +21,10 @@ namespace CS2MultiplayerMod.Game.Sync.Infrastructure
         private readonly Dictionary<Type, bool> _wasEnabled = new Dictionary<Type, bool>();
         private bool _applied;
 
-        /// <param name="label">Log prefix identifying the sync system, e.g. "Occupancy".</param>
-        /// <param name="subject">What is being handed over, e.g. "residential occupancy".</param>
-        /// <param name="decides">
-        /// Completes "the host decides ..." in the per-system verbose line, e.g. "who lives where".
-        /// </param>
-        /// <param name="topic">Flight-recorder topic, e.g. "occupancy authority".</param>
+        /// <param name="label">Log prefix, e.g. "Occupancy".</param>
+        /// <param name="subject">What is handed over, e.g. "residential occupancy".</param>
+        /// <param name="decides">Completes "the host decides ...", e.g. "who lives where".</param>
+        /// <param name="topic">Flight-recorder topic.</param>
         /// <param name="systems">The native systems a client must not run.</param>
         public LocalAuthorityHold(string label, string subject, string decides, string topic,
             params Type[] systems)
@@ -48,10 +39,7 @@ namespace CS2MultiplayerMod.Game.Sync.Infrastructure
         /// <summary>The native systems this hold covers.</summary>
         public int Count => _systems.Length;
 
-        /// <summary>
-        /// Hands the subject to the host on a client, and restores the local simulation on a host -
-        /// in case this process was a client earlier in its life.
-        /// </summary>
+        /// <summary>Holds on a client; restores on a host in case this process was a client before.</summary>
         public void Apply(World world, MultiplayerSession session)
         {
             if (session.Role == SessionRole.Host)
@@ -67,8 +55,7 @@ namespace CS2MultiplayerMod.Game.Sync.Infrastructure
                 if (system == null) continue;
                 if (!_wasEnabled.ContainsKey(type)) _wasEnabled[type] = system.Enabled;
                 if (!system.Enabled) continue;
-                // If a system that was initially off becomes enabled during the session, remember
-                // that latest native intent before holding it again so disconnect restores it on.
+                // Enabled natively during the session: restore it enabled on disconnect.
                 _wasEnabled[type] = true;
                 system.Enabled = false;
                 SyncLog.Detail(LogTopic.Pipeline, _label + ": " + type.Name +
@@ -81,10 +68,7 @@ namespace CS2MultiplayerMod.Game.Sync.Infrastructure
                 _systems.Length + " simulation system(s) held).");
         }
 
-        /// <summary>
-        /// Gives the local simulation its half of the world back when the session ends. Without
-        /// this a player who leaves a session keeps a city those systems can never act on again.
-        /// </summary>
+        /// <summary>Gives the local simulation back when the session ends.</summary>
         public void Restore(World world)
         {
             if (_wasEnabled.Count == 0)

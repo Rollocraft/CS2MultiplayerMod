@@ -4,13 +4,9 @@ using CS2MultiplayerMod.Core.Sync;
 namespace CS2MultiplayerMod.Game.Sync.Commands
 {
     /// <summary>
-    /// "A player replaced this road segment's TYPE in place" - drew a different net prefab over an
-    /// existing edge (e.g. a two-lane road over a one-lane one). Unlike a composition
-    /// <see cref="NetUpgradeCommand"/> (trees/sidewalks, same prefab) this changes the edge's
-    /// <c>PrefabRef</c>; unlike a placement/delete the edge keeps its identity, so it surfaces only
-    /// as an <c>Updated</c> tag - see <see cref="Systems.NetReplaceSyncSystem"/>.
-    /// The command carries TWO full cubic Béziers: <c>OldAx</c>... is the segment's curve BEFORE
-    /// the replacement; <c>Ax</c>... is the COMMITTED curve AFTER the replacement.
+    /// An in-place change of a segment's net prefab (unlike <see cref="NetUpgradeCommand"/>, which keeps
+    /// it). The edge keeps its identity and surfaces only as <c>Updated</c>. Carries the curve before
+    /// (<c>OldAx</c>...) and the committed curve after (<c>Ax</c>...).
     /// </summary>
     public sealed class NetReplaceCommand : ISimulationCommand
     {
@@ -19,19 +15,19 @@ namespace CS2MultiplayerMod.Game.Sync.Commands
         /// <summary>The prefab the segment was replaced WITH.</summary>
         public string PrefabName;
 
-        // Cubic Bézier control points a → b → c → d (start, two handles, end) of the segment as
-        // COMMITTED by the replacement — the geometry the receiver must end up with.
+        // Committed curve after the replacement: what the receiver must end with.
         public float Ax, Ay, Az;
         public float Bx, By, Bz;
         public float Cx, Cy, Cz;
         public float Dx, Dy, Dz;
 
-        // The same segment's curve BEFORE the replacement (the sender's baseline) — the geometry
-        // the receiver's edges still lie on, used to find them.
+        // Curve before the replacement: what the receiver's edges still lie on.
         public float OldAx, OldAy, OldAz;
         public float OldBx, OldBy, OldBz;
         public float OldCx, OldCy, OldCz;
         public float OldDx, OldDy, OldDz;
+        // Direct mod geometry only matches the exact pre-edit edge, never a nearby road.
+        public bool ExactGeometry;
 
         public ushort CommandId => Id;
 
@@ -46,6 +42,7 @@ namespace CS2MultiplayerMod.Game.Sync.Commands
             writer.WriteFloat(OldBx); writer.WriteFloat(OldBy); writer.WriteFloat(OldBz);
             writer.WriteFloat(OldCx); writer.WriteFloat(OldCy); writer.WriteFloat(OldCz);
             writer.WriteFloat(OldDx); writer.WriteFloat(OldDy); writer.WriteFloat(OldDz);
+            writer.WriteBool(ExactGeometry);
         }
 
         public void Read(NetworkReader reader)
@@ -59,6 +56,7 @@ namespace CS2MultiplayerMod.Game.Sync.Commands
             OldBx = WireGuard.ReadCoordinate(reader); OldBy = WireGuard.ReadCoordinate(reader); OldBz = WireGuard.ReadCoordinate(reader);
             OldCx = WireGuard.ReadCoordinate(reader); OldCy = WireGuard.ReadCoordinate(reader); OldCz = WireGuard.ReadCoordinate(reader);
             OldDx = WireGuard.ReadCoordinate(reader); OldDy = WireGuard.ReadCoordinate(reader); OldDz = WireGuard.ReadCoordinate(reader);
+            ExactGeometry = reader.ReadBool();
         }
 
         public byte[] Encode()

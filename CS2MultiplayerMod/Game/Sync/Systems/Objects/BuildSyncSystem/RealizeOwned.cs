@@ -1,8 +1,5 @@
-using System.Text;
-using Colossal.Mathematics;
 using Game.Common;
 using Game.Prefabs;
-using Game.Simulation;
 using Game.Tools;
 using Unity.Collections;
 using Unity.Entities;
@@ -13,19 +10,12 @@ using CS2MultiplayerMod.Game.Sync.Infrastructure;
 
 namespace CS2MultiplayerMod.Game.Sync.Systems
 {
-    // Creating the object itself and the sub-elements the game generates with it - the lot and its
-    // areas - from the same owner definition the sender's tool produced.
     public partial class BuildSyncSystem
     {
         /// <summary>
-        /// Emit three definition entities (object + lot per SubArea + net per SubNet) linked by
-        /// <see cref="OwnerDefinition"/>, with <see cref="CreationFlags.Permanent"/> for direct build.
-        /// Must run in ToolUpdate (see <see cref="SyncRealizeSystem"/>). Fixes prior recipe: m_ParentMesh=-1
-        /// ground marker, local transform, sub-definitions.
-        ///
-        /// <paramref name="attachParent"/> is the road node or edge a net object hangs off (Null
-        /// otherwise). Permanent skips the tool's apply pass, so the parent is tagged here instead -
-        /// see <see cref="NetAttachment"/>.
+        /// Emits the object, lot and connection-net definitions linked by <see cref="OwnerDefinition"/>, as
+        /// Permanent. ToolUpdate only. Permanent skips the apply pass, so <paramref name="attachParent"/>
+        /// (a net object's road) is tagged here (see <see cref="NetAttachment"/>).
         /// </summary>
         private void RealizeObject(Entity prefab, float3 position, quaternion rotation, Entity attachParent,
             int randomSeed, float age, CreationFlags extraFlags = default(CreationFlags),
@@ -47,8 +37,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             });
             EntityManager.AddComponentData(definition, new ObjectDefinition
             {
-                // -1 = sits on the ground (gets ElevationFlags.OnGround, no Elevation component);
-                // any other value makes the game treat it as mesh-attached / elevated.
+                // -1: on the ground; anything else is mesh-attached or elevated.
                 m_ParentMesh = -1,
                 m_Position = position,
                 m_Rotation = rotation,
@@ -73,23 +62,14 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             };
             RealizeOwnedSubElements(prefab, owner, ref random, simulationSpawn: simulationSpawn);
 
-            // The composition that draws the ring, or applies the sign's restriction, is re-selected
-            // only for Updated entities, and nothing else will tag them on this path. GenerateObjects
-            // (M1) creates the object, AttachSystem (M3) files it under the parent, and
-            // CompositionSelect reads it immediately after - all downstream of this ToolUpdate call.
+            // The parent's composition is re-selected only when Updated, and nothing else tags it here.
             if (attachParent != Entity.Null) NetAttachment.TagParentUpdated(EntityManager, attachParent);
         }
 
         /// <summary>
-        /// Builds a building the sending machine's zoning simulation grew. The spawner emits the
-        /// same object definition a tool placement does - only the Construction flag differs, which
-        /// is what puts it behind scaffolding instead of standing it up finished - but its owned
-        /// connection nets follow a different recipe, so this path asks for that one (see
-        /// <paramref name="simulationSpawn"/> on <see cref="RealizeSubNetCourse"/>).
-        ///
-        /// <paramref name="randomSeed"/> is the sender's variant seed and reaches the built entity
-        /// as its PseudoRandomSeed, which is what makes the same house look the same on both
-        /// machines. Called from ToolUpdate by <see cref="GrowableSyncSystem"/>.
+        /// Builds a zoning-grown building: the same object definition with the Construction flag, but its
+        /// connection nets use the spawner's recipe (<paramref name="simulationSpawn"/>).
+        /// <paramref name="randomSeed"/> becomes its PseudoRandomSeed so the variant matches.
         /// </summary>
         internal void RealizeSimulationBuilding(Entity prefab, float3 position, quaternion rotation,
             int randomSeed, bool underConstruction)
@@ -100,12 +80,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         }
 
         /// <summary>
-        /// Emit a prefab's owned lot areas and connection nets.
-        ///
-        /// <paramref name="lotOwner"/> is the building whose lot surface the connection nets are laid
-        /// on, or <see cref="Entity.Null"/> to lay them on the terrain. The tools pass the host
-        /// building here for a service upgrade (the extension's paths belong on the host's lot) and
-        /// nothing for a plain placement.
+        /// Emits a prefab's lot areas and connection nets. <paramref name="lotOwner"/> is the building
+        /// whose lot surface the nets follow (the host, for an upgrade), or null for terrain.
         /// </summary>
         internal void RealizeOwnedSubElements(Entity prefab, OwnerDefinition owner,
             ref Unity.Mathematics.Random random, Entity lotOwner = default(Entity),
@@ -130,11 +106,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             RealizeSubNets(prefab, owner, ownerEntity, lotOwner, simulationSpawn: false, ref random);
         }
 
-        /// <summary>
-        /// Emit lot/area definitions per <see cref="SubArea"/>, terrain-following polygons from
-        /// <see cref="SubAreaNode"/> buffer (local to world). Resolve placeholder prefabs via
-        /// SelectAreaPrefab, guarded against missing <see cref="SpawnableObjectData"/>.
-        /// </summary>
+        /// <summary>Lot/area definitions per <see cref="SubArea"/>, with placeholder prefabs resolved safely.</summary>
         private void RealizeSubAreas(Entity prefab, OwnerDefinition owner, Entity ownerEntity,
             ref Unity.Mathematics.Random random)
         {
@@ -156,8 +128,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     {
                         DynamicBuffer<PlaceholderObjectElement> placeholders =
                             EntityManager.GetBuffer<PlaceholderObjectElement>(areaPrefab, isReadOnly: true);
-                        // SelectAreaPrefab reads SpawnableObjectData[candidate] with NO existence check —
-                        // a candidate missing it is a hard (native) crash, not a catchable exception. Guard.
+                        // SelectAreaPrefab reads SpawnableObjectData unchecked: a missing one is a native crash.
                         if (!AllHaveSpawnableData(placeholders))
                         {
                             SyncLog.Warn(LogTopic.Buildings,
@@ -178,8 +149,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                         seed = random.NextInt();
                     }
 
-                    // GenerateAreasSystem reads AreaData[prefab] with NO existence check → a non-area
-                    // prefab here hard-crashes the game. Only emit a definition for a real area prefab.
+                    // GenerateAreasSystem reads AreaData unchecked: a non-area prefab is a native crash.
                     if (!EntityManager.HasComponent<AreaData>(areaPrefab))
                     {
                         SyncLog.Warn(LogTopic.Buildings, "BuildSync realize: sub-area prefab '" +
@@ -225,11 +195,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             }
         }
 
-        /// <summary>
-        /// True only when every placeholder candidate carries <see cref="SpawnableObjectData"/>, which
-        /// <c>AreaUtils.SelectAreaPrefab</c> dereferences without checking. Empty buffers return false
-        /// (nothing to select).
-        /// </summary>
+        /// <summary>Every candidate has <see cref="SpawnableObjectData"/>; empty is false.</summary>
         private bool AllHaveSpawnableData(DynamicBuffer<PlaceholderObjectElement> placeholders)
         {
             if (placeholders.Length == 0) return false;

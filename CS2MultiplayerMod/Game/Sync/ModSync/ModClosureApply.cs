@@ -1,6 +1,7 @@
 using System.Collections.Generic;
 using CS2MultiplayerMod.Core.Sync.ModSync;
 using Game.Common;
+using Game.Net;
 using Unity.Entities;
 
 namespace CS2MultiplayerMod.Game.Sync.ModSync
@@ -21,13 +22,9 @@ namespace CS2MultiplayerMod.Game.Sync.ModSync
     }
 
     /// <summary>
-    /// Writes an arriving closure into this machine's world.
-    ///
-    /// Resolution and writing are separate passes on purpose. A closure names several places in the
-    /// city, and a road that is still a frame or two from being built makes one of them
-    /// temporarily unfindable; discovering that halfway through would leave the junction holding
-    /// half of somebody else's edit with no record of what the other half was. So everything is
-    /// looked up first, and nothing is written until all of it is found.
+    /// Writes an arriving closure. Everything is resolved before anything is written: a road a frame
+    /// from being built makes a place temporarily unfindable, and a half-applied closure has no record
+    /// of the other half.
     /// </summary>
     internal sealed class ModClosureApply
     {
@@ -58,8 +55,7 @@ namespace CS2MultiplayerMod.Game.Sync.ModSync
             _resolved.Clear();
             _newSatellites.Clear();
 
-            Entity carrier;
-            if (!_identity.TryResolve(snapshot.Carrier, out carrier))
+            if (!_identity.TryResolve(snapshot.Carrier, out Entity carrier))
             {
                 Detail = snapshot.Carrier.Key();
                 return ModApplyOutcome.CarrierMissing;
@@ -68,8 +64,7 @@ namespace CS2MultiplayerMod.Game.Sync.ModSync
             ModApplyOutcome check = Resolve(snapshot);
             if (check != ModApplyOutcome.Applied) return check;
 
-            // Everything the payload names is present. From here the world is written to, and the
-            // only remaining failure would be a bug rather than a race.
+            // Everything resolved; from here only a bug can fail.
             List<Entity> stale = CollectExistingSatellites(carrier);
 
             for (int i = 0; i < snapshot.Satellites.Count; i++)
@@ -81,9 +76,9 @@ namespace CS2MultiplayerMod.Game.Sync.ModSync
 
             StripAbsentTypes(carrier, snapshot.CarrierValues);
             DestroySatellites(stale);
+            if (snapshot.HasLaneSpeedReset) ApplyLaneSpeedReset(carrier, snapshot.LaneSpeedReset);
 
-            // The same signal an ordinary edit leaves, so the mod's own systems and the game's
-            // rendering both notice that this junction changed.
+            // Same signal an ordinary edit leaves, for the mod's systems and rendering.
             if (!_entities.HasComponent<Updated>(carrier)) _entities.AddComponent<Updated>(carrier);
             if (!_entities.HasComponent<BatchesUpdated>(carrier))
                 _entities.AddComponent<BatchesUpdated>(carrier);
@@ -91,10 +86,38 @@ namespace CS2MultiplayerMod.Game.Sync.ModSync
             return ModApplyOutcome.Applied;
         }
 
-        /// <summary>
-        /// Looks up every place in the city the payload names, and checks that every type in it can
-        /// be written here. Touches nothing.
-        /// </summary>
+        private void ApplyLaneSpeedReset(Entity carrier, float speed)
+        {
+            if (!_entities.HasComponent<Edge>(carrier) || !_entities.HasBuffer<SubLane>(carrier))
+                return;
+            // A reset can only accompany removal of this exact mod's durable component.
+            for (int i = 0; i < _catalog.Entries.Count; i++)
+                if (_catalog.Entries[i].Type.FullName ==
+                        "RoadSpeedAdjuster.Components.CustomSpeed" &&
+                    _catalog.Entries[i].Accessor.Has(_entities, carrier)) return;
+
+            DynamicBuffer<SubLane> lanes = _entities.GetBuffer<SubLane>(carrier, true);
+            for (int i = 0; i < lanes.Length; i++)
+            {
+                Entity lane = lanes[i].m_SubLane;
+                if (!_entities.Exists(lane)) continue;
+                if (_entities.HasComponent<CarLane>(lane))
+                {
+                    CarLane car = _entities.GetComponentData<CarLane>(lane);
+                    car.m_DefaultSpeedLimit = speed;
+                    car.m_SpeedLimit = speed;
+                    _entities.SetComponentData(lane, car);
+                }
+                else if (_entities.HasComponent<TrackLane>(lane))
+                {
+                    TrackLane track = _entities.GetComponentData<TrackLane>(lane);
+                    track.m_SpeedLimit = speed;
+                    _entities.SetComponentData(lane, track);
+                }
+            }
+        }
+
+        /// <summary>Resolves every place the payload names and checks every type is writable. Touches nothing.</summary>
         private ModApplyOutcome Resolve(ModStateSnapshot snapshot)
         {
             ModApplyOutcome outcome = ResolveEntity(snapshot.CarrierValues);
@@ -133,8 +156,7 @@ namespace CS2MultiplayerMod.Game.Sync.ModSync
                     string key = reference.Key();
                     if (_resolved.ContainsKey(key)) continue;
 
-                    Entity target;
-                    if (!_identity.TryResolve(reference, out target))
+                    if (!_identity.TryResolve(reference, out Entity target))
                     {
                         Detail = key;
                         return ModApplyOutcome.ReferenceMissing;
@@ -167,15 +189,13 @@ namespace CS2MultiplayerMod.Game.Sync.ModSync
                         ? _newSatellites[reference.SatelliteIndex]
                         : Entity.Null;
                 default:
-                    Entity found;
-                    return _resolved.TryGetValue(reference.Key(), out found) ? found : Entity.Null;
+                    return _resolved.TryGetValue(reference.Key(), out Entity found) ? found : Entity.Null;
             }
         }
 
         /// <summary>
-        /// Takes off the carrier any replicated type the arriving closure does not mention. A query
-        /// on a type cannot report that it was removed somewhere else, so a removal only travels as
-        /// the absence of that type from a snapshot - and this is where that absence is acted on.
+        /// Removes replicated types the closure does not mention: a removal travels only as absence from a
+        /// snapshot.
         /// </summary>
         private void StripAbsentTypes(Entity carrier, ModEntityValues values)
         {
@@ -184,8 +204,7 @@ namespace CS2MultiplayerMod.Game.Sync.ModSync
                 ModCatalogEntry entry = _catalog.Entries[i];
                 if (!entry.Accessor.Has(_entities, carrier)) continue;
 
-                int typeIndex;
-                if (!_binding.TryIndexOf(entry.Descriptor.Key, out typeIndex)) continue;
+                if (!_binding.TryIndexOf(entry.Descriptor.Key, out int typeIndex)) continue;
 
                 bool mentioned = false;
                 for (int c = 0; c < values.Components.Count; c++)
@@ -198,21 +217,15 @@ namespace CS2MultiplayerMod.Game.Sync.ModSync
             }
         }
 
-        /// <summary>
-        /// The bookkeeping entities the carrier owned before this closure arrived. They are
-        /// replaced wholesale rather than matched up, because the mods rebuild them on every edit
-        /// anyway and there is nothing stable to match them on.
-        /// </summary>
+        /// <summary>Satellites the carrier owned before; replaced wholesale, as mods rebuild them per edit.</summary>
         private List<Entity> CollectExistingSatellites(Entity carrier)
         {
             var capture = new ModClosureCapture(_entities, _identity, _binding, _catalog);
-            ModEntityRef carrierRef;
-            if (!_identity.TryDescribe(carrier, out carrierRef)) return new List<Entity>();
+            if (!_identity.TryDescribe(carrier, out ModEntityRef carrierRef)) return new List<Entity>();
 
             capture.Capture(carrier, carrierRef);
 
-            // A rejected capture still leaves behind whatever it reached before it stopped, and
-            // those are still this carrier's satellites.
+            // A rejected capture still lists the satellites it reached.
             return new List<Entity>(capture.SatelliteEntities);
         }
 
@@ -223,10 +236,8 @@ namespace CS2MultiplayerMod.Game.Sync.ModSync
                 Entity satellite = satellites[i];
                 if (satellite == Entity.Null || !_entities.Exists(satellite)) continue;
 
-                // Never a thing in the world, even if the walk that found it went wrong: only an
-                // entity with no place of its own can have been one of these.
-                ModEntityRef described;
-                if (_identity.TryDescribe(satellite, out described)) continue;
+                // Only an entity with no place of its own can be a satellite.
+                if (_identity.TryDescribe(satellite, out ModEntityRef described)) continue;
 
                 _entities.DestroyEntity(satellite);
             }

@@ -11,7 +11,8 @@ description: "Requirements, installing through Paradox Mods, hosting your first 
 - The same mod version on every computer.
 - The same gameplay DLC enabled everywhere. Radio station DLC does not matter, and CS1
   Treasure Hunt is ignored because it cannot be disabled. See [Disabling DLC](disable_dlc.md).
-- No other mods. Hosting and joining are blocked while another mod is active - see
+- No other mods, except the supported ones: Traffic, Road Speed Adjuster, Anarchy, Find It
+  and Asset Icon Library. Any other active mod blocks hosting and joining - see
   [Mods and compatibility](mods.md).
 - A connection type both sides agree on: [Steam Relay](steam-relay.md) or a
   [direct connection](direct-connection.md).
@@ -34,6 +35,7 @@ and joining step by step.
 | --- | --- |
 | [Steam Relay](steam-relay.md) | Everyone owns the game on Steam. Share a join code, no router setup |
 | [Direct connection](direct-connection.md) | Any copy of the game, and any local network. Needs an address and a port |
+| [Hamachi or another VPN](hamachi.md) | Any copy of the game, when the host's port cannot be opened. Every player installs the VPN program |
 
 ## While you play
 
@@ -42,6 +44,7 @@ and joining step by step.
 | The city looks out of sync | Type `/sync` in chat, or press Sync World in the multiplayer panel |
 | You cannot join at all | Compare mod version, game version, DLC and active mods - see [Troubleshooting](troubleshooting.md) |
 | An error dialog appeared | Use its Open Help button, or look it up in the [error reference](errors-and-warnings.md) |
+| You want to report a bug | Type `/diag` in chat right after it happens and send the file - see [Reporting a problem](errors-and-warnings.md#reporting-a-problem) |
 
 ---
 

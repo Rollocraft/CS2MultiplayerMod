@@ -18,10 +18,10 @@ namespace CS2MultiplayerMod.Core.Sync.ModSync
         public string Text;
         public ModEntityRef Reference;
 
-        public static ModLeaf FromInteger(long value) { return new ModLeaf { Integer = value }; }
-        public static ModLeaf FromReal(double value) { return new ModLeaf { Real = value }; }
-        public static ModLeaf FromText(string value) { return new ModLeaf { Text = value ?? string.Empty }; }
-        public static ModLeaf FromReference(ModEntityRef value) { return new ModLeaf { Reference = value }; }
+        public static ModLeaf FromInteger(long value) => new ModLeaf { Integer = value };
+        public static ModLeaf FromReal(double value) => new ModLeaf { Real = value };
+        public static ModLeaf FromText(string value) => new ModLeaf { Text = value ?? string.Empty };
+        public static ModLeaf FromReference(ModEntityRef value) => new ModLeaf { Reference = value };
     }
 
     /// <summary>The value of one replicated type on one entity: a component, a tag, or a whole buffer.</summary>
@@ -46,16 +46,8 @@ namespace CS2MultiplayerMod.Core.Sync.ModSync
     }
 
     /// <summary>
-    /// The complete replicated state hanging off one carrier, as one transaction.
-    ///
-    /// It is a whole-closure snapshot rather than a list of edits, because that is the shape the
-    /// mods themselves work in: an intersection's stored connections are torn down and rebuilt on
-    /// every change, so a per-field diff would describe bookkeeping entities that no longer existed
-    /// by the time it arrived. A snapshot is also idempotent, which is what lets a late or repeated
-    /// one be applied without tracking what the receiver did with the last.
-    ///
-    /// An empty snapshot is meaningful: it says this carrier no longer holds any replicated state,
-    /// and is how a removal travels.
+    /// One carrier's complete replicated state as an idempotent transaction; mods rebuild their
+    /// bookkeeping per edit, so diffs would not work. Empty means the state was removed.
     /// </summary>
     public sealed class ModStateSnapshot
     {
@@ -74,12 +66,12 @@ namespace CS2MultiplayerMod.Core.Sync.ModSync
         public ModEntityRef Carrier;
         public ModEntityValues CarrierValues = new ModEntityValues();
         public readonly List<ModEntityValues> Satellites = new List<ModEntityValues>();
+        // A Road Speed reset removes CustomSpeed; the final lane value travels with the removal.
+        public bool HasLaneSpeedReset;
+        public float LaneSpeedReset;
 
         /// <summary>True when the carrier holds nothing replicated - the removal case.</summary>
-        public bool IsEmpty
-        {
-            get { return CarrierValues.Components.Count == 0 && Satellites.Count == 0; }
-        }
+        public bool IsEmpty => CarrierValues.Components.Count == 0 && Satellites.Count == 0;
 
         public void Write(NetworkWriter writer, IModTypeLookup types)
         {
@@ -87,6 +79,8 @@ namespace CS2MultiplayerMod.Core.Sync.ModSync
             Carrier.Write(writer);
             WriteEntity(writer, types, CarrierValues);
             for (int i = 0; i < Satellites.Count; i++) WriteEntity(writer, types, Satellites[i]);
+            writer.WriteBool(HasLaneSpeedReset);
+            if (HasLaneSpeedReset) writer.WriteFloat(LaneSpeedReset);
         }
 
         public static ModStateSnapshot Read(NetworkReader reader, IModTypeLookup types)
@@ -96,14 +90,22 @@ namespace CS2MultiplayerMod.Core.Sync.ModSync
             if (satellites < 0 || satellites > MaxSatellites)
                 throw new ProtocolException("Mod state transaction declares " + satellites + " satellites.");
 
-            // The satellite count is read first so that every reference into the satellite list can
-            // be bounds-checked as it is read, rather than trusted now and chased later.
+            // Satellite count first, so every satellite reference is bounds-checked as read.
             snapshot.Carrier = ModEntityRef.Read(reader, satellites);
 
             int budget = MaxTotalLeaves;
             snapshot.CarrierValues = ReadEntity(reader, types, satellites, ref budget);
             for (int i = 0; i < satellites; i++)
                 snapshot.Satellites.Add(ReadEntity(reader, types, satellites, ref budget));
+            snapshot.HasLaneSpeedReset = reader.ReadBool();
+            if (snapshot.HasLaneSpeedReset)
+            {
+                snapshot.LaneSpeedReset = reader.ReadFloat();
+                if (float.IsNaN(snapshot.LaneSpeedReset) ||
+                    float.IsInfinity(snapshot.LaneSpeedReset) ||
+                    snapshot.LaneSpeedReset < 0.1f || snapshot.LaneSpeedReset > 500f)
+                    throw new ProtocolException("Invalid restored road speed.");
+            }
             return snapshot;
         }
 

@@ -1,6 +1,4 @@
-using System.Collections.Concurrent;
 using System.Collections.Generic;
-using Game;
 using Game.City;
 using Game.Common;
 using Game.Prefabs;
@@ -18,26 +16,15 @@ using CS2MultiplayerMod.Game.Sync.Infrastructure;
 namespace CS2MultiplayerMod.Game.Sync.Systems
 {
     /// <summary>
-    /// Replicates the *start* of a natural disaster - tornado, hailstorm, thunderstorm, tsunami -
-    /// and nothing else. One <see cref="DisasterEventCommand"/> per event carries the state the
-    /// game resolves once at creation (place, size, duration, strength); every machine then runs
-    /// the event with its own simulation. Streaming the storm's path instead would put a message
-    /// on the wire every simulation frame for minutes on end.
-    ///
-    /// Each machine rolls its own disaster dice from a wall-clock seed, so without this the two
-    /// cities get unrelated disasters. Clients therefore stop rolling entirely
-    /// (<see cref="global::Game.Simulation.WeatherHazardSystem"/> is switched off while a client is
-    /// in a session) and take the host's, which is the same host-authoritative shape as the rest of
-    /// the mod. The rain-driven river flood is deliberately left alone: it is derived from the
-    /// already-replicated weather, and it respawns itself as long as the rain lasts.
+    /// Replicates only the start of a disaster: one command with what the game resolves at creation.
+    /// Rolls are wall-clock seeded, so clients stop rolling (WeatherHazardSystem is off) and take the
+    /// host's. The rain-driven river flood is left alone; it follows the replicated weather.
     /// </summary>
-    public partial class DisasterSyncSystem : GameSystemBase
+    public partial class DisasterSyncSystem : CommandSyncSystem, IRealizeStage
     {
         /// <summary>Disasters arrive one at a time; a per-frame cap keeps a flood from stalling a frame.</summary>
         private const int MaxRealizePerFrame = 4;
 
-        private readonly ConcurrentQueue<SimulationCommandMessage> _incoming =
-            new ConcurrentQueue<SimulationCommandMessage>();
         private readonly List<Realized> _justRealized = new List<Realized>();
 
         private PrefabSystem _prefabSystem;
@@ -46,11 +33,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         private CityConfigurationSystem _cityConfiguration;
         private EntityQuery _createdPhenomena;
         private EntityQuery _createdSurges;
-        private CommandObserver _observer;
         private bool _rollsSuppressed;
 
-        /// <summary>An event realized this frame: it must not be captured straight back out, and
-        /// the sender's values are re-stamped onto it once the game's own initialization has run.</summary>
+        /// <summary>Realized this frame: never recaptured, and re-stamped after initialization.</summary>
         private struct Realized
         {
             public Entity Entity;
@@ -75,9 +60,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 None = SyncQuery.ReadOnly<Deleted, Temp>(),
             });
 
-            // Flood excluded: that marker is the rain-driven river flood, which every machine
-            // derives from the replicated weather and re-creates on its own for as long as it
-            // rains. Replicating it would stack a second surge on top of the local one.
+            // The rain flood follows the replicated weather; replicating it would stack a second surge.
             _createdSurges = GetEntityQuery(new EntityQueryDesc
             {
                 All = SyncQuery.ReadOnly<global::Game.Events.Event,
@@ -85,19 +68,12 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 None = SyncQuery.ReadOnly<global::Game.Events.Flood, Deleted, Temp>(),
             });
 
-            _observer = SyncObserverBinding.Bind(
-                () => new CommandObserver(_incoming, DisasterEventCommand.Id)
-                    {
-                        MaxBodyBytes = DisasterEventCommand.MaxEncodedBytes,
-                    },
-                DrainQueue);
+            ListenFor(new[] { DisasterEventCommand.Id }, DisasterEventCommand.MaxEncodedBytes);
         }
 
         protected override void OnDestroy()
         {
-            SyncInbox.UnregisterDrain(DrainQueue);
             SuppressLocalRolls(false);
-            SyncObserverBinding.Unbind(_observer);
             base.OnDestroy();
         }
 
@@ -119,17 +95,12 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 CapturePhenomena(session);
                 CaptureSurges(session);
 
-                // The game's initialization pass (Modification2) has run by now, so anything it
-                // overwrote or re-randomized on a replica gets the sender's values put back. This also
-                // ends the frame's echo window: from here on those entities are indistinguishable
-                // from local ones, which is safe because their Created tag is stripped at Cleanup.
+                // Initialization has run: put back what it re-randomized. Created is stripped at Cleanup.
                 ReassertRealized();
             }
         }
 
-        /// <summary>Called by <see cref="SyncRealizeSystem"/> during ToolUpdate: an event created
-        /// any later in the frame loses its <see cref="Created"/> tag at Cleanup before the game's
-        /// initialization pass can size its hotspot trail and place its effects.</summary>
+        /// <summary>ToolUpdate: created later, an event loses Created before initialization places it.</summary>
         public void RealizePending()
         {
             MultiplayerService service = Mod.Service;
@@ -142,19 +113,13 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
             MultiplayerSession session = service.Session;
             int realized = 0;
-            SimulationCommandMessage message;
-            while (realized < MaxRealizePerFrame && _incoming.TryDequeue(out message))
+            while (realized < MaxRealizePerFrame && _incoming.TryDequeue(out SimulationCommandMessage message))
             {
                 if (message.OriginPlayerId == session.LocalPlayerId) continue;
 
-                DisasterEventCommand command;
-                try { command = DisasterEventCommand.Decode(message.Body); }
-                catch (System.Exception ex)
-                {
-                    SyncLog.Warn(LogTopic.City, "DisasterSync: dropping malformed command: " +
-                        ex.Message);
+                if (!CommandDecode.TryDecode(message, DisasterEventCommand.Decode, LogTopic.City,
+                        "DisasterSync", out DisasterEventCommand command))
                     continue;
-                }
 
                 if (Realize(command, message.OriginPlayerId)) realized++;
             }
@@ -174,9 +139,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     Entity entity = events[i];
                     if (WasRealizedThisFrame(entity)) continue;
 
-                    Entity prefab;
-                    string prefabName;
-                    if (!TryNamePrefab(entity, out prefab, out prefabName)) continue;
+                    if (!TryNamePrefab(entity, out Entity prefab, out string prefabName)) continue;
 
                     var phenomenon =
                         EntityManager.GetComponentData<global::Game.Events.WeatherPhenomenon>(entity);
@@ -198,8 +161,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                         EntityManager.GetComponentData<global::Game.Events.Duration>(entity));
                     if (!Send(session, command, "phenomenon")) continue;
 
-                    // Harmless weather (fog, plain thunderstorms) comes through here too and is
-                    // frequent; only an actual disaster is worth a line in the quiet default log.
+                    // Only real disasters reach the default log.
                     string detail = "'" + prefabName + "' at " + phenomenon.m_PhenomenonPosition +
                                     ", radius " + command.PhenomenonRadius + ", starting in " +
                                     command.StartDelayFrames + " frame(s), lasting " +
@@ -232,11 +194,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     Entity entity = events[i];
                     if (WasRealizedThisFrame(entity)) continue;
 
-                    Entity prefab;
-                    string prefabName;
-                    if (!TryNamePrefab(entity, out prefab, out prefabName)) continue;
-                    // The query already excludes the stock rain flood by its Flood marker; a
-                    // custom prefab could declare the same change type without that marker.
+                    if (!TryNamePrefab(entity, out Entity prefab, out string prefabName)) continue;
+                    // A custom prefab can declare the flood change type without the Flood marker.
                     if (IsRainControlled(prefab)) continue;
 
                     var surge =
@@ -267,11 +226,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             }
         }
 
-        /// <summary>
-        /// Convert the event's absolute start/end simulation frames into counts relative to now.
-        /// Absolute frames are meaningless across machines - each keeps its own frame counter and
-        /// the in-game clock is aligned by re-anchoring its epoch instead.
-        /// </summary>
+        /// <summary>Absolute frames differ per machine; send counts relative to now.</summary>
         private void FillTiming(DisasterEventCommand command, global::Game.Events.Duration duration)
         {
             long frame = _simulation.frameIndex;
@@ -300,8 +255,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
         private bool Realize(DisasterEventCommand command, int originPlayerId)
         {
-            Entity prefab;
-            if (!_prefabIndex.TryResolve(command.PrefabName, out prefab))
+            if (!_prefabIndex.TryResolve(command.PrefabName, out Entity prefab))
             {
                 SyncLog.Warn(LogTopic.City, "DisasterSync: no local event prefab named '" +
                     command.PrefabName + "'; ignoring the disaster.");
@@ -314,8 +268,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 return false;
             }
 
-            // The same gate the game applies to its own rolls: a city with natural disasters
-            // switched off never starts a damaging event, so it must not accept one either.
+            // The game's own gate: disasters off means no damaging events.
             if (IsDamaging(prefab) && !_cityConfiguration.naturalDisasters)
             {
                 SyncLog.Detail(LogTopic.City,
@@ -368,12 +321,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             return true;
         }
 
-        /// <summary>
-        /// Put the sender's values back after the game's initialization pass. That pass leaves
-        /// anything already set alone for a weather phenomenon, but re-rolls a water surge's
-        /// intensity and re-dates its duration unconditionally - which would give every machine a
-        /// different tsunami from the same command.
-        /// </summary>
+        /// <summary>Initialization re-rolls a surge's intensity and duration; put the sender's values back.</summary>
         private void ReassertRealized()
         {
             if (_justRealized.Count == 0) return;
@@ -415,8 +363,6 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
                 if (!refreshTrail) return;
 
-                // The hotspot trail and the effect anchor were filled from whatever the
-                // initialization pass resolved; re-seed both from the values above.
                 if (EntityManager.HasBuffer<global::Game.Events.HotspotFrame>(entity))
                 {
                     DynamicBuffer<global::Game.Events.HotspotFrame> trail =
@@ -439,11 +385,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
         // ---- Local rolls ------------------------------------------------------------
 
-        /// <summary>
-        /// Stop or restart this machine's own disaster rolls. The spawner seeds itself from the
-        /// wall clock, so leaving it running on a client produces a second, unrelated set of
-        /// disasters alongside the host's replicated ones.
-        /// </summary>
+        /// <summary>The spawner is wall-clock seeded, so a client's own rolls would be unrelated.</summary>
         private void SuppressLocalRolls(bool suppress)
         {
             if (suppress == _rollsSuppressed) return;
@@ -459,17 +401,15 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
         // ---- Helpers ------------------------------------------------------------
 
-        private void DrainQueue()
+        protected override void DrainQueue()
         {
             SyncInbox.Clear(_incoming);
             _justRealized.Clear();
         }
 
         /// <summary>
-        /// True for an event this machine created from a remote command earlier in this same frame.
-        /// Realization runs at ToolUpdate and capture at ModificationEnd, so a replica is only ever
-        /// visible to the capture queries (which require <see cref="Created"/>) on that one frame -
-        /// matching by entity is exact, where a position key could collide.
+        /// A replica is visible to the Created capture queries only on its realize frame, so matching by
+        /// entity is exact.
         /// </summary>
         private bool WasRealizedThisFrame(Entity entity)
         {

@@ -10,27 +10,20 @@ using CS2MultiplayerMod.Core.Diagnostics;
 namespace CS2MultiplayerMod.Core.Networking.Tcp
 {
     /// <summary>
-    /// Host-side transport. Listens on a port, accepts clients on a background thread,
-    /// and tracks each as a <see cref="FramedConnection"/>. Lifecycle and data events
-    /// from all connections funnel into one thread-safe queue drained by
-    /// <see cref="Poll"/> on the game thread.
-    ///
-    /// Exposure controls live here: in LAN-only mode connections from non-private
-    /// addresses are closed at accept time, the number of sockets that have not yet
-    /// completed the handshake is capped, and a bounded event queue means a flooding
-    /// client gets disconnected instead of ballooning host memory.
+    /// Listens and accepts on a background thread; every connection's events funnel into one queue
+    /// drained by <see cref="Poll"/>. Exposure controls: LAN-only refuses non-private addresses at
+    /// accept, pre-handshake sockets are capped, and a flooding client overflows its queue and is dropped.
     /// </summary>
-    public sealed partial class TcpServerTransport : ITransport
+    public sealed partial class TcpServerTransport : ITransport, IInboundActivity
     {
         /// <summary>Sockets allowed to sit in the pre-session (pre-handshake) state at once.</summary>
         public const int MaxPendingConnections = 8;
 
         /// <summary>Queued transport events before the producing connection is dropped.</summary>
-        public const int MaxQueuedEvents = 10000;
+        public const int MaxQueuedEvents = TransportEventQueue.Capacity;
 
         private readonly IModLogger _log;
-        private readonly InboundByteBudget _inboundBudget = new InboundByteBudget();
-        private readonly ConcurrentQueue<TransportEvent> _events = new ConcurrentQueue<TransportEvent>();
+        private readonly TransportEventQueue _events = new TransportEventQueue();
         private readonly ConcurrentDictionary<int, FramedConnection> _connections =
             new ConcurrentDictionary<int, FramedConnection>();
 
@@ -38,8 +31,8 @@ namespace CS2MultiplayerMod.Core.Networking.Tcp
         private Thread _acceptThread;
         private X509Certificate2 _certificate;
         private bool _lanOnly;
+        private bool _dualStack;
         private int _nextConnectionId = ConnectionId.Server.Value + 1; // 0=None, 1=Server reserved
-        private int _queuedEvents;
         private volatile bool _active;
 
         public TcpServerTransport(IModLogger log)
@@ -60,9 +53,8 @@ namespace CS2MultiplayerMod.Core.Networking.Tcp
         }
 
         /// <summary>
-        /// Start listening. <paramref name="lanOnly"/> refuses non-private remote
-        /// addresses; <paramref name="certificate"/> enables TLS for every connection
-        /// (null = plaintext). The certificate is owned by the caller.
+        /// <paramref name="lanOnly"/> refuses addresses outside this network; <paramref name="certificate"/> (caller
+        /// owned) enables TLS, null is plaintext.
         /// </summary>
         public void Start(int port, bool lanOnly = true, X509Certificate2 certificate = null)
         {
@@ -70,8 +62,9 @@ namespace CS2MultiplayerMod.Core.Networking.Tcp
 
             _lanOnly = lanOnly;
             _certificate = certificate;
-            _listener = new TcpListener(IPAddress.Any, port);
-            _listener.Start();
+            _listener = StartListener(port);
+            List<KeyValuePair<IPAddress, string>> localAddresses = LocalAddresses();
+            _localIpv6Subnets = Ipv6Subnets(localAddresses);
             _active = true;
 
             _acceptThread = new Thread(AcceptLoop)
@@ -82,11 +75,44 @@ namespace CS2MultiplayerMod.Core.Networking.Tcp
             _acceptThread.Start();
 
             _log.Event(LogTopic.Transport, "Host listening on " + _listener.LocalEndpoint + " (" +
+                (_dualStack ? "IPv4+IPv6" : "IPv4 only") + ", " +
                 (lanOnly ? "LAN-only" : "PUBLIC") + ", " +
                 (certificate != null ? "TLS" : "PLAINTEXT") + ").");
-            LogReachability(port, lanOnly);
+            LogReachability(port, lanOnly, localAddresses);
         }
 
+        /// <summary>
+        /// One dual-stack socket takes IPv6 and IPv4 peers alike. Without IPv6 on this machine it falls back to
+        /// IPv4 alone; a busy or forbidden port is rethrown, since the IPv4 bind would fail the same way.
+        /// </summary>
+        private TcpListener StartListener(int port)
+        {
+            if (Socket.OSSupportsIPv6)
+            {
+                TcpListener dual = null;
+                try
+                {
+                    dual = new TcpListener(IPAddress.IPv6Any, port);
+                    dual.Server.DualMode = true;
+                    dual.Start();
+                    _dualStack = true;
+                    return dual;
+                }
+                catch (Exception ex) when (!(ex is SocketException socketEx &&
+                    (socketEx.SocketErrorCode == SocketError.AddressAlreadyInUse ||
+                     socketEx.SocketErrorCode == SocketError.AccessDenied)))
+                {
+                    if (dual != null) { try { dual.Stop(); } catch { /* ignore */ } }
+                    _log.Warn(LogTopic.Transport, "IPv6 listening unavailable (" + ex.Message +
+                        "); accepting IPv4 connections only.");
+                }
+            }
+
+            _dualStack = false;
+            var ipv4 = new TcpListener(IPAddress.Any, port);
+            ipv4.Start();
+            return ipv4;
+        }
 
         private void AcceptLoop()
         {
@@ -107,17 +133,20 @@ namespace CS2MultiplayerMod.Core.Networking.Tcp
                 if (!Admit(client)) continue;
 
                 string remote = "?";
-                try { remote = client.Client.RemoteEndPoint.ToString(); } catch { /* socket already dead */ }
+                try
+                {
+                    var endpoint = (IPEndPoint)client.Client.RemoteEndPoint;
+                    remote = NetAddress.FormatEndpoint(NetAddress.Normalize(endpoint.Address).ToString(), endpoint.Port);
+                }
+                catch { /* socket already dead */ }
 
                 var id = new ConnectionId(Interlocked.Increment(ref _nextConnectionId));
                 _log.Detail(LogTopic.Transport, "Accepted TCP connection " + id + " from " + remote +
                     (_certificate != null ? "; starting TLS handshake." : "."));
                 var connection = new FramedConnection(id, client, _certificate)
                 {
-                    InboundBudget = _inboundBudget,
-                    // Connected is announced only once the connection is actually usable
-                    // (after the TLS handshake), so the session never talks to a socket
-                    // that is still negotiating.
+                    InboundBudget = _events.Budget,
+                    // Connected only after TLS.
                     OnReady = cid => Enqueue(TransportEvent.Connected(cid), cid),
                     OnData = (cid, payload) => Enqueue(TransportEvent.Data(cid, payload), cid),
                     OnClosed = HandleClosed,
@@ -132,7 +161,7 @@ namespace CS2MultiplayerMod.Core.Networking.Tcp
         private bool Admit(TcpClient client)
         {
             IPAddress remote = null;
-            try { remote = ((IPEndPoint)client.Client.RemoteEndPoint).Address; }
+            try { remote = NetAddress.Normalize(((IPEndPoint)client.Client.RemoteEndPoint).Address); }
             catch { /* socket already dead — fall through to close */ }
 
             if (remote == null)
@@ -141,7 +170,7 @@ namespace CS2MultiplayerMod.Core.Networking.Tcp
                 return false;
             }
 
-            if (_lanOnly && !IsPrivateAddress(remote))
+            if (_lanOnly && !IsLanAddress(remote))
             {
                 _log.Warn(LogTopic.Transport, "Refused connection from " + remote +
                     ": session is LAN-only.");
@@ -149,11 +178,10 @@ namespace CS2MultiplayerMod.Core.Networking.Tcp
                 return false;
             }
 
-            if (Volatile.Read(ref _queuedEvents) >= MaxQueuedEvents ||
+            if (_events.Count >= MaxQueuedEvents ||
                 _connections.Count >= MaxPendingConnections + 16)
             {
-                // Coarse global cap: handshaked peers are bounded by the session's player
-                // limit, so runaway growth here means a pending-socket flood.
+                // Handshaked peers are bounded by the player limit; growth here is a pending-socket flood.
                 _log.Warn(LogTopic.Transport, "Refused connection from " + remote +
                     ": too many open connections.");
                 try { client.Close(); } catch { }
@@ -163,81 +191,53 @@ namespace CS2MultiplayerMod.Core.Networking.Tcp
             return true;
         }
 
-
         private void Enqueue(TransportEvent evt, ConnectionId from)
         {
-            if (Interlocked.Increment(ref _queuedEvents) > MaxQueuedEvents)
-            {
-                Interlocked.Decrement(ref _queuedEvents);
-                if (evt.Type == TransportEventType.Data) _inboundBudget.Release(evt.Connection, evt.Payload.Length);
-                // The game thread is not draining fast enough or someone is flooding;
-                // either way, shedding the producer beats unbounded memory growth.
-                _log.Warn(LogTopic.Transport, "Transport event queue full; dropping connection " +
-                    from.Value + ".");
-                FramedConnection connection;
-                if (_connections.TryGetValue(from.Value, out connection))
-                    connection.Close("event queue overflow");
-                return;
-            }
-            _events.Enqueue(evt);
+            if (_events.TryEnqueue(evt)) return;
+            // Undrained or flooding: shed the producer.
+            _log.Warn(LogTopic.Transport, "Transport event queue full; dropping connection " + from.Value + ".");
+            if (_connections.TryGetValue(from.Value, out FramedConnection connection))
+                connection.Close("event queue overflow");
         }
 
         private void HandleClosed(ConnectionId id, string reason)
         {
-            FramedConnection removed;
-            _connections.TryRemove(id.Value, out removed);
-            Interlocked.Increment(ref _queuedEvents);
-            _events.Enqueue(TransportEvent.Disconnected(id, reason));
+            _connections.TryRemove(id.Value, out FramedConnection removed);
+            _events.EnqueueAlways(TransportEvent.Disconnected(id, reason));
         }
 
         public void Send(ConnectionId target, byte[] payload)
         {
-            FramedConnection connection;
-            if (_connections.TryGetValue(target.Value, out connection))
+            if (_connections.TryGetValue(target.Value, out FramedConnection connection))
                 connection.Send(payload);
         }
 
         public void Disconnect(ConnectionId connection)
         {
-            FramedConnection found;
-            if (_connections.TryGetValue(connection.Value, out found))
+            if (_connections.TryGetValue(connection.Value, out FramedConnection found))
                 found.Close("disconnected by host");
         }
 
         public void DisconnectAfterFlush(ConnectionId connection)
         {
-            FramedConnection found;
-            if (_connections.TryGetValue(connection.Value, out found))
+            if (_connections.TryGetValue(connection.Value, out FramedConnection found))
                 found.CloseAfterFlush("disconnected by host");
         }
 
-        public string GetRemoteAddress(ConnectionId connection)
-        {
-            FramedConnection found;
-            return _connections.TryGetValue(connection.Value, out found) ? found.RemoteAddress : null;
-        }
+        public string GetRemoteAddress(ConnectionId connection) =>
+            _connections.TryGetValue(connection.Value, out FramedConnection found) ? found.RemoteAddress : null;
+
+        public long LastInboundActivityMs(ConnectionId connection) =>
+            _connections.TryGetValue(connection.Value, out FramedConnection found) ? found.LastInboundMs : long.MinValue;
 
         public byte[] GetChannelBinding(ConnectionId connection)
         {
-            FramedConnection found;
-            return _connections.TryGetValue(connection.Value, out found)
+            return _connections.TryGetValue(connection.Value, out FramedConnection found)
                 ? found.ChannelBinding
                 : Array.Empty<byte>();
         }
 
-        public int Poll(IList<TransportEvent> sink)
-        {
-            int count = 0;
-            TransportEvent evt;
-            while (_events.TryDequeue(out evt))
-            {
-                Interlocked.Decrement(ref _queuedEvents);
-                sink.Add(evt);
-                if (evt.Type == TransportEventType.Data) _inboundBudget.Release(evt.Connection, evt.Payload.Length);
-                count++;
-            }
-            return count;
-        }
+        public int Poll(IList<TransportEvent> sink) => _events.Drain(sink);
 
         public void Shutdown()
         {
@@ -258,15 +258,13 @@ namespace CS2MultiplayerMod.Core.Networking.Tcp
             if (!_active) { Shutdown(); return; }
             _active = false;
 
-            // Stop admitting new clients first: an accept completing mid-drain would add a
-            // connection nobody waits for.
+            // Stop accepting first, or a mid-drain accept adds a connection nobody waits for.
             try { _listener.Stop(); } catch { /* ignore */ }
 
             foreach (var pair in _connections)
                 pair.Value.CloseAfterFlush("host left the session");
 
-            // Each connection removes itself from the map once its send thread has drained
-            // and closed, so an empty map is the accurate "everything went out" signal.
+            // Connections leave the map once drained and closed, so empty means everything went out.
             var deadline = System.Diagnostics.Stopwatch.StartNew();
             while (!_connections.IsEmpty && deadline.ElapsedMilliseconds < timeoutMs)
                 Thread.Sleep(5);

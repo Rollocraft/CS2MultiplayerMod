@@ -2,6 +2,7 @@ import { trigger } from "cs2/api";
 import { ModRegistrar } from "cs2/modding";
 import { extendCreditsScreen, MultiplayerMenuButton } from "mods/join-game";
 import { MultiplayerRightMenuButton } from "mods/mp-hub";
+import { MilestoneAutoDismiss } from "mods/milestone-auto-dismiss";
 import { GameJoinLoadingScreen, MenuJoinLoadingScreen } from "mods/loading-screen";
 import {
     GameSessionDisconnectConfirmation,
@@ -38,6 +39,13 @@ const register: ModRegistrar = (moduleRegistry) => {
         moduleRegistry.append("Game", GameSessionDisconnectConfirmation);
     } catch (e) {
         console.warn("[cs2mp] in-game connection view could not be registered.", e);
+    }
+    // Keep the optional native milestone integration isolated. If a game update
+    // changes its bindings, the multiplayer buttons and connection UI must still load.
+    try {
+        moduleRegistry.append("Game", MilestoneAutoDismiss);
+    } catch (e) {
+        console.warn("[cs2mp] milestone auto-dismiss could not be registered.", e);
     }
 
     // In-game multiplayer hub: the right-menu column renders the official

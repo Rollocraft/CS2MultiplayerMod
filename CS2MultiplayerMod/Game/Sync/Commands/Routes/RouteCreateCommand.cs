@@ -3,10 +3,7 @@ using CS2MultiplayerMod.Core.Sync;
 
 namespace CS2MultiplayerMod.Game.Sync.Commands
 {
-    /// <summary>
-    /// "A player created this transport line." Carries the complete route plus portable
-    /// transport-stop identities; the receiver rebuilds the route-definition graph locally.
-    /// </summary>
+    /// <summary>A new transport line with portable stop identities; the receiver rebuilds its definitions.</summary>
     public sealed class RouteCreateCommand : ISimulationCommand
     {
         public const ushort Id = 12;

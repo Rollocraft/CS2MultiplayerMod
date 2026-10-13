@@ -1,19 +1,11 @@
 namespace CS2MultiplayerMod.Core.Protocol.Messages
 {
-    /// <summary>
-    /// A final, reliable explanation sent by the host before it deliberately closes a
-    /// client's connection. This keeps administrative disconnects distinct from network
-    /// failures and gives the client a useful message to display.
-    /// </summary>
+    /// <summary>The host's reason for closing a client's connection, distinct from a network failure.</summary>
     public sealed class DisconnectNoticeMessage : INetMessage
     {
         public string Reason;
 
-        /// <summary>
-        /// True when the session simply ended (the host left the game or returned to the
-        /// main menu) rather than this player being removed. The client reports a graceful
-        /// notice as a normal end of session instead of a connection error.
-        /// </summary>
+        /// <summary>The session simply ended (host left); reported as a normal end, not an error.</summary>
         public bool Graceful;
 
         public DisconnectNoticeMessage() { }

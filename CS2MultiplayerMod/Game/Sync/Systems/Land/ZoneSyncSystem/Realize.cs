@@ -17,18 +17,14 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             Dictionary<long, List<Entity>> lookup = GetBlockLookup(now);
             int remaining = MaxApplyPerFrame;
 
-            // Fresh states take priority. Because each source layout occurs at most once in _ready,
-            // one frame can never structurally update the same Block over and over.
+            // Each source layout occurs once in _ready, so a Block is updated at most once per frame.
             int fresh = Math.Min(_ready.Count, remaining);
             for (int i = 0; i < fresh; i++)
             {
-                ZoneBlockKey key;
-                ZonePaintCommand command;
-                if (!_ready.TryTake(out key, out command)) break;
+                if (!_ready.TryTake(out ZoneBlockKey key, out ZonePaintCommand command)) break;
                 remaining--;
 
-                bool matched, changed, absentGrid;
-                ApplyOne(command, lookup, out matched, out changed, out absentGrid);
+                ApplyOne(command, lookup, out bool matched, out bool changed, out bool absentGrid);
                 if (changed) _diagnosticApplied++;
                 if (!matched)
                 {
@@ -46,21 +42,16 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 }
             }
 
-            // Retry only with budget left after fresh work. If fresh work spends the frame budget,
-            // leave the timer due so retries run at the first available frame instead of waiting
-            // another interval.
+            // Leave the timer due if fresh work used the budget.
             if (retryDue && remaining > 0)
             {
                 int retries = Math.Min(_pending.Count, remaining);
                 if (retries > 0) _lastRetryMs = now;
                 for (int i = 0; i < retries; i++)
                 {
-                    ZoneBlockKey key;
-                    PendingZone pending;
-                    if (!_pending.TryTake(out key, out pending)) break;
+                    if (!_pending.TryTake(out ZoneBlockKey key, out PendingZone pending)) break;
 
-                    bool matched, changed, absentGrid;
-                    ApplyOne(pending.Command, lookup, out matched, out changed, out absentGrid);
+                    ApplyOne(pending.Command, lookup, out bool matched, out bool changed, out bool absentGrid);
                     if (matched)
                     {
                         WithdrawZoneRecovery(pending, now);
@@ -70,9 +61,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     {
                         if (pending.RecoveryReport == null && _retryClock.NowMs >= pending.DeadlineMs)
                         {
-                            // Every cell still unresolved sits on a live block that exposes no
-                            // zonable cell there. Zoning it is a no-op on this machine, so the
-                            // patch is dropped rather than treated as a diverged city.
+                            // Unresolved cells sit on live blocks with no zonable cell there: a no-op, not a divergence.
                             if (!absentGrid)
                             {
                                 _diagnosticUnzonable++;
@@ -89,9 +78,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                                 .Tried("retried unresolved cells for 12 s of eligible time; continuing during the recovery hold");
                             Infrastructure.SyncInbox.Settle(pending.RecoveryReport);
                         }
-                        // Keep trying while recovery is held, and withdraw the report if the grid
-                        // catches up. Reporting every retry would falsely corroborate the same miss.
-                        // The removed slot remains ours, so reinsertion cannot exceed the bound.
+                        // Keep retrying while recovery is held; report once, not every retry.
                         _pending.TrySetLatest(key, pending, MaxPendingZones);
                     }
                 }
@@ -160,8 +147,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 for (int z = minZ; z <= maxZ; z++)
                 {
                     long key = PackSpatialBucket(x, z);
-                    List<Entity> entities;
-                    if (!_blockLookup.TryGetValue(key, out entities))
+                    if (!_blockLookup.TryGetValue(key, out List<Entity> entities))
                     {
                         if (_blockLookupListPool.Count > 0)
                         {
@@ -180,11 +166,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         }
 
         /// <summary>
-        /// Apply edited cells to the local grid. <paramref name="matched"/> tells the
-        /// caller whether every edited cell resolved (so unresolved cells can be retried);
-        /// <paramref name="changed"/> whether any cell actually changed;
-        /// <paramref name="absentGrid"/> whether any unresolved cell had no zoning grid at all
-        /// where the source put it, which is the only miss that can mean a diverged city.
+        /// Applies edited cells. <paramref name="absentGrid"/> is set when an unresolved cell had no zoning
+        /// grid at all, the only miss that means a diverged city.
         /// </summary>
         private void ApplyOne(ZonePaintCommand command, Dictionary<long, List<Entity>> lookup,
             out bool matched, out bool changed, out bool absentGrid)
@@ -197,8 +180,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             var knownZones = new bool[command.ZoneNames.Length];
             for (int i = 0; i < command.ZoneNames.Length; i++)
             {
-                ushort resolved;
-                if (_nameToIndex.TryGetValue(command.ZoneNames[i], out resolved) ||
+                if (_nameToIndex.TryGetValue(command.ZoneNames[i], out ushort resolved) ||
                     TryResolveZoneIndex(command.ZoneNames[i], out resolved))
                 {
                     resolvedZones[i] = resolved;
@@ -218,28 +200,23 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     wanted = resolvedZones[tableIndex];
                 }
 
-                float sourceX, sourceY, sourceZ;
-                if (!command.TryGetCellCenter(c, out sourceX, out sourceY, out sourceZ))
+                if (!command.TryGetCellCenter(c, out float sourceX, out float sourceY, out float sourceZ))
                 {
                     matched = false;
                     absentGrid = true;
                     continue;
                 }
 
-                Entity blockEntity;
-                int localIndex;
-                bool gridCoversCell;
                 if (!TryFindLocalCell(lookup, command,
                         new float3(sourceX, sourceY, sourceZ), command.CellStates[c],
-                        out blockEntity, out localIndex, out gridCoversCell))
+                        out Entity blockEntity, out int localIndex, out bool gridCoversCell))
                 {
                     matched = false;
                     if (!gridCoversCell) absentGrid = true;
                     continue;
                 }
 
-                // Retire each successful cell separately. Replaying a partially matched block
-                // must not undo a newer paint/erase on a cell that already succeeded.
+                // Retire cells individually so a replay cannot undo a newer edit on a finished cell.
                 command.CellStates[c] &= unchecked((byte)~ZonePaintCommand.StateEdited);
                 DynamicBuffer<Cell> cells = EntityManager.GetBuffer<Cell>(blockEntity);
                 Cell cell = cells[localIndex];
@@ -259,14 +236,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         }
 
         /// <summary>
-        /// Map one visible source cell to the closest semantically compatible visible local cell.
-        /// Searching immediate index neighbours handles a half-cell alignment difference without
-        /// copying any of the sender's locally generated state flags.
-        /// <para>
-        /// <paramref name="gridCoversCell"/> separates the two ways this can fail: no live block
-        /// reaches the position at all (the zoning grid itself is missing here) versus a block
-        /// that reaches it but exposes no zonable cell there. Only the first is a divergence.
-        /// </para>
+        /// Maps a source cell to the closest compatible local cell, tolerating a half-cell offset.
+        /// <paramref name="gridCoversCell"/> is false only when no block reaches the position at all.
         /// </summary>
         private bool TryFindLocalCell(Dictionary<long, List<Entity>> lookup,
             ZonePaintCommand command, float3 sourcePosition, byte sourceState,
@@ -275,8 +246,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             bestBlock = Entity.Null;
             bestIndex = -1;
             gridCoversCell = false;
-            List<Entity> candidates;
-            if (!lookup.TryGetValue(SpatialBucket(sourcePosition.xz), out candidates)) return false;
+            if (!lookup.TryGetValue(SpatialBucket(sourcePosition.xz), out List<Entity> candidates)) return false;
 
             float2 sourceDirection = math.normalizesafe(new float2(command.DirX, command.DirZ));
             float2 sourceBlockPosition = new float2(command.PosX, command.PosZ);
@@ -311,12 +281,11 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
                         float3 localPosition = ZoneUtils.GetCellPosition(block, local);
                         float distanceSquared = math.lengthsq(localPosition.xz - sourcePosition.xz);
-                        float score;
                         if (!ZoneCellMatchRules.TryScore(distanceSquared,
                                 block.m_Position.y - sourcePosition.y, signedAlignment, stripOffset,
                                 sourceState, PortableCellState(cell.m_State),
                                 block.m_Size.x == command.SizeX && block.m_Size.y == command.SizeY,
-                                out score)) continue;
+                                out float score)) continue;
 
                         if (score >= bestScore) continue;
                         bestScore = score;

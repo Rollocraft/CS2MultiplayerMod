@@ -15,10 +15,7 @@ namespace CS2MultiplayerMod.Core.Session
         public void SendBlob(string channel, byte[] data) =>
             SendBlobTo(ConnectionId.None, channel, data);
 
-        /// <summary>
-        /// Send a blob to a single peer - auto-ships map to just-joined client
-        /// without re-sending to everyone already in the session.
-        /// </summary>
+        /// <summary>Sends a blob to one peer, e.g. the map to a joiner.</summary>
         public void SendBlobTo(ConnectionId target, string channel, byte[] data) =>
             SendBlobTo(target, channel, 0, data);
 
@@ -42,8 +39,7 @@ namespace CS2MultiplayerMod.Core.Session
             public int Offset;
         }
 
-        // One reusable chunk buffer: SendTo encodes the message before it returns, so the same
-        // buffer can carry every chunk of every transfer.
+        // SendTo encodes before returning, so one buffer carries every chunk.
         private readonly byte[] _blobChunkBuffer = new byte[ProtocolConstants.BlobChunkBytes];
         // Ceiling for one transfer and for everything being reassembled at once.
         private const long MaxBlobMemoryBytes = BlobSource.MaxBytes;
@@ -114,10 +110,8 @@ namespace CS2MultiplayerMod.Core.Session
             for (int chunks = 0; chunks < 8 && _outgoingBlobs.Count > 0 &&
                  _transport.PendingSendBytes < BlobSendWindowBytes; chunks++)
             {
-                OutgoingBlob next;
-                if (!_outgoingBlobs.TryPeek(out next)) break;
-                Peer peer;
-                if (!_peers.TryGetValue(next.Target.Value, out peer) || !peer.Handshaked ||
+                if (!_outgoingBlobs.TryPeek(out OutgoingBlob next)) break;
+                if (!_peers.TryGetValue(next.Target.Value, out Peer peer) || !peer.Handshaked ||
                     (next.TransferId > 0 && (!_worldSyncSuspended || next.TransferId != _worldSyncEpoch)))
                 {
                     _outgoingBlobTotal -= next.Data.Length - next.Offset;
@@ -149,9 +143,7 @@ namespace CS2MultiplayerMod.Core.Session
 
         private void HandleBlobChunk(ConnectionId from, Peer peer, BlobChunkMessage chunk, long nowUnixMs)
         {
-            // Blobs flow host → client only. The "map" channel is auto-LOADED as a
-            // savegame on arrival, so accepting blobs from clients would let any joiner
-            // replace the host's running city.
+            // Host -> client only: the map channel is loaded as a savegame on arrival.
             if (Role == SessionRole.Host)
             {
                 Punt(from, peer, "client attempted to stream a blob", "BlobChunk");
@@ -168,19 +160,17 @@ namespace CS2MultiplayerMod.Core.Session
                 return;
             }
 
-            // Only channels the game layer registered are expected — and each carries
-            // its own size ceiling (a savegame cap is far below the 512 MiB of old).
-            int maxBytes;
+            // Only registered channels, each with its own ceiling.
             if (string.IsNullOrEmpty(chunk.Channel) ||
-                !_allowedBlobChannels.TryGetValue(chunk.Channel, out maxBytes))
+                !_allowedBlobChannels.TryGetValue(chunk.Channel, out int maxBytes))
             {
                 _log.Warn(LogTopic.WorldTransfer, "Dropping blob chunk on unregistered channel '" +
                     (chunk.Channel ?? "<null>") + "'.");
                 return;
             }
 
-            long completedTransfer;
-            if (chunk.TransferId > 0 && _completedBlobTransfers.TryGetValue(chunk.Channel, out completedTransfer) &&
+            if (chunk.TransferId > 0 &&
+                _completedBlobTransfers.TryGetValue(chunk.Channel, out long completedTransfer) &&
                 completedTransfer == chunk.TransferId) return;
 
             if (chunk.TotalBytes <= 0 || chunk.TotalBytes > maxBytes)
@@ -194,10 +184,8 @@ namespace CS2MultiplayerMod.Core.Session
                 return;
             }
 
-            BlobReassembler reassembler;
-            long activeTransferId;
-            if (_blobs.TryGetValue(chunk.Channel, out reassembler) &&
-                (!_blobTransferIds.TryGetValue(chunk.Channel, out activeTransferId) ||
+            if (_blobs.TryGetValue(chunk.Channel, out BlobReassembler reassembler) &&
+                (!_blobTransferIds.TryGetValue(chunk.Channel, out long activeTransferId) ||
                  activeTransferId != chunk.TransferId))
             {
                 _log.Warn(LogTopic.WorldTransfer, "Replacing incomplete blob '" + chunk.Channel +
@@ -235,8 +223,7 @@ namespace CS2MultiplayerMod.Core.Session
 
                 if (!chunk.Last) return;
 
-                // Completion verifies ReceivedBytes == TotalBytes exactly; a short or
-                // overlong transfer never reaches the game layer.
+                // Completion requires an exact byte count.
                 byte[] data = reassembler.Complete();
                 _blobs.Remove(chunk.Channel);
                 _blobTransferIds.Remove(chunk.Channel);
@@ -283,6 +270,5 @@ namespace CS2MultiplayerMod.Core.Session
             IncomingBlobReceived = 0;
             IncomingBlobTotal = 0;
         }
-
     }
 }

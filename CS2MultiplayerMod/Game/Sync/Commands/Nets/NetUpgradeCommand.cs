@@ -4,11 +4,8 @@ using CS2MultiplayerMod.Core.Sync;
 namespace CS2MultiplayerMod.Game.Sync.Commands
 {
     /// <summary>
-    /// "A player changed a piece of road in place" - carries the RESULTING composition,
-    /// not a delta, for either an edge (trees, grass, wide sidewalks, sound barriers, street
-    /// lights, crosswalks, roadside tree-row styles) or a node (traffic lights, all-way stop,
-    /// roundabout - <see cref="IsNode"/>). All-zero flags mean "the upgrade was removed".
-    /// See <see cref="NetUpgradeSyncSystem"/>.
+    /// The RESULTING composition of an edge (trees, sidewalks, barriers, lights, crosswalks) or node
+    /// (traffic lights, stops, roundabout - <see cref="IsNode"/>). All-zero flags remove the upgrade.
     /// </summary>
     public sealed class NetUpgradeCommand : ISimulationCommand
     {

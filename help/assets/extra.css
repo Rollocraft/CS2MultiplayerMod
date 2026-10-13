@@ -183,19 +183,334 @@ a.card:hover {
   vertical-align: top;
 }
 
+/* Fenced blocks render as .highlight, which the theme never lets scroll, so a
+   long line widened the whole page on phones. */
+.typography .highlight pre {
+  overflow-x: auto;
+}
+
+/* ------------------------------------------------------------ mod table */
+
+/* Filters and sorting come from mod-table.js; without it the table is a
+   plain Markdown table. The theme styles every article button as a primary
+   button, so the rules here are scoped under .mod-table to outrank it. */
+.mod-table {
+  --mod-official: var(--mp-brand);
+  --mod-works: oklch(66% 0.16 150);
+  --mod-partial: oklch(78% 0.15 80);
+  --mod-broken: var(--destructive);
+}
+
+.mod-table [data-status="official"] { --mod-c: var(--mod-official); }
+.mod-table [data-status="works"] { --mod-c: var(--mod-works); }
+.mod-table [data-status="partial"] { --mod-c: var(--mod-partial); }
+.mod-table [data-status="broken"] { --mod-c: var(--mod-broken); }
+
+.mod-filter {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  margin-top: 1rem;
+}
+
+.mod-filter__search {
+  position: relative;
+  flex: 1 1 14rem;
+  display: flex;
+  align-items: center;
+}
+
+.mod-filter__search svg {
+  position: absolute;
+  left: 0.65rem;
+  width: 1rem;
+  height: 1rem;
+  color: var(--muted-foreground);
+  pointer-events: none;
+}
+
+.mod-filter__search input,
+.mod-filter__tester {
+  height: 2.25rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--background);
+  color: var(--foreground);
+  font-size: 0.875rem;
+  outline: none;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.mod-filter__search input {
+  width: 100%;
+  padding: 0 0.75rem 0 2.1rem;
+}
+
+.mod-filter__tester {
+  flex: 0 1 12rem;
+  padding: 0 0.6rem;
+  cursor: pointer;
+}
+
+.dark .mod-filter__tester {
+  color-scheme: dark;
+}
+
+.mod-filter__search input:focus-visible,
+.mod-filter__tester:focus-visible {
+  border-color: var(--ring);
+  box-shadow: 0 0 0 3px color-mix(in oklab, var(--ring) 45%, transparent);
+}
+
+.mod-filter__status {
+  flex-basis: 100%;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+}
+
+.mod-table .mod-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  height: 2.25rem;
+  padding: 0 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--background);
+  color: var(--foreground);
+  font-size: 0.85rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background-color 0.15s ease, border-color 0.15s ease;
+}
+
+.mod-table .mod-chip:hover {
+  background: var(--secondary);
+}
+
+.mod-table .mod-chip[aria-pressed="true"] {
+  background: color-mix(in oklab, var(--mod-c, var(--foreground)) 14%, var(--background));
+  border-color: var(--mod-c, var(--foreground));
+}
+
+.mod-chip__dot,
+.mod-status::before {
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 50%;
+  background: var(--mod-c);
+  flex: none;
+}
+
+.mod-chip__count {
+  min-width: 1.25rem;
+  padding: 0 0.3rem;
+  border-radius: 999px;
+  background: var(--secondary);
+  color: var(--muted-foreground);
+  font-size: 0.75rem;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+.mod-filter__summary {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin: 0.75rem 0 0 !important;
+  color: var(--muted-foreground);
+  font-size: 0.85rem;
+}
+
+.mod-table .mod-sort,
+.mod-table .mod-tester,
+.mod-table .mod-filter__reset {
+  height: auto;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.mod-table .mod-filter__reset {
+  color: var(--mp-brand);
+  font-weight: 500;
+}
+
+.mod-table .mod-filter__reset:hover {
+  background: none;
+  text-decoration: underline;
+}
+
+.mod-table .table-wrapper {
+  margin-top: 0.5rem;
+}
+
+.mod-table table {
+  width: 100%;
+}
+
+.mod-table tbody tr td {
+  vertical-align: top;
+  white-space: normal;
+  line-height: 1.5;
+}
+
+.mod-table td[data-label="Status"] {
+  white-space: nowrap;
+}
+
+.mod-table td[data-label="Mod"] {
+  min-width: 8rem;
+  font-weight: 500;
+}
+
+.mod-table td[data-label="Details"] {
+  color: var(--muted-foreground);
+}
+
+.mod-table td[data-label="Tested by"] {
+  min-width: 7rem;
+}
+
+.mod-table tbody tr[hidden] {
+  display: none !important;
+}
+
+.mod-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.1rem 0.55rem;
+  border-radius: 999px;
+  background: color-mix(in oklab, var(--mod-c, var(--muted-foreground)) 15%, transparent);
+  font-size: 0.8rem;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.mod-status::before {
+  content: "";
+}
+
+.mod-testers {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+}
+
+.mod-table .mod-tester {
+  padding: 0.05rem 0.45rem;
+  border-radius: calc(var(--radius) - 0.2rem);
+  background: var(--secondary);
+  color: var(--foreground);
+  font-size: 0.8rem;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+
+.mod-table .mod-tester:hover,
+.mod-table .mod-tester[data-active="true"] {
+  background: var(--mp-brand-soft);
+  color: var(--mp-brand);
+}
+
+.mod-table .mod-sort {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+
+.mod-table .mod-sort:hover {
+  background: none;
+  color: var(--mp-brand);
+}
+
+.mod-sort::after {
+  content: "\2195";
+  color: var(--muted-foreground);
+  font-size: 0.8em;
+}
+
+th[aria-sort="ascending"] .mod-sort::after { content: "\2191"; color: var(--foreground); }
+th[aria-sort="descending"] .mod-sort::after { content: "\2193"; color: var(--foreground); }
+
+.mod-table__empty td {
+  padding: 2rem 0.5rem !important;
+  text-align: center;
+  color: var(--muted-foreground);
+}
+
+/* Phones: one card per mod instead of a sideways-scrolling table. */
+@media (max-width: 40rem) {
+  .mod-table.is-ready thead {
+    display: none;
+  }
+
+  .mod-table.is-ready table,
+  .mod-table.is-ready tbody,
+  .mod-table.is-ready tr,
+  .mod-table.is-ready td {
+    display: block;
+    width: 100%;
+  }
+
+  .mod-table.is-ready tbody tr {
+    border: 1px solid var(--border) !important;
+    border-radius: var(--radius);
+    padding: 0.6rem 0.75rem;
+    margin-bottom: 0.6rem;
+  }
+
+  .mod-table.is-ready tbody tr td {
+    padding: 0.2rem 0;
+    min-width: 0;
+  }
+
+  .mod-table.is-ready td[data-label="Details"]::before,
+  .mod-table.is-ready td[data-label="Tested by"]::before {
+    content: attr(data-label);
+    display: block;
+    color: var(--muted-foreground);
+    font-size: 0.75rem;
+  }
+}
+
 /* ---------------------------------------------------------------- logo */
 
-/* The logo is the mod's thumbnail, and the theme drops a non-SVG icon into a
-   square 2rem slot - free both the slot and the image so the 3:2 artwork keeps
-   its aspect ratio. */
+/* The theme's icon slot is a square 2rem box; the wordmark needs its width. */
 header span.size-8 {
   width: auto;
 }
 
-header span.size-8 > img {
+/* The lettering is white on transparent with padding around it: its letters
+   span 39.9%..76.5% of the image height (a spire rises above them). Size it so
+   the letter height matches the text's cap height (Geist ~0.71em) and sit the
+   letter bottoms on the text baseline. */
+.cs2mp-brand {
+  --mark-h: 1.94em;
+  font-size: 1rem;
+  font-weight: 600;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.cs2mp-brand__mark {
+  display: inline;
+  height: var(--mark-h);
   width: auto;
-  height: 2.75rem;
-  border-radius: 0.35rem;
+  vertical-align: calc(var(--mark-h) * -0.235);
+  filter: brightness(0);
+}
+
+.dark .cs2mp-brand__mark {
+  filter: none;
 }
 
 /* -------------------------------------------------------------- layout */

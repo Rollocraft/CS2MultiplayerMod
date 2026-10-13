@@ -12,23 +12,12 @@ using Unity.Mathematics;
 namespace CS2MultiplayerMod.Game.Sync.ModSync
 {
     /// <summary>
-    /// Says what an entity is in terms both machines share, and finds it again from that.
-    ///
-    /// An entity index is a position in one process's arrays; it means something else in another,
-    /// and a client keeps creating entities of its own for as long as it is connected, so the two
-    /// drift apart from the first frame. What both machines do agree on is the city: a junction is
-    /// at a place, a road runs between two junctions, a building stands on a spot and was placed
-    /// from a named prefab. Everything that crosses the wire is described that way and looked up
-    /// through the game's own search trees, which is also what keeps the lookup off the whole-city
-    /// walk that has cost this mod frames before.
+    /// Describes an entity in terms both machines share (a position, two junctions, a prefab at a spot)
+    /// and finds it again through the game's search trees. Entity indices differ per process.
     /// </summary>
     internal sealed class ModCarrierIdentity
     {
-        /// <summary>
-        /// How far a lookup may stray from the transmitted position. Both machines' worlds came
-        /// from the same savegame, so this covers float noise and a node that a local edit nudged -
-        /// not a search for something plausible nearby.
-        /// </summary>
+        /// <summary>Covers float noise and a locally nudged node, not a search for something nearby.</summary>
         private const float ToleranceXZ = 3f;
 
         /// <summary>Vertical slack. Generous, because elevation is re-derived on each machine.</summary>
@@ -51,10 +40,7 @@ namespace CS2MultiplayerMod.Game.Sync.ModSync
             _prefabIndex = prefabIndex;
         }
 
-        /// <summary>
-        /// Describes <paramref name="entity"/> portably, or fails when it has no place in the world
-        /// - which is how an entity a mod made purely for its own bookkeeping is recognised.
-        /// </summary>
+        /// <summary>Fails for an entity with no place in the world, i.e. a mod's own bookkeeping entity.</summary>
         public bool TryDescribe(Entity entity, out ModEntityRef reference)
         {
             reference = ModEntityRef.Null;
@@ -70,9 +56,8 @@ namespace CS2MultiplayerMod.Game.Sync.ModSync
             if (_entities.HasComponent<global::Game.Net.Edge>(entity))
             {
                 global::Game.Net.Edge edge = _entities.GetComponentData<global::Game.Net.Edge>(entity);
-                float3 start, end;
-                if (!TryNodePosition(edge.m_Start, out start)) return false;
-                if (!TryNodePosition(edge.m_End, out end)) return false;
+                if (!TryNodePosition(edge.m_Start, out float3 start)) return false;
+                if (!TryNodePosition(edge.m_End, out float3 end)) return false;
                 reference = ModEntityRef.Edge(start.x, start.y, start.z, end.x, end.y, end.z);
                 return true;
             }
@@ -138,7 +123,6 @@ namespace CS2MultiplayerMod.Game.Sync.ModSync
         private bool TryFindNode(float3 wanted, out Entity found)
         {
             found = Entity.Null;
-            float best = float.MaxValue;
 
             var candidates = new NativeList<Entity>(16, Allocator.Temp);
             try
@@ -154,9 +138,12 @@ namespace CS2MultiplayerMod.Game.Sync.ModSync
                         _entities.GetComponentData<global::Game.Net.Node>(candidate).m_Position;
                     if (math.abs(position.y - wanted.y) > ToleranceY) continue;
                     float distance = math.distancesq(position.xz, wanted.xz);
-                    if (distance > ToleranceXZ * ToleranceXZ || distance >= best) continue;
-
-                    best = distance;
+                    if (distance > ToleranceXZ * ToleranceXZ) continue;
+                    if (found != Entity.Null && found != candidate)
+                    {
+                        found = Entity.Null;
+                        return false;
+                    }
                     found = candidate;
                 }
             }
@@ -167,19 +154,13 @@ namespace CS2MultiplayerMod.Game.Sync.ModSync
             return found != Entity.Null;
         }
 
-        /// <summary>
-        /// An edge is found through its own start node rather than by searching for a curve: the
-        /// two nodes fix it exactly, and the node already carries the list of edges leaving it, so
-        /// this never has to decide which of several overlapping curves was meant.
-        /// </summary>
+        /// <summary>Through the start node's edge list: two nodes fix an edge exactly, curves may overlap.</summary>
         private bool TryFindEdge(float3 start, float3 end, out Entity found)
         {
             found = Entity.Null;
 
-            Entity startNode;
-            if (!TryFindNode(start, out startNode)) return false;
-            Entity endNode;
-            if (!TryFindNode(end, out endNode)) return false;
+            if (!TryFindNode(start, out Entity startNode)) return false;
+            if (!TryFindNode(end, out Entity endNode)) return false;
             if (!_entities.HasBuffer<global::Game.Net.ConnectedEdge>(startNode)) return false;
 
             DynamicBuffer<global::Game.Net.ConnectedEdge> connected =
@@ -191,16 +172,19 @@ namespace CS2MultiplayerMod.Game.Sync.ModSync
 
                 global::Game.Net.Edge ends = _entities.GetComponentData<global::Game.Net.Edge>(edge);
 
-                // Either orientation: which node a mod called the start is its own business, and an
-                // edge redrawn the other way round is still the same road.
+                // Either orientation: an edge redrawn the other way round is the same road.
                 if ((ends.m_Start == startNode && ends.m_End == endNode) ||
                     (ends.m_Start == endNode && ends.m_End == startNode))
                 {
+                    if (found != Entity.Null && found != edge)
+                    {
+                        found = Entity.Null;
+                        return false;
+                    }
                     found = edge;
-                    return true;
                 }
             }
-            return false;
+            return found != Entity.Null;
         }
 
         private bool TryFindObject(float3 wanted, string prefabName, out Entity found)
@@ -208,7 +192,6 @@ namespace CS2MultiplayerMod.Game.Sync.ModSync
             found = Entity.Null;
             if (_objectSearch == null) return false;
 
-            float best = float.MaxValue;
             var candidates = new NativeList<Entity>(16, Allocator.Temp);
             try
             {
@@ -228,9 +211,12 @@ namespace CS2MultiplayerMod.Game.Sync.ModSync
                     float3 position = _entities
                         .GetComponentData<global::Game.Objects.Transform>(candidate).m_Position;
                     float distance = math.distancesq(position, wanted);
-                    if (distance >= best) continue;
-
-                    best = distance;
+                    if (distance > ToleranceXZ * ToleranceXZ) continue;
+                    if (found != Entity.Null && found != candidate)
+                    {
+                        found = Entity.Null;
+                        return false;
+                    }
                     found = candidate;
                 }
             }
@@ -243,8 +229,7 @@ namespace CS2MultiplayerMod.Game.Sync.ModSync
 
         private bool IsLiveNet(Entity entity)
         {
-            // The search tree is only as fresh as its last update, so existence comes first and
-            // preview/deleted entities are never a legitimate answer.
+            // The search tree can be stale; preview and deleted entities never count.
             return entity != Entity.Null && _entities.Exists(entity) &&
                    !_entities.HasComponent<Temp>(entity) &&
                    !_entities.HasComponent<Deleted>(entity);
@@ -252,36 +237,19 @@ namespace CS2MultiplayerMod.Game.Sync.ModSync
 
         private void CollectNets(float3 around, NativeList<Entity> results)
         {
-            Unity.Jobs.JobHandle dependencies;
             NativeQuadTree<Entity, QuadTreeBoundsXZ> tree =
-                _netSearch.GetNetSearchTree(true, out dependencies);
+                _netSearch.GetNetSearchTree(true, out Unity.Jobs.JobHandle dependencies);
 
             // Read on the main thread; the caller writes structurally straight afterwards.
             dependencies.Complete();
 
             var extent = new float3(ToleranceXZ, ToleranceY, ToleranceXZ);
-            var iterator = new NearNetIterator
+            var iterator = new Bounds3Collector
             {
                 Bounds = new Bounds3(around - extent, around + extent),
                 Results = results,
             };
             tree.Iterate(ref iterator);
-        }
-
-        private struct NearNetIterator :
-            INativeQuadTreeIterator<Entity, QuadTreeBoundsXZ>,
-            IUnsafeQuadTreeIterator<Entity, QuadTreeBoundsXZ>
-        {
-            public Bounds3 Bounds;
-            public NativeList<Entity> Results;
-
-            public bool Intersect(QuadTreeBoundsXZ bounds) =>
-                MathUtils.Intersect(bounds.m_Bounds, Bounds);
-
-            public void Iterate(QuadTreeBoundsXZ bounds, Entity item)
-            {
-                if (MathUtils.Intersect(bounds.m_Bounds, Bounds)) Results.Add(item);
-            }
         }
     }
 }

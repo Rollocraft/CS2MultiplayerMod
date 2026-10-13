@@ -1,10 +1,6 @@
 namespace CS2MultiplayerMod.Core.Protocol
 {
-    /// <summary>
-    /// A serializable application message. Each implementation owns its own wire
-    /// layout via <see cref="Write"/>/<see cref="Read"/>; the leading type byte is
-    /// handled by <see cref="MessageCodec"/>, not here.
-    /// </summary>
+    /// <summary>A message owning its wire layout; the type byte is <see cref="MessageCodec"/>'s.</summary>
     public interface INetMessage
     {
         MessageType Type { get; }

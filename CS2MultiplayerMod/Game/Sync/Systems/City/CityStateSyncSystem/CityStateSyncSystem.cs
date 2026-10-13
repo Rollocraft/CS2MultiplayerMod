@@ -14,14 +14,12 @@ using CS2MultiplayerMod.Game.Sync.Channels;
 namespace CS2MultiplayerMod.Game.Sync.Systems
 {
     /// <summary>
-    /// Replicates city state via <see cref="IStateChannel"/> snapshots: host periodically
-    /// captures and broadcasts; clients apply snapshots and detect edits via <see cref="StateEditMessage"/>.
-    /// Two channel types: authoritative (money, XP, etc., host to clients);
-    /// editable (taxes, policies, etc., client edit -> host -> broadcast). Host is arbiter.
+    /// Replicates city state through <see cref="IStateChannel"/> snapshots. Authoritative channels flow
+    /// host to clients; editable ones accept client edits that the host arbitrates and rebroadcasts.
     /// </summary>
     public partial class CityStateSyncSystem : GameSystemBase
     {
-        /// <summary>How often the host publishes a fresh snapshot.</summary>
+        /// <summary>How often the host publishes a fresh snapshot of each channel.</summary>
         private const long SnapshotIntervalMs = 1000;
 
         /// <summary>How often a client compares its local editable state against the host's.</summary>
@@ -46,14 +44,17 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             new ConcurrentQueue<StateSnapshotMessage>();
         private readonly Stopwatch _clock = Stopwatch.StartNew();
 
-        // Client-side edit tracking: what the host last sent per editable channel, and
-        // the edit we shipped and are waiting to see confirmed in a snapshot.
+        // Per editable channel: what the host last sent, and our edit awaiting confirmation.
         private readonly Dictionary<byte, byte[]> _lastHostPayload = new Dictionary<byte, byte[]>();
         private readonly Dictionary<byte, PendingEdit> _pendingEdits = new Dictionary<byte, PendingEdit>();
 
         private Observer _observer;
         private TreeStateChannel _treeStateChannel;
-        private long _lastSnapshotMs;
+        // Each channel keeps the 1 s cadence on its own phase: captured together, the paged channels
+        // (occupancy, companies, rents, trees) stacked into one 30-40 ms host frame every second.
+        private readonly Dictionary<byte, long> _channelDueMs = new Dictionary<byte, long>();
+        private readonly List<byte> _captureOrder = new List<byte>();
+        private int _broadcastSinceLog;
         private long _lastEditScanMs;
         private long _lastLogMs;
         private int _applied;
@@ -73,41 +74,30 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
             // Simulation-owned values: one source of truth, host → clients.
             Register(new MoneyStateChannel());
-            // No population channel: the HUD population count is a cosmetic output of each
-            // peer's own simulation. Overwriting it once a second made the client's number
-            // flicker as the local sim and the snapshot fought over it. Channel id 2 is retired.
+            // No population channel (id 2 retired): the HUD count is each peer's own simulation output.
             Register(new XpStateChannel());
             Register(new MilestoneStateChannel());
             Register(new DevTreePointsStateChannel());
             Register(new TourismStateChannel());
             Register(new StatisticsStateChannel());
-            // Taxation's displayed residential/commercial/industrial/office amounts come from
-            // parameterized taxable-income statistics, independently of the editable rate table.
+            // Displayed tax amounts come from taxable-income statistics, apart from the editable rates.
             Register(new TaxIncomeStateChannel());
-            // Fee events from every service path and the collected building/net upkeep records
-            // converge into one native accounting view. Keep that terminal view host-owned while
-            // channel 8 remains the separately editable fee-slider table.
+            // The terminal accounting view is host-owned; channel 8 stays the editable fee table.
             Register(new ServiceAccountingStateChannel(
                 World.GetOrCreateSystemManaged<ServiceAccountingCorrectionSystem>()));
             Register(new WeatherStateChannel());
             Register(new GameClockStateChannel());
             _treeStateChannel = new TreeStateChannel();
             Register(_treeStateChannel);
-            // Full native demand state. On a client the channel holds the three redundant demand
-            // writers after its first valid snapshot and feeds their host arrays to native readers.
+            // On a client this holds the three demand writers and feeds the host's arrays to readers.
             Register(new ZoneDemandChannel());
-            // Numeric rent only. The channel queues rolling absolute pages; its runtime applies
-            // them in GameSimulation after vanilla recalculates rent and before rent is charged.
+            // Rolling rent pages, applied between RentAdjust and rent payment.
             Register(new PropertyRentStateChannel(
                 World.GetOrCreateSystemManaged<PropertyRentSyncSystem>()));
-            // Who lives in each residential building, and the people in those households. Rolling
-            // absolute pages; the runtime reconciles them in GameSimulation through the game's own
-            // renter pipeline. See ResidentialOccupancySyncSystem.
+            // Residential rosters, reconciled through the game's renter pipeline.
             Register(new ResidentialOccupancyChannel(
                 World.GetOrCreateSystemManaged<ResidentialOccupancySyncSystem>()));
-            // The money-facing figures behind every shop, factory and office, and the goods they
-            // hold. Rolling absolute pages; the runtime corrects them in GameSimulation in the
-            // same frame the game recomputes them. See CompanyStatsSyncSystem.
+            // Workplace tenancy, figures and goods, corrected in the frame the game recomputes them.
             Register(new CompanyStatsStateChannel(
                 World.GetOrCreateSystemManaged<CompanyStatsSyncSystem>()));
 
@@ -145,8 +135,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         private void Register(IStateChannel channel)
         {
             _channels[channel.ChannelId] = channel;
-            var pumped = channel as IPumpedStateChannel;
-            if (pumped != null) _pumped.Add(pumped);
+            if (channel is IPumpedStateChannel pumped) _pumped.Add(pumped);
             if (channel is IOrderedStateChannel) _ordered.Add(channel.ChannelId);
         }
 
@@ -170,6 +159,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 {
                     // Leaving a session invalidates everything we knew about the host's state.
                     if (_lastHostPayload.Count > 0) { _lastHostPayload.Clear(); _pendingEdits.Clear(); }
+                    _captureOrder.Clear();
+                    _channelDueMs.Clear();
                     for (int i = 0; i < _pumped.Count; i++) _pumped[i].ResetPending();
                     SyncInbox.Clear(_incoming);
                     SyncInbox.Clear(_incomingEdits);
@@ -197,36 +188,64 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
         // ---- Host ------------------------------------------------------------
 
-
+        /// <summary>
+        /// Every channel once per interval, each at its own phase: the paged channels build a whole page
+        /// per capture, and capturing all of them in one frame was a once-a-second hitch in a large city.
+        /// </summary>
         private void CaptureAndBroadcast(MultiplayerSession session)
         {
             long now = _clock.ElapsedMilliseconds;
-            if (_lastSnapshotMs != 0 && now - _lastSnapshotMs < SnapshotIntervalMs) return;
-            _lastSnapshotMs = now;
+            if (_captureOrder.Count != _channels.Count) ScheduleChannelPhases(now);
 
-            int sent = 0;
-            foreach (var pair in _channels)
+            for (int i = 0; i < _captureOrder.Count; i++)
             {
+                byte channelId = _captureOrder[i];
+                long due = _channelDueMs[channelId];
+                if (now < due) continue;
+                // Keep the phase after a hitch so the channels do not stay bunched together.
+                do due += SnapshotIntervalMs; while (due <= now);
+                _channelDueMs[channelId] = due;
+
                 var writer = new NetworkWriter(64);
-                if (pair.Value.Capture(EntityManager, writer)) { session.SendState(pair.Key, writer.ToArray()); sent++; }
+                if (!_channels[channelId].Capture(EntityManager, writer)) continue;
+                session.SendState(channelId, writer.ToArray());
+                _broadcastSinceLog++;
             }
 
             // Heartbeat every ~30 s so the log shows state replication is alive without spam.
             if (now - _lastLogMs >= 30000)
             {
                 _lastLogMs = now;
-                SyncLog.Detail(LogTopic.City, "CityState: broadcasting " + sent +
-                    " channel(s)/snapshot to clients.");
+                SyncLog.Detail(LogTopic.City, "CityState: broadcast " + _broadcastSinceLog +
+                    " channel snapshot(s) to clients in the last 30s.");
+                _broadcastSinceLog = 0;
             }
+        }
+
+        /// <summary>Spreads the channels' first captures evenly over one interval.</summary>
+        private void ScheduleChannelPhases(long now)
+        {
+            _captureOrder.Clear();
+            _channelDueMs.Clear();
+            foreach (byte channelId in _channels.Keys) _captureOrder.Add(channelId);
+            for (int i = 0; i < _captureOrder.Count; i++)
+                _channelDueMs[_captureOrder[i]] = now + SnapshotIntervalMs * i / _captureOrder.Count;
+        }
+
+        /// <summary>The next capture of this channel runs on the coming frame.</summary>
+        private void CaptureChannelNow(byte channelId)
+        {
+            long now = _clock.ElapsedMilliseconds;
+            // An edit can arrive before the first scheduled host capture.
+            if (_captureOrder.Count != _channels.Count) ScheduleChannelPhases(now);
+            if (_channelDueMs.ContainsKey(channelId)) _channelDueMs[channelId] = now;
         }
 
         // ---- Client ------------------------------------------------------------
 
         /// <summary>
-        /// A local edit shows up as the channel capturing something different from what
-        /// the host last sent (and from anything we already shipped). Runs before
-        /// <see cref="ApplyIncoming"/> so a fresh edit is sent before a stale snapshot
-        /// could overwrite it.
+        /// A local edit is a capture that differs from the host's last payload and anything already sent.
+        /// Runs before <see cref="ApplyIncoming"/> so a stale snapshot cannot overwrite it.
         /// </summary>
         private void DetectLocalEdits(MultiplayerSession session)
         {
@@ -236,10 +255,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
             foreach (byte channelId in _editable)
             {
-                // Until the host has told us its state once, "different" means nothing —
-                // we may simply still hold pre-join defaults.
-                byte[] hostPayload;
-                if (!_lastHostPayload.TryGetValue(channelId, out hostPayload)) continue;
+                // Before the host's first snapshot we may still hold pre-join defaults.
+                if (!_lastHostPayload.TryGetValue(channelId, out byte[] hostPayload)) continue;
 
                 var writer = new NetworkWriter(64);
                 if (!_channels[channelId].Capture(EntityManager, writer)) continue;
@@ -247,8 +264,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
                 if (BytesEqual(local, hostPayload)) { _pendingEdits.Remove(channelId); continue; }
 
-                PendingEdit pending;
-                if (_pendingEdits.TryGetValue(channelId, out pending) &&
+                if (_pendingEdits.TryGetValue(channelId, out PendingEdit pending) &&
                     BytesEqual(local, pending.Payload) &&
                     now - pending.SentMs < EditPendingTimeoutMs)
                     continue; // already in flight
@@ -259,9 +275,6 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     " sent to host.");
             }
         }
-
-
-
 
         /// <summary>Bridges session callbacks (sim thread) into this system's queues.</summary>
         private sealed class Observer : SessionObserver
@@ -288,12 +301,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             }
             public override void OnStateEditReceived(StateEditMessage edit)
             {
-                // Reject channel probing before it can occupy the shared edit inbox. In particular,
-                // channel 19 is host-only and must never be client-injectable through StateEdit.
+                // Non-editable channels (e.g. 19, host-only) are rejected before queuing.
                 if (edit == null || !_isEditable(edit.ChannelId)) return;
-                // Edits are absolute proposals, not an ordered dependency stream. Under a hostile
-                // burst it is safer to drop excess proposals than trigger a multi-megabyte world
-                // resync; the next host snapshot remains authoritative.
+                // Edits are absolute proposals: under a burst drop the excess; the next snapshot is authoritative.
                 lock (_edits)
                 {
                     if (_edits.Count >= EditIngressCap) return;
@@ -316,18 +326,14 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             for (int i = 0; i < _pumped.Count; i++) _pumped[i].ResetPending();
         }
 
-        private void RequestOrderedPoison()
-        {
-            Interlocked.Exchange(ref _orderedPoisonRequested, 1);
-        }
+        private void RequestOrderedPoison() => Interlocked.Exchange(ref _orderedPoisonRequested, 1);
 
         private void PoisonOrderedStream(string reason)
         {
             if (_orderedInvalidated) return;
             _orderedInvalidated = true;
             SyncInbox.Clear(_orderedDeferred);
-            // The ordered city-state stream is revisioned: once a page is lost or refused, every
-            // later page describes a state this machine never reached. Nothing local supplies it.
+            // The ordered stream is revisioned: after a lost page nothing local can catch up.
             SyncInbox.RequestResync(CS2MultiplayerMod.Game.Diagnostics.ResyncReport
                 .Create(reason, "city-state", CS2MultiplayerMod.Game.Diagnostics.ResyncEvidence.StreamLoss)
                 .About("ordered city-state stream")

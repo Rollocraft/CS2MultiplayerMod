@@ -1,6 +1,5 @@
 using Colossal.Collections;
 using Colossal.Mathematics;
-using Game.Areas;
 using Game.Common;
 using Game.Prefabs;
 using Game.Tools;
@@ -21,10 +20,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         private void ApplyIncoming(MultiplayerSession session, long now)
         {
             _targetRetry.Observe(now, Infrastructure.RealizeGate.WorldBuildingHeld);
-            // Names almost always arrive before the road or building they belong to has been rebuilt
-            // here, so the retry pass is the normal path, not the exception. Re-attempting it a few
-            // times a second rather than every frame keeps a pending name from completing the net
-            // search tree's jobs on every single frame of its window.
+            // Names usually arrive before their target; retry a few times a second, not every frame.
             if ((_targetRetry.Count > 0 || _autoHold.Count > 0) &&
                 now - _lastRetryMs >= RetryIntervalMs)
             {
@@ -33,19 +29,13 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 ReassertHeldDraws(now);
             }
 
-            SimulationCommandMessage message;
-            while (_incoming.TryDequeue(out message))
+            while (_incoming.TryDequeue(out SimulationCommandMessage message))
             {
                 if (message.OriginPlayerId == session.LocalPlayerId) continue;
 
-                EntityNameCommand command;
-                try { command = EntityNameCommand.Decode(message.Body); }
-                catch (System.Exception ex)
-                {
-                    SyncLog.Warn(LogTopic.City, "NameSync: dropping malformed command: " +
-                        ex.Message);
+                if (!Infrastructure.CommandDecode.TryDecode(message, EntityNameCommand.Decode, LogTopic.City,
+                        "NameSync", out EntityNameCommand command))
                     continue;
-                }
 
                 if (!TryApplyName(command, message.OriginPlayerId, now))
                     QueueRetry(command, message.OriginPlayerId);
@@ -62,10 +52,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     " s of eligible retry time; dropping its name."));
         }
 
-        /// <summary>
-        /// Returns false only while the target can still arrive - a name usually reaches a peer
-        /// before the road or building it belongs to has been rebuilt there.
-        /// </summary>
+        /// <summary>False only while the target can still arrive.</summary>
         private bool TryApplyName(EntityNameCommand command, int origin, long now)
         {
             var anchor = new float3(command.AnchorX, command.AnchorY, command.AnchorZ);
@@ -78,8 +65,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             {
                 try
                 {
-                    // The game's own naming path: it owns the name table, adds/removes the marker
-                    // component, and refreshes the rendered label exactly as a local rename does.
+                    // The game's own naming path: name table, marker and label, as a local rename.
                     _nameSystem.SetCustomName(target, name);
                 }
                 catch (System.Exception ex)
@@ -89,8 +75,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     return true;
                 }
 
-                // Keep the diff baseline in step with what we just applied, or the next scan reads
-                // this as a local rename and sends it straight back.
+                // Keep the baseline in step, or the next scan sends this back.
                 if (name.Length == 0) _knownNames.Remove(target);
                 else _knownNames[target] = name;
             }
@@ -102,8 +87,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     HoldDraw(command, target, now);
             }
 
-            // What makes the rendered street/district label pick the new name up; it is also what the
-            // game's own naming path adds.
+            // Makes the rendered label pick up the name, as the game's naming path does.
             if (refresh) EntityManager.AddComponent<BatchesUpdated>(target);
             SyncLog.Detail(LogTopic.City, "NameSync realize: " + KindName(command.TargetKind) + " '" +
                 command.TargetPrefabName + "' from player " + origin +
@@ -119,10 +103,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         }
 
         /// <summary>
-        /// Keep defending an adopted street draw for a while. Committing roads regroups this
-        /// machine's aggregates for as long as an operation's courses keep arriving, and a regroup
-        /// deletes one of the two aggregates it joins - which one is a local decision the sender
-        /// cannot see, so the draw can be dropped moments after it was written.
+        /// Keeps defending an adopted draw: while courses arrive, regrouping can delete the aggregate it
+        /// was written to.
         /// </summary>
         private void HoldDraw(EntityNameCommand command, Entity target, long now)
         {
@@ -131,8 +113,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             for (int i = _autoHold.Count - 1; i >= 0; i--)
             {
                 AutoNameHold held = _autoHold[i];
-                // One writer per street: a newer draw for the same street, or for the same point on
-                // it, replaces the older one instead of alternating with it every retry tick.
+                // One writer per street, or two draws alternate every tick.
                 if (held.Target == target ||
                     Infrastructure.ReplicationGuard.Key(held.PrefabName, held.Anchor) == key)
                     _autoHold.RemoveAt(i);
@@ -154,15 +135,13 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             for (int i = 0; i < _autoHold.Count;)
             {
                 if (now >= _autoHold[i].Deadline) { _autoHold.RemoveAt(i); continue; }
-                // Re-resolved from the anchor, not from the entity: the street a draw landed on may
-                // have been merged into another one since. Null while its street is absent again.
+                // Re-resolved from the anchor: the street may have merged since.
                 _autoHold[i].Target =
                     FindTarget(_autoHold[i].Kind, _autoHold[i].PrefabName, _autoHold[i].Anchor);
                 i++;
             }
 
-            // Newest wins. Two draws whose streets merged into one here now name the same entity,
-            // and holding both would make it alternate between them every tick.
+            // Newest wins when two held draws now name one street.
             _heldTargets.Clear();
             for (int i = _autoHold.Count - 1; i >= 0; i--)
             {
@@ -183,10 +162,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             }
         }
 
-        /// <summary>
-        /// One pending entry per target and per field, so an auto-name draw waiting for a street to
-        /// arrive is not overwritten by a rename of a different one.
-        /// </summary>
+        /// <summary>One entry per target and field, so a pending draw and a rename do not overwrite each other.</summary>
         private static string PendingKey(EntityNameCommand command) =>
             command.TargetKind + "|" + (command.SetsCustomName ? "custom" : "auto") + "|" +
             command.TargetPrefabName + "|" +
@@ -207,23 +183,18 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             }
         }
 
-        /// <summary>
-        /// Find the street that owns the edge the anchor sits on. The lookup goes through the game's
-        /// own network search tree, so a name waiting for its road scales with local road density
-        /// rather than with every edge in the city.
-        /// </summary>
+        /// <summary>The street owning the edge under the anchor, via the net search tree.</summary>
         private Entity ResolveStreet(string prefabName, float3 anchor)
         {
-            JobHandle dependencies;
             NativeQuadTree<Entity, QuadTreeBoundsXZ> tree =
-                _netSearch.GetNetSearchTree(readOnly: true, out dependencies);
+                _netSearch.GetNetSearchTree(readOnly: true, out JobHandle dependencies);
             // Read on the main thread; a structural change follows immediately afterwards.
             dependencies.Complete();
 
             var candidates = new NativeList<Entity>(16, Allocator.Temp);
             try
             {
-                var iterator = new NearNetIterator
+                var iterator = new Infrastructure.Bounds3Collector
                 {
                     Bounds = new Bounds3(
                         anchor - new float3(StreetSearchRadius, StreetTolY, StreetSearchRadius),
@@ -247,8 +218,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
                     Bezier4x3 curve =
                         EntityManager.GetComponentData<global::Game.Net.Curve>(edge).m_Bezier;
-                    float t;
-                    float distance = MathUtils.Distance(curve.xz, anchor.xz, out t);
+                    float distance = MathUtils.Distance(curve.xz, anchor.xz, out float t);
                     if (distance > StreetTolXZ) continue;
                     if (math.abs(MathUtils.Position(curve, t).y - anchor.y) > StreetTolY) continue;
 
@@ -258,8 +228,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                         !EntityManager.HasBuffer<global::Game.Net.AggregateElement>(aggregate) ||
                         EntityManager.HasComponent<Deleted>(aggregate)) continue;
 
-                    // Roads of different classes never share an aggregate, so the aggregate prefab
-                    // separates two streets whose centrelines cross at exactly this point.
+                    // Road classes never share an aggregate: the prefab separates crossing streets.
                     bool prefabMatch = PrefabNameMatches(aggregate, prefabName);
                     bool better = best == Entity.Null || (prefabMatch && !bestPrefabMatch) ||
                                   (prefabMatch == bestPrefabMatch && distance < bestDistance);
@@ -278,10 +247,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
         private Entity ResolveObject(string prefabName, float3 anchor)
         {
-            Entity prefab;
-            // Several prefab collections can share a display name; only an object prefab can be
-            // behind a named building or prop.
-            if (!_prefabIndex.TryResolve(prefabName, IsObjectPrefab, out prefab)) return Entity.Null;
+            // Prefab collections can share a display name; only an object prefab applies.
+            if (!_prefabIndex.TryResolve(prefabName, IsObjectPrefab, out Entity prefab)) return Entity.Null;
 
             var candidates = new NativeList<Entity>(16, Allocator.Temp);
             try
@@ -318,8 +285,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         private Entity ResolveByAnchor(EntityQuery query, byte kind, string prefabName,
             float3 anchor, float maxDistance)
         {
-            Entity prefab;
-            if (!_prefabIndex.TryResolve(prefabName, out prefab)) return Entity.Null;
+            if (!_prefabIndex.TryResolve(prefabName, out Entity prefab)) return Entity.Null;
             if (query.IsEmptyIgnoreFilter) return Entity.Null;
 
             Entity best = Entity.Null;
@@ -331,8 +297,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 {
                     if (EntityManager.GetComponentData<PrefabRef>(entities[i]).m_Prefab != prefab)
                         continue;
-                    float3 candidate;
-                    if (!TryAnchor(kind, entities[i], out candidate)) continue;
+                    if (!TryAnchor(kind, entities[i], out float3 candidate)) continue;
                     float distanceSq = math.distancesq(candidate, anchor);
                     if (distanceSq > bestDistanceSq) continue;
                     bestDistanceSq = distanceSq;
@@ -357,16 +322,14 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         }
 
         /// <summary>
-        /// Overwrite the local auto-name draw with the sender's. Each slot is clamped to the length
-        /// of the name list this machine has for that prefab, so a draw made against different
-        /// content still lands on a real name instead of a raw locale key.
+        /// Writes the sender's draw, each slot clamped to this machine's name list so different content
+        /// still lands on a real name.
         /// </summary>
         private bool ApplyRandomIndices(Entity target, int[] indices)
         {
             if (!EntityManager.HasBuffer<RandomLocalizationIndex>(target)) return false;
 
-            // Copied out before the target's own buffer is touched, so nothing holds a live buffer
-            // handle across the resize below.
+            // Read before resizing, so no buffer handle crosses the resize.
             int[] counts = ReadLocalizationCounts(target);
             int slots = counts != null ? counts.Length : indices.Length;
             if (slots == 0 || slots > EntityNameCommand.MaxRandomIndices) return false;
@@ -387,11 +350,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             return changed;
         }
 
-        /// <summary>
-        /// How many names the prefab offers per slot, looked up where the game looks it up - on the
-        /// prefab itself, or on the zone behind a growable building. Null when the prefab declares
-        /// no name lists at all.
-        /// </summary>
+        /// <summary>Names per slot, from the prefab or a growable's zone; null when it declares none.</summary>
         private int[] ReadLocalizationCounts(Entity entity)
         {
             if (!EntityManager.HasComponent<PrefabRef>(entity)) return null;
@@ -411,23 +370,6 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             var lengths = new int[counts.Length];
             for (int i = 0; i < counts.Length; i++) lengths[i] = counts[i].m_Count;
             return lengths;
-        }
-
-        /// <summary>Collects every net entity whose bounds reach the anchor box; callers filter.</summary>
-        private struct NearNetIterator :
-            INativeQuadTreeIterator<Entity, QuadTreeBoundsXZ>,
-            IUnsafeQuadTreeIterator<Entity, QuadTreeBoundsXZ>
-        {
-            public Bounds3 Bounds;
-            public NativeList<Entity> Results;
-
-            public bool Intersect(QuadTreeBoundsXZ bounds) =>
-                MathUtils.Intersect(bounds.m_Bounds, Bounds);
-
-            public void Iterate(QuadTreeBoundsXZ bounds, Entity item)
-            {
-                if (MathUtils.Intersect(bounds.m_Bounds, Bounds)) Results.Add(item);
-            }
         }
     }
 }

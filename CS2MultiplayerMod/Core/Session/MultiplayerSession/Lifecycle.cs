@@ -10,22 +10,14 @@ namespace CS2MultiplayerMod.Core.Session
 {
     public sealed partial class MultiplayerSession
     {
-        /// <summary>
-        /// How long <see cref="StopWithNotice"/> may block the game thread waiting for the
-        /// farewell to reach the peers. Long enough for a small message on a live socket,
-        /// short enough that a wedged connection cannot noticeably delay the shutdown the
-        /// player asked for.
-        /// </summary>
+        /// <summary>How long <see cref="StopWithNotice"/> may block for the farewell to go out.</summary>
         private const int GracefulCloseTimeoutMs = 750;
-
 
         public void StartHost(MultiplayerConfig config)
         {
             if (Role != SessionRole.None) throw new InvalidOperationException("A session is already active.");
 
-            // Nothing below may escape: an exception thrown after Role is set would
-            // leave a half-started session ("a session is already active" forever) —
-            // exactly what happened when TLS setup crashed on the game's runtime.
+            // Nothing may escape after Role is set, or the session is stuck half-started.
             try
             {
                 StartHostCore(config);
@@ -44,13 +36,12 @@ namespace CS2MultiplayerMod.Core.Session
                 return;
             }
 
-            // Public exposure without a password lets anyone who finds the port walk
-            // into the city. Said loudly, but allowed — private games with trusted
-            // friends over a forwarded port are this mod's main use case.
-            if (!config.LanOnly && string.IsNullOrEmpty(config.Password))
-                _log.Warn(LogTopic.Session,
-                    "Hosting PUBLICLY with NO PASSWORD: anyone who can reach port " + config.Port +
-                    " can join and receive the city. Setting a password is strongly recommended.");
+            // Anyone who can reach an open port could otherwise join and download the city.
+            if (!config.LanOnly && config.Password.Length < MultiplayerConfig.MinPublicPasswordLength)
+            {
+                Fault(PublicPasswordRequired);
+                return;
+            }
 
             _config = config;
             LocalPlayerName = WireGuard.SanitizePlayerName(config.PlayerName);
@@ -61,8 +52,7 @@ namespace CS2MultiplayerMod.Core.Session
             _certificate = null;
             if (config.UseEncryption)
             {
-                string certError;
-                _certificate = TlsCertificate.TryCreateEphemeral(out certError);
+                _certificate = TlsCertificate.TryCreateEphemeral(out string certError);
                 if (_certificate == null)
                 {
                     if (config.LanOnly)
@@ -94,9 +84,7 @@ namespace CS2MultiplayerMod.Core.Session
             {
                 server.Start(config.Port, config.LanOnly, _certificate);
 
-                // A LAN-only session is reachable without the router's help, so there is
-                // nothing to ask for. Hosting never waits on the answer: the listener is
-                // already accepting, and a forward only adds reach from outside.
+                // LAN-only needs no forward; hosting never waits on it.
                 if (!config.LanOnly)
                     _portForward = PortForward.Begin(_log, config.Port);
 
@@ -111,10 +99,8 @@ namespace CS2MultiplayerMod.Core.Session
         }
 
         /// <summary>
-        /// Host over the relay. Nothing listens on this machine, so the exposure warnings
-        /// and the TLS setup that guard the direct path have nothing to protect here: the
-        /// relay authenticates and encrypts every connection itself, and a peer can only
-        /// arrive by knowing the join code.
+        /// Relay host: nothing listens here, and the relay authenticates and encrypts every connection, so
+        /// the direct path's exposure warnings and TLS do not apply.
         /// </summary>
         private void StartRelayHost(MultiplayerConfig config)
         {
@@ -149,8 +135,7 @@ namespace CS2MultiplayerMod.Core.Session
         {
             if (Role != SessionRole.None) throw new InvalidOperationException("A session is already active.");
 
-            // Same containment as StartHost: a throw after Role is set must become a
-            // clean Fault (which resets the session), never a stuck half-join.
+            // As in StartHost: a throw after Role is set becomes a clean Fault.
             try
             {
                 if (config.Transport == TransportMode.SteamRelay)
@@ -169,7 +154,8 @@ namespace CS2MultiplayerMod.Core.Session
 
                 var client = new TcpClientTransport(_log);
                 _transport = client;
-                SetStatus(SessionStatus.Connecting, "Connecting to " + config.HostAddress + ":" + config.Port +
+                SetStatus(SessionStatus.Connecting, "Connecting to " +
+                                                    NetAddress.FormatEndpoint(config.HostAddress, config.Port) +
                                                     (config.UseEncryption ? " (TLS)" : " (PLAINTEXT)"));
                 client.Connect(config.HostAddress, config.Port, config.UseEncryption);
             }
@@ -196,8 +182,7 @@ namespace CS2MultiplayerMod.Core.Session
                 return;
             }
 
-            // Checked here rather than left to the dial: a short number still parses as an
-            // id and would fail much later as an unexplained relay timeout.
+            // A short number parses as an id and would fail later as a relay timeout.
             if (!RelayProvider.LooksLikeJoinCode(config.JoinCode))
             {
                 Fault("'" + config.JoinCode + "' is not a valid join code. A join code is 17 digits - " +
@@ -219,19 +204,13 @@ namespace CS2MultiplayerMod.Core.Session
 
         private static string DescribeStartupFailure(string prefix, Exception ex)
         {
-            var socket = ex as SocketException;
-            return prefix + (socket != null ? " [" + socket.SocketErrorCode + "]" : "") +
+            return prefix + (ex is SocketException socket ? " [" + socket.SocketErrorCode + "]" : "") +
                    ": " + ex.Message;
         }
 
         /// <summary>
-        /// End the session because this machine is leaving the shared city (the player quit
-        /// the game, returned to the main menu, or loaded another world).
-        ///
-        /// A plain <see cref="Stop"/> drops the sockets, which peers only ever see as an
-        /// anonymous "remote closed". A host owes its clients better than that: the notice
-        /// says the session ended normally, and the flush is what actually gets it onto the
-        /// wire before the process (or the world) goes away.
+        /// Ends the session because this machine is leaving the shared city: sends peers a notice that it
+        /// ended normally and flushes it before the world goes away.
         /// </summary>
         public void StopWithNotice(string reason)
         {
@@ -249,16 +228,11 @@ namespace CS2MultiplayerMod.Core.Session
             Stop();
         }
 
-        public void Stop()
-        {
-            Stop("Stopped");
-        }
+        public void Stop() => Stop("Stopped");
 
         /// <summary>
-        /// Tear down locally while preserving a remote close reason for observers. The
-        /// public no-argument Stop keeps its historical "Stopped" detail; clients which
-        /// lose their host use this overload so the game layer can explain why it is
-        /// closing the downloaded host world.
+        /// Local teardown that keeps a remote close reason for observers, so the game layer can say why the
+        /// host world is closing.
         /// </summary>
         private void Stop(string detail)
         {
@@ -284,6 +258,7 @@ namespace CS2MultiplayerMod.Core.Session
             _peers.Clear();
             _administrativeRemovals.Clear();
             _puntedConnections.Clear();
+            _localCloseReasons.Clear();
             _hostBannedAddresses.Clear();
             _blobs.Clear();
             ClearOutgoingBlobs();
@@ -304,6 +279,5 @@ namespace CS2MultiplayerMod.Core.Session
             SetStatus(SessionStatus.Offline,
                 string.IsNullOrWhiteSpace(detail) ? "The connection to the host closed." : detail);
         }
-
     }
 }

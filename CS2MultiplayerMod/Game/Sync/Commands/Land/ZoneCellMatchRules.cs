@@ -10,10 +10,7 @@ namespace CS2MultiplayerMod.Game.Sync.Commands
         private const float HeightPenaltyScale = 0.25f;
         private const float MaxHeightPenalty = 256f;
 
-        /// <summary>
-        /// Height helps choose between overlapping local grids, but is not portable identity.
-        /// Road and terrain realization can settle the same zoning grid at different elevations.
-        /// </summary>
+        /// <summary>Height separates overlapping grids but is not identity: peers settle grids at different heights.</summary>
         public static float HeightPenalty(float difference)
         {
             if (float.IsNaN(difference) || float.IsInfinity(difference)) return float.MaxValue;
@@ -28,8 +25,7 @@ namespace CS2MultiplayerMod.Game.Sync.Commands
                 distanceSquared > MaxDistanceSquared) return false;
             if ((localState & ZonePaintCommand.StateVisible) == 0) return false;
 
-            // A perpendicular block can own the visible cell at an intersection on this peer.
-            // Prefer an exact physical match to a neighbouring cell with more similar flags.
+            // A perpendicular block can own the visible cell at an intersection; prefer the exact position.
             score = distanceSquared * 1024f + (1f - Math.Abs(signedAlignment)) * 32f +
                     Math.Min(stripOffset * stripOffset * 0.25f, 64f);
             if (signedAlignment < 0f) score += 32f;

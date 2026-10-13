@@ -124,6 +124,5 @@ namespace CS2MultiplayerMod.Core.Session
             _log.Error(LogTopic.Session, "Observer crashed in " + callback +
                 " (session continues): " + ex);
         }
-
     }
 }

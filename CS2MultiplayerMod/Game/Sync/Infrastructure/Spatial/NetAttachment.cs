@@ -10,15 +10,9 @@ using Unity.Mathematics;
 namespace CS2MultiplayerMod.Game.Sync.Infrastructure
 {
     /// <summary>
-    /// A net object - a roundabout central island on a node, a "no right turn" sign on an edge -
-    /// acts on the road purely through the composition flags of the net entity it hangs off, and
-    /// those flags are re-selected only while that entity carries <see cref="Updated"/>. The game's
-    /// AttachSystem maintains the parent link but tags nothing; in a normal placement the tool's
-    /// apply pass supplies the tags.
-    ///
-    /// A direct create/delete has no apply pass, so it must tag the parent itself - otherwise the
-    /// object renders as an inert prop on an untouched road (or its effect survives a bulldoze).
-    /// See docs/internals/roundabout-placement.md.
+    /// A net object (roundabout island, turn sign) acts through its parent's composition flags, which
+    /// re-select only when the parent is Updated. A direct create or delete has no apply pass to tag it,
+    /// so the parent is tagged here.
     /// </summary>
     internal static class NetAttachment
     {
@@ -31,10 +25,7 @@ namespace CS2MultiplayerMod.Game.Sync.Infrastructure
             return NormalizeNetParent(em, parent);
         }
 
-        /// <summary>
-        /// Resolve a raycast/snap target to its road node or edge. Object-tool control points can
-        /// name either the net entity directly or an already-attached roadside object.
-        /// </summary>
+        /// <summary>A snap target to its node or edge; it may be the net or an attached object.</summary>
         public static Entity NormalizeNetParent(EntityManager em, Entity candidate)
         {
             if (candidate == Entity.Null || !em.Exists(candidate)) return Entity.Null;
@@ -49,9 +40,7 @@ namespace CS2MultiplayerMod.Game.Sync.Infrastructure
         }
 
         /// <summary>
-        /// Describe an object's attachment for the wire. The anchor is the parent's own world
-        /// position (node) or the point on its centreline the object hangs at (edge) - entity ids
-        /// differ per machine, positions do not.
+        /// The anchor: the node's position, or the point on the edge centreline the object hangs at.
         /// </summary>
         public static bool TryGetAttachment(EntityManager em, Entity obj, out bool isNode, out float3 anchor)
         {
@@ -68,19 +57,14 @@ namespace CS2MultiplayerMod.Game.Sync.Infrastructure
                 return true;
             }
 
-            // An edge-attached object sits off the centreline, at the curb. Anchoring on its own
-            // transform would let a neighbouring road win the match, so anchor on the projection
-            // the game itself stored: Attached.m_CurvePosition along the parent curve.
+            // Anchor on Attached.m_CurvePosition, not the curb-side transform a neighbour road could win.
             if (!em.HasComponent<Curve>(parent)) return false;
             float curvePosition = em.GetComponentData<Attached>(obj).m_CurvePosition;
             anchor = MathUtils.Position(em.GetComponentData<Curve>(parent).m_Bezier, curvePosition);
             return true;
         }
 
-        /// <summary>
-        /// Describe a known node/edge as a portable anchor. For an edge, project the nearby object
-        /// position onto its centreline so differently subdivided peer roads still resolve it.
-        /// </summary>
+        /// <summary>A node or edge as a portable anchor, projected onto the centreline for edges.</summary>
         public static bool TryDescribeParent(EntityManager em, Entity candidate, float3 nearPosition,
             out bool isNode, out float3 anchor)
         {
@@ -98,16 +82,12 @@ namespace CS2MultiplayerMod.Game.Sync.Infrastructure
 
             if (!em.HasComponent<Curve>(parent)) return false;
             Bezier4x3 curve = em.GetComponentData<Curve>(parent).m_Bezier;
-            float curvePosition;
-            MathUtils.Distance(curve, nearPosition, out curvePosition);
+            MathUtils.Distance(curve, nearPosition, out float curvePosition);
             anchor = MathUtils.Position(curve, curvePosition);
             return true;
         }
 
-        /// <summary>
-        /// Tag a parent so its compositions re-derive this frame. A node is selected through the
-        /// edges meeting it; an edge carries its own composition plus the node-side ones at each end.
-        /// </summary>
+        /// <summary>Tags a parent so its compositions re-derive, including the node sides of an edge.</summary>
         public static void TagParentUpdated(EntityManager em, Entity parent)
         {
             if (parent == Entity.Null || !em.Exists(parent)) return;

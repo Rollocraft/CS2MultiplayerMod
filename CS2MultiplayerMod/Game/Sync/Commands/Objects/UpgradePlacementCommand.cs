@@ -4,13 +4,8 @@ using CS2MultiplayerMod.Core.Sync;
 namespace CS2MultiplayerMod.Game.Sync.Commands
 {
     /// <summary>
-    /// "A player attached an upgrade/extension to a service building." The upgrade and
-    /// its owner both travel as prefab name + position so the receiver can find its own
-    /// owner entity - see <see cref="UpgradeSyncSystem"/>.
-    ///
-    /// These fields are also the complete input set the game's own definition generator needs:
-    /// prefab, the building being upgraded, one placement transform, and the placing tool's seed.
-    /// The receiver re-runs that generator rather than rebuilding the transaction by hand.
+    /// A service-building upgrade: upgrade and owner as prefab + position, plus the transform and tool
+    /// seed, which is the complete generator input the receiver re-runs.
     /// </summary>
     public sealed class UpgradePlacementCommand : ISimulationCommand
     {

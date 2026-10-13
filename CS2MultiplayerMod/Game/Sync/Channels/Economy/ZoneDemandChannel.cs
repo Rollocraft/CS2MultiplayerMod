@@ -15,25 +15,11 @@ using CS2MultiplayerMod.Game.Sync.Infrastructure;
 namespace CS2MultiplayerMod.Game.Sync.Channels
 {
     /// <summary>
-    /// Replicates the complete host zone-demand state and reports population/building drift behind
-    /// it. The old implementation only compared seven headline values. It never wrote them, so a
-    /// client's commercial/office demand was replaced by its local simulation again every sixteen
-    /// frames; matching low-density values were incidental while high-density/resource arrays kept
-    /// diverging.
-    ///
-    /// Once the first valid host snapshot arrives, the three local demand writers are held for the
-    /// rest of the session and the channel installs both their current/lagged headline values and
-    /// every factor/resource array serialized by Game.dll. Native consumers remain alive and read
-    /// genuine host state; only the redundant client-side calculation is stopped. CityInfoUISystem
-    /// is not held, so it keeps easing the toolbar demand bars toward the host headline values at
-    /// its own rate - a 1 Hz change animates up/down instead of jumping. A later snapshot that
-    /// cannot be decoded leaves the last good values frozen rather than releasing the hold; only a
-    /// world replacement (<see cref="ResetPending"/>) does that.
-    ///
-    /// The occupancy counts are here for the same reason. Households, citizens and pets are
-    /// separate entities driven by each machine's own random stream; they start identical because a
-    /// joining client loads the host's city, and they drift from there. Nothing corrects them yet,
-    /// so the gap is what is reported.
+    /// The host's complete zone-demand state. After the first valid snapshot a client holds its three
+    /// demand writers for the session and installs the host's headline values and serialized arrays;
+    /// CityInfoUISystem keeps easing the bars toward them. A bad later snapshot keeps the last good
+    /// values; only <see cref="ResetPending"/> releases the hold. Also reports household, citizen and
+    /// pet count drift, which nothing corrects yet.
     /// </summary>
     public sealed class ZoneDemandChannel : IStateChannel, IPumpedStateChannel
     {
@@ -98,8 +84,7 @@ namespace CS2MultiplayerMod.Game.Sync.Channels
                 ComponentType.ReadOnly<global::Game.Agents.PropertySeeker>());
             _citizens = em.CreateEntityQuery(ComponentType.ReadOnly<Citizen>());
             _pets = em.CreateEntityQuery(ComponentType.ReadOnly<HouseholdPet>());
-            // Every building the zoning simulation could have grown. Counting by chunk keeps this
-            // to a handful of microseconds even in a city of hundreds of thousands.
+            // Counted by chunk: microseconds even in a huge city.
             _growables = Live(em, ComponentType.ReadOnly<Building>(),
                 ComponentType.ReadOnly<PrefabRef>());
             _ready = true;
@@ -118,8 +103,7 @@ namespace CS2MultiplayerMod.Game.Sync.Channels
 
         public bool Capture(EntityManager em, NetworkWriter writer)
         {
-            // Demand is an output of the zoning simulation, so a session that lets each city run
-            // its own has nothing to say here.
+            // Demand is simulation output; without simulation sync each city keeps its own.
             MultiplayerService captureService = Mod.Service;
             if (captureService != null && !captureService.SimulationSyncEnabled) return false;
 
@@ -129,10 +113,9 @@ namespace CS2MultiplayerMod.Game.Sync.Channels
             var industrial = em.World.GetExistingSystemManaged<IndustrialDemandSystem>();
             if (residential == null || commercial == null || industrial == null) return false;
 
-            DemandStateSnapshot demand;
             try
             {
-                if (!DemandStateAccess.TryCapture(residential, commercial, industrial, out demand))
+                if (!DemandStateAccess.TryCapture(residential, commercial, industrial, out DemandStateSnapshot demand))
                     return false;
                 demand.Write(writer);
             }
@@ -142,7 +125,7 @@ namespace CS2MultiplayerMod.Game.Sync.Channels
                 {
                     _captureWarned = true;
                     SyncLog.Warn(LogTopic.City,
-                        "ZoneDemand: complete Game.dll demand capture failed (logged once): " +
+                        "ZoneDemand: complete demand capture failed (logged once): " +
                         ex.Message);
                 }
                 return false;
@@ -182,10 +165,7 @@ namespace CS2MultiplayerMod.Game.Sync.Channels
                 }
             }
 
-            // A household-state experiment once disabled the vanilla client spawner and counted
-            // only brand-new graphs, which made an existing homeless family moving into a new
-            // building invisible. Report the real host population pipeline so future reports can
-            // distinguish normal reuse of seeking households from an actually stalled spawner.
+            // Report the real population pipeline, so reuse of seeking households is not mistaken for a stall.
             if (Mod.Service != null && Mod.Service.Session.Role == SessionRole.Host &&
                 ++_hostSnapshots % 30 == 0)
             {
@@ -262,8 +242,7 @@ namespace CS2MultiplayerMod.Game.Sync.Channels
             MultiplayerService service = Mod.Service;
             if (service != null && !service.SimulationSyncEnabled)
             {
-                // A page from before the switch was read, or from a peer that is still sending
-                // them. The local demand writers own these values now; do not fight them.
+                // A page from before the switch: the local writers own demand now.
                 _authority.Restore(em.World);
                 return;
             }
@@ -275,12 +254,8 @@ namespace CS2MultiplayerMod.Game.Sync.Channels
             }
             catch (System.Exception ex)
             {
-                // DemandStateAccess writes the headline bar values first and absorbs a factor-array
-                // mismatch itself, so reaching here means a demand field is gone on this build
-                // entirely. Once a good snapshot has landed, keep it frozen and keep the local
-                // demand writers held: handing the HUD bars back to the client's own simulation
-                // for a second, then snapping to the host again, is the fight this channel exists
-                // to remove. Only ResetPending (world no longer loaded) releases the hold.
+                // A demand field is missing on this build. Keep the good snapshot and the hold: flipping the bars
+                // back to local for a second is the fight this channel removes.
                 if (!_hasAuthoritativeSnapshot)
                 {
                     _authority.Restore(em.World);

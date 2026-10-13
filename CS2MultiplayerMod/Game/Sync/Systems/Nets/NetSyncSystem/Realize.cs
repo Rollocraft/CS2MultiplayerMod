@@ -17,15 +17,8 @@ using CS2MultiplayerMod.Game.Sync.Infrastructure;
 using CS2MultiplayerMod.Game.Sync.Commands;
 namespace CS2MultiplayerMod.Game.Sync.Systems.Net
 {
-    // Realize (client) side of NetSyncSystem: drain queued NetPlacementCommands into one working set,
-    // resolve captured native targets (or classify fallback geometry), then route every course
-    // through one serialized Temp+ApplyTool transaction. Dependent systems wait for its drain so
-    // they never observe half-realized network geometry.
-    //
-    // This file holds the operation state and RealizeIncoming, the cycle itself. Assembling an
-    // operation out of its messages is in RealizeOperation.cs, holding one whose targets have not
-    // arrived is in RealizeHold.cs, and the span and endpoint geometry it leans on is in
-    // RealizeSpan.cs.
+    // Client realize: drain placement commands, resolve native targets (or classify fallback
+    // geometry), and route every course through one serialized Temp+ApplyTool transaction.
     public partial class NetSyncSystem
     {
         private const long OperationAssemblyWindowMs = 3000;
@@ -51,13 +44,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
             new Dictionary<NetOperationKey, long>();
 
         /// <summary>
-        /// What an operation whose target has not appeared is still waiting for.
-        ///
-        /// <see cref="NativeOperationHold.Relaxed"/> is separate from the deadline on purpose. The
-        /// resolver's last-resort matches unlock when the first window expires, and a second window
-        /// granted by the resync arbiter must not take them away again - re-deriving "relaxed" from
-        /// the deadline alone would do exactly that, and the operation would spend its extra window
-        /// with strictly less resolving power than the one before it.
+        /// What an unresolved operation waits for. <see cref="NativeOperationHold.Relaxed"/> is stored
+        /// separately so a second window granted by the arbiter keeps the relaxed matches the first unlocked.
         /// </summary>
         private struct NativeOperationHold
         {
@@ -71,16 +59,14 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
         private readonly Dictionary<NetOperationKey, int> _operationBuildFailures =
             new Dictionary<NetOperationKey, int>();
 
-        // Operations whose Temp batch this machine has already armed at least once. Reconciling a
-        // partially present operation is how a lost commit recovers; the SAME state on an operation
-        // seen for the first time means the two worlds disagree about what is already built.
+        // Operations armed at least once: a partially present operation recovers a lost commit;
+        // seen for the first time, it means the worlds disagree.
         private readonly CS2MultiplayerMod.Core.Sync.OperationReplayWindow<NetOperationKey>
             _armedNetOperations =
                 new CS2MultiplayerMod.Core.Sync.OperationReplayWindow<NetOperationKey>();
         private const long ArmedOperationWindowMs = 60000;
 
-        // Existing edges this batch's courses will split, keyed by the local edge and remembering
-        // which source edge claimed it. See TryClaimSplitTarget.
+        // Local edges this batch will split and the source edge that claimed each (TryClaimSplitTarget).
         private readonly Dictionary<Entity, Bezier4x3> _batchSplitClaims =
             new Dictionary<Entity, Bezier4x3>();
 
@@ -118,10 +104,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
             public ComponentLookup<global::Game.Common.Deleted> Deleted;
             public bool Covered;
 
-            public bool Intersect(QuadTreeBoundsXZ bounds)
-            {
-                return !Covered && MathUtils.Intersect(bounds.m_Bounds, Bounds);
-            }
+            public bool Intersect(QuadTreeBoundsXZ bounds) => !Covered && MathUtils.Intersect(bounds.m_Bounds, Bounds);
 
             public void Iterate(QuadTreeBoundsXZ bounds, Entity entity)
             {
@@ -131,8 +114,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                     Deleted.HasComponent(entity) || Prefabs[entity].m_Prefab != Prefab) return;
 
                 Bezier4x3 curve = Curves[entity].m_Bezier;
-                float t;
-                if (MathUtils.Distance(curve.xz, Point.xz, out t) > SplitMatch.TolXZ) return;
+                if (MathUtils.Distance(curve.xz, Point.xz, out float t) > SplitMatch.TolXZ) return;
                 Covered = math.abs(MathUtils.Position(curve, t).y - Point.y) <= SplitMatch.TolY;
             }
         }
@@ -157,20 +139,14 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
             PruneCompletedNetOperations(now);
             if (_incoming.IsEmpty && _remoteDeferred.Count == 0) return;
 
-            // One Temp batch in flight at a time (a course built before the previous batch's
-            // nodes/edges are query-able could not connect to them), and never on the frame the
-            // player's own gesture applies. A selected tool is allowed while its preview is being
-            // regenerated or cleared; only the single frame that commits a local Apply has priority.
+            // One Temp batch at a time (the next course must see the previous batch's nodes), and never on
+            // the frame a local Apply commits.
             if (!CanBuildDefinitions) return;
 
-            // One source Apply may emit several native courses. Keep that operation intact: a
-            // junction or point-mode network object is not equivalent to a sequence of independent
-            // clicks, and applying only a prefix lets intermediate node reduction deform the rest.
-            List<SimulationCommandMessage> work;
-            bool nativeOperation;
-            NetToolOperationCommand mixedOperation;
-            if (!TryTakeCompleteOperation(session, now, out work, out nativeOperation,
-                    out mixedOperation)) return;
+            // Keep a multi-course operation intact: applying a prefix lets node reduction deform the rest.
+            if (!TryTakeCompleteOperation(session, now, out List<SimulationCommandMessage> work,
+                out bool nativeOperation,
+                    out NetToolOperationCommand mixedOperation)) return;
             if (mixedOperation != null)
             {
                 RealizeMixedNetOperation(session, work[0], mixedOperation, now);
@@ -207,9 +183,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
             bool haveSnapshot = false;
             int built = 0;
             bool splitUsed = false;
-            // Enabled only once the retry window has passed (see the rejection path below): a node
-            // that is merely mid-commit comes back on its own, and splitting an edge under it would
-            // plant a junction the source never made.
+            // Only after the retry window: a node merely mid-commit comes back on its own.
             bool allowMergedNodeSplit = false;
             PreparedNativeCourse[] preparedNative = nativeOperation
                 ? new PreparedNativeCourse[work.Count]
@@ -222,36 +196,27 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
             long constructionCost = 0;
             int chargedCourses = 0;
 
-            // Source messages of the courses the Temp batch builds, retained until the commit
-            // actually runs: if the armed batch is wiped before committing (see _onCommitLost) they
-            // are re-enqueued and the batch rebuilds instead of being lost.
+            // Source messages kept until the commit runs, re-enqueued if the armed batch is wiped.
             List<SimulationCommandMessage> retained = null;
 
-            // New nodes / edges the Temp batch will create, so a later course can recognise (a) an
-            // endpoint that coincides with one of our pending new nodes — it will MERGE, so it is not
-            // a split — and (b) an endpoint that taps the middle of a pending batch edge, which must
-            // wait until that edge is real (deferred to the next, post-commit cycle).
+            // Nodes/edges this batch will create: an endpoint on a pending node merges; one tapping a
+            // pending edge waits for the next cycle.
             var batchNewNodes = new NetBatchNodes();
             var batchEdges = new NativeList<Bezier4x3>(maxBatch, Allocator.Temp);
             try
             {
                 if (nativeOperation)
                 {
-                    // Resolve every external target before creating the first definition. If course
-                    // N depends on geometry that has not arrived yet, committing courses 0..N-1 and
-                    // retrying only the suffix would destroy the source operation's junction shape.
+                    // Resolve every external target first; committing a prefix would break the junction shape.
                     TakeNetSnapshot(out nodes, out edges, out ownedNodes, out ownedEdges);
                     TakeSurfaceSnapshot(ref heightData, ref waterData);
                     haveSnapshot = true;
 
-                    // The game resolves nearby network geometry through its quadtree. Use the same
-                    // read-only snapshot for per-course idempotence instead of scanning every edge in
-                    // the city once for every grid cell.
-                    JobHandle searchDependencies;
+                    // Read-only quadtree snapshot for idempotence, instead of scanning the city per course.
                     liveEdgeSearch = new LiveEdgeSearchSnapshot
                     {
                         Tree = _netSearchSystem.GetNetSearchTree(readOnly: true,
-                            out searchDependencies),
+                            out JobHandle searchDependencies),
                         Curves = GetComponentLookup<Curve>(isReadOnly: true),
                         Prefabs = GetComponentLookup<global::Game.Prefabs.PrefabRef>(isReadOnly: true),
                         Owners = GetComponentLookup<global::Game.Common.Owner>(isReadOnly: true),
@@ -287,8 +252,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                             return;
                         }
 
-                        Entity prefab;
-                        if (!_prefabIndex.TryResolve(command.PrefabName, out prefab) ||
+                        if (!_prefabIndex.TryResolve(command.PrefabName, out Entity prefab) ||
                             !EntityManager.HasComponent<global::Game.Prefabs.NetData>(prefab) ||
                             !EntityManager.HasComponent<global::Game.Prefabs.NetGeometryData>(prefab))
                         {
@@ -299,8 +263,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                         }
                         if (!string.IsNullOrEmpty(command.SubPrefabName))
                         {
-                            Entity subPrefab;
-                            if (!_prefabIndex.TryResolve(command.SubPrefabName, out subPrefab) ||
+                            if (!_prefabIndex.TryResolve(command.SubPrefabName, out Entity subPrefab) ||
                                 !EntityManager.HasComponent<global::Game.Prefabs.NetLaneData>(subPrefab))
                             {
                                 SyncLog.Warn(LogTopic.Nets,
@@ -336,9 +299,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                             return;
                         }
 
-                        // NetCourse length is generator state, not a checksum of the final curve.
-                        // Native trimming/profile adjustments can change one without the other.
-                        // Apply a broad sanity bound, then replay the source length intact.
+                        // Length is generator state, not a checksum: sanity-bound it, then replay the source value.
                         if (!NativeCourseLengthPolicy.IsPlausible(command.Length, measuredLength, nativePoint))
                         {
                             SyncLog.Warn(LogTopic.Nets, "NetSync: native operation " +
@@ -368,10 +329,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                                 .Fact("creation flags on the wire", command.CreationFlags));
                             return;
                         }
-                        // NetCourse elevations are exact native generator state, not values limited
-                        // by PlaceableNetData's UI range. Snaps and underground transitions can
-                        // legitimately exceed that range. The wire decoder already rejects every
-                        // non-finite or globally implausible value, so preserve these values intact.
+                        // Exact generator elevations can exceed the UI range; the decoder already bounds them.
 
                         NetPrefabInfo placedInfo = NetInfoOf(prefab);
                         bool startExternal = HasExternalNativeTarget(command.Start.Kind);
@@ -401,20 +359,15 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                         }
 
                         bool resolved = startResolved && endResolved;
-                        // Keyed on the RESOLVED kind, not the wire kind: a node target that matched a
-                        // merged edge still has to replay that split, or the course is skipped as
-                        // already-built and the junction never appears.
+                        // By the resolved kind: a node target that matched a merged edge still replays its split.
                         bool topologyNeedsReplay =
                             (startExternal && startResolved && startKind == KindSplit) ||
                             (endExternal && endResolved && endKind == KindSplit);
                         bool geometryAlreadyBuilt = !nativePoint &&
                                                     SpanAlreadyBuilt(prefab, curve, ref liveEdgeSearch);
 
-                        // Geometry coverage alone is not enough for a native operation. An endpoint
-                        // aimed at an edge also creates a split node. Skipping that course while the
-                        // target is still an unsplit edge leaves the next operation's Node target
-                        // unresolved even though the road pixels look identical on both machines.
-                        // External node targets must resolve as well before this is a safe no-op.
+                        // Geometry alone is not enough: an edge-targeted endpoint also makes a split node the next
+                        // operation may target. External node targets must resolve too.
                         bool alreadyBuilt = geometryAlreadyBuilt && resolved && !topologyNeedsReplay;
                         if (alreadyBuilt) alreadyBuiltCourses++;
                         preparedNative[i] = new PreparedNativeCourse
@@ -451,9 +404,6 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                             SyncLog.Trace(LogTopic.Nets, "net native topology replay op=" +
                                 command.OperationId + " course=" + command.CourseIndex);
 
-                        // A course whose geometry and endpoint topology are already present is this
-                        // operation's idempotent portion. Remaining missing courses still reconcile
-                        // atomically below.
                         if (alreadyBuilt) continue;
                     }
 
@@ -475,24 +425,15 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
 
                     if (unresolvedOperationTarget)
                     {
-                        int windows;
                         if (HoldUnresolvedOperation(operationRetryKey, now,
-                                operationHeader.OperationId, unresolvedDetail, out windows))
+                                operationHeader.OperationId, unresolvedDetail, out int windows))
                         {
-                            // Wait BEHIND work that can still make progress, not in front of it.
-                            // Parking the whole queue here for the length of the window stopped
-                            // every later operation from every player - including, in the logs this
-                            // came from, the ones that would have built the target being waited for.
+                            // Wait behind work that can still progress, which may build the missing target.
                             RequeueStalledOperation(work);
                             return;
                         }
 
-                        // The window is up. Before spending a world reload on it, say exactly what
-                        // is missing and what stands there instead, and let the arbiter decide: the
-                        // same "missing" road has been observed to be one this machine's own delete
-                        // feeder removed while the placement waited.
-                        // Non-null whenever unresolvedOperationTarget is set - they are assigned
-                        // together - but the endpoint description is worth having either way.
+                        // Window up: describe what is missing and let the arbiter decide before any reload.
                         NetEndpointIntent failedEndpoint = unresolvedCommand == null
                             ? default(NetEndpointIntent)
                             : unresolvedStartResolved ? unresolvedCommand.End : unresolvedCommand.Start;
@@ -514,9 +455,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
 
                         if (SyncInbox.Settle(report) == Diagnostics.ResyncVerdict.Held)
                         {
-                            // Not settled: keep the edit. The arbiter has frozen the feeders that
-                            // could remove the target, so this window is the first one that gets to
-                            // look at a world that is standing still.
+                            // Held: the arbiter froze the feeders that could remove the target, so retry against a still world.
                             ExtendUnresolvedOperation(operationRetryKey, now);
                             RequeueStalledOperation(work);
                             return;
@@ -534,9 +473,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                         NativeOperationSubject(operationHeader.OperationId, operationRetryKey.Origin),
                         "every endpoint resolved on a later attempt");
 
-                    // Every target resolved, but two of them collapsed onto one local edge. There is
-                    // no safe way to commit that batch and no way to repair it from here: the missing
-                    // split belongs to work this machine never applied.
+                    // Two targets collapsed onto one local edge: unsafe to commit and unrepairable here.
                     if (aliasedSplitTarget)
                     {
                         _operationBuildFailures.Remove(operationRetryKey);
@@ -557,10 +494,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                         return;
                     }
 
-                    // A first-sight operation that is already partly present means the two worlds
-                    // disagree about what is built. Reconciling still commits atomically, so let it
-                    // through, but record it: the source applied a different course set than this
-                    // batch will, and CourseSplitSystem resolves intersections from what it is given.
+                    // Partly present on first sight: the worlds disagree. Still commit atomically, but record it.
                     if (alreadyBuiltCourses > 0 && !_armedNetOperations.Contains(operationRetryKey, now))
                         SyncLog.Trace(LogTopic.Nets, "net native op partial on first sight op=" +
                             operationHeader.OperationId + " present=" + alreadyBuiltCourses + "/" +
@@ -593,13 +527,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                     }
                     else
                     {
-                        try { command = NetPlacementCommand.Decode(message.Body); }
-                        catch (System.Exception ex)
-                        {
-                            SyncLog.Warn(LogTopic.Nets, "NetSync: dropping malformed command: " +
-                                ex.Message);
+                        if (!CommandDecode.TryDecode(message, NetPlacementCommand.Decode, LogTopic.Nets,
+                                "NetSync", out command))
                             continue;
-                        }
 
                         if (!_prefabIndex.TryResolve(command.PrefabName, out prefab) ||
                             !EntityManager.HasComponent<global::Game.Prefabs.NetData>(prefab) ||
@@ -642,12 +572,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                         haveSnapshot = true;
                     }
 
-                    // Idempotence: skip a span this machine already has as live same-prefab geometry.
-                    // The game's node reduction can merge a committed span into a neighbour and
-                    // re-surface it as a wider create on the other machine; without this check that
-                    // echo would stack a duplicate road on top of the existing one (and ping-pong).
-                    // The tolerances are SplitMatch-tight (~1 m), far below a parallel lane, and a
-                    // span rebuilt at another elevation fails the height match — never wrongly skipped.
+                    // Skip a span already present as same-prefab geometry, e.g. a node-reduction echo. Tolerances are
+                    // ~1 m and height-matched, so a parallel or re-elevated span is never skipped.
                     if (!nativeOperation && SpanAlreadyBuilt(prefab, bezier, ref edges))
                     {
                         if (command.HasNativeCourse)
@@ -702,8 +628,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                         if (startUsedLocalSurface) _rzLocalSurfaceMatches++;
                         if (endUsedLocalSurface) _rzLocalSurfaceMatches++;
 
-                        // Endpoints the source left for local inference never went through the
-                        // operation preflight, so claim every native split target here too.
+                        // Endpoints left for local inference skipped the preflight; claim their split targets here.
                         if (nativeOperation &&
                             (!TryClaimSplitTarget(command.Start, startSnap, startKind) ||
                              !TryClaimSplitTarget(command.End, endSnap, endKind)))
@@ -717,9 +642,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                         NativeTargetRetryKey retryKey = NativeRetryKey(message, command);
                         if (!nativeTargetsResolved)
                         {
-                            // The operation-level preflight resolved every external target against
-                            // this same snapshot. If one vanished now, do not leave an already-built
-                            // prefix behind; retry the complete source operation on a fresh frame.
+                            // A target vanished since the preflight: retry the whole operation rather than leave a prefix.
                             _nativeTargetDeadlines.Remove(retryKey);
                             abortWholeOperation = true;
                             abortReason = "a native target changed after operation preflight";
@@ -746,49 +669,36 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                             out endT, out endKind, out endShared);
                     }
 
-                    // Fixed-height ends retain the captured elevation/profile choice. Free-height
-                    // ends are adjusted against this machine's surface (see EndElevation).
-                    float startCorrection, endCorrection;
+                    // Fixed-height ends keep the captured elevation; free-height ends follow the local surface.
                     float2 startElevation = EndElevation(prefab, startSnap, startKind, a,
                         sourceStartElevation, command.Start.Flags,
-                        ref heightData, ref waterData, out startCorrection);
+                        ref heightData, ref waterData, out float startCorrection);
                     float2 endElevation = EndElevation(prefab, endSnap, endKind, d,
                         sourceEndElevation, command.End.Flags,
-                        ref heightData, ref waterData, out endCorrection);
+                        ref heightData, ref waterData, out float endCorrection);
                     TallySurfaceCorrection(startCorrection, endCorrection);
 
-                    // A captured native operation is the exact set the source applied together, so
-                    // its courses stay together even when one references geometry another course in
-                    // that same operation creates. Geometry-only fallback commands remain serialized.
+                    // A native operation stays together; geometry-only fallback commands stay serialized.
                     bool defer = !nativeOperation &&
                                  (startKind == KindDeferBatchEdge || endKind == KindDeferBatchEdge);
                     bool splittingCourse = startKind == KindSplit || endKind == KindSplit;
-                    // A course whose BODY crosses or hugs an existing edge splits it at Temp generation
-                    // exactly like an endpoint tap, but ClassifyEndpoint only sees the two endpoints —
-                    // probe the span interior too, or two quick drags across the same road slip into one
-                    // batch and hit the stale-edge crash below.
+                    // A body crossing an existing edge splits it like an endpoint tap does.
                     if (!nativeOperation && !defer && !splittingCourse)
                         splittingCourse = BodyTouchesExistingEdge(bezier, placedInfo, ref edges);
-                    // At most ONE existing-edge-splitting course per batch: two courses committed in the
-                    // same ApplyTool pass that both touch an existing edge can make ApplyNetSystem
-                    // dereference a stale (already-split/deleted) edge and crash the process natively.
-                    // Courses touching nothing pre-existing are unbounded (safe — the net tool grids
-                    // many at once).
+                    // One existing-edge-splitting course per batch: two in one ApplyTool pass can make
+                    // ApplyNetSystem dereference a stale edge and crash natively.
                     if (!defer && splittingCourse && splitUsed && !nativeOperation) defer = true;
 
                     if (defer)
                     {
-                        // Re-queue this and every remaining item, in order, for the next cycle - after
-                        // this frame's committed edges have become query-able.
+                        // Requeue the rest, in order, after this frame's edges become queryable.
                         RequeueFrom(work, i);
                         break;
                     }
 
                     try
                     {
-                        // All replicated courses use the same Temp/apply transaction as the source.
-                        // The former Permanent shortcut could not recover a missed contact or split
-                        // and exposed half-realized geometry to dependent commands in this frame.
+                        // Always Temp/apply, so late contacts and splits are handled natively.
                         if (built == 0) PrepareDefinitionFrame();
                         Entity definition;
                         if (command.HasNativeCourse)
@@ -852,11 +762,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                         Origin = work[0].OriginPlayerId,
                         Operation = header.OperationId,
                     };
-                    int failures;
-                    _operationBuildFailures.TryGetValue(failureKey, out failures);
+                    _operationBuildFailures.TryGetValue(failureKey, out int failures);
                     failures++;
-                    // Aliasing is deterministic: retrying the same courses against the same local
-                    // geometry resolves them onto the same edge again. Recover the world instead.
+                    // Aliasing is deterministic; retrying cannot help.
                     bool retry = failures <= 3 && !abortAliasedSplit;
                     if (abortAliasedSplit) SyncInbox.RequestResync(CS2MultiplayerMod.Game.Diagnostics.ResyncReport
                         .Create("net split target aliased by local divergence", "net",
@@ -893,9 +801,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                     });
                 }
 
-                // Accumulate the operation only after every selected definition exists. The actual
-                // host treasury update is one write after this Temp transaction has drained, so a
-                // failed/replayed later grid or parallel course cannot leave a partial charge.
+                // Charge only once every definition exists, so a failed course cannot leave a partial charge.
                 try
                 {
                     for (int i = 0; i < realizedCourses.Count; i++)
@@ -914,9 +820,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                     SyncLog.Warn(LogTopic.Nets, "NetSync: could not calculate remote net charge: " +
                         ex.Message);
                 }
-                // Publish echo guards and diagnostics only after every definition selected for this
-                // operation exists. A failed later course therefore cannot leave a phantom realized
-                // span suppressing unrelated local capture.
+                // Echo guards only after every definition exists.
                 for (int i = 0; i < realizedCourses.Count; i++)
                 {
                     RealizedCourse realized = realizedCourses[i];
@@ -947,8 +851,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                 ForceActiveToolUpdate();
             }
 
-            // Arm the commit for the Temp batch: those definitions become Temp edges at this frame's
-            // Modification, and the next quiet frame applies that isolated set through the net domain.
+            // Definitions become Temp edges this Modification; the next quiet frame applies them.
             if (built > 0)
             {
                 _pendingApply = true;
@@ -956,10 +859,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                 _armTick = System.Environment.TickCount;
                 _pendingNetConstructionCharge = constructionCost;
                 _pendingNetConstructionChargeCourses = chargedCourses;
-                // A partially reconciled native operation may have skipped courses that were
-                // already present locally. If this commit is lost, replay the complete source
-                // operation so it can be assembled atomically again; replaying only the missing
-                // fragments could never satisfy CourseCount.
+                // Replay the complete source operation if this commit is lost; fragments cannot satisfy CourseCount.
                 List<SimulationCommandMessage> batchSources = nativeOperation
                     ? new List<SimulationCommandMessage>(work)
                     : retained;
@@ -984,10 +884,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
         }
 
         /// <summary>
-        /// A native operation refused before a single course was built. Its commands never come
-        /// again, so this machine keeps a hole the source does not have and only a resync closes
-        /// it. The offending course travels with the request: the bare warning this used to be is
-        /// a silent divergence, noticed days later as roads that never appeared.
+        /// A native operation refused before any course was built never comes again, so the hole needs a
+        /// resync; the offending course travels with the request.
         /// </summary>
         private static void ReportRefusedNativeOperation(NetPlacementCommand command,
             int courseIndex, int courseCount, string what, string measurement)
@@ -1000,7 +898,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                 .Fact("what was refused", what)
                 .Fact("net prefab", command.PrefabName)
                 .Fact("measurement", measurement)
-                .Fact("pinned over water", command.PinProfile));
+                .Fact("straight profile pinned", command.PinProfile));
         }
     }
 }

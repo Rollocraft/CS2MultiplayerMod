@@ -1,32 +1,39 @@
+using CS2MultiplayerMod.Game.Sync.Infrastructure;
 using Game;
+using Game.Common;
+using Game.Tools;
+using Unity.Entities;
 
 namespace CS2MultiplayerMod.Game.Sync.Systems
 {
     /// <summary>
-    /// Owns the native household-lifecycle boundary immediately before the move-away executor.
-    /// On a host it samples departures before the executor consumes them. On a client it removes
-    /// lifecycle decisions made by local household behaviour while retaining that system's
-    /// shopping and vehicle-demand work. The main occupancy system owns all retained state; this
-    /// class is only its every-frame ordering point.
+    /// Just before the move-away executor: samples departures on a host, strips local lifecycle
+    /// decisions on a client. State lives in ResidentialOccupancySyncSystem.
     /// </summary>
     public sealed partial class ResidentialOccupancyDepartureCaptureSystem : GameSystemBase
     {
         private ResidentialOccupancySyncSystem _occupancy;
+        // Owned here so its change filter spans exactly the ticks since this scan last ran.
+        private EntityQuery _changedDepartures;
 
         protected override void OnCreate()
         {
             base.OnCreate();
             _occupancy = World.GetOrCreateSystemManaged<ResidentialOccupancySyncSystem>();
+            _changedDepartures = GetEntityQuery(new EntityQueryDesc
+            {
+                All = SyncQuery.ReadOnly<global::Game.Citizens.Household,
+                    global::Game.Agents.MovingAway>(),
+                None = SyncQuery.ReadOnly<Deleted, Temp, global::Game.Citizens.TouristHousehold,
+                    global::Game.Citizens.CommuterHousehold>(),
+            });
+            _changedDepartures.SetChangedVersionFilter(
+                ComponentType.ReadOnly<global::Game.Agents.MovingAway>());
         }
 
         /// <summary>
-        /// HouseholdMoveAwaySystem, the executor this boundary sits in front of, updates every 16
-        /// frames. At full rate this walked every departing household 15 more times for a queue
-        /// nothing could act on yet, which is what turned a 10 ms/30 s scope into 3,000 ms once a
-        /// city started shedding thousands of families at once. Matching the interval also makes
-        /// the ordering exact rather than incidental: a system whose interval equals the interval
-        /// of the system it is registered against inherits that system's update offset, so the two
-        /// always tick on the same frame.
+        /// HouseholdMoveAwaySystem's interval; an equal interval inherits its update offset, so both tick on
+        /// the same frame.
         /// </summary>
         public override int GetUpdateInterval(SystemUpdatePhase phase) =>
             phase == SystemUpdatePhase.GameSimulation ? 16 : 1;
@@ -35,7 +42,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         {
             using (Diagnostics.SyncProfiler.Measure("Occupancy.Lifecycle", Diagnostics.SyncZone.Residential))
             {
-                if (_occupancy != null) _occupancy.ProcessHouseholdLifecycleBoundary();
+                if (_occupancy != null) _occupancy.ProcessHouseholdLifecycleBoundary(_changedDepartures);
             }
         }
     }

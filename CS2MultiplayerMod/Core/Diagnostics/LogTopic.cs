@@ -1,26 +1,13 @@
 ﻿namespace CS2MultiplayerMod.Core.Diagnostics
 {
     /// <summary>
-    /// What a log line is about.
-    ///
-    /// Every line the mod writes names one of these. It is what a reader greps a log for
-    /// ("[nets]"), and what a developer build narrows the detail down to when chasing one bug
-    /// (see the game layer's LogTopics). The player has a single switch: which subsystem is at
-    /// fault is the answer to the bug report, not a question to put to the person filing it.
-    ///
-    /// The topics are named after the thing that went wrong from the player's side, not after
-    /// the class that noticed it - "my transit lines are missing" is <see cref="Routes"/>, and
-    /// the reporter may be a channel, a system or the pipeline.
-    ///
-    /// This lives in the portable core so the networking and session code can name the same
-    /// topics as the game layer without referencing a game assembly.
+    /// What a log line is about, named from the player's side ("my transit lines are missing" is
+    /// <see cref="Routes"/>). The grep target, and what developer builds narrow detail to. In Core so
+    /// session code shares the game layer's topics.
     /// </summary>
     public enum LogTopic
     {
-        /// <summary>
-        /// The mod itself: load, settings, system registration, compatibility and DLC checks.
-        /// Deliberately first, so an unattributed line lands somewhere honest.
-        /// </summary>
+        /// <summary>Load, settings, registration, compatibility and DLC checks. First, so unattributed lines land here.</summary>
         Startup = 0,
 
         /// <summary>Connecting, disconnecting, the handshake, peers joining and leaving, kicks and bans.</summary>
@@ -74,10 +61,7 @@
         /// <summary>Frame times and the mod's own main-thread cost, including the per-zone split.</summary>
         Performance,
 
-        /// <summary>
-        /// State belonging to other mods: what was discovered, what the two machines agreed to
-        /// replicate, and what travelled.
-        /// </summary>
+        /// <summary>Other mods' state: what was discovered, agreed and sent.</summary>
         ModSync,
     }
 }

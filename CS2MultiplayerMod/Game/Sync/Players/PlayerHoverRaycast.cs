@@ -10,12 +10,8 @@ using Unity.Entities;
 namespace CS2MultiplayerMod.Game.Sync.Players
 {
     /// <summary>
-    /// Finds the net under the local cursor for <see cref="PlayerCursorSyncSystem"/> to publish.
-    /// The shared tool raycast only looks for what the active tool needs, and with no tool selected
-    /// that excludes every net, so a road, track or pipe being pointed at otherwise reaches no
-    /// partner. Raycast phase: an input only joins the frame's raycast job from there. The answer to
-    /// the previous frame's input is taken before this one is added, which leaves this system's
-    /// order against the publisher irrelevant.
+    /// Finds the net under the cursor, which the tool raycast skips when no tool is selected. Raycast
+    /// phase: an input joins the frame's job only there; last frame's answer is read first.
     /// </summary>
     public partial class PlayerHoverRaycastSystem : GameSystemBase
     {
@@ -54,8 +50,7 @@ namespace CS2MultiplayerMod.Game.Sync.Players
                 MultiplayerService service = Mod.Service;
                 if (service == null || !service.GameplaySyncReady ||
                     _tools.fullUpdateRequired || !InputManager.instance.controlOverWorld ||
-                    // The active tool already searches the net tree; its own result is what the
-                    // capture reads, and a second input would search that tree twice per frame.
+                    // The active tool already searches nets; do not search twice.
                     (_toolRaycast.typeMask & TypeMask.Net) != TypeMask.None)
                 {
                     NetHit = Entity.Null;
@@ -65,8 +60,7 @@ namespace CS2MultiplayerMod.Game.Sync.Players
                 long now = service.NowMs;
                 if (now - _lastAskMs < AskIntervalMs) return;
 
-                Viewer viewer;
-                if (!_camera.TryGetViewer(out viewer) || viewer.camera == null) return;
+                if (!_camera.TryGetViewer(out Viewer viewer) || viewer.camera == null) return;
 
                 _lastAskMs = now;
                 _raycast.AddInput(this, new RaycastInput
@@ -74,8 +68,6 @@ namespace CS2MultiplayerMod.Game.Sync.Players
                     m_Line = ToolRaycastSystem.CalculateRaycastLine(viewer.camera),
                     m_TypeMask = TypeMask.Net,
                     m_NetLayerMask = HoverLayers,
-                    // Follows the player's own underground toggle, so what they can see is what
-                    // their partner is shown.
                     m_CollisionMask = _toolRaycast.collisionMask
                 });
                 _pending = true;

@@ -3,7 +3,6 @@ using Game.Common;
 using Game.Net;
 using Game.Prefabs;
 using Game.Simulation;
-using Unity.Collections;
 using Unity.Entities;
 using Unity.Mathematics;
 using CS2MultiplayerMod.Game.Sync.Commands;
@@ -11,9 +10,8 @@ using CS2MultiplayerMod.Game.Sync.Infrastructure;
 
 namespace CS2MultiplayerMod.Game.Sync.Systems.Net
 {
-    // Portable native-target resolution. Source entity ids cannot cross machines, so an endpoint
-    // names the source target by anchor, optional prefab and source curve. The resolver tolerates
-    // different local subdivision while strongly preferring the same physical edge and direction.
+    // Portable target resolution by anchor, optional prefab and source curve; tolerant of different
+    // subdivision, preferring the same physical edge and direction.
     public partial class NetSyncSystem
     {
         private const float NativeNodeResolveXZ = 2f;
@@ -59,8 +57,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                     splitT = 0f;
                     kind = KindReuseNode;
                     return false;
-                // No merged-node fallback here: a building's sub-net stub is never node-reduced,
-                // so a missing one is a real absence, not local subdivision drift.
+                // Building stubs are never node-reduced: a missing one is really missing.
                 case NetEndpointTargetKind.OwnedNode:
                     target = FindNativeNode(intent, placedInfo, ref ownedNodes);
                     kind = KindReuseConnector;
@@ -78,19 +75,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
         }
 
         /// <summary>
-        /// Resolve a captured target at its source-world height, then at the corresponding
-        /// local-surface height. Explicit target identity, prefab/layer contracts and curve
-        /// direction are still required by the second pass; only the Y reference changes. This
-        /// prevents terrain/water drift from turning a valid captured snap into an unresolved
-        /// operation.
-        ///
-        /// Normally the second pass covers utility nets only. Once an operation has spent a full
-        /// retry window (<paramref name="allowMergedNodeSplit"/>, which is what marks the
-        /// last-resort pass), it covers roads and rails too - see
-        /// <see cref="TryProjectEndpointToLocalSurface"/> for why that gap mattered. That same
-        /// last-resort pass then allows
-        /// <see cref="TryResolveNativeEndpointByIdentityOnly"/>, which drops the height test
-        /// entirely for an otherwise unambiguous node.
+        /// Source height first, then the local-surface height; identity and direction are still required.
+        /// Utilities only, until the last-resort pass (<paramref name="allowMergedNodeSplit"/>), which also
+        /// covers roads and rails and allows <see cref="TryResolveNativeEndpointByIdentityOnly"/>.
         /// </summary>
         private bool TryResolveNativeEndpointWithLocalSurface(Entity prefab,
             NetEndpointIntent intent, NetPrefabInfo placedInfo,
@@ -112,10 +99,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
             {
                 float3 sourcePoint = new float3(intent.PosX, intent.PosY, intent.PosZ);
                 float2 sourceElevation = new float2(intent.ElevationLeft, intent.ElevationRight);
-                float3 projected;
                 if (TryProjectEndpointToLocalSurface(prefab, placedInfo, sourcePoint,
                         sourceElevation, allowMergedNodeSplit, ref heightData, ref waterData,
-                        out projected))
+                        out float3 projected))
                 {
                     float deltaY = projected.y - intent.PosY;
                     intent.PosY = projected.y;
@@ -141,14 +127,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
         }
 
         /// <summary>
-        /// Last-resort node match for an endpoint whose only disagreement with this world is
-        /// height. A node's committed height is derived locally, and the same junction has been
-        /// observed settling three to four metres apart on the two machines - just outside
-        /// <see cref="NativeTargetResolveY"/>, while the candidate sits at the captured XZ to
-        /// within a centimetre and carries the same prefab, layers, contract and owner. Replacing
-        /// the whole city over that is the wrong trade, so once the operation has spent a full
-        /// retry window the height window widens - but only onto a candidate that is unambiguous,
-        /// so stacked same-prefab nets are still refused.
+        /// Last resort: a node that differs only in height (committed heights are derived locally) matches
+        /// when it is unambiguous and carries the same prefab, layers, contract and owner.
         /// </summary>
         private bool TryResolveNativeEndpointByIdentityOnly(NetEndpointIntent intent,
             NetPrefabInfo placedInfo, ref NodePool nodes, ref NodePool ownedNodes,
@@ -207,12 +187,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
         }
 
         /// <summary>
-        /// Last-resort match for a <see cref="NetEndpointTargetKind.Node"/> target this machine no
-        /// longer has as a node. Node reduction merges a node with two compatible edges back into a
-        /// single edge as a local side-effect, so the same junction point is legitimately a node on
-        /// the source and mid-span here; tapping that edge at the captured anchor rebuilds it.
-        /// Identity stays strict — same prefab name, layer contract and owner — so a parallel road
-        /// is never split in place of the real target.
+        /// Last resort for a Node target that local node reduction merged into an edge: split that edge at
+        /// the anchor. Prefab, layers and owner stay strict.
         /// </summary>
         private bool TryResolveMergedNodeAsEdgeSplit(NetEndpointIntent intent,
             NetPrefabInfo placedInfo, ref EdgePool edges,
@@ -232,8 +208,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
             while (candidates.MoveNext())
             {
                 int i = candidates.Current;
-                float t;
-                float xz = MathUtils.Distance(edges.Curves[i].m_Bezier.xz, anchor.xz, out t);
+                float xz = MathUtils.Distance(edges.Curves[i].m_Bezier.xz, anchor.xz, out float t);
                 if (xz > NativeNodeResolveXZ) continue;
                 float3 projected = MathUtils.Position(edges.Curves[i].m_Bezier, t);
                 float dy = math.abs(projected.y - anchor.y);
@@ -256,8 +231,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
             }
             if (bestEdge == Entity.Null) return false;
 
-            // The survivor's own end node carries a different prefab at a mixed junction, so it can
-            // be the source's node even when the node search rejected it on prefab identity.
+            // At a mixed junction the survivor's end node has another prefab but can still be the source node.
             Bezier4x3 bestCurve = EntityManager.GetComponentData<Curve>(bestEdge).m_Bezier;
             Edge bestEdgeData = EntityManager.GetComponentData<Edge>(bestEdge);
             float3 projectedBest = MathUtils.Position(bestCurve, bestT);
@@ -293,9 +267,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
             while (candidates.MoveNext())
             {
                 int i = candidates.Current;
-                // Geometry first: the per-candidate liveness and layer lookups are main-thread
-                // component reads, and running them ahead of the range test made one endpoint cost
-                // the whole city.
+                // Geometry before the per-candidate component reads.
                 if (math.abs(nodes.Data[i].m_Position.y - position.y) > 1f) continue;
                 float distance = math.distancesq(nodes.Data[i].m_Position.xz, position.xz);
                 if (distance >= best) continue;
@@ -366,8 +338,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
             while (candidates.MoveNext())
             {
                 int i = candidates.Current;
-                float t;
-                float xz = MathUtils.Distance(edges.Curves[i].m_Bezier.xz, anchor.xz, out t);
+                float xz = MathUtils.Distance(edges.Curves[i].m_Bezier.xz, anchor.xz, out float t);
                 if (xz > NativeEdgeResolveXZ) continue;
                 float3 projected = MathUtils.Position(edges.Curves[i].m_Bezier, t);
                 float dy = math.abs(projected.y - anchor.y);
@@ -394,17 +365,14 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                 bool prefabMatch = targetPrefab != Entity.Null &&
                     string.Equals(PrefabNameOf(targetPrefab), intent.TargetPrefabName,
                         System.StringComparison.Ordinal);
-                // An explicit source prefab is part of the portable edge identity. A nearby
-                // parallel road of another type is not an acceptable fallback: splitting it makes
-                // the receivers permanently disagree about which carriageway owns the junction.
+                // An explicit prefab is part of the identity; splitting a parallel road of another type diverges.
                 if (!string.IsNullOrEmpty(intent.TargetPrefabName) && !prefabMatch) continue;
                 if (!TargetContractMatches(edge, intent) || !TargetOwnerMatches(edge, intent)) continue;
                 float score = xz * xz + dy * dy * 0.25f + (1f - alignment) * 16f;
                 if (score >= best) continue;
                 best = score;
                 bestEdge = edge;
-                // When the receiver still has the exact source curve, preserve the captured split
-                // parameter instead of projecting the anchor and introducing solver-rounding drift.
+                // Same source curve: keep the captured split parameter exactly.
                 Bezier4x3 localCurve = edges.Curves[i].m_Bezier;
                 if (SameCurveBits(localCurve, source)) bestT = sourceT;
                 else if (SameCurveBitsReversed(localCurve, source)) bestT = 1f - sourceT;
@@ -419,9 +387,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                 return false;
             }
 
-            // The source targeted an edge interior, but this receiver may already have an equivalent
-            // split at that anchor. Reuse its existing endpoint node rather than asking the generator
-            // to split a local sub-edge at t=0/1.
+            // Already split here at that anchor: reuse its node rather than split at t=0/1.
             Bezier4x3 bestCurve = EntityManager.GetComponentData<Curve>(bestEdge).m_Bezier;
             Edge bestEdgeData = EntityManager.GetComponentData<Edge>(bestEdge);
             float3 projectedBest = MathUtils.Position(bestCurve, bestT);
@@ -462,9 +428,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
 
         private static Bezier4x3 TargetCurveOf(NetEndpointIntent intent)
         {
-            // A node target carries no curve, so two DIFFERENT source nodes would otherwise claim
-            // one local edge with identical all-zero "curves" and pass the aliasing check that
-            // exists to stop two Temps sharing one original.
+            // Node targets carry no curve; include the anchor so two source nodes cannot alias one edge.
             if (intent.Kind == NetEndpointTargetKind.Node ||
                 intent.Kind == NetEndpointTargetKind.OwnedNode)
             {

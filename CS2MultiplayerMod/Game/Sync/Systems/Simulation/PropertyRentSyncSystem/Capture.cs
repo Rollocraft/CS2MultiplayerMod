@@ -1,35 +1,27 @@
 using System;
-using System.Collections.Concurrent;
 using System.Collections.Generic;
 using CS2MultiplayerMod.Core.Diagnostics;
 using CS2MultiplayerMod.Core.Protocol;
 using CS2MultiplayerMod.Game.Diagnostics;
 using CS2MultiplayerMod.Game.Sync.Commands;
 using CS2MultiplayerMod.Game.Sync.Infrastructure;
-using Game;
 using Game.Buildings;
 using Game.Common;
-using Game.Objects;
 using Game.Prefabs;
 using Game.Simulation;
 using Game.Tools;
 using Unity.Collections;
 using Unity.Entities;
-using Unity.Mathematics;
 
 namespace CS2MultiplayerMod.Game.Sync.Systems
 {
-    // The host's side: walking one partition per update, noticing the rents that changed, and
-    // writing them into a page. Also the page plumbing either peer needs - enqueueing an incoming
-    // page, seeding a client's baseline, and clearing everything on a world change.
     public partial class PropertyRentSyncSystem
     {
         /// <summary>Called once per CityState snapshot on the host.</summary>
         internal bool Capture(NetworkWriter writer)
         {
             if (writer == null) return false;
-            // Rents belong to properties each city grew for itself once simulation sync is off,
-            // so the pages would name buildings the receiver has never had.
+            // Without simulation sync each city grows its own properties.
             MultiplayerService service = Mod.Service;
             if (service != null && !service.SimulationSyncEnabled) return false;
             if (_hostSweepEntities == null)
@@ -71,15 +63,14 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 SweepId = _captureSweepId,
                 PageIndex = _capturePageIndex,
             };
-            var identities = new HashSet<PropertyRentIdentity>();
+            var identities = new HashSet<PropertyIdentity>();
             AddPriorityEntries(snapshot, identities);
 
             int index = _captureCursor;
             while (index < _hostSweepEntities.Length &&
                    snapshot.Entries.Count < PropertyRentSnapshot.MaxEntries)
             {
-                PropertyRentEntry entry;
-                if (TryCaptureEntry(_hostSweepEntities[index], out entry))
+                if (TryCaptureEntry(_hostSweepEntities[index], out PropertyRentEntry entry))
                 {
                     if (identities.Add(entry.Identity)) snapshot.Entries.Add(entry);
                     else _localIdentityCollisions++;
@@ -117,21 +108,21 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             if (snapshot != null) _droppedPages += _propertyState.Enqueue(snapshot);
         }
 
+        bool Channels.IPagedPropertyRuntime<PropertyRentSnapshot>.Capture(NetworkWriter writer) => Capture(writer);
+        void Channels.IPagedPropertyRuntime<PropertyRentSnapshot>.Enqueue(PropertyRentSnapshot snapshot) => Enqueue(snapshot);
+        void Channels.IPagedPropertyRuntime<PropertyRentSnapshot>.Pump() => PumpIncoming();
+        void Channels.IPagedPropertyRuntime<PropertyRentSnapshot>.ResetPending() => DrainForWorldChange();
+
         internal void DrainForWorldChange()
         {
             lock (_incoming) SyncInbox.Clear(_incoming);
             _cache.Clear();
-            _pending.Clear();
-            PropertyRentIdentity discardedPending;
-            while (_pendingOrder.TryDequeue(out discardedPending)) { }
+            _propertyState.ClearPending();
+            _propertyState.ResetSweep();
             _cacheScratch.Clear();
             ClearBuckets(_cacheBuckets);
             ClearBucketSets(_cacheBucketMembers);
-            _clientSweepId = 0;
-            _clientNextPage = 0;
-            _clientSweepIntact = false;
             _clientBaselineWarned = false;
-            _nextPendingPumpMs = 0;
             _prefabIndex = new PrefabIndex(_prefabSystem, _prefabs);
 
             _hostObserved.Clear();
@@ -139,8 +130,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             Array.Clear(_hostBucketInitialized, 0, _hostBucketInitialized.Length);
             Array.Clear(_hostBucketCursor, 0, _hostBucketCursor.Length);
             _priority.Clear();
-            PropertyRentIdentity discardedPriority;
-            while (_priorityOrder.TryDequeue(out discardedPriority)) { }
+            while (_priorityOrder.TryDequeue(out PropertyIdentity discardedPriority)) { }
             RestartHostSweep();
         }
 
@@ -153,14 +143,12 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 int seeded = 0;
                 for (int i = 0; i < properties.Length; i++)
                 {
-                    PropertyRentEntry entry;
-                    if (!TryCaptureEntry(properties[i], out entry)) continue;
+                    if (!TryCaptureEntry(properties[i], out PropertyRentEntry entry)) continue;
                     int before = _cache.Count;
                     Cache(properties[i], entry, 0);
                     if (_cache.Count > before) seeded++;
                 }
-                // Advance only after the complete query was consumed. A failed partial pass keeps
-                // the old generation so the next UI pump retries.
+                // Advance only after the whole query, so a failed pass retries.
                 _lastSeededWorldInstallGeneration = installGeneration;
                 _clientBaselineWarned = false;
                 SyncLog.Detail(LogTopic.Residential, "PropertyRent: seeded " + seeded +
@@ -169,8 +157,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             }
             catch (Exception ex)
             {
-                // Leave the flag false: UIUpdate will retry. Partial managed-cache inserts are
-                // idempotent and bounded, and this path never writes an ECS component.
+                // UIUpdate retries; inserts are idempotent and this path never writes an ECS component.
                 if (!_clientBaselineWarned)
                 {
                     _clientBaselineWarned = true;
@@ -241,8 +228,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 AnchorZ = transform.m_Position.z,
                 Rent = rent,
             };
-            // Do not let an unusable local asset name or corrupt transform reach Snapshot.Write:
-            // CityState capture is shared, so a throw here would suppress every state channel.
+            // A throw in Write would suppress every state channel.
             return PropertyRentSnapshot.IsValidEntry(entry);
         }
 
@@ -280,16 +266,14 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             !EntityManager.HasComponent<StorageProperty>(property);
 
         private void AddPriorityEntries(PropertyRentSnapshot snapshot,
-            HashSet<PropertyRentIdentity> identities)
+            HashSet<PropertyIdentity> identities)
         {
             int added = 0;
             while (added < PriorityEntriesPerPage && _priorityOrder.Count > 0 &&
                    snapshot.Entries.Count < PropertyRentSnapshot.MaxEntries)
             {
-                PropertyRentIdentity identity;
-                if (!_priorityOrder.TryDequeue(out identity)) break;
-                PropertyRentEntry entry;
-                if (!_priority.TryGetValue(identity, out entry)) continue;
+                if (!_priorityOrder.TryDequeue(out PropertyIdentity identity)) break;
+                if (!_priority.TryGetValue(identity, out PropertyRentEntry entry)) continue;
                 _priority.Remove(identity);
                 if (!identities.Add(identity)) continue;
                 snapshot.Entries.Add(entry);
@@ -297,11 +281,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             }
         }
 
-        /// <summary>
-        /// Walks at most <see cref="MaxPropertiesObservedPerUpdate"/> properties of one partition
-        /// and resumes where it stopped. Without the ceiling a large city examined thousands of
-        /// properties in a single frame each time this system came round.
-        /// </summary>
+        /// <summary>At most <see cref="MaxPropertiesObservedPerUpdate"/> per update, resuming where it stopped.</summary>
         private void ScanHostChanges(int bucket)
         {
             _properties.SetSharedComponentFilter(new UpdateFrame((uint)bucket));
@@ -319,10 +299,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 {
                     if (cursor >= properties.Length) { cursor = 0; wrapped = true; }
                     Entity property = properties[cursor++];
-                    PropertyRentEntry entry;
-                    if (!TryCaptureEntry(property, out entry)) continue;
-                    HostObservedRent observed;
-                    if (!_hostObserved.TryGetValue(property, out observed))
+                    if (!TryCaptureEntry(property, out PropertyRentEntry entry)) continue;
+                    if (!_hostObserved.TryGetValue(property, out HostObservedRent observed))
                     {
                         observed = new HostObservedRent { Rent = entry.Rent, Bucket = bucket };
                         _hostObserved[property] = observed;
@@ -349,9 +327,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
         private void Prioritize(PropertyRentEntry entry)
         {
-            PropertyRentIdentity identity = entry.Identity;
-            int dropped;
-            if (_propertyState.Prioritize(identity, entry, MaxPriorityEntries, out dropped)) _priorityChanges++;
+            PropertyIdentity identity = entry.Identity;
+            if (_propertyState.Prioritize(identity, entry, MaxPriorityEntries, out int dropped)) _priorityChanges++;
             _priorityDrops += dropped;
         }
 
@@ -362,8 +339,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             for (int i = 0; i < entities.Count; i++)
             {
                 Entity entity = entities[i];
-                HostObservedRent observed;
-                if (!_hostObserved.TryGetValue(entity, out observed)) continue;
+                if (!_hostObserved.TryGetValue(entity, out HostObservedRent observed)) continue;
                 if (!IsLiveProperty(entity) || observed.Bucket != bucket ||
                     !EntityManager.HasComponent<UpdateFrame>(entity) ||
                     EntityManager.GetSharedComponent<UpdateFrame>(entity).m_Index != (uint)bucket)

@@ -1,5 +1,4 @@
 using System.Collections.Generic;
-using Game.Buildings;
 using Game.Common;
 using Game.Objects;
 using Game.Prefabs;
@@ -10,17 +9,12 @@ using CS2MultiplayerMod.Core.Diagnostics;
 using CS2MultiplayerMod.Core.Session;
 using CS2MultiplayerMod.Game.Diagnostics;
 using CS2MultiplayerMod.Game.Sync.Commands;
-using CS2MultiplayerMod.Game.Sync.Infrastructure;
 
 namespace CS2MultiplayerMod.Game.Sync.Systems
 {
     public partial class GrowableSyncSystem
     {
-        /// <summary>
-        /// Announces buildings the zoning simulation grew this frame. Runs on the host only: a
-        /// client's own spawner is held (see Authority.cs), so nothing it creates could be its own
-        /// decision, and one-way traffic is what makes a create/remove feedback loop impossible.
-        /// </summary>
+        /// <summary>Host only: one-way traffic makes a create/remove feedback loop impossible.</summary>
         private void CaptureCreated(MultiplayerSession session, long now)
         {
             if (_createdBuildings.IsEmptyIgnoreFilter) return;
@@ -40,9 +34,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     global::Game.Objects.Transform transform =
                         EntityManager.GetComponentData<global::Game.Objects.Transform>(entity);
 
-                    // The variant the building renders as. It is drawn from this machine's random
-                    // stream at creation, so a peer that rebuilds the same prefab without it gets
-                    // the right building in the wrong style.
+                    // The render variant, drawn from this machine's random stream.
                     ushort seed = EntityManager.HasComponent<global::Game.Common.PseudoRandomSeed>(entity)
                         ? EntityManager.GetComponentData<global::Game.Common.PseudoRandomSeed>(entity).m_Seed
                         : (ushort)0;
@@ -100,10 +92,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         }
 
         /// <summary>
-        /// Announces buildings the simulation retired - condemned by a zoning change, abandoned
-        /// then destroyed, or collapsed. A bulldoze is not one of these: that is a player action
-        /// and already travels as a delete command, so re-sending it here would remove the same
-        /// building twice.
+        /// Buildings the simulation retired. A bulldoze already travels as a delete command.
         /// </summary>
         private void CaptureRemoved(MultiplayerSession session, long now)
         {
@@ -115,8 +104,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 for (int i = 0; i < entities.Length; i++)
                 {
                     Entity entity = entities[i];
-                    // Tool deletions travel through DeleteSync, but must still release the
-                    // host observations or repeated zoning/bulldozing retains retired entities.
+                    // Tool deletions travel through DeleteSync but must still release host observations.
                     _announcedLevelChange.Remove(entity);
                     _hostConstruction.Remove(entity);
                     _hostState.Remove(entity);
@@ -151,19 +139,13 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         }
 
         /// <summary>
-        /// Announces level changes. A building levels up by being handed the prefab it is about to
-        /// become, and that prefab is picked from this machine's random stream out of every
-        /// candidate that fits the lot - so the peer has to be told which one, not just that a
-        /// level change happened.
-        ///
-        /// Polled rather than captured from a Created frame: the marker is added to a building that
-        /// already exists, so there is no one frame to catch it on. The query only holds buildings
-        /// currently under construction, which is a handful even in a large city.
+        /// Level changes: the target prefab is drawn from this machine's random stream, so the peer is told
+        /// which one. Polled, since the marker lands on an existing building; the query holds only sites
+        /// under construction.
         /// </summary>
         private void CaptureConstruction(MultiplayerSession session, long now)
         {
-            // Both consumers need the same active sites. Materialize the query once, and
-            // still run completion detection when it is empty (the last site just finished).
+            // Materialize once; completion detection still runs when the last site just finished.
             NativeArray<Entity> entities = _levelChanging.ToEntityArray(Allocator.Temp);
             try
             {
@@ -182,12 +164,10 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 Entity entity = entities[i];
                 Entity newPrefab = EntityManager.GetComponentData<UnderConstruction>(entity).m_NewPrefab;
 
-                // A freshly grown building is also under construction, but with no replacement
-                // prefab. Its spawn command already carried everything the peer needs.
+                // A freshly grown building; its spawn command carried everything.
                 if (newPrefab == Entity.Null) continue;
 
-                Entity announced;
-                if (_announcedLevelChange.TryGetValue(entity, out announced) &&
+                if (_announcedLevelChange.TryGetValue(entity, out Entity announced) &&
                     announced == newPrefab) continue;
                 if (!IsAutonomousGrowable(entity, now)) continue;
                 if (!IsGrowablePrefab(newPrefab)) continue;
@@ -197,9 +177,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
                 if (_announcedLevelChange.Count >= MaxTrackedLevelChanges)
                 {
-                    // Only reachable if buildings are levelling faster than they finish. Drop
-                    // the memory rather than the cap: a repeat announcement is idempotent on
-                    // the receiver, an unbounded dictionary is not recoverable.
+                    // Drop the memory, not the cap: a repeat announcement is idempotent on the receiver.
                     SyncLog.Warn(LogTopic.Buildings, "GrowableSync: level-change memory hit " +
                         MaxTrackedLevelChanges + " entries and was cleared; " +
                         "some level changes may be announced twice.");
@@ -256,10 +234,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         }
 
         /// <summary>
-        /// Mirrors the native construction clock while a building is active and sends an explicit
-        /// finished state when UnderConstruction disappears. Active sites are few, so scanning the
-        /// narrow query twice a second is cheaper and far more timely than waiting for a rolling
-        /// occupancy page.
+        /// Mirrors the construction clock of active sites and sends an explicit finished state when
+        /// UnderConstruction disappears.
         /// </summary>
         private void CaptureConstructionChanges(MultiplayerSession session, long now,
             NativeArray<Entity> entities)
@@ -271,8 +247,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
                 UnderConstruction construction =
                     EntityManager.GetComponentData<UnderConstruction>(entity);
-                HostConstructionObservation observed;
-                bool changed = !_hostConstruction.TryGetValue(entity, out observed) ||
+                bool changed = !_hostConstruction.TryGetValue(entity, out HostConstructionObservation observed) ||
                                observed.Progress != construction.m_Progress ||
                                observed.Speed != construction.m_Speed;
                 if (!changed)
@@ -283,8 +258,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 if (!IsAutonomousGrowable(entity, now)) continue;
                 _constructionSeen.Add(entity);
 
-                GrowableLifecycleCommand command;
-                if (TryCreateStateCommand(entity, out command))
+                if (TryCreateStateCommand(entity, out GrowableLifecycleCommand command))
                 {
                     Send(session, command);
                     ObserveHostState(entity, command);
@@ -308,8 +282,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     EntityManager.HasComponent<Deleted>(entity) ||
                     !IsAutonomousGrowable(entity, now)) continue;
 
-                GrowableLifecycleCommand command;
-                if (!TryCreateStateCommand(entity, out command)) continue;
+                if (!TryCreateStateCommand(entity, out GrowableLifecycleCommand command)) continue;
                 // No UnderConstruction component is the authoritative completion edge.
                 Send(session, command);
                 ObserveHostState(entity, command);
@@ -321,9 +294,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         }
 
         /// <summary>
-        /// Announces condition (the LevelSection progress input) together with
-        /// abandonment/condemnation/destruction transitions. The first observation is a baseline
-        /// shared by the downloaded world; later differences are host decisions.
+        /// Condition and abandonment transitions. The first observation is the shared baseline; later
+        /// differences are host decisions.
         /// </summary>
         private void CaptureStateChanges(MultiplayerSession session, long now)
         {
@@ -339,10 +311,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 NativeArray<Entity> entities = _stateBuildings.ToEntityArray(Allocator.Temp);
                 try
                 {
-                    // A partition of a large city holds thousands of buildings and each of these
-                    // checks reaches into several component chunks. Walk a window and resume from
-                    // it next time; the bucket only advances once the window has been all the way
-                    // round, so no building is skipped, it is merely revisited less often.
+                    // Walk a window and resume; the bucket advances only after a full lap.
                     int cursor = _stateScanCursor;
                     if (cursor >= entities.Length) cursor = 0;
                     int examine = entities.Length < MaxStateBuildingsPerScan
@@ -353,10 +322,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                         Entity entity = entities[cursor++];
                         byte flags = CaptureStateFlags(entity);
                         int condition = CaptureCondition(entity);
-                        HostStateObservation previous;
-                        bool known = _hostState.TryGetValue(entity, out previous);
-                        // Only autonomous buildings enter this table. An unchanged observation
-                        // needs no origin/attachment/prefab inspection or outgoing payload.
+                        bool known = _hostState.TryGetValue(entity, out HostStateObservation previous);
                         if (known && flags == previous.Flags && condition == previous.Condition) continue;
                         if (!IsAutonomousGrowable(entity, now)) continue;
                         if (!known)
@@ -368,8 +334,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                             };
                             continue;
                         }
-                        GrowableLifecycleCommand command;
-                        if (TryCreateStateCommand(entity, out command))
+                        if (TryCreateStateCommand(entity, out GrowableLifecycleCommand command))
                         {
                             Send(session, command);
                             ObserveHostState(entity, command);

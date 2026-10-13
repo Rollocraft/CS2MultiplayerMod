@@ -1,13 +1,5 @@
-using System;
-using System.Collections.Generic;
-using System.Text;
-
 namespace CS2MultiplayerMod.Game.Sync.Commands
 {
-    // The records one occupancy page is made of: a property and the households, people and
-    // departures it carries. Plain data - the page that carries them, and the validation each must
-    // pass, are in ResidentialOccupancySnapshot.cs.
-
     /// <summary>One residential property and everyone the host has living in it.</summary>
     public struct OccupancyProperty
     {
@@ -16,25 +8,18 @@ namespace CS2MultiplayerMod.Game.Sync.Commands
         public float AnchorY;
         public float AnchorZ;
 
-        /// <summary>
-        /// Host-monotonic version of this property's absolute roster. It is opaque to the client
-        /// except for rejecting an older roster after a newer one has already been applied.
-        /// </summary>
+        /// <summary>Host-monotonic roster version; only used to reject an older roster.</summary>
         public ulong Revision;
 
         /// <summary>
-        /// Zero when the host's building is finished; otherwise the build rate its site was given.
-        /// That rate is drawn independently on each machine, so without it two peers building the
-        /// same house finish it at different times - and a roster that describes a finished
-        /// building keeps arriving at a peer that is still a construction site.
+        /// Zero when finished, else the host's build rate. The rate is drawn per machine, so without it peers
+        /// finish the same house at different times.
         /// </summary>
         public byte ConstructionSpeed;
 
         /// <summary>
-        /// Fee inputs shown by the residents panel. The native electricity and water dispatch
-        /// systems derive these from each machine's utility graph, so equal buildings can still
-        /// report different household fees when those graphs are a frame or a rounding step apart.
-        /// Only the fulfilled quantities travel; connectivity, warnings and demand remain native.
+        /// Fulfilled utility quantities behind the household fees; each machine's utility graph can be a
+        /// frame or rounding step apart. Connectivity and demand stay native.
         /// </summary>
         public bool HasElectricityConsumer;
         public int ElectricityFulfilledConsumption;
@@ -44,12 +29,9 @@ namespace CS2MultiplayerMod.Game.Sync.Commands
 
         public OccupancyHousehold[] Households;
 
-        /// <summary>
-        /// The same portable property identity the rent channel and growable realization use:
-        /// building entity ids are machine-local, the prefab name and world anchor are not.
-        /// </summary>
-        public PropertyRentIdentity Identity =>
-            new PropertyRentIdentity(PrefabName, AnchorX, AnchorY, AnchorZ);
+        /// <summary>The portable property identity shared with rent and growable realization.</summary>
+        public PropertyIdentity Identity =>
+            new PropertyIdentity(PrefabName, AnchorX, AnchorY, AnchorZ);
     }
 
     /// <summary>One household in a property, identified by a host-issued world-scoped id.</summary>
@@ -60,8 +42,8 @@ namespace CS2MultiplayerMod.Game.Sync.Commands
         public byte Flags;
 
         /// <summary>
-        /// Explicit host lifecycle decision. Property-page absence alone is not a departure: the
-        /// household may have moved to a destination whose page was dropped or is unresolved.
+        /// Explicit host departure. Absence from a page is not one: the destination page may be dropped or
+        /// unresolved.
         /// </summary>
         public bool Departing;
 
@@ -73,19 +55,13 @@ namespace CS2MultiplayerMod.Game.Sync.Commands
         /// <summary>The money resource in the household's own resource buffer.</summary>
         public int Money;
 
-        /// <summary>
-        /// Rolling residential tax state. Tax rates alone are insufficient: the native tax pass
-        /// accumulates these values per family and the next pass starts from that local history.
-        /// </summary>
+        /// <summary>Rolling tax state; the native tax pass accumulates per family from local history.</summary>
         public bool HasTaxPayer;
         public int UntaxedIncome;
         public int AverageTaxRate;
         public int AverageTaxPaid;
 
-        /// <summary>
-        /// Daily household income the host's household behavior pass recomputed. Named
-        /// SalaryLastDay before game 1.6.2; same value, same wire slot.
-        /// </summary>
+        /// <summary>Daily household income from the host's household pass (formerly SalaryLastDay, same slot).</summary>
         public int Income;
 
         /// <summary>Consumption target produced by the host's household behavior pass.</summary>
@@ -105,17 +81,15 @@ namespace CS2MultiplayerMod.Game.Sync.Commands
         public string[] Pets;
 
         /// <summary>
-        /// Prefabs of the household's live personal vehicles. Synced households deliberately skip
-        /// the local random-arrival initializer, so the owned vehicles created by that initializer
-        /// have to be realized explicitly on receiving peers.
+        /// Live personal vehicles. Synced households skip the random-arrival initializer that would create
+        /// them, so they are realized explicitly.
         /// </summary>
         public string[] OwnedVehicles;
     }
 
     /// <summary>
-    /// One resident. The stable id prevents a same-sized roster replacement from reusing the wrong
-    /// local citizen. Age, education and gender live in the citizen's flag word; employment and
-    /// unemployment state feed the household-income calculation.
+    /// One resident; the stable id stops a same-sized roster from reusing the wrong citizen. Age,
+    /// education and gender live in the flag word.
     /// </summary>
     public struct OccupancyCitizen
     {
@@ -128,9 +102,8 @@ namespace CS2MultiplayerMod.Game.Sync.Commands
         public byte WellBeing;
 
         /// <summary>
-        /// Host-owned <c>HealthProblem</c> presence and flags. Bit 7 means the component exists;
-        /// bits 0-6 are the game's <c>HealthProblemFlags</c>. Death cannot be inferred from the
-        /// citizen fields above: illness and accident deaths use a per-world random stream.
+        /// Bit 7: <c>HealthProblem</c> present; bits 0-6: its flags. Deaths come from a per-world random
+        /// stream and cannot be inferred.
         /// </summary>
         public byte HealthProblem;
 
@@ -155,26 +128,19 @@ namespace CS2MultiplayerMod.Game.Sync.Commands
             (byte)((present ? 0x80 : 0) | (flags & 0x7F));
     }
 
-    /// <summary>
-    /// A repeated, revisioned host lifecycle tombstone. It is carried independently of a property
-    /// roster so coalescing one move-away page cannot leave the client preserving that family.
-    /// </summary>
+    /// <summary>A repeated, revisioned departure tombstone, independent of any property roster.</summary>
     public struct OccupancyDeparture
     {
         public ulong HouseholdId;
         public ulong Revision;
 
-        /// <summary>
-        /// The live household currently has no property. A client releases its old renter link but
-        /// preserves the family and identity for a later host-authored destination.
-        /// </summary>
+        /// <summary>No property now: the client drops the renter link but keeps the family for a later destination.</summary>
         public bool Unhoused;
     }
 
     /// <summary>
-    /// A retained exact-person tombstone. It closes individual death or emigration without
-    /// treating absence from one household page as proof of departure; a later, higher-revision
-    /// positive location still wins when the citizen actually moved to another household.
+    /// A person's death or emigration tombstone; a later, higher-revision location still wins when the
+    /// citizen actually moved.
     /// </summary>
     public struct OccupancyCitizenDeparture
     {

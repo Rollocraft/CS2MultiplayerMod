@@ -1,38 +1,23 @@
 using System;
-using System.Collections.Concurrent;
 using System.Collections.Generic;
-using Colossal.Entities;
 using CS2MultiplayerMod.Core.Diagnostics;
 using CS2MultiplayerMod.Core.Protocol.Messages;
 using CS2MultiplayerMod.Core.Session;
 using CS2MultiplayerMod.Game.Diagnostics;
 using CS2MultiplayerMod.Game.Sync.Commands;
 using CS2MultiplayerMod.Game.Sync.Infrastructure;
-using Game;
 using Game.Buildings;
 using Game.Common;
-using Game.Objects;
-using Game.Prefabs;
 using Game.Rendering;
-using Game.Tools;
-using Game.UI.InGame;
-using Game.Vehicles;
-using Unity.Collections;
 using Unity.Entities;
-using Unity.Mathematics;
 
 namespace CS2MultiplayerMod.Game.Sync.Systems
 {
-    // Applying a peer's recolouring. The entity it names may not exist locally yet, so an
-    // unmatched command is retried within its window before being given up on.
     public partial class VisualCustomizationSyncSystem
     {
-        // ---- incoming / retry ------------------------------------------------
-
         private void ApplyIncoming(MultiplayerSession session, long now)
         {
-            SimulationCommandMessage message;
-            while (_incoming.TryDequeue(out message))
+            while (_incoming.TryDequeue(out SimulationCommandMessage message))
             {
                 if (message.OriginPlayerId == session.LocalPlayerId) continue;
                 try
@@ -56,16 +41,11 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             }
         }
 
-        // Re-resolving every pending command on every frame is what turns a burst of targets
-        // into a stall; the retry window is measured in seconds, so this granularity is ample.
         private readonly HeldTime _targetHold = new HeldTime();
 
         private void ApplyRetries(long now)
         {
-            // A customization waits for its building, and a zone-grown building is exactly what the
-            // realize pipeline holds back while terrain or roads catch up. Counting the window down
-            // through that hold expires it against a target that could not have arrived, and the
-            // expiry below asks for a world reload.
+            // The window waits for the building, not for the realize pipeline's hold.
             long heldMs = _targetHold.Observe(now, RealizeGate.WorldBuildingHeld);
             if (heldMs > 0)
                 for (int h = 0; h < _retry.Count; h++)
@@ -137,13 +117,10 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             }
         }
 
-        // ---- apply -----------------------------------------------------------
-
         private void ApplyVisual(VisualCustomizationCommand command, long now,
             long retryDeadline, bool allowRetry)
         {
-            Entity prefab;
-            if (!_prefabIndex.TryResolve(command.PrefabName, out prefab))
+            if (!_prefabIndex.TryResolve(command.PrefabName, out Entity prefab))
             {
                 if (allowRetry)
                     QueueRetry(command, new List<VisualCustomizationTarget>(command.Targets),
@@ -173,19 +150,13 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
         private bool ApplyTarget(Entity entity, VisualCustomizationCommand command, long now)
         {
-            VisualState state;
-            if (!TryReadState(entity, out state))
+            if (!TryReadState(entity, out VisualState state))
                 return false;
 
-            // An enable/disable recorded in EndFrameBarrier is not visible through
-            // IsComponentEnabled until the next frame. Keep the already-applied desired
-            // color state for sequential commands in this frame, but always refresh
-            // component support and the directly-written historical flag.
-            VisualState pending;
-            long suppressUntil;
-            if (_suppressColorBatch.TryGetValue(entity, out suppressUntil) &&
+            // Barrier-recorded enable state is invisible until next frame; keep this frame's desired state.
+            if (_suppressColorBatch.TryGetValue(entity, out long suppressUntil) &&
                 suppressUntil >= now &&
-                _known.TryGetValue(entity, out pending) &&
+                _known.TryGetValue(entity, out VisualState pending) &&
                 pending.SupportsColor)
             {
                 state.HasCustomColor = pending.HasCustomColor;
@@ -249,8 +220,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
         private void EnsureLocalState(VisualCustomizationCommand command, long now)
         {
-            Entity prefab;
-            if (!_prefabIndex.TryResolve(command.PrefabName, out prefab)) return;
+            if (!_prefabIndex.TryResolve(command.PrefabName, out Entity prefab)) return;
 
             var used = new HashSet<Entity>();
             bool needsApply = false;
@@ -260,8 +230,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 if (entity == Entity.Null) continue;
                 used.Add(entity);
 
-                VisualState state;
-                if (!_known.TryGetValue(entity, out state) && !TryReadState(entity, out state))
+                if (!_known.TryGetValue(entity, out VisualState state) && !TryReadState(entity, out state))
                     continue;
                 if (!MatchesCommand(in state, command))
                 {

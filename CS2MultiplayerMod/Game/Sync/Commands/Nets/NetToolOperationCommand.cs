@@ -3,11 +3,7 @@ using CS2MultiplayerMod.Core.Sync;
 
 namespace CS2MultiplayerMod.Game.Sync.Commands
 {
-    /// <summary>
-    /// One already-encoded network command inside an atomic net-tool operation. Only placement,
-    /// deletion, and replacement commands are valid members; keeping their existing codecs as the
-    /// inner format avoids maintaining a second representation of the same portable geometry.
-    /// </summary>
+    /// <summary>An encoded placement, delete or replace command inside a net-tool operation.</summary>
     public sealed class NetToolOperationItem
     {
         public ushort CommandId;
@@ -15,10 +11,8 @@ namespace CS2MultiplayerMod.Game.Sync.Commands
     }
 
     /// <summary>
-    /// The complete heterogeneous output of one net-tool Apply. A mixed road gesture may create
-    /// courses while deleting and replacing existing edges. Those pieces must cross the wire in one
-    /// envelope so the receiver can preflight them against one topology and commit them in one
-    /// native transaction instead of applying three independently ordered command streams.
+    /// The whole output of one net-tool Apply (creates, deletes, replaces), preflighted against one
+    /// topology and committed in one native transaction.
     /// </summary>
     public sealed class NetToolOperationCommand : ISimulationCommand
     {
@@ -26,8 +20,7 @@ namespace CS2MultiplayerMod.Game.Sync.Commands
         public const int MaxItems = 1024;
         public const int MaxEncodedBytes = 256 * 1024;
 
-        // A placement is already capped at 4 KiB. Delete/replace commands are much smaller, so the
-        // same ceiling is a simple defense against one oversized nested allocation.
+        // Placements are capped at 4 KiB; deletes and replaces are smaller.
         private const int MaxNestedCommandBytes = NetPlacementCommand.MaxEncodedBytes;
 
         public long OperationId;

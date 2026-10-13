@@ -5,20 +5,16 @@ using CS2MultiplayerMod.Core.Protocol;
 namespace CS2MultiplayerMod.Game.Sync.Commands
 {
     /// <summary>
-    /// One bounded page of host-authoritative, property-wide rents. A page is an absolute set of
-    /// independent corrections rather than an ordered delta: losing one delays those properties
-    /// until the next rolling sweep, but can never make a later page unsafe to apply.
+    /// One page of host property rents: absolute corrections, so a lost page only delays those properties
+    /// until the next sweep.
     /// </summary>
     public sealed class PropertyRentSnapshot
     {
-        // A rent entry is small, but the former 96-entry page needed minutes to cover a large
-        // city. Keep client-side spatial resolution bounded while bringing the rolling baseline
-        // back to a useful cadence.
+        // Keeps a large city's sweep fast while bounding client-side spatial resolution.
         public const int MaxEntries = 256;
         public const int MaxPagesPerSweep = 4096;
         public const int MaxEncodedBytes = 240 * 1024;
-        // Far above any plausible in-game daily rent while still preventing a corrupt host from
-        // feeding a near-int.MaxValue charge into the economy systems.
+        // Far above plausible daily rent; stops near-int.MaxValue charges.
         public const int MaxRent = 100000000;
 
         public uint SweepId;
@@ -39,7 +35,7 @@ namespace CS2MultiplayerMod.Game.Sync.Commands
             writer.WriteShort((short)PageIndex);
             writer.WriteBool(EndOfSweep);
             writer.WriteShort((short)Entries.Count);
-            var identities = new HashSet<PropertyRentIdentity>();
+            var identities = new HashSet<PropertyIdentity>();
             for (int i = 0; i < Entries.Count; i++)
             {
                 PropertyRentEntry entry = Entries[i];
@@ -81,7 +77,7 @@ namespace CS2MultiplayerMod.Game.Sync.Commands
                 throw new ProtocolException("Property-rent page index is outside its cap.");
 
             int count = WireGuard.ReadCount(reader, 20, MaxEntries);
-            var identities = new HashSet<PropertyRentIdentity>();
+            var identities = new HashSet<PropertyIdentity>();
             for (int i = 0; i < count; i++)
             {
                 var entry = new PropertyRentEntry
@@ -111,9 +107,8 @@ namespace CS2MultiplayerMod.Game.Sync.Commands
         }
 
         /// <summary>
-        /// Shared validation for both the wire codec and host capture. Capture calls this before an
-        /// entry reaches the page so one broken local prefab/transform is skipped rather than making
-        /// <see cref="Write"/> throw and abort every other city-state channel in that snapshot.
+        /// Shared by codec and capture: capture skips a broken entry instead of making <see cref="Write"/>
+        /// throw and abort every channel in the snapshot.
         /// </summary>
         public static bool IsValidEntry(PropertyRentEntry entry)
         {
@@ -125,12 +120,7 @@ namespace CS2MultiplayerMod.Game.Sync.Commands
                    IsValidCoordinate(entry.AnchorZ) && entry.Rent >= 0 && entry.Rent <= MaxRent;
         }
 
-        private static bool ReadStrictBool(NetworkReader reader)
-        {
-            byte value = reader.ReadByte();
-            if (value > 1) throw new ProtocolException("Invalid property-rent page flag.");
-            return value != 0;
-        }
+        private static bool ReadStrictBool(NetworkReader reader) => WireGuard.ReadStrictBool(reader, "property-rent page flag");
 
         private static void Validate(PropertyRentEntry entry)
         {
@@ -152,46 +142,7 @@ namespace CS2MultiplayerMod.Game.Sync.Commands
         public float AnchorZ;
         public int Rent;
 
-        public PropertyRentIdentity Identity =>
-            new PropertyRentIdentity(PrefabName, AnchorX, AnchorY, AnchorZ);
-    }
-
-    /// <summary>
-    /// Prefab entity ids and building entity ids are machine-local. The prefab's stable name and
-    /// its world anchor are the same portable identity used by growable-building realization.
-    /// </summary>
-    public struct PropertyRentIdentity : IEquatable<PropertyRentIdentity>
-    {
-        public readonly string PrefabName;
-        public readonly float AnchorX;
-        public readonly float AnchorY;
-        public readonly float AnchorZ;
-
-        public PropertyRentIdentity(string prefabName, float anchorX, float anchorY, float anchorZ)
-        {
-            PrefabName = prefabName;
-            AnchorX = anchorX;
-            AnchorY = anchorY;
-            AnchorZ = anchorZ;
-        }
-
-        public bool Equals(PropertyRentIdentity other) =>
-            string.Equals(PrefabName, other.PrefabName, StringComparison.Ordinal) &&
-            AnchorX.Equals(other.AnchorX) && AnchorY.Equals(other.AnchorY) &&
-            AnchorZ.Equals(other.AnchorZ);
-
-        public override bool Equals(object obj) =>
-            obj is PropertyRentIdentity && Equals((PropertyRentIdentity)obj);
-
-        public override int GetHashCode()
-        {
-            unchecked
-            {
-                int hash = PrefabName != null ? PrefabName.GetHashCode() : 0;
-                hash = hash * 397 ^ AnchorX.GetHashCode();
-                hash = hash * 397 ^ AnchorY.GetHashCode();
-                return hash * 397 ^ AnchorZ.GetHashCode();
-            }
-        }
+        public PropertyIdentity Identity =>
+            new PropertyIdentity(PrefabName, AnchorX, AnchorY, AnchorZ);
     }
 }

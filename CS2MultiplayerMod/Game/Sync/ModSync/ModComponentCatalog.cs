@@ -16,16 +16,9 @@ namespace CS2MultiplayerMod.Game.Sync.ModSync
     }
 
     /// <summary>
-    /// Every component and buffer type in the world that belongs to another mod and holds state
-    /// worth replicating - found by asking the engine what types exist, never by naming a mod.
-    ///
-    /// Two filters do the work. The first is ownership: a type declared by the game, the engine or
-    /// this mod is not another mod's state. The second is durability, and it is the one that
-    /// matters: a type is replicated only if the runtime would write it to a savegame. Mods create
-    /// a great deal of per-frame working state - tool previews, map overlays, hover highlights -
-    /// that looks exactly like real state to a component scan and is pure noise on a wire.
-    /// Whether the author marked it for serialization is their own answer to the question of
-    /// whether it is worth keeping, and it is a far better answer than any heuristic here.
+    /// Every component and buffer type owned by another mod that holds durable state, found from the
+    /// engine's type registry. Filters: not declared by the game, engine or this mod, and saved by the
+    /// runtime (per-frame previews and overlays are not).
     /// </summary>
     internal sealed class ModComponentCatalog
     {
@@ -42,23 +35,14 @@ namespace CS2MultiplayerMod.Game.Sync.ModSync
         public int ThirdPartyTypeCount;
 
         /// <summary>
-        /// How many types the engine had registered when this catalogue was taken.
-        ///
-        /// A mod can be switched on while the game is running, and its components only enter the
-        /// engine's type registry when its own systems first touch them. A catalogue taken before
-        /// that saw a world without the mod in it, and nothing about it would ever say so - it
-        /// would simply replicate nothing, for the rest of the session. Comparing this against the
-        /// current count is how that is noticed.
+        /// Registered type count when built. A mod's types register only when its systems first touch
+        /// them, so a larger count means the catalogue may be missing a mod.
         /// </summary>
         public int TypeCountAtBuild;
 
         /// <summary>
-        /// Whether this catalogue replicates exactly what <paramref name="other"/> did.
-        ///
-        /// The engine's type count moves whenever anything at all registers a type for the first
-        /// time, which is a far broader event than "a mod appeared". Rebuilding on the count is
-        /// right; throwing away the session's type table and every recorded hash is only right when
-        /// what travels has actually changed.
+        /// Same replicated set as <paramref name="other"/>. The type count moves on any registration, so
+        /// the session table is only discarded when this is false.
         /// </summary>
         public bool ReplicatesSameAs(ModComponentCatalog other)
         {
@@ -72,10 +56,7 @@ namespace CS2MultiplayerMod.Game.Sync.ModSync
             return true;
         }
 
-        public bool TryGet(string key, out ModCatalogEntry entry)
-        {
-            return _byKey.TryGetValue(key, out entry);
-        }
+        public bool TryGet(string key, out ModCatalogEntry entry) => _byKey.TryGetValue(key, out entry);
 
         public static ModComponentCatalog Build()
         {
@@ -84,8 +65,7 @@ namespace CS2MultiplayerMod.Game.Sync.ModSync
 
             catalog.TypeCountAtBuild = TypeManager.GetTypeCount();
 
-            // AllTypes reads the registry in place; GetAllTypes would copy every entry in the game
-            // into a new array just to walk it once.
+            // AllTypes reads in place; GetAllTypes copies the whole registry.
             foreach (TypeManager.TypeInfo info in TypeManager.AllTypes)
             {
                 Type type = SafeType(info);
@@ -95,8 +75,7 @@ namespace CS2MultiplayerMod.Game.Sync.ModSync
                 catalog.ThirdPartyTypeCount++;
 
                 string key = ModTypeDescriptor.MakeKey(type.Assembly.GetName().Name, type.FullName);
-                string reason;
-                ModCatalogEntry entry = Accept(type, info, key, out reason);
+                ModCatalogEntry entry = Accept(type, info, key, out string reason);
                 if (entry == null)
                 {
                     catalog.Exclusions.Add(Short(type) + " - " + reason);
@@ -108,15 +87,12 @@ namespace CS2MultiplayerMod.Game.Sync.ModSync
                 catalog.Entries.Add(entry);
             }
 
-
             catalog.Entries.Sort(CompareByKey);
             return catalog;
         }
 
-        private static int CompareByKey(ModCatalogEntry left, ModCatalogEntry right)
-        {
-            return string.CompareOrdinal(left.Descriptor.Key, right.Descriptor.Key);
-        }
+        private static int CompareByKey(ModCatalogEntry left, ModCatalogEntry right) =>
+            string.CompareOrdinal(left.Descriptor.Key, right.Descriptor.Key);
 
         private static ModCatalogEntry Accept(Type type, TypeManager.TypeInfo info, string key,
             out string reason)
@@ -136,9 +112,7 @@ namespace CS2MultiplayerMod.Game.Sync.ModSync
                 return null;
             }
 
-            // A reference to a blob, an asset or a Unity object is a pointer into this process's
-            // own loaded content. It has no meaning on another machine, and nothing here could
-            // translate one, so the type is left alone rather than half-copied.
+            // Blob, asset and Unity object references are process-local and cannot be translated.
             if (info.HasBlobAssetRefs) { reason = "holds blob references"; return null; }
             if (info.HasWeakAssetRefs) { reason = "holds asset references"; return null; }
             if (info.HasUnityObjectRefs) { reason = "holds engine object references"; return null; }
@@ -150,8 +124,7 @@ namespace CS2MultiplayerMod.Game.Sync.ModSync
             }
 
             bool isBuffer = info.Category == TypeManager.TypeCategory.BufferData;
-            ModFieldPlan plan;
-            if (!ModFieldPlan.TryBuild(type, out plan, out reason)) return null;
+            if (!ModFieldPlan.TryBuild(type, out ModFieldPlan plan, out reason)) return null;
 
             ModTypeKind kind = isBuffer
                 ? ModTypeKind.Buffer
@@ -163,7 +136,7 @@ namespace CS2MultiplayerMod.Game.Sync.ModSync
                 return null;
             }
 
-            var descriptor = new ModTypeDescriptor(key, kind, plan.Kinds);
+            var descriptor = new ModTypeDescriptor(key, kind, plan.Kinds, plan.FieldPaths);
 
             ModTypeAccessor accessor;
             try
@@ -172,8 +145,7 @@ namespace CS2MultiplayerMod.Game.Sync.ModSync
             }
             catch (Exception ex)
             {
-                // A generic constraint this assembly cannot satisfy for that type. Naming it is
-                // worth more than the type would have been.
+                // A generic constraint this assembly cannot satisfy for that type.
                 reason = "cannot be accessed (" + ex.GetType().Name + ")";
                 return null;
             }
@@ -181,10 +153,7 @@ namespace CS2MultiplayerMod.Game.Sync.ModSync
             return new ModCatalogEntry { Type = type, Descriptor = descriptor, Accessor = accessor };
         }
 
-        /// <summary>
-        /// Whether the runtime would write this type into a savegame - the discriminator between a
-        /// mod's state and a mod's scratch space.
-        /// </summary>
+        /// <summary>Saved by the runtime: a mod's state rather than its scratch space.</summary>
         private static bool IsDurable(Type type)
         {
             return typeof(ISerializable).IsAssignableFrom(type) ||
@@ -195,17 +164,12 @@ namespace CS2MultiplayerMod.Game.Sync.ModSync
 
         private static Type SafeType(TypeManager.TypeInfo info)
         {
-            // The type table holds entries whose managed type is not resolvable; asking is cheaper
-            // than any guard that tries to predict which.
+            // Some entries have no resolvable managed type.
             try { return info.Type; }
             catch (Exception) { return null; }
         }
 
-        /// <summary>
-        /// Whether an assembly belongs to somebody other than the game, the engine and the runtime.
-        /// Prefix matching on the assembly name, because that is what a mod cannot accidentally
-        /// collide with and what does not need a list of every game assembly to be kept current.
-        /// </summary>
+        /// <summary>Not the game, engine or runtime, by assembly-name prefix.</summary>
         private static bool IsThirdParty(Assembly assembly)
         {
             string name;
@@ -221,9 +185,6 @@ namespace CS2MultiplayerMod.Game.Sync.ModSync
             return true;
         }
 
-        private static string Short(Type type)
-        {
-            return type.FullName;
-        }
+        private static string Short(Type type) => type.FullName;
     }
 }

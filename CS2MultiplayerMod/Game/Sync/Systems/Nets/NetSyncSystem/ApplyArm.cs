@@ -1,9 +1,5 @@
 using System.Collections.Generic;
 using Colossal.Mathematics;
-using Game.Common;
-using Game.Net;
-using Game.Tools;
-using Unity.Collections;
 using Unity.Entities;
 
 using CS2MultiplayerMod.Core.Diagnostics;
@@ -11,13 +7,8 @@ using CS2MultiplayerMod.Game.Diagnostics;
 using CS2MultiplayerMod.Game.Sync.Infrastructure;
 namespace CS2MultiplayerMod.Game.Sync.Systems.Net
 {
-    // Commit orchestration for NetSyncSystem. A remote net operation includes the objects and areas
-    // its native generation updates as side effects; the complete local preview graph is temporarily
-    // Disabled so an unrelated tool can remain selected without either transaction consuming the
-    // other one's entities.
-    // Arming a commit - net, route or object - and the bookkeeping around one: charging
-    // construction for what committed, remembering spans just realized so a duplicate is not built
-    // from them, and nudging the active tool into producing its output.
+    // Arming a net, route or object commit, plus charging construction, remembering realized spans and
+    // nudging the active tool.
     public partial class NetSyncSystem
     {
         private void DiscardStaleTransactionTemps(string why)
@@ -29,23 +20,13 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
         }
 
         /// <summary>
-        /// Arm the isolated net-domain commit for definitions a sibling system (delete/replace)
-        /// created this frame. They become Temp net entities at the following Modification and
-        /// <see cref="RealizePending"/> applies them natively. Only call when
-        /// <see cref="CanBuildDefinitions"/> is true (and after
-        /// <see cref="PrepareDefinitionFrame"/>). <paramref name="onCommitLost"/> is invoked if the
-        /// armed batch never materialises (the apply window expiring) - it must re-queue the batch's
-        /// source commands so the work is rebuilt, not lost.
+        /// Arms the isolated net commit for definitions a sibling system created this frame. Call only when
+        /// <see cref="CanBuildDefinitions"/>, after <see cref="PrepareDefinitionFrame"/>.
+        /// <paramref name="onCommitLost"/> must re-queue the source commands.
         /// </summary>
-        public void ArmNetCommit(System.Action onCommitLost, string source)
-        {
-            ArmNetCommit(onCommitLost, null, source);
-        }
+        public void ArmNetCommit(System.Action onCommitLost, string source) => ArmNetCommit(onCommitLost, null, source);
 
-        /// <summary>
-        /// Arm one correlated net mutation graph and retain its completion callback until the
-        /// committed Temp graph has fully drained.
-        /// </summary>
+        /// <summary>Arms one correlated mutation graph; the callback is kept until it drains.</summary>
         public bool ArmNetCommit(System.Action onCommitLost,
             System.Action onCommitComplete, string source)
         {
@@ -64,11 +45,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
             return true;
         }
 
-        /// <summary>
-        /// Arm one route root and its complete waypoint/segment graph. Definitions materialize as
-        /// Temps later in the frame; the next quiet ToolUpdate validates and applies only that
-        /// isolated route domain.
-        /// </summary>
+        /// <summary>Arms a route root and its waypoint/segment graph; applied alone on the next quiet ToolUpdate.</summary>
         public bool ArmRouteCommit(System.Action onCommitLost,
             System.Action onCommitComplete, string source)
         {
@@ -88,10 +65,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
             return true;
         }
 
-        /// <summary>
-        /// Arm one object graph. Its Object, owned Node/Edge/Lane/Aggregate, and Area Temps are
-        /// validated and consumed together. The source callback is retained until drain completes.
-        /// </summary>
+        /// <summary>Arms one object graph; object, owned net and area Temps are consumed together.</summary>
         public bool ArmObjectCommit(System.Action onCommitLost, System.Action onCommitComplete,
             string source, bool rootlessAssetStamp = false,
             List<ArmedOwnerDefinition> ownerDefinitions = null)
@@ -130,18 +104,12 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
             }
             catch (System.Exception ex)
             {
-                // Charging is accounting, not geometry. Never destabilize a successfully committed
-                // network transaction merely because the money singleton changed unexpectedly.
+                // Accounting never destabilizes a committed transaction.
                 SyncLog.Warn(LogTopic.Nets, "NetSync: remote net charge failed: " + ex.Message);
             }
         }
 
-        /// <summary>
-        /// Record a span this machine just realized from a remote command, so capture-side heuristics
-        /// (NetReplaceSync's extension detection) can recognise follow-on local edits of that geometry
-        /// - e.g. the game's node reduction merging it into a neighbour - as remote work, not
-        /// something to broadcast back.
-        /// </summary>
+        /// <summary>Remembers a realized span so node reduction re-surfacing it is not broadcast back.</summary>
         public void RecordRealizedSpan(Bezier4x3 curve)
         {
             long now = Mod.Service != null ? Mod.Service.NowMs : 0;
@@ -168,11 +136,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
         private static bool _forceUpdateFieldResolved;
 
         /// <summary>
-        /// Set the tool's protected <c>m_ForceUpdate</c> flag so it regenerates its preview
-        /// definitions on its next update even with a motionless cursor - the definition gate removed
-        /// the preview, and without this a parked cursor would show none until moved. Runtime access
-        /// to the loaded game assembly's own member; a rename in a future patch degrades gracefully
-        /// (the preview simply returns on the next cursor move).
+        /// Sets the tool's protected <c>m_ForceUpdate</c> so a still cursor regenerates the preview the
+        /// gate removed. A future rename degrades to "preview returns on the next move".
         /// </summary>
         private void TryForceToolUpdate(global::Game.Tools.ToolBaseSystem tool)
         {
@@ -186,10 +151,6 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
             if (_forceUpdateField != null) _forceUpdateField.SetValue(tool, true);
         }
 
-        /// <summary>
-        /// <see cref="DefinitionGateSystem"/>'s hook: after it destroys the tool's buffered
-        /// definitions on an armed frame, the tool must regenerate its gesture next update.
-        /// </summary>
         public void ForceActiveToolUpdate()
         {
             global::Game.Tools.ToolBaseSystem tool = _toolSystem != null ? _toolSystem.activeTool : null;
@@ -197,8 +158,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
         }
 
         /// <summary>
-        /// Apply remote terrain samples through the brush domain only. Local brush previews were
-        /// Disabled by <see cref="PrepareAuxiliaryTemps"/> and are restored after ToolOutputBarrier.
+        /// Applies remote terrain samples through the brush domain only; local previews come back after
+        /// ToolOutputBarrier.
         /// </summary>
         public bool CommitAuxiliaryTempsNow()
         {

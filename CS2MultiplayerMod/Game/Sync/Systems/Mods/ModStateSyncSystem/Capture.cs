@@ -5,9 +5,9 @@ using CS2MultiplayerMod.Core.Session;
 using CS2MultiplayerMod.Core.Sync.ModSync;
 using CS2MultiplayerMod.Game.Diagnostics;
 using CS2MultiplayerMod.Game.Sync.Commands;
-using CS2MultiplayerMod.Game.Sync.Infrastructure;
 using CS2MultiplayerMod.Game.Sync.ModSync;
 using Game.Common;
+using Game.Net;
 using Game.Tools;
 using Unity.Collections;
 using Unity.Entities;
@@ -47,13 +47,10 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Mods
             if (_catalog.Entries.Count == 0) return;
             if (!EnsureQuery()) return;
 
-            // ToolUpdate applies the payload; ModificationEnd sees the result after native
-            // systems have rebuilt derived state. Only that result can close the echo.
+            // Only the result after native systems rebuilt derived state closes the echo.
             SettleApplied(session);
 
-            // A structural change to one of these types is the only way a removal ever shows: the
-            // entity stops matching the query, so nothing that looks at the query can see it go.
-            // When one happens, every carrier known to hold state is looked at again.
+            // A removal only shows as a structural change: then every known carrier is looked at again.
             int orderVersion = _replicated.GetCombinedComponentOrderVersion(true);
             if (orderVersion != _lastOrderVersion)
             {
@@ -92,11 +89,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Mods
         }
 
         /// <summary>
-        /// Asks the engine which chunks holding replicated types were written to since the last
-        /// pass. This is a prefilter and not a finding: the engine reports write access, not a
-        /// changed value, which is why every candidate is compared against what was last published
-        /// before anything is sent. Idle frames report nothing at all, and that is what keeps this
-        /// free when nobody is using any of these mods.
+        /// Chunks of replicated types written since last pass: a prefilter (write access, not a changed
+        /// value), so candidates are compared before sending. Idle frames cost nothing.
         /// </summary>
         private void CollectChangedCarriers()
         {
@@ -134,11 +128,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Mods
                 chunks.Dispose();
             }
 
-            // Record all changed entities before LastSystemVersion advances. The per-frame
-            // budget limits encoding, not discovery; overflow must survive an idle next frame.
-            Entity pending;
+            // Record before LastSystemVersion advances; the budget limits encoding, not discovery.
             while (_candidates.Count < ModSyncFeature.MaxCarriersPerPass &&
-                   _pendingCandidates.TryDequeue(out pending))
+                   _pendingCandidates.TryDequeue(out Entity pending))
             {
                 Entity entity = pending;
                 _queuedCandidates.Remove(entity);
@@ -153,14 +145,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Mods
                 Entity entity = _candidates[i];
                 if (!EntityManager.Exists(entity)) continue;
 
-                Entity carrier;
-                ModEntityRef carrierRef;
-                if (!TryFindCarrier(entity, out carrier, out carrierRef))
+                if (!TryFindCarrier(entity, out Entity carrier, out ModEntityRef carrierRef))
                 {
-                    // Holds replicated state, is not a place in the world, and points at nothing
-                    // that is. Nothing can be said about it, so it is counted and named rather
-                    // than dropped in silence - this is the count that says a whole mod is not
-                    // travelling and nobody could see why.
+                    // Holds state but is no place and names none: counted and named, not dropped silently.
                     _noCarrier++;
                     ReportOnce("nocarrier:" + DescribeTypes(entity),
                         "Mod state on an entity with no carrier (" + DescribeTypes(entity) +
@@ -173,10 +160,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Mods
         }
 
         /// <summary>
-        /// The entity that changed is usually the carrier itself - a junction, a road, a building.
-        /// When it is not, it is one of the mod's own bookkeeping entities, and those carry a
-        /// reference back to what they belong to; following that is what makes a change to a
-        /// satellite alone still travel as its carrier's closure.
+        /// The carrier is usually the changed entity; otherwise a mod's bookkeeping entity references it.
         /// </summary>
         private bool TryFindCarrier(Entity entity, out Entity carrier, out ModEntityRef carrierRef)
         {
@@ -201,8 +185,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Mods
                 entry.Accessor.ReadInto(EntityManager, entity, scratch, target =>
                 {
                     if (found != Entity.Null || target == Entity.Null) return ModEntityRef.Null;
-                    ModEntityRef described;
-                    if (!_identity.TryDescribe(target, out described)) return ModEntityRef.Null;
+                    if (!_identity.TryDescribe(target, out ModEntityRef described)) return ModEntityRef.Null;
                     found = target;
                     foundRef = described;
                     return described;
@@ -216,10 +199,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Mods
         }
 
         /// <summary>
-        /// Describes one carrier's whole closure and sends it if it differs from what this machine
-        /// last saw there. The comparison is against the encoded form, which makes it exact and
-        /// also closes the echo: state written here because it arrived from somebody else encodes
-        /// to what was already recorded, so it is not sent back.
+        /// Sends a carrier's closure if its encoding differs from the last seen; state written from a peer
+        /// encodes identically, so it is not echoed.
         /// </summary>
         private void PublishCarrier(MultiplayerSession session, Entity carrier, ModEntityRef carrierRef,
             Entity changedEntity = default(Entity))
@@ -227,18 +208,14 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Mods
             string key = carrierRef.Key();
             if (_seenThisPass.Contains(key)) return;
 
-            byte[] body;
-            ulong hash;
-            if (!TryEncode(carrier, carrierRef, out body, out hash)) return;
+            if (!TryEncode(carrier, carrierRef, out byte[] body, out ulong hash, true)) return;
 
-            // A reference to a road does not establish ownership. Preview bookkeeping can
-            // reference live roads without belonging to their committed mod state.
+            // A reference to a road is not ownership; previews reference live roads too.
             if (changedEntity != Entity.Null && changedEntity != carrier &&
                 !_capture.SatelliteEntities.Contains(changedEntity)) return;
             _seenThisPass.Add(key);
 
-            ulong previous;
-            if (_shadow.TryGetValue(key, out previous) && previous == hash) return;
+            if (_shadow.TryGetValue(key, out ulong previous) && previous == hash) return;
 
             _shadow[key] = hash;
             RememberCarrier(key, carrierRef);
@@ -253,7 +230,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Mods
         }
 
         /// <summary>Builds the closure and its encoded form, or explains why it could not be sent.</summary>
-        private bool TryEncode(Entity carrier, ModEntityRef carrierRef, out byte[] body, out ulong hash)
+        private bool TryEncode(Entity carrier, ModEntityRef carrierRef, out byte[] body,
+            out ulong hash, bool localCapture = false)
         {
             body = null;
             hash = 0;
@@ -285,6 +263,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Mods
                 return false;
             }
 
+            if (localCapture) AnnotateRoadSpeedReset(carrier, snapshot);
             var command = new ModStateCommand { Snapshot = snapshot, Types = _binding };
             try
             {
@@ -303,12 +282,60 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Mods
             return true;
         }
 
+        private void AnnotateRoadSpeedReset(Entity carrier, ModStateSnapshot snapshot)
+        {
+            if (!EntityManager.HasComponent<Edge>(carrier)) return;
+            bool hasSpeed = false;
+            for (int i = 0; i < snapshot.CarrierValues.Components.Count; i++)
+            {
+                ModComponentValue value = snapshot.CarrierValues.Components[i];
+                if (_binding.ByIndex(value.TypeIndex).DisplayName !=
+                    "RoadSpeedAdjuster.Components.CustomSpeed") continue;
+                hasSpeed = true;
+                break;
+            }
+            if (hasSpeed)
+            {
+                _roadSpeedActive.Add(carrier);
+                return;
+            }
+            if (!_roadSpeedActive.Remove(carrier)) return;
+
+            if (!TryReadLaneSpeed(carrier, out float speed))
+            {
+                SyncLog.Warn(LogTopic.ModSync, "Road Speed reset has no readable lane speed; " +
+                    "the CustomSpeed removal will travel without a lane reset value.");
+                return;
+            }
+            snapshot.HasLaneSpeedReset = true;
+            snapshot.LaneSpeedReset = speed;
+        }
+
+        private bool TryReadLaneSpeed(Entity edge, out float speed)
+        {
+            speed = 0f;
+            if (!EntityManager.HasBuffer<SubLane>(edge)) return false;
+            DynamicBuffer<SubLane> lanes = EntityManager.GetBuffer<SubLane>(edge, true);
+            for (int i = 0; i < lanes.Length; i++)
+            {
+                Entity lane = lanes[i].m_SubLane;
+                if (!EntityManager.Exists(lane)) continue;
+                if (EntityManager.HasComponent<CarLane>(lane))
+                    speed = EntityManager.GetComponentData<CarLane>(lane).m_SpeedLimit;
+                else if (EntityManager.HasComponent<TrackLane>(lane))
+                    speed = EntityManager.GetComponentData<TrackLane>(lane).m_SpeedLimit;
+                else continue;
+                return !float.IsNaN(speed) && !float.IsInfinity(speed) &&
+                       speed >= 0.1f && speed <= 500f;
+            }
+            return false;
+        }
+
         private void RememberCarrier(string key, ModEntityRef carrierRef)
         {
             if (_knownCarriers.ContainsKey(key))
             {
-                // Keep sweeps on the same local coordinates as the latest shadow. Otherwise
-                // float drift makes sweeps and ordinary capture alternate different headers.
+                // Same local coordinates as the shadow, or float drift makes headers alternate.
                 _knownCarriers[key] = carrierRef;
                 return;
             }
@@ -318,9 +345,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Mods
         }
 
         /// <summary>
-        /// Re-examines carriers that were holding state when something structural happened. This is
-        /// where a removal is noticed: the closure comes back empty, which differs from what was
-        /// recorded, so the empty closure is published and the receiver takes the state off.
+        /// Re-examines known carriers after a structural change; an empty closure is published so the
+        /// receiver removes the state.
         /// </summary>
         private void RunSweep(MultiplayerSession session, long now)
         {
@@ -339,11 +365,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Mods
                 string key = _sweepOrder[_sweepCursor];
                 ModEntityRef carrierRef = _knownCarriers[key];
 
-                Entity carrier;
-                if (!_identity.TryResolve(carrierRef, out carrier))
+                if (!_identity.TryResolve(carrierRef, out Entity carrier))
                 {
-                    // The road or building itself is gone. Its own deletion travels as a deletion;
-                    // there is nothing left here to describe.
+                    // The carrier itself is gone; its deletion travels on its own.
                     _knownCarriers.Remove(key);
                     _shadow.Remove(key);
                     _sweepOrder.RemoveAt(_sweepCursor);
@@ -370,11 +394,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Mods
             return names ?? "no replicated type";
         }
 
-        /// <summary>
-        /// Names each type this machine holds that the session does not replicate. The host's table
-        /// decides what travels, so a type only this peer has is skipped mid-closure and would
-        /// otherwise be invisible on both sides.
-        /// </summary>
+        /// <summary>Names local types the session does not replicate (the host's table decides).</summary>
         private void DrainUnsharedTypes()
         {
             if (_capture.TypesNotInSession.Count == 0) return;

@@ -13,9 +13,8 @@ site_dir: site
 theme:
   name: shadcn
   custom_dir: overrides
-  icon: assets/logo.webp
   favicon: assets/favicon.svg
-  show_title: true
+  show_title: false
   topbar_sections: true
   show_stargazers: true
   hide_source_files: false
@@ -43,6 +42,7 @@ nav:
   - Connection:
       - Steam Relay: steam-relay.md
       - Direct connection: direct-connection.md
+      - Hamachi and other VPNs: hamachi.md
       - Set up port forwarding: forwarding.md
       - Port forwarding problems: forwarding_troubleshoot.md
   - Changelog: changelog.md

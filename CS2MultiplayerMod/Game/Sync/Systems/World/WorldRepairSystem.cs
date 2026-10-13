@@ -14,11 +14,8 @@ using CS2MultiplayerMod.Game.Sync.Infrastructure;
 namespace CS2MultiplayerMod.Game.Sync.Systems
 {
     /// <summary>
-    /// Removes mover instances left in saves by older builds that treated simulation spawns
-    /// as player placements. Those instances have a live mover archetype but no owning
-    /// citizen, household, or vehicle controller, so later simulation/tool contact is unsafe.
-    /// The sweep runs once after each world load and only deletes on positive missing-link
-    /// evidence. Work is spread across frames to keep large cities responsive.
+    /// Removes stranded mover instances (no owning citizen, household or controller) left in saves.
+    /// Runs once per world load, frame-budgeted, and deletes only on positive missing-link evidence.
     /// </summary>
     public partial class WorldRepairSystem : GameSystemBase
     {
@@ -119,10 +116,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             if (_sweepIndex >= _sweepCandidates.Length) FinishSweep();
         }
 
-        /// <summary>
-        /// True only when an instance's required simulation link is null or dead. Wildlife,
-        /// parked vehicles, and every live linked resident/pet/controller are preserved.
-        /// </summary>
+        /// <summary>True only when a required simulation link is null or dead.</summary>
         private bool IsStrandedMover(Entity entity)
         {
             if (!EntityManager.HasComponent<PrefabRef>(entity)) return false;
@@ -154,8 +148,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     return controller == Entity.Null || !EntityManager.Exists(controller);
                 }
 
-                // Owner-less, unparked, and uncontrolled means no simulation system can
-                // legitimately steer this instance. Normal transient traffic can respawn.
+                // Owner-less, unparked and uncontrolled: nothing can steer it.
                 return true;
             }
 
@@ -170,8 +163,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             EntityManager.AddComponent<Deleted>(entity);
 
             if (string.IsNullOrEmpty(name)) name = "?";
-            int count;
-            _sweepByPrefab.TryGetValue(name, out count);
+            _sweepByPrefab.TryGetValue(name, out int count);
             _sweepByPrefab[name] = count + 1;
         }
 

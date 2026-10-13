@@ -12,9 +12,8 @@ using CS2MultiplayerMod.Game.Sync.Infrastructure;
 namespace CS2MultiplayerMod.Game.Sync.Systems.Net
 {
     /// <summary>
-    /// Keep later edge-only refreshes (including building integration and road upgrades) from
-    /// leaving the existing junction lanes behind. Runs on both peers before native references,
-    /// composition and lane generation, over this cycle's updated standalone edges only.
+    /// Refreshes the junctions of edge-only updates before native references, composition and lanes,
+    /// so junction lanes are not left behind.
     /// </summary>
     public partial class NetJunctionRefreshSystem : GameSystemBase
     {
