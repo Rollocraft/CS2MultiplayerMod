@@ -459,6 +459,7 @@ namespace CS2MultiplayerMod.Game
                     _service.ResetWorldSyncState(restoreSpeed: true);
                     _service.SetPhase(ClientWorldPhase.None);
                     _service._remotePlayers.Clear();
+                    _service.StopFollowingPlayer();
                 }
 
                 // Hub lifecycle lines stay English (shared diagnostics). Stop() always fires Offline, so
@@ -545,6 +546,9 @@ namespace CS2MultiplayerMod.Game
         public float EyeY;
         public float EyeZ;
         public float Yaw;
+        public float Pitch;
+        public float Zoom;
+        public string Name;
         public Core.Protocol.Messages.PlayerHoverShape[] Hover =
             System.Array.Empty<Core.Protocol.Messages.PlayerHoverShape>();
         public long LastUpdateMs;

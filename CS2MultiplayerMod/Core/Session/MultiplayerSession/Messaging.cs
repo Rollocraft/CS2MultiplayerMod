@@ -408,13 +408,13 @@ namespace CS2MultiplayerMod.Core.Session
 
         /// <summary>Publish the local player's camera and display-only hover outlines.</summary>
         public void SendPlayerState(float x, float y, float z, float eyeX, float eyeY, float eyeZ, float yaw,
-            PlayerHoverShape[] hover = null)
+            PlayerHoverShape[] hover = null, float pitch = 0f, float zoom = 0f)
         {
             if (Status != SessionStatus.Connected || _worldSyncSuspended) return;
 
             // 10 Hz presence: skip under backpressure rather than queue stale hovers behind city updates.
             if (_transport == null || _transport.PendingSendBytes > 16 * 1024) return;
-            var message = new PlayerStateMessage(LocalPlayerId, x, y, z, eyeX, eyeY, eyeZ, yaw, hover);
+            var message = new PlayerStateMessage(LocalPlayerId, x, y, z, eyeX, eyeY, eyeZ, yaw, hover, pitch, zoom, LocalPlayerName);
             if (Role == SessionRole.Host)
                 BroadcastToAll(message, ConnectionId.None);
             else
@@ -426,7 +426,10 @@ namespace CS2MultiplayerMod.Core.Session
             if (_worldSyncSuspended) return;
             // Same anti-impersonation stamp as commands: positions are keyed by player id.
             if (Role == SessionRole.Host && peer != null)
+            {
                 state.PlayerId = peer.PlayerId;
+                state.PlayerName = Core.Protocol.WireGuard.SanitizePlayerName(peer.Name);
+            }
 
             NotifyPlayerState(state);
             if (Role == SessionRole.Host && _transport != null && _transport.PendingSendBytes <= 16 * 1024)

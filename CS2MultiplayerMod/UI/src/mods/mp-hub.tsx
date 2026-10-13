@@ -123,6 +123,8 @@ const requireApproval$ = bindValue<boolean>(GROUP, "requireApproval", true);
 const autoApproveSteamFriends$ = bindValue<boolean>(GROUP, "autoApproveSteamFriends", false);
 const simulationSync$ = bindValue<boolean>(GROUP, "simulationSync", true);
 const resyncPolicy$ = bindValue<string>(GROUP, "resyncPolicy", "allow");
+const cameraPlayers$ = bindValue<string>(GROUP, "cameraPlayers", "[]");
+const followingPlayerId$ = bindValue<number>(GROUP, "followingPlayerId", 0);
 const playerList$ = bindValue<string>(GROUP, "playerList", "[]");
 const pendingJoins$ = bindValue<string>(GROUP, "pendingJoins", "[]");
 const pendingResyncs$ = bindValue<string>(GROUP, "pendingResyncs", "[]");
@@ -1290,6 +1292,28 @@ const ClientWorldSaveDialog = ({ onClose }: { onClose: () => void }) => {
     );
 };
 
+const PlayerCameras = () => {
+    const t = useT();
+    const json = useValue(cameraPlayers$);
+    const following = useValue(followingPlayerId$);
+    const players = useMemo(() => parseArray<{ id: number; name: string }>(json), [json]);
+    if (players.length === 0 && following === 0) return null;
+    return <div style={styles.playerSection}>
+        <div style={styles.sectionHeader}>{t("CS2MP.UI.PlayerCameras", "Player cameras")}</div>
+        {players.map(player => <div key={player.id} style={styles.playerRow}>
+            <div style={styles.playerName}>{player.name}</div>
+            <Button variant="flat" style={styles.footerButton} onSelect={() => trigger(GROUP, "goToPlayer", player.id)}>
+                {t("CS2MP.UI.GoToPlayer", "Go to")}
+            </Button>
+            <Button variant="flat" style={styles.footerButton} selected={following === player.id}
+                onSelect={() => following === player.id ? trigger(GROUP, "stopFollowing") : trigger(GROUP, "followPlayer", player.id)}>
+                {following === player.id ? t("CS2MP.UI.StopFollowing", "Stop following") : t("CS2MP.UI.FollowPlayer", "Follow")}
+            </Button>
+        </div>)}
+        {following !== 0 ? <div style={styles.activityDetail}>{t("CS2MP.UI.FollowHint", "Move the camera or press Escape to stop following.")}</div> : null}
+    </div>;
+};
+
 // Active session: player count, chat feed (player lines + "X joined." event
 // lines), send box, world sync, local client copy and disconnect.
 const SessionView = ({ entries, players }: { entries: ChatEntry[]; players: PlayerEntry[] }) => {
@@ -1354,6 +1378,7 @@ const SessionView = ({ entries, players }: { entries: ChatEntry[]; players: Play
             {isHost
                 ? <HostPlayerList players={players} />
                 : <div style={styles.playerCountRow}>{t(LOC.players, "Players") + ": " + playerCount}</div>}
+            <PlayerCameras />
             {showActivity ? (
                 <>
                     <TransferProgress

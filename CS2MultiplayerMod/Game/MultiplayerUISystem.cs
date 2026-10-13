@@ -156,6 +156,14 @@ namespace CS2MultiplayerMod.Game
             AddBinding(new TriggerBinding(Group, "multiplayerScreenExited",
                 () => _multiplayerMenuActiveBinding.Update(false)));
 
+            AddBinding(new TriggerBinding<int>(Group, "goToPlayer", id => Mod.Service?.GoToPlayer(id)));
+            AddBinding(new TriggerBinding<int>(Group, "followPlayer", id => Mod.Service?.FollowPlayer(id)));
+            AddBinding(new TriggerBinding(Group, "stopFollowing", () => Mod.Service?.StopFollowingPlayer()));
+            AddUpdateBinding(new GetterValueBinding<int>(Group, "followingPlayerId",
+                () => Mod.Service?.FollowingPlayerId ?? 0));
+            AddUpdateBinding(new GetterValueBinding<string>(Group, "cameraPlayers",
+                () => Mod.Service?.CameraPlayersJson ?? "[]"));
+
             // -- In-game hub panel (right-menu button above the Chirper) ----------
 
             // Serialized once per append; the binding pushes only on a new instance.

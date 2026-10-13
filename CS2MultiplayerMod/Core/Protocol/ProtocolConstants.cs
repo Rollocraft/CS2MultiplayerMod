@@ -1,4 +1,4 @@
-﻿namespace CS2MultiplayerMod.Core.Protocol
+namespace CS2MultiplayerMod.Core.Protocol
 {
     public static class ProtocolConstants
     {
@@ -6,7 +6,7 @@
         /// Wire-format version; a mismatch is refused at the handshake. Bump on any layout change or new
         /// command, channel or message id.
         /// </summary>
-        public const int ProtocolVersion = 72;
+        public const int ProtocolVersion = 75;
 
         /// <summary>Transport ceiling against corrupt length prefixes; <see cref="MessageCodec"/> caps each type far lower.</summary>
         public const int MaxPayloadBytes = 16 * 1024 * 1024;

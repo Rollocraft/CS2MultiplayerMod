@@ -16,13 +16,17 @@ namespace CS2MultiplayerMod.Core.Protocol.Messages
         public float EyeY;
         public float EyeZ;
         public float Yaw;
+        public float Pitch;
+        public float Zoom;
+        public string PlayerName = "Player";
         public PlayerHoverShape[] Hover = System.Array.Empty<PlayerHoverShape>();
 
         public PlayerStateMessage() { }
 
         public PlayerStateMessage(int playerId,
             float posX, float posY, float posZ,
-            float eyeX, float eyeY, float eyeZ, float yaw, PlayerHoverShape[] hover = null)
+            float eyeX, float eyeY, float eyeZ, float yaw, PlayerHoverShape[] hover = null,
+            float pitch = 0f, float zoom = 0f, string playerName = "Player")
         {
             PlayerId = playerId;
             PosX = posX;
@@ -32,6 +36,9 @@ namespace CS2MultiplayerMod.Core.Protocol.Messages
             EyeY = eyeY;
             EyeZ = eyeZ;
             Yaw = yaw;
+            Pitch = pitch;
+            Zoom = zoom;
+            PlayerName = playerName;
             Hover = hover ?? System.Array.Empty<PlayerHoverShape>();
         }
 
@@ -55,6 +62,9 @@ namespace CS2MultiplayerMod.Core.Protocol.Messages
                 shape.Validate();
                 shape.Write(writer);
             }
+            writer.WriteFloat(Pitch);
+            writer.WriteFloat(Zoom);
+            writer.WriteString(WireGuard.SanitizePlayerName(PlayerName));
         }
 
         public void Read(NetworkReader reader)
@@ -66,12 +76,15 @@ namespace CS2MultiplayerMod.Core.Protocol.Messages
             EyeX = WireGuard.ReadCoordinate(reader);
             EyeY = WireGuard.ReadCoordinate(reader);
             EyeZ = WireGuard.ReadCoordinate(reader);
-            Yaw = WireGuard.ReadFinite(reader);
+            Yaw = WireGuard.ReadCoordinate(reader);
             int count = reader.ReadByte();
             if (count > PlayerHoverShape.MaxShapes || count * PlayerHoverShape.WireSize > reader.Remaining)
                 throw new ProtocolException("Invalid hover shape count.");
             Hover = count == 0 ? System.Array.Empty<PlayerHoverShape>() : new PlayerHoverShape[count];
             for (int i = 0; i < count; i++) Hover[i] = PlayerHoverShape.Read(reader);
+            Pitch = WireGuard.ReadCoordinate(reader);
+            Zoom = WireGuard.ReadCoordinate(reader);
+            PlayerName = WireGuard.ReadName(reader);
         }
     }
 }
