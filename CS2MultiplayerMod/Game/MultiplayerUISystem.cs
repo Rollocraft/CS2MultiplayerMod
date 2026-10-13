@@ -156,7 +156,6 @@ namespace CS2MultiplayerMod.Game
             AddBinding(new TriggerBinding(Group, "multiplayerScreenExited",
                 () => _multiplayerMenuActiveBinding.Update(false)));
 
-<<<<<<< HEAD
             AddBinding(new TriggerBinding(Group, "pingMap", () => Mod.Service?.PingMapFocus()));
             AddUpdateBinding(new GetterValueBinding<bool>(Group, "canPingMap",
                 () => Mod.Service != null && Mod.Service.CanPingMap));
@@ -167,14 +166,12 @@ namespace CS2MultiplayerMod.Game
                 () => Mod.Service?.FollowingPlayerId ?? 0));
             AddUpdateBinding(new GetterValueBinding<string>(Group, "cameraPlayers",
                 () => Mod.Service?.CameraPlayersJson ?? "[]"));
-=======
             AddBinding(new TriggerBinding(Group, "smartSync", () =>
                 World.GetOrCreateSystemManaged<Sync.Systems.CityStateSyncSystem>().RequestSmartSync()));
             AddUpdateBinding(new GetterValueBinding<bool>(Group, "canSmartSync",
                 () => Mod.Service != null && Mod.Service.GameplaySyncReady && Mod.Service.Session.CanRequestStateRepair));
             AddUpdateBinding(new GetterValueBinding<bool>(Group, "smartSyncPending",
                 () => Mod.Service != null && Mod.Service.Session.StateRepairPending));
->>>>>>> feature/smart-resync
 
             // -- In-game hub panel (right-menu button above the Chirper) ----------
 

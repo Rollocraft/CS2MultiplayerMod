@@ -263,12 +263,9 @@ namespace CS2MultiplayerMod.Core.Session
             }
 
             _peers.Clear();
-<<<<<<< HEAD
             _lastLocalPingMs = null;
-=======
             _localStateRepairId = 0;
             _lastStateRequestMs = null;
->>>>>>> feature/smart-resync
             _administrativeRemovals.Clear();
             _puntedConnections.Clear();
             _localCloseReasons.Clear();

@@ -123,14 +123,11 @@ const requireApproval$ = bindValue<boolean>(GROUP, "requireApproval", true);
 const autoApproveSteamFriends$ = bindValue<boolean>(GROUP, "autoApproveSteamFriends", false);
 const simulationSync$ = bindValue<boolean>(GROUP, "simulationSync", true);
 const resyncPolicy$ = bindValue<string>(GROUP, "resyncPolicy", "allow");
-<<<<<<< HEAD
 const canPingMap$ = bindValue<boolean>(GROUP, "canPingMap", false);
 const cameraPlayers$ = bindValue<string>(GROUP, "cameraPlayers", "[]");
 const followingPlayerId$ = bindValue<number>(GROUP, "followingPlayerId", 0);
-=======
 const canSmartSync$ = bindValue<boolean>(GROUP, "canSmartSync", false);
 const smartSyncPending$ = bindValue<boolean>(GROUP, "smartSyncPending", false);
->>>>>>> feature/smart-resync
 const playerList$ = bindValue<string>(GROUP, "playerList", "[]");
 const pendingJoins$ = bindValue<string>(GROUP, "pendingJoins", "[]");
 const pendingResyncs$ = bindValue<string>(GROUP, "pendingResyncs", "[]");
@@ -1324,12 +1321,9 @@ const PlayerCameras = () => {
 // lines), send box, world sync, local client copy and disconnect.
 const SessionView = ({ entries, players }: { entries: ChatEntry[]; players: PlayerEntry[] }) => {
     const t = useT();
-<<<<<<< HEAD
     const canPingMap = useValue(canPingMap$);
-=======
     const canSmartSync = useValue(canSmartSync$);
     const smartSyncPending = useValue(smartSyncPending$);
->>>>>>> feature/smart-resync
     const playerCount = useValue(playerCount$);
     const mapTransferPercent = useValue(mapTransferPercent$);
     const worldSendPercent = useValue(worldSendPercent$);
@@ -1455,16 +1449,13 @@ const SessionView = ({ entries, players }: { entries: ChatEntry[]; players: Play
                 </Button>
             </div>
             <div style={styles.footer}>
-<<<<<<< HEAD
                 <Button variant="flat" style={styles.footerButton} disabled={!canPingMap} onSelect={() => trigger(GROUP, "pingMap")}>
                     {t("CS2MP.UI.PingHere", "Ping here")}
                 </Button>
-=======
                 {!isHost ? <Button variant="flat" style={styles.footerButton} disabled={!canSmartSync}
                     onSelect={() => trigger(GROUP, "smartSync")}>
                     {smartSyncPending ? t("CS2MP.UI.CheckingState", "Checking state...") : t("CS2MP.UI.SmartSync", "Smart sync")}
                 </Button> : null}
->>>>>>> feature/smart-resync
                 <Button variant="flat" style={styles.footerButton} onSelect={() => trigger(GROUP, "syncNow")}>
                     {t(LOC.syncWorld, "Sync World")}
                 </Button>
