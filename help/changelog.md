@@ -64,10 +64,6 @@ This update is mostly about performance in large cities. Hosts and clients both 
 * The Options page shows the mod version at the top of the General tab. The read-only status rows were removed, since the in-game multiplayer panel shows the same information live.
 * The host's log records the mod build of every player who joins.
 
-### Compatibility
-
-* This update changes the network protocol, so all players must update together. Older versions cannot join.
-
 ## Version 0.1.7 - 2026-09-15
 
 This update focuses on improving performance, giving players more control over simulation synchronization, reducing unnecessary resyncs, fixing several gameplay synchronization issues, and expanding mod compatibility. It also brings support up to game version 1.6.2f1.
@@ -184,7 +180,7 @@ Contributing to the project has previously been difficult, if not nearly impossi
 
 Going forward, the project will have a dedicated development branch, making it significantly easier for other developers to contribute, test changes and help improve the mod.
 
-## 0.1.6 - 2026-08-24
+## Version 0.1.6 - 2026-08-24
 
 This update focuses on synchronization, chat and general stability.
 
@@ -210,16 +206,16 @@ This update focuses on synchronization, chat and general stability.
 - [This documentation site](index.md), covering setup, connections and every error the
   mod can show
 
-## 0.1.5h2 - 2026-08-12
+## Version 0.1.5h2 - 2026-08-12
 
 - Fixed the mod not loading for non-Steam players.
 
-## 0.1.5h1 - 2026-08-11
+## Version 0.1.5h1 - 2026-08-11
 
 - Fixed CS1 Treasure Hunt blocking a connection.
 - Fixed client placement throwing an exception.
 
-## 0.1.5 - 2026-08-11
+## Version 0.1.5 - 2026-08-11
 
 Steam Relay arrived: no port forwarding and no manual IP setup. Host a game, share your
 lobby code, and friends join instantly.
@@ -270,7 +266,7 @@ performance.
 
 - Better error messages for hosts.
 
-## 0.1.4 - 2026-07-22
+## Version 0.1.4 - 2026-07-22
 
 This update focuses on synchronization improvements, crash fixes and a smoother multiplayer
 experience. There were also many smaller fixes for stability.
@@ -294,7 +290,7 @@ experience. There were also many smaller fixes for stability.
 - Updated hosting interface.
 - Clearer and easier to understand error messages when connecting.
 
-## 0.1.3 - 2026-07-11
+## Version 0.1.3 - 2026-07-11
 
 ### Bug fixes
 
@@ -310,17 +306,17 @@ experience. There were also many smaller fixes for stability.
 
 - A crash logging system.
 
-## 0.1.2 - 2026-07-09
+## Version 0.1.2 - 2026-07-09
 
 - Building and road spam no longer crashes the game.
 - Roundabouts place correctly.
 - Build mode synchronizes properly.
 
-## 0.1.1 - 2026-07-08
+## Version 0.1.1 - 2026-07-08
 
 - Host-authoritative sessions, world transfer on join, and synchronized roads, zoning,
   services, finances, progression, time and weather.
 
-## 0.1.0
+## Version 0.1.0 - 2026-07-07
 
 - The first public release.
