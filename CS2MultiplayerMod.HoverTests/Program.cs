@@ -32,7 +32,8 @@ static class Program
         A = new(10, 20, 30), B = new(40, 20, 30), C = new(40, 20, 60), D = new(10, 20, 60),
         Width = 12, Height = 30
     };
-    static PlayerStateMessage State(params PlayerHoverShape[] shapes) => new(99, 1, 2, 3, 4, 5, 6, 7, shapes);
+    static PlayerStateMessage State(params PlayerHoverShape[] shapes) => new(99, 1, 2, 3, 4, 5, 6, 7, shapes,
+        pitch: 42, zoom: 0.65f, playerName: "Spoofed");
     static void Assert(bool condition, string message) { if (!condition) throw new Exception(message); }
     static void Reject(Action action, string name)
     {
@@ -47,17 +48,25 @@ static class Program
         {
             var shape = Shape(kind);
             byte[] wire = Codec.Encode(State(shape));
-            Assert(wire.Length == 34 + PlayerHoverShape.WireSize, "wire size");
+            Assert(wire.Length == 53 + PlayerHoverShape.WireSize, "wire size including camera and name");
             var decoded = (PlayerStateMessage)Codec.Decode(wire);
             Assert(decoded.PlayerId == 99 && decoded.Yaw == 7 && decoded.Hover.Length == 1, "presence round trip");
+            Assert(decoded.Pitch == 42 && decoded.Zoom == 0.65f && decoded.PlayerName == "Spoofed", "camera round trip");
             Assert(Codec.Encode(decoded).SequenceEqual(wire), "lossless geometry round trip");
             for (int length = 0; length < wire.Length; length++)
                 Reject(() => Codec.Decode(wire.Take(length).ToArray()), "truncated geometry");
         }
         Assert(((PlayerStateMessage)Codec.Decode(Codec.Encode(State()))).Hover.Length == 0, "explicit clear");
-        Assert(Codec.Encode(State(Enumerable.Repeat(Shape(), 8).ToArray())).Length == 530, "bounded maximum packet");
+        Assert(Codec.Encode(State(Enumerable.Repeat(Shape(), 8).ToArray())).Length == 549, "bounded maximum packet");
         Reject(() => Codec.Encode(State(Enumerable.Repeat(Shape(), 9).ToArray())), "too many outbound shapes");
         var good = Codec.Encode(State(Shape()));
+        foreach (int offset in new[] { 96, 100 })
+            foreach (float invalid in new[] { float.NaN, float.PositiveInfinity, WireGuard.MaxCoordinate + 1 })
+            {
+                byte[] malformed = (byte[])good.Clone();
+                BitConverter.GetBytes(invalid).CopyTo(malformed, offset);
+                Reject(() => Codec.Decode(malformed), "invalid camera value");
+            }
         void BadByte(int offset, byte value)
         {
             var bad = (byte[])good.Clone(); bad[offset] = value;
@@ -149,7 +158,7 @@ static class Program
         }
         MultiplayerConfig Config(string name) => new(name, "127.0.0.1", port, "hover-test", true, encryption);
         void Send(MultiplayerSession session, params PlayerHoverShape[] shapes) =>
-            session.SendPlayerState(1, 2, 3, 4, 5, 6, 7, shapes);
+            session.SendPlayerState(1, 2, 3, 4, 5, 6, 7, shapes, pitch: 42, zoom: 0.65f);
         try
         {
             host.StartHost(Config("Host")); alice.Join(Config("Alice")); bob.Join(Config("Bob"));
@@ -158,6 +167,8 @@ static class Program
             Pump(() => observed[0].States.Count == 1 && observed[2].States.Count == 1);
             Assert(observed[1].States.Count == 0, "source must not receive its own echo");
             Assert(observed[2].States.Last().PlayerId == alice.LocalPlayerId, "relayed source identity");
+            Assert(observed[2].States.Last().PlayerName == "Alice" && observed[2].States.Last().Pitch == 42 &&
+                observed[2].States.Last().Zoom == 0.65f, "relayed camera and name");
             Assert(observed[2].States.Last().Hover[0].Height == 30, "relayed geometry");
             Send(host, Shape(PlayerHoverKind.Circle));
             Pump(() => observed[1].States.Count == 1 && observed[2].States.Count == 2);
@@ -167,6 +178,7 @@ static class Program
             Pump(() => observed[0].States.Count == 2 && observed[2].States.Count == 3);
             Assert(observed[0].States.Last().PlayerId == alice.LocalPlayerId &&
                 observed[2].States.Last().PlayerId == alice.LocalPlayerId, "host prevents impersonation");
+            Assert(observed[2].States.Last().PlayerName == "Alice", "host prevents name impersonation");
 
             Send(alice);
             Pump(() => observed[0].States.Count == 3 && observed[2].States.Count == 4);

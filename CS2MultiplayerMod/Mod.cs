@@ -280,6 +280,7 @@ namespace CS2MultiplayerMod
                 global::Game.Citizens.CitizenInitializeSystem>(
                 SystemUpdatePhase.GameSimulation);
             // UIUpdate: the camera focus must publish while paused.
+            updateSystem.UpdateAt<Game.Sync.Players.PlayerCameraNavigationSystem>(SystemUpdatePhase.UIUpdate);
             updateSystem.UpdateAt<Game.Sync.Players.PlayerCursorSyncSystem>(SystemUpdatePhase.UIUpdate);
             // Raycast phase, after the tool's input: the only slot where an extra input joins this frame's job,
             // so roads, tracks and pipes can be hovered.
