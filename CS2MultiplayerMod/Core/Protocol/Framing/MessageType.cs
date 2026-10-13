@@ -47,6 +47,10 @@ namespace CS2MultiplayerMod.Core.Protocol
         /// <summary>Host -> client: checks passed, awaiting manual approval.</summary>
         HandshakePending = 14,
 
+<<<<<<< HEAD
         MapPing = 15,
+=======
+        StateRepair = 16,
+>>>>>>> feature/smart-resync
     }
 }

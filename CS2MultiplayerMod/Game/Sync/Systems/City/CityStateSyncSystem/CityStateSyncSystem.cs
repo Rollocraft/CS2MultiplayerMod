@@ -113,6 +113,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             SyncLog.Detail(LogTopic.City, nameof(CityStateSyncSystem) + " ready with " +
                 _channels.Count + " state channel(s), " + _editable.Count + " player-editable.");
 
+            _repairObserver = SyncObserverBinding.Bind(() => new RepairObserver(this));
             _observer = SyncObserverBinding.Bind(
                 () => new Observer(_incoming, _incomingEdits, RequestOrderedPoison,
                     channelId => _editable.Contains(channelId)),
@@ -121,6 +122,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
         protected override void OnDestroy()
         {
+            SyncObserverBinding.Unbind(_repairObserver);
             SyncObserverBinding.Unbind(_observer, DrainQueues);
             if (_treeStateChannel != null) _treeStateChannel.Dispose();
             base.OnDestroy();
@@ -157,6 +159,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 MultiplayerSession session = service.Session;
                 if (!service.GameplaySyncReady)
                 {
+                    ClearRepairQueues();
                     // Leaving a session invalidates everything we knew about the host's state.
                     if (_lastHostPayload.Count > 0) { _lastHostPayload.Clear(); _pendingEdits.Clear(); }
                     _captureOrder.Clear();
@@ -172,6 +175,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     return;
                 }
 
+                PumpRepairs(session);
                 if (session.Role == SessionRole.Host)
                 {
                     ApplyIncomingEdits();
@@ -314,6 +318,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
         private void DrainQueues()
         {
+            ClearRepairQueues();
             SyncInbox.Clear(_incoming);
             SyncInbox.Clear(_incomingEdits);
             _newestSnapshot.Clear();

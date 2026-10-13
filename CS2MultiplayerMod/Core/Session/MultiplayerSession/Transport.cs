@@ -199,7 +199,7 @@ namespace CS2MultiplayerMod.Core.Session
                 string violation = peer.RateLimiter.Account(
                     nowUnixMs, payloadBytes, commandId,
                     message.Type == MessageType.Chat,
-                    message.Type == MessageType.ResyncRequest);
+                    message.Type == MessageType.ResyncRequest && ((ResyncRequestMessage)message).StateRequestId == 0);
                 if (violation != null)
                 {
                     Punt(connection, peer, "rate limit exceeded: " + violation, message.Type.ToString());
@@ -248,7 +248,12 @@ namespace CS2MultiplayerMod.Core.Session
                 case MessageType.ResyncRequest:
                     HandleResyncRequest(connection, peer, nowUnixMs,
                         ((ResyncRequestMessage)message).Reason,
-                        ((ResyncRequestMessage)message).IsAutomatic);
+                        ((ResyncRequestMessage)message).IsAutomatic,
+                        ((ResyncRequestMessage)message).StateRequestId,
+                        ((ResyncRequestMessage)message).Digests);
+                    break;
+                case MessageType.StateRepair:
+                    HandleStateRepair(connection, peer, (StateRepairMessage)message);
                     break;
                 case MessageType.WorldSyncControl:
                     HandleWorldSyncControl(connection, peer, (WorldSyncControlMessage)message);

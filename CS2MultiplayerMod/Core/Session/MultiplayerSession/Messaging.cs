@@ -210,9 +210,18 @@ namespace CS2MultiplayerMod.Core.Session
             HandleResyncRequest(from, peer, nowUnixMs, ManualSyncReason, false);
 
         private void HandleResyncRequest(ConnectionId from, Peer peer, long nowUnixMs, string reason,
-            bool automatic)
+            bool automatic, long stateRequestId = 0, StateDigest[] digests = null)
         {
             if (Role != SessionRole.Host) return;
+            if (stateRequestId > 0 && peer != null)
+            {
+                if (peer.LastStateRequestMs.HasValue && nowUnixMs - peer.LastStateRequestMs.Value < 5000)
+                {
+                    DeclineStateRepair(from, stateRequestId);
+                    return;
+                }
+                peer.LastStateRequestMs = nowUnixMs;
+            }
 
             reason = WireGuard.SanitizeText(reason, WireGuard.MaxResyncReasonLength);
             if (reason.Length == 0) reason = automatic ? "automatic recovery" : ManualSyncReason;
@@ -222,6 +231,7 @@ namespace CS2MultiplayerMod.Core.Session
 
             if (resyncPolicy == ClientResyncPolicy.HostOnly)
             {
+                DeclineStateRepair(from, stateRequestId);
                 string deniedName = peer != null && peer.Name != null ? peer.Name : from.ToString();
                 _log.Warn(LogTopic.Session, "Declined world sync request from " + deniedName +
                     " because the session policy is host-only.");
@@ -233,6 +243,8 @@ namespace CS2MultiplayerMod.Core.Session
             if (resyncPolicy == ClientResyncPolicy.RequireApproval)
             {
                 if (peer == null) return;
+                peer.PendingStateRequestId = stateRequestId;
+                peer.PendingStateDigests = digests;
                 peer.PendingResyncReason = reason;
                 peer.PendingResyncAutomatic = automatic;
                 if (!peer.AwaitingResyncApproval)
@@ -251,12 +263,14 @@ namespace CS2MultiplayerMod.Core.Session
                 return;
             }
 
-            AcceptClientResyncRequest(from, peer, nowUnixMs, reason, automatic);
+            AcceptClientResyncRequest(from, peer, nowUnixMs, reason, automatic, stateRequestId, digests);
         }
 
         private bool AcceptClientResyncRequest(ConnectionId from, Peer peer, long nowUnixMs,
-            string reason, bool automatic)
+            string reason, bool automatic, long stateRequestId = 0, StateDigest[] digests = null)
         {
+            if (stateRequestId > 0)
+                return BeginStateRepair(from, peer, stateRequestId, digests, nowUnixMs);
             // Stops /sync spam from looping the host; per-peer budgets run on top.
             if (nowUnixMs - _lastResyncAcceptedUnixMs < ResyncRequestCooldownMs)
             {
@@ -294,7 +308,8 @@ namespace CS2MultiplayerMod.Core.Session
             string reason = peer.PendingResyncReason;
             bool automatic = peer.PendingResyncAutomatic;
             // Another approved sync just began: keep this card queued.
-            if (AcceptClientResyncRequest(peer.Connection, peer, nowUnixMs, reason, automatic))
+            if (AcceptClientResyncRequest(peer.Connection, peer, nowUnixMs, reason, automatic,
+                peer.PendingStateRequestId, peer.PendingStateDigests))
                 ClearPendingResync(peer);
             return true;
         }
@@ -306,6 +321,7 @@ namespace CS2MultiplayerMod.Core.Session
             Peer peer = FindPendingResyncRequest(playerId);
             if (peer == null) return false;
 
+            DeclineStateRepair(peer.Connection, peer.PendingStateRequestId);
             ClearPendingResync(peer);
             _log.Event(LogTopic.Session, "Host declined the world sync request from " + peer.Name + ".");
             SendTo(peer.Connection, new ChatMessage(null, "The host declined your world sync request."));
@@ -327,6 +343,8 @@ namespace CS2MultiplayerMod.Core.Session
             peer.AwaitingResyncApproval = false;
             peer.PendingResyncReason = null;
             peer.PendingResyncAutomatic = false;
+            peer.PendingStateRequestId = 0;
+            peer.PendingStateDigests = null;
         }
 
         /// <summary>The host applies and relays; a client forwards to the host.</summary>
