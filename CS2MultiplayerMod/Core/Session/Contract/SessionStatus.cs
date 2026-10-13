@@ -14,5 +14,8 @@ namespace CS2MultiplayerMod.Core.Session
 
         /// <summary>The session ended due to an error (see the reason reported to observers).</summary>
         Faulted,
+
+        /// <summary>Client retains its session intent while waiting to redial.</summary>
+        Reconnecting,
     }
 }

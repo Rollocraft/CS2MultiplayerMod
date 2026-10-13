@@ -17,7 +17,7 @@ namespace CS2MultiplayerMod.Core.Session
                     OnTransportConnected(evt.Connection, nowUnixMs);
                     break;
                 case TransportEventType.Disconnected:
-                    OnTransportDisconnected(evt.Connection, evt.Detail);
+                    OnTransportDisconnected(evt.Connection, evt.Detail, evt.ProtocolViolation);
                     break;
                 case TransportEventType.Data:
                     OnTransportData(evt.Connection, evt.Payload, nowUnixMs);
@@ -89,9 +89,9 @@ namespace CS2MultiplayerMod.Core.Session
             }
         }
 
-        private void OnTransportDisconnected(ConnectionId connection, string reason)
+        private void OnTransportDisconnected(ConnectionId connection, string reason, bool transportProtocolViolation)
         {
-            _puntedConnections.Remove(connection.Value);
+            bool protocolViolation = _puntedConnections.Remove(connection.Value) || transportProtocolViolation;
             bool closedHere = _localCloseReasons.TryGetValue(connection.Value, out string localReason);
             if (closedHere)
             {
@@ -126,6 +126,7 @@ namespace CS2MultiplayerMod.Core.Session
             {
                 // Losing the host while Connecting is a failed join (fault). While Connected the host ended a live
                 // session: a normal end, so no error log, no Faulted, no OnError.
+                if (!protocolViolation && TryScheduleReconnect(reason)) return;
                 if (Status == SessionStatus.Connecting)
                     Fault("Could not join: " + reason);
                 else if (closedHere)

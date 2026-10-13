@@ -42,6 +42,7 @@ namespace CS2MultiplayerMod.Game
                 if (_session.Role == SessionRole.None)
                     return string.IsNullOrEmpty(_lastFault) ? "offline" : "error";
                 if (_session.Status == SessionStatus.Faulted) return "error";
+                if (_session.IsReconnecting) return "connecting";
                 if (_worldSyncBarrierActive) return "syncing";
                 if (_session.Status == SessionStatus.Connecting ||
                     (_session.Role == SessionRole.Client &&
@@ -65,6 +66,8 @@ namespace CS2MultiplayerMod.Game
                     return L10n.T(L10n.Key.TitleConnectionFailed);
                 if (_session.Role == SessionRole.Client && _session.AwaitingHostApproval)
                     return L10n.T(L10n.Key.TitleAwaitingApproval);
+                if (_session.IsReconnecting)
+                    return L10n.T("CS2MP.Status.Reconnecting");
                 if (_session.Status == SessionStatus.Connecting)
                     return L10n.T(L10n.Key.StateConnecting);
                 if (_session.Role == SessionRole.Host && _worldSyncBarrierActive)
@@ -97,6 +100,9 @@ namespace CS2MultiplayerMod.Game
             get
             {
                 if (!ModEnabled) return L10n.T(L10n.Key.DetailEnableMod);
+                if (_session.IsReconnecting)
+                    return L10n.F("CS2MP.Status.ReconnectDetail", _session.ReconnectAttempt,
+                        ReconnectBackoff.MaxAttempts, _session.ReconnectDelaySeconds);
                 string kind = UiStatusKind;
                 if (kind == "error")
                     return string.IsNullOrEmpty(_lastFault)

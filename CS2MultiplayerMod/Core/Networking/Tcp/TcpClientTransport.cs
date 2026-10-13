@@ -132,10 +132,10 @@ namespace CS2MultiplayerMod.Core.Networking.Tcp
                         (useTls ? " (TLS)." : " (PLAINTEXT)."));
                 },
                 OnData = (cid, payload) => Enqueue(TransportEvent.Data(cid, payload)),
-                OnClosed = (cid, reason) =>
+                OnClosed = (cid, reason, protocolViolation) =>
                 {
                     _active = false;
-                    _events.EnqueueAlways(TransportEvent.Disconnected(cid, reason));
+                    _events.EnqueueAlways(TransportEvent.Disconnected(cid, reason, protocolViolation));
                 },
             };
 

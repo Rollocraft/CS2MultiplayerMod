@@ -50,6 +50,7 @@ if (Socket.OSSupportsIPv6) CheckConnects(host, "::1", port, "::1");
 else Console.WriteLine("IPv6 unavailable on this machine; skipped the IPv6 loopback check.");
 host.Shutdown();
 
+ReconnectChecks.Run();
 Console.WriteLine("Network regression checks passed.");
 
 static void CheckSplit(string text, string host, int port)

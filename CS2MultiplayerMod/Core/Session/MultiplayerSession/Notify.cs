@@ -38,6 +38,8 @@ namespace CS2MultiplayerMod.Core.Session
 
         private void Fault(string message)
         {
+            _reconnect.Reset();
+            _reconnectEligible = false;
             _log.Error(LogTopic.Session, "Session fault: " + message);
             SetStatus(SessionStatus.Faulted, message);
             for (int i = 0; i < _observers.Count; i++)

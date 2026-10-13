@@ -191,6 +191,7 @@ namespace CS2MultiplayerMod.Core.Session
         /// </summary>
         public void Update(long nowUnixMs)
         {
+            PumpReconnect();
             if (_transport == null) return;
 
             _eventBuffer.Clear();
@@ -201,6 +202,7 @@ namespace CS2MultiplayerMod.Core.Session
             long monotonicNow = MonotonicClock.NowMs;
             for (int i = 0; i < _eventBuffer.Count; i++)
             {
+                if (_transport == null) break;
                 TransportEvent evt = _eventBuffer[i];
                 long waited = monotonicNow - evt.ReceivedAtMs;
                 HandleEvent(evt, waited > 0 ? nowUnixMs - waited : nowUnixMs);

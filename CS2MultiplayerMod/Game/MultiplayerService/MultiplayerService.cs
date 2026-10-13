@@ -18,6 +18,7 @@ namespace CS2MultiplayerMod.Game
     {
         None,
         Connecting,
+        Reconnecting,
         WaitingForMap,
         LoadingMap,
         WaitingForResume,
@@ -439,10 +440,22 @@ namespace CS2MultiplayerMod.Game
                     (string.IsNullOrEmpty(flightDetail) ? "" : " detail=" + flightDetail));
                 if (status == SessionStatus.Connected &&
                     _service._session.Role == SessionRole.Client &&
-                    _service._phase == ClientWorldPhase.Connecting)
+                    (_service._phase == ClientWorldPhase.Connecting || _service._phase == ClientWorldPhase.Reconnecting))
                 {
                     // Authenticated; the host streams its world to every fresh join.
                     _service.SetPhase(ClientWorldPhase.WaitingForMap);
+                }
+                else if (status == SessionStatus.Reconnecting)
+                {
+                    _service._lastFault = null;
+                    _service.ResetWorldSyncState(restoreSpeed: false);
+                    _service._worldSyncBarrierActive = true;
+                    _service._worldSyncInputLocked = true;
+                    _service.SetPhase(ClientWorldPhase.Reconnecting);
+                    _service._remotePlayers.Clear();
+                    Sync.Infrastructure.SyncInbox.DrainAll();
+                    Diagnostics.ResyncArbiter.Reset();
+                    _service.MaintainWorldSyncBarrier();
                 }
                 else if (status == SessionStatus.Offline || status == SessionStatus.Faulted)
                 {

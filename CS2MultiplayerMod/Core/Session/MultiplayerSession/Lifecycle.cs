@@ -161,7 +161,8 @@ namespace CS2MultiplayerMod.Core.Session
             }
             catch (Exception ex)
             {
-                Fault(DescribeStartupFailure("Failed to start joining", ex));
+                string reason = DescribeStartupFailure("Failed to start joining", ex);
+                if (!TryScheduleReconnect(reason)) Fault(reason);
             }
         }
 
@@ -170,8 +171,9 @@ namespace CS2MultiplayerMod.Core.Session
             IRelayProvider relay = RelayProvider.Current;
             if (!RelayProvider.IsAvailable)
             {
-                Fault("Cannot join over the Steam relay: " + RelayProvider.UnavailableReason +
-                      " Ask the host for an address and port and use Direct Connection instead.");
+                string reason = "Cannot join over the Steam relay: " + RelayProvider.UnavailableReason +
+                    " Ask the host for an address and port and use Direct Connection instead.";
+                if (!TryScheduleReconnect(reason)) Fault(reason);
                 return;
             }
 
@@ -234,8 +236,13 @@ namespace CS2MultiplayerMod.Core.Session
         /// Local teardown that keeps a remote close reason for observers, so the game layer can say why the
         /// host world is closing.
         /// </summary>
-        private void Stop(string detail)
+        private void Stop(string detail, bool reconnecting = false)
         {
+            if (!reconnecting)
+            {
+                _reconnect.Reset();
+                _reconnectEligible = false;
+            }
             if (_transport != null)
             {
                 _transport.Shutdown();
@@ -268,7 +275,7 @@ namespace CS2MultiplayerMod.Core.Session
             _outgoingBlobActive = false;
             _outgoingBlobTotal = 0;
             _outgoingBlobSent = 0;
-            Role = SessionRole.None;
+            Role = reconnecting ? SessionRole.Client : SessionRole.None;
             LocalPlayerId = 0;
             _nextPlayerId = HostPlayerId + 1;
             _awaitingHostApproval = false;
@@ -276,7 +283,7 @@ namespace CS2MultiplayerMod.Core.Session
             EncryptionActive = false;
             _worldSyncSuspended = false;
             _worldSyncEpoch = 0;
-            SetStatus(SessionStatus.Offline,
+            SetStatus(reconnecting ? SessionStatus.Reconnecting : SessionStatus.Offline,
                 string.IsNullOrWhiteSpace(detail) ? "The connection to the host closed." : detail);
         }
     }
