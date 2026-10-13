@@ -67,6 +67,8 @@ namespace CS2MultiplayerMod.Game.Sync.Players
             new Color(1.00f, 0.85f, 0.40f), // yellow
         };
 
+        internal static Color PlayerColor(int id) => Palette[((id % Palette.Length) + Palette.Length) % Palette.Length];
+
         private OverlayRenderSystem _overlay;
         private CameraUpdateSystem _camera;
         private readonly Plane[] _frustum = new Plane[6];

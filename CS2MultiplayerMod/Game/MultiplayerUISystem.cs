@@ -156,6 +156,10 @@ namespace CS2MultiplayerMod.Game
             AddBinding(new TriggerBinding(Group, "multiplayerScreenExited",
                 () => _multiplayerMenuActiveBinding.Update(false)));
 
+            AddBinding(new TriggerBinding(Group, "pingMap", () => Mod.Service?.PingMapFocus()));
+            AddUpdateBinding(new GetterValueBinding<bool>(Group, "canPingMap",
+                () => Mod.Service != null && Mod.Service.CanPingMap));
+
             // -- In-game hub panel (right-menu button above the Chirper) ----------
 
             // Serialized once per append; the binding pushes only on a new instance.

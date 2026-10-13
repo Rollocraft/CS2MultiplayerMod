@@ -5,6 +5,7 @@ namespace CS2MultiplayerMod.Core.Session
     /// <summary>A session participant as seen locally.</summary>
     public sealed class Peer
     {
+        internal long? LastMapPingMs;
         public readonly ConnectionId Connection;
 
         /// <summary>Host-assigned; 0 until the approval prompt or the completed handshake.</summary>

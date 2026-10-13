@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using Colossal.IO.AssetDatabase;
 using Colossal.Logging;
@@ -286,6 +286,7 @@ namespace CS2MultiplayerMod
             updateSystem.UpdateAfter<Game.Sync.Players.PlayerHoverRaycastSystem,
                 global::Game.Tools.ToolRaycastSystem>(SystemUpdatePhase.Raycast);
             // Rendering: markers draw every frame, paused or not.
+            updateSystem.UpdateAt<Game.Sync.Players.MapPingRenderSystem>(SystemUpdatePhase.Rendering);
             updateSystem.UpdateAt<Game.Sync.Players.RemotePlayerMarkerSystem>(SystemUpdatePhase.Rendering);
             // UIUpdate: policies change while paused, and GameSimulation stops at speed 0. The scan is 1 Hz gated.
             updateSystem.UpdateAt<Game.Sync.Systems.PolicySyncSystem>(SystemUpdatePhase.UIUpdate);

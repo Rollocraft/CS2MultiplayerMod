@@ -256,6 +256,7 @@ namespace CS2MultiplayerMod.Core.Session
             }
 
             _peers.Clear();
+            _lastLocalPingMs = null;
             _administrativeRemovals.Clear();
             _puntedConnections.Clear();
             _localCloseReasons.Clear();
