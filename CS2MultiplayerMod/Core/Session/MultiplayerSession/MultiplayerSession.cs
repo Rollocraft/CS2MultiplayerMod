@@ -208,6 +208,7 @@ namespace CS2MultiplayerMod.Core.Session
 
             if (Status == SessionStatus.Connected)
             {
+                PumpStateRepairs(nowUnixMs);
                 PumpHeartbeats(nowUnixMs);
                 ReportCommandOverruns(nowUnixMs);
                 ReapTimedOutPeers(nowUnixMs);

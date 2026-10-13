@@ -123,6 +123,8 @@ const requireApproval$ = bindValue<boolean>(GROUP, "requireApproval", true);
 const autoApproveSteamFriends$ = bindValue<boolean>(GROUP, "autoApproveSteamFriends", false);
 const simulationSync$ = bindValue<boolean>(GROUP, "simulationSync", true);
 const resyncPolicy$ = bindValue<string>(GROUP, "resyncPolicy", "allow");
+const canSmartSync$ = bindValue<boolean>(GROUP, "canSmartSync", false);
+const smartSyncPending$ = bindValue<boolean>(GROUP, "smartSyncPending", false);
 const playerList$ = bindValue<string>(GROUP, "playerList", "[]");
 const pendingJoins$ = bindValue<string>(GROUP, "pendingJoins", "[]");
 const pendingResyncs$ = bindValue<string>(GROUP, "pendingResyncs", "[]");
@@ -1294,6 +1296,8 @@ const ClientWorldSaveDialog = ({ onClose }: { onClose: () => void }) => {
 // lines), send box, world sync, local client copy and disconnect.
 const SessionView = ({ entries, players }: { entries: ChatEntry[]; players: PlayerEntry[] }) => {
     const t = useT();
+    const canSmartSync = useValue(canSmartSync$);
+    const smartSyncPending = useValue(smartSyncPending$);
     const playerCount = useValue(playerCount$);
     const mapTransferPercent = useValue(mapTransferPercent$);
     const worldSendPercent = useValue(worldSendPercent$);
@@ -1418,6 +1422,10 @@ const SessionView = ({ entries, players }: { entries: ChatEntry[]; players: Play
                 </Button>
             </div>
             <div style={styles.footer}>
+                {!isHost ? <Button variant="flat" style={styles.footerButton} disabled={!canSmartSync}
+                    onSelect={() => trigger(GROUP, "smartSync")}>
+                    {smartSyncPending ? t("CS2MP.UI.CheckingState", "Checking state...") : t("CS2MP.UI.SmartSync", "Smart sync")}
+                </Button> : null}
                 <Button variant="flat" style={styles.footerButton} onSelect={() => trigger(GROUP, "syncNow")}>
                     {t(LOC.syncWorld, "Sync World")}
                 </Button>

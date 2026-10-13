@@ -98,6 +98,10 @@ namespace CS2MultiplayerMod.Core.Session
             return line;
         }
 
+        /// <summary>Automatic partial-repair fallback shares the full-world request budget.</summary>
+        public bool TryAcceptRepairFallback(long nowMs) =>
+            _resyncs.Add(nowMs, 1, MaxResyncPerMinute / 60d) <= MaxResyncBurst;
+
         private void AccountCommand(long nowMs, int commandId)
         {
             if (_commands.Add(nowMs, 1, MaxCommandsPerSecond) <= MaxCommandBurst) return;

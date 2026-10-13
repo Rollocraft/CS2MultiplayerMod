@@ -156,6 +156,13 @@ namespace CS2MultiplayerMod.Game
             AddBinding(new TriggerBinding(Group, "multiplayerScreenExited",
                 () => _multiplayerMenuActiveBinding.Update(false)));
 
+            AddBinding(new TriggerBinding(Group, "smartSync", () =>
+                World.GetOrCreateSystemManaged<Sync.Systems.CityStateSyncSystem>().RequestSmartSync()));
+            AddUpdateBinding(new GetterValueBinding<bool>(Group, "canSmartSync",
+                () => Mod.Service != null && Mod.Service.GameplaySyncReady && Mod.Service.Session.CanRequestStateRepair));
+            AddUpdateBinding(new GetterValueBinding<bool>(Group, "smartSyncPending",
+                () => Mod.Service != null && Mod.Service.Session.StateRepairPending));
+
             // -- In-game hub panel (right-menu button above the Chirper) ----------
 
             // Serialized once per append; the binding pushes only on a new instance.

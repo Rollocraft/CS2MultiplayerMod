@@ -5,6 +5,11 @@ namespace CS2MultiplayerMod.Core.Session
     /// <summary>A session participant as seen locally.</summary>
     public sealed class Peer
     {
+        internal long PendingStateRequestId;
+        internal Protocol.Messages.StateDigest[] PendingStateDigests;
+        internal long ActiveStateRepairId;
+        internal long StateRepairDeadlineMs;
+        internal long? LastStateRequestMs;
         public readonly ConnectionId Connection;
 
         /// <summary>Host-assigned; 0 until the approval prompt or the completed handshake.</summary>

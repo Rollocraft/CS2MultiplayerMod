@@ -39,6 +39,8 @@ namespace CS2MultiplayerMod.Core.Session
         /// <see cref="ConnectionId.None"/>.
         /// </summary>
         void OnResyncRequested(int playerId, ConnectionId connection);
+        void OnStateResyncRequested(ConnectionId connection, long requestId, StateDigest[] digests);
+        void OnStateRepairReceived(StateRepairMessage message);
 
         void OnError(string message);
     }
@@ -60,6 +62,8 @@ namespace CS2MultiplayerMod.Core.Session
         public virtual void OnWorldSyncControl(WorldSyncStage stage, long epoch, float resumeSpeed,
             ConnectionId connection) { }
         public virtual void OnResyncRequested(int playerId, ConnectionId connection) { }
+        public virtual void OnStateResyncRequested(ConnectionId connection, long requestId, StateDigest[] digests) { }
+        public virtual void OnStateRepairReceived(StateRepairMessage message) { }
         public virtual void OnError(string message) { }
     }
 }

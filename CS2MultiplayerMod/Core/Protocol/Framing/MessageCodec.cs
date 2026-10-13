@@ -37,9 +37,10 @@ namespace CS2MultiplayerMod.Core.Protocol
                 ProtocolConstants.BlobChunkBytes + 1024);
             codec.Register(MessageType.StateEdit, () => new StateEditMessage(), 128 * 1024);
             // Sized for the player id plus a capped, UTF-8 encoded reason string.
-            codec.Register(MessageType.ResyncRequest, () => new ResyncRequestMessage(), 1024);
+            codec.Register(MessageType.ResyncRequest, () => new ResyncRequestMessage(), 2048);
             codec.Register(MessageType.WorldSyncControl, () => new WorldSyncControlMessage(), 64);
             codec.Register(MessageType.DisconnectNotice, () => new DisconnectNoticeMessage(), 1024);
+            codec.Register(MessageType.StateRepair, () => new StateRepairMessage(), 70 * 1024);
             return codec;
         }
 
