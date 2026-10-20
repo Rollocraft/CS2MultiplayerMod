@@ -31,7 +31,9 @@ namespace CS2MultiplayerMod.Game
                     if (json.Length > 1) json.Append(',');
                     json.Append("{\"id\":").Append(player.PlayerId).Append(",\"name\":");
                     AppendJsonString(json, player.Name ?? "Player");
-                    json.Append('}');
+                    json.Append(",\"color\":\"")
+                        .Append(Sync.Players.RemotePlayerMarkerSystem.PlayerColorCss(player.PlayerId))
+                        .Append("\"}");
                 }
                 return _cameraPlayersJson = json.Append(']').ToString();
             }

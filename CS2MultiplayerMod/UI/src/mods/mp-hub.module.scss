@@ -1,0 +1,16 @@
+.enabled {
+    cursor: pointer;
+}
+
+.disabled {
+    pointer-events: none;
+}
+
+.toggle.enabled:hover {
+    background-color: #437da0 !important;
+    border-color: #d5f3ff !important;
+}
+
+.chatInput:focus {
+    border-color: #99d3e9 !important;
+}

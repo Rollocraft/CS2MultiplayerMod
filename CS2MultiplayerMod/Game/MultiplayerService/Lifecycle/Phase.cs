@@ -223,6 +223,7 @@ namespace CS2MultiplayerMod.Game
             _lastFault = null;
             var config = BuildConfig(settings, hosting: true);
             _hostConfig = config;
+            _sessionFeed.Clear();
             _log.Event(LogTopic.Session, "Host requested: transport=" + config.Transport +
                 (config.Transport == TransportMode.SteamRelay ? " joinCode=" + RelayProvider.LocalJoinCode : " port=" + config.Port) +
                 " lanOnly=" + config.LanOnly + " password=" +
@@ -249,6 +250,7 @@ namespace CS2MultiplayerMod.Game
             ResetCommandDiagnostics();
             _lastFault = null;
             var config = BuildConfig(settings, hosting: false, listed);
+            _sessionFeed.Clear();
             _log.Event(LogTopic.Session, "Join requested: transport=" + config.Transport +
                 " target=" +
                 (config.Transport == TransportMode.SteamRelay

@@ -9,6 +9,8 @@ using CS2MultiplayerMod.Core.Networking;
 using CS2MultiplayerMod.Core.Networking.Tcp;
 using CS2MultiplayerMod.Core.Session;
 
+SessionFeedChecks.Run(Check);
+
 // What a player may type as the host address.
 CheckSplit("127.0.0.1", "127.0.0.1", 0);
 CheckSplit(" 192.168.1.5:25002 ", "192.168.1.5", 25002);

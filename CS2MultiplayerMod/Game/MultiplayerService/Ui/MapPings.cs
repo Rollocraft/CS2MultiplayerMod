@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using CS2MultiplayerMod.Core.Protocol.Messages;
+using CS2MultiplayerMod.Localization;
 using Game.Rendering;
 using Unity.Entities;
 
@@ -34,7 +35,7 @@ namespace CS2MultiplayerMod.Game
             PruneMapPings();
             if (_mapPings.Count >= 32) _mapPings.RemoveAt(0);
             _mapPings.Add(new MapPing { Message = ping, CreatedMs = NowMs });
-            AppendChatEntry(null, ping.PlayerName + " pinged the map.");
+            AppendSessionActivity(L10n.F("CS2MP.Activity.MapPing", ping.PlayerName));
         }
     }
 

@@ -1,6 +1,7 @@
 import { GROUP, tryModule, useT } from "mods/ui-helpers";
 import { bindValue } from "cs2/api";
 import { Button, Dropdown, DropdownToggle } from "cs2/ui";
+import hubClasses from "./mp-hub.module.scss";
 import { CSSProperties } from "react";
 
 // Shared by the main-menu join/host screens and the in-game hub so all three
@@ -137,19 +138,6 @@ const segment: CSSProperties = {
     fontSize: "13rem",
     textAlign: "center",
     borderRadius: "3rem",
-    border: "1rem solid rgba(157, 193, 222, 0.35)",
-};
-
-const segmentSelected: CSSProperties = {
-    ...segment,
-    backgroundColor: "rgba(157, 193, 222, 0.30)",
-    color: "#ffffff",
-};
-
-const segmentIdle: CSSProperties = {
-    ...segment,
-    backgroundColor: "rgba(0, 0, 0, 0.35)",
-    color: "#9dc1de",
 };
 
 /**
@@ -164,8 +152,10 @@ export const ConnectionSegmented = ({ value, disabled, onChange }: ConnectionDro
     const seg = (optionValue: string, label: string, selected: boolean) => (
         <Button
             variant="flat"
+            className={disabled ? hubClasses.disabled : hubClasses.enabled}
+            selected={selected}
             style={{
-                ...(selected ? segmentSelected : segmentIdle),
+                ...segment,
                 ...(disabled ? { opacity: 0.55 } : null),
                 marginRight: optionValue === CONNECTION_RELAY ? "6rem" : 0,
             }}

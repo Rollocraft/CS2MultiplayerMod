@@ -5,7 +5,8 @@
     "node": ">=18"
   },
   "scripts": {
-    "build": "webpack",
+    "build": "node check-cohtml-styles.cjs && webpack",
+    "test:chat": "node checks/chat-grouping.cjs",
     "dev": "webpack --watch",
     "update": "npx create-csii-ui-mod update",
     "clean": "npx create-csii-ui-mod clean"

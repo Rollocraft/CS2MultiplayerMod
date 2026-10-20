@@ -67,7 +67,12 @@ namespace CS2MultiplayerMod.Game.Sync.Players
             new Color(1.00f, 0.85f, 0.40f), // yellow
         };
 
-        internal static Color PlayerColor(int id) => Palette[((id % Palette.Length) + Palette.Length) % Palette.Length];
+        private static readonly string[] PaletteCss = System.Array.ConvertAll(Palette,
+            color => "#" + ColorUtility.ToHtmlStringRGB(color));
+
+        private static int PlayerColorIndex(int id) => ((id % Palette.Length) + Palette.Length) % Palette.Length;
+        internal static Color PlayerColor(int id) => Palette[PlayerColorIndex(id)];
+        internal static string PlayerColorCss(int id) => PaletteCss[PlayerColorIndex(id)];
 
         private OverlayRenderSystem _overlay;
         private CameraUpdateSystem _camera;
@@ -186,7 +191,7 @@ namespace CS2MultiplayerMod.Game.Sync.Players
                     haveBuffer = true;
                 }
 
-                Color color = Palette[((p.PlayerId % Palette.Length) + Palette.Length) % Palette.Length];
+                Color color = PlayerColor(p.PlayerId);
                 Color fill = new Color(color.r, color.g, color.b, 0.12f);
                 color.a = 0.9f;
 

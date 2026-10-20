@@ -1,5 +1,6 @@
 import { tryModule, useT } from "mods/ui-helpers";
 import { Button, Dropdown, DropdownToggle } from "cs2/ui";
+import hubClasses from "./mp-hub.module.scss";
 import { CSSProperties } from "react";
 
 export const RESYNC_ALLOW = "allow";
@@ -79,7 +80,6 @@ const segment: CSSProperties = {
     fontSize: "12rem",
     textAlign: "center",
     borderRadius: "3rem",
-    border: "1rem solid rgba(157, 193, 222, 0.35)",
 };
 
 export const ResyncPolicySegmented = ({ value, disabled, onChange }: ResyncPolicyProps) => {
@@ -94,14 +94,12 @@ export const ResyncPolicySegmented = ({ value, disabled, onChange }: ResyncPolic
                 <Button
                     key={optionValue}
                     variant="flat"
+                    className={disabled ? hubClasses.disabled : hubClasses.enabled}
+                    selected={selected === optionValue}
                     disabled={disabled}
                     style={{
                         ...segment,
                         marginRight: index < options.length - 1 ? "4rem" : 0,
-                        backgroundColor: selected === optionValue
-                            ? "rgba(157, 193, 222, 0.30)"
-                            : "rgba(0, 0, 0, 0.35)",
-                        color: selected === optionValue ? "#ffffff" : "#9dc1de",
                         opacity: disabled ? 0.55 : 1,
                     }}
                     onSelect={() => {

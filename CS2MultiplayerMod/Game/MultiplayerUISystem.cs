@@ -180,6 +180,12 @@ namespace CS2MultiplayerMod.Game
                 () => Mod.Service != null ? Mod.Service.ChatLogJson : "[]"));
             AddUpdateBinding(new GetterValueBinding<bool>(Group, "isHost",
                 () => Mod.Service != null && Mod.Service.Session.Role == SessionRole.Host));
+            AddUpdateBinding(new GetterValueBinding<int>(Group, "localPlayerId",
+                () => Mod.Service?.Session.LocalPlayerId ?? 0));
+            AddUpdateBinding(new GetterValueBinding<string>(Group, "localPlayerColor",
+                () => Mod.Service != null
+                    ? Sync.Players.RemotePlayerMarkerSystem.PlayerColorCss(Mod.Service.Session.LocalPlayerId)
+                    : "#9bb3c2"));
             AddUpdateBinding(new GetterValueBinding<int>(Group, "playerCount",
                 () => Mod.Service != null ? Mod.Service.PlayerCount : 0));
             AddUpdateBinding(new GetterValueBinding<string>(Group, "playerList",
