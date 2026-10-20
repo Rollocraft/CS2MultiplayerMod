@@ -1,8 +1,9 @@
 ---
 title: Mods and compatibility
-description: "Which mods are officially supported, how unsupported mods affect multiplayer, and how the compatibility check works."
 extra_javascript:
   - assets/mod-table.js
+seo_title: "Mod compatibility | CS2 Multiplayer Mod"
+description: "Check supported Cities: Skylines II mods and community multiplayer test results. Filter compatibility reports and learn how the mod compatibility check works."
 ---
 
 # Mods and compatibility
@@ -132,5 +133,3 @@ includes mods that may appear to be display-only or UI-only: without verificatio
 multiplayer developers cannot guarantee that they will not change synchronized state.
 
 ---
-
-[Back to troubleshooting.](troubleshooting.md)

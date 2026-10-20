@@ -1,6 +1,7 @@
 ---
 title: Port forwarding problems
-description: "Friends cannot reach your direct connection? Check the router, the address, the firewall and CGNAT, in that order."
+seo_title: "Fix port forwarding problems | CS2 Multiplayer Mod"
+description: "Troubleshoot unreachable Cities: Skylines II multiplayer hosts. Check TCP ports, router settings, Windows Firewall, public addresses and CGNAT."
 ---
 
 # Diagnose issues with port forwarding

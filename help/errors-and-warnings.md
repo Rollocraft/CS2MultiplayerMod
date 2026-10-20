@@ -1,6 +1,7 @@
 ---
 title: Errors and warnings
-description: "Every error and warning the mod can show, what it means and what to do about it."
+seo_title: "Errors and warnings | CS2 Multiplayer Mod"
+description: "Find explanations and fixes for Cities: Skylines II multiplayer errors, including connection failures, mismatched mods, passwords and world loading issues."
 ---
 
 # Error and Warning Reference

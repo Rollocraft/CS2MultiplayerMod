@@ -1,6 +1,7 @@
 ---
 title: Verify game files
-description: "Check your Cities: Skylines II files for corruption on Steam and on Xbox, Microsoft Store or Game Pass."
+seo_title: "Verify game files | CS2 Multiplayer Mod"
+description: "Verify Cities: Skylines II game files on Steam, Xbox App, Microsoft Store or Game Pass to repair missing or corrupted files before playing multiplayer."
 ---
 
 # Verify your game files for corruption
@@ -23,5 +24,3 @@ This guide will show you how to check your game files for corruption on Steam an
 
 
 ---
-
-[Back to troubleshooting.](troubleshooting.md)

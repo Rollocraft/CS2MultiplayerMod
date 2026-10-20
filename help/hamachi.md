@@ -1,6 +1,7 @@
 ---
 title: Hamachi and other VPNs
-description: "Play over a Hamachi, Radmin VPN, ZeroTier or Tailscale network when port forwarding is impossible and Steam Relay is not an option."
+seo_title: "Hamachi and VPN setup | CS2 Multiplayer Mod"
+description: "Use Hamachi or another VPN for Cities: Skylines II multiplayer when direct internet access is unavailable. Set up the network and troubleshoot joining."
 ---
 
 # Hamachi and other VPNs
@@ -96,7 +97,3 @@ addresses the program hands out:
 
 With LAN Only on, no password is required and the mod does not ask your router to open
 anything. The firewall step above applies to every VPN program.
-
----
-
-[Back to Direct connection](direct-connection.md)

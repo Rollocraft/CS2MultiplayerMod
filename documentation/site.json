@@ -1,0 +1,11 @@
+{
+  "name": "CS2 Multiplayer Mod",
+  "url": "https://cs2multiplayer.rollocraft.me/",
+  "description": "Build a city together in Cities: Skylines II. Installation, connection guides and help for the Multiplayer Mod.",
+  "repository": "https://github.com/Rollocraft/CS2MultiplayerMod",
+  "navigation": [
+    {"title": "Documentation", "pages": [["getting-started", "Getting started"], ["changelog", "Changelog"]]},
+    {"title": "Connection", "pages": [["steam-relay", "Steam Relay"], ["direct-connection", "Direct connection"], ["hamachi", "Hamachi & VPNs"], ["forwarding", "Port forwarding"]]},
+    {"title": "Help & compatibility", "pages": [["troubleshooting", "Troubleshooting"], ["errors-and-warnings", "Errors & warnings"], ["mods", "Mods & compatibility"], ["forwarding_troubleshoot", "Port forwarding problems"], ["disable_dlc", "Disable DLC"], ["verify_files", "Verify game files"]]}
+  ]
+}

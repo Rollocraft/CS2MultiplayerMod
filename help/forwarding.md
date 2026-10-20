@@ -1,6 +1,7 @@
 ---
 title: Set up port forwarding
-description: "How to open a TCP port on your router so friends can join over the internet."
+seo_title: "Port forwarding setup | CS2 Multiplayer Mod"
+description: "Set up TCP port forwarding for Cities: Skylines II multiplayer. Use automatic UPnP or configure your router and Windows Firewall for direct connections."
 ---
 
 # Port Forwarding

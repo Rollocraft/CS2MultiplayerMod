@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ page.seo_title }}</title>
+  <meta name="description" content="{{ page.description }}">
+  <meta name="author" content="Rollocraft">
+  <meta name="theme-color" content="#f2f2ef">
+  <script src="{{ prefix }}assets/theme.js"></script>
+  <meta name="robots" content="{% if page.slug == '404' %}noindex, follow{% else %}index, follow, max-image-preview:large{% endif %}">
+  <link rel="canonical" href="{{ page.canonical }}">
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="{{ config.name }}">
+  <meta property="og:title" content="{{ page.seo_title }}">
+  <meta property="og:description" content="{{ page.description }}">
+  <meta property="og:url" content="{{ page.canonical }}">
+  <meta property="og:locale" content="en_US">
+  <meta property="og:image" content="{{ config.url }}assets/favicon-512.png">
+  <meta property="og:image:type" content="image/png">
+  <meta property="og:image:width" content="512">
+  <meta property="og:image:height" content="512">
+  <meta property="og:image:alt" content="CS2 Multiplayer Mod logo">
+  <meta name="twitter:card" content="summary">
+  <meta name="twitter:title" content="{{ page.seo_title }}">
+  <meta name="twitter:description" content="{{ page.description }}">
+  <meta name="twitter:image" content="{{ config.url }}assets/favicon-512.png">
+  <meta name="twitter:image:alt" content="CS2 Multiplayer Mod logo">
+  {% if page.structured_data %}<script type="application/ld+json">{{ page.structured_data | tojson }}</script>{% endif %}
+  <link rel="icon" href="{{ prefix }}assets/favicon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="{{ prefix }}assets/favicon-180.png">
+  <link rel="preload" href="{{ prefix }}assets/fonts/Inter-latin.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="stylesheet" href="{{ prefix }}assets/extra.css">
+  <link rel="stylesheet" href="{{ prefix }}assets/mod-table.css">
+  <link rel="stylesheet" href="{{ prefix }}assets/syntax.css">
+  <script src="{{ prefix }}assets/search-index.js" defer></script>
+  <script src="{{ prefix }}assets/site.js" defer></script>
+  <script src="{{ prefix }}assets/search.js" defer></script>
+  <script src="{{ prefix }}assets/stars.js" defer></script>
+  {% for script in page.meta.get('extra_javascript', []) %}<script src="{{ prefix }}{{ script }}" defer></script>{% endfor %}
+</head>
+<body class="{% if page.slug == 'index' %}is-home{% else %}is-guide{% endif %}" data-root="{{ prefix }}">
+  <a class="skip-link" href="#main">Skip to content</a>
+  <header class="site-header">
+    <a class="wordmark" href="{{ prefix }}" aria-label="CS2 Multiplayer Mod home">CS2 <img class="wordmark__logo" src="{{ prefix }}assets/img/Multiplayer_text.webp" alt="Multiplayer" width="2172" height="724"> Mod</a>
+    <nav class="header-nav" aria-label="Main navigation"><a href="{{ prefix }}getting-started/"{% if page.slug == 'getting-started' %} aria-current="page"{% endif %}>Getting started</a><a href="{{ prefix }}changelog/"{% if page.slug == 'changelog' %} aria-current="page"{% endif %}>Changelog</a></nav>
+    <div class="header-actions">
+      <div id="desktop-search">
+      <div class="search" id="docs-search" hidden>
+        <label class="search-field" for="search-input"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 4 4"/></svg><input id="search-input" type="search" placeholder="Search…" autocomplete="off" spellcheck="false" aria-label="Search documentation" aria-controls="search-panel" aria-expanded="false"><kbd class="shortcut-key" aria-hidden="true"><span data-shortcut-modifier>Ctrl</span><span>K</span></kbd></label>
+        <div class="search-panel" id="search-panel" hidden><p id="search-status" role="status" aria-live="polite"></p><div id="search-results"></div></div>
+      </div>
+      </div>
+      <div id="desktop-repository">
+      <a class="github-link" id="github-link" href="{{ config.repository }}" aria-label="GitHub" title="GitHub" data-stars-api="{{ config.repository|replace('https://github.com/', 'https://api.github.com/repos/') }}">{% include 'github-icon.html' %}<span class="github-stars"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="m12 3 2.8 5.7 6.3.9-4.6 4.4 1.1 6.2-5.6-3-5.6 3 1.1-6.2L3 9.6l6.2-.9Z"/></svg><span id="github-star-count" hidden></span></span></a>
+      </div>
+      <button class="icon-button theme-toggle" type="button" data-theme-toggle aria-label="Switch to dark mode" title="Switch to dark mode" hidden><svg class="theme-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M20.5 14A8.6 8.6 0 0 1 10 3.5 8.7 8.7 0 1 0 20.5 14Z"/></svg><svg class="theme-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M2 12h2m16 0h2M5 5l1.5 1.5m11 11L19 19M5 19l1.5-1.5m11-11L19 5"/></svg></button>
+      <button class="icon-button menu-toggle" id="menu-toggle" type="button" aria-label="Open menu" aria-controls="mobile-menu" aria-expanded="false" hidden><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16"/></svg></button>
+    </div>
+  </header>
+  <dialog class="mobile-menu" id="mobile-menu" aria-labelledby="mobile-menu-title">
+    <div class="mobile-menu-heading"><h2 id="mobile-menu-title">Menu</h2><button class="icon-button" id="menu-close" type="button" aria-label="Close menu" autofocus><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="m6 6 12 12M6 18 18 6"/></svg></button></div>
+    <div id="mobile-search"></div>
+    <div id="mobile-navigation"></div>
+    <div id="mobile-repository"></div>
+  </dialog>
+  <div class="docs-layout">
+    <aside class="sidebar" id="desktop-navigation">
+        <nav id="guide-navigation" aria-label="Documentation">
+          {% for group in config.navigation %}<section class="nav-group" aria-labelledby="nav-group-{{ loop.index }}"><h2 id="nav-group-{{ loop.index }}" class="nav-group-title">{{ group.title }}</h2><ul>{% for slug, label in group.pages %}<li><a href="{{ prefix }}{{ page_url(slug) }}"{% if page.slug == slug %} class="active" aria-current="page"{% endif %}>{{ label }}</a></li>{% endfor %}</ul></section>{% endfor %}
+        </nav>
+    </aside>
+    <main id="main" tabindex="-1">
+      <div class="page-content">
+      {% if page.toc and page.slug != 'index' %}<details class="mobile-toc"><summary>On this page</summary><nav aria-label="On this page (mobile)">{% for item in page.toc %}<a href="#{{ item.id }}">{{ item.name }}</a>{% endfor %}</nav></details>{% endif %}
+      <article class="prose" id="article">{{ page.content }}</article>
+      {% if page.slug != 'index' and page.slug != '404' %}
+      <div class="article-meta"><a href="{{ config.repository }}/edit/master/help/{{ page.slug }}.md">Edit this page <span aria-hidden="true">↗</span></a></div>
+      <nav class="page-pagination" aria-label="Previous and next guide">{% if previous %}<a href="{{ prefix }}{{ previous.url }}"><span class="eyebrow">← Previous</span><strong>{{ previous.label }}</strong></a>{% else %}<span></span>{% endif %}{% if following %}<a href="{{ prefix }}{{ following.url }}"><span class="eyebrow">Next →</span><strong>{{ following.label }}</strong></a>{% endif %}</nav>
+      {% endif %}
+      </div>
+      <footer class="site-footer" id="links">
+        <p class="footer-credit">Built by <a href="https://rollocraft.me/">Rollocraft</a> and <a href="{{ config.repository }}/graphs/contributors">contributors</a></p>
+        <nav class="footer-icons" aria-label="Community links">
+          <a href="https://discord.gg/KFZTW2YSJt" aria-label="Discord" title="Discord"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M20.317 4.37a19.791 19.791 0 0 0-4.885-1.515.074.074 0 0 0-.079.037c-.211.375-.445.865-.609 1.25a18.27 18.27 0 0 0-5.487 0 12.64 12.64 0 0 0-.617-1.25.077.077 0 0 0-.079-.037A19.736 19.736 0 0 0 3.677 4.37a.07.07 0 0 0-.032.027C.533 9.046-.32 13.58.099 18.057a.082.082 0 0 0 .031.057 19.9 19.9 0 0 0 5.993 3.03.078.078 0 0 0 .084-.028c.462-.63.874-1.295 1.226-1.994a.076.076 0 0 0-.041-.106 13.107 13.107 0 0 1-1.872-.892.077.077 0 0 1-.008-.128c.126-.094.252-.192.372-.291a.074.074 0 0 1 .077-.01c3.928 1.793 8.18 1.793 12.061 0a.074.074 0 0 1 .078.01c.12.099.246.197.373.291a.077.077 0 0 1-.006.128c-.598.35-1.22.648-1.873.892a.077.077 0 0 0-.041.107c.36.698.771 1.363 1.225 1.993a.076.076 0 0 0 .084.028 19.84 19.84 0 0 0 6.002-3.03.077.077 0 0 0 .032-.054c.5-5.177-.838-9.674-3.549-13.66a.061.061 0 0 0-.031-.03ZM8.02 15.331c-1.183 0-2.157-1.085-2.157-2.419 0-1.333.955-2.418 2.157-2.418 1.212 0 2.176 1.095 2.157 2.418 0 1.334-.955 2.419-2.157 2.419Zm7.975 0c-1.183 0-2.157-1.085-2.157-2.419 0-1.333.955-2.418 2.157-2.418 1.212 0 2.176 1.095 2.157 2.418 0 1.334-.945 2.419-2.157 2.419Z"/></svg></a>
+          <a href="{{ config.repository }}" aria-label="GitHub source code" title="GitHub">{% include 'github-icon.html' %}</a>
+          <a href="#main" aria-label="Back to top" title="Back to top"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 20V4m-7 7 7-7 7 7"/></svg></a>
+        </nav>
+        <p class="footer-legal">Cities: Skylines II is a trademark of Paradox Interactive AB. This project is not affiliated with, endorsed by or sponsored by Colossal Order Oy, Paradox Interactive AB or Iceflake Studios Oy.</p>
+      </footer>
+    </main>
+    {% if page.toc and page.slug != 'index' %}<aside class="page-outline"><nav aria-label="On this page"><p class="eyebrow">On this page</p>{% for item in page.toc %}<a href="#{{ item.id }}">{{ item.name }}</a>{% endfor %}</nav></aside>{% endif %}
+  </div>
+</body>
+</html>

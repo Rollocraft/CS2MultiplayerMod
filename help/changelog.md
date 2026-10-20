@@ -1,6 +1,7 @@
 ---
 title: Changelog
-description: "What changed in each release of the mod: new features, sync work and fixes."
+seo_title: "Changelog and release notes | CS2 Multiplayer Mod"
+description: "Read the Cities: Skylines II Multiplayer Mod release notes, including new features, synchronization changes, connection improvements and bug fixes."
 ---
 
 # Changelog
@@ -174,7 +175,7 @@ Improving performance under these new workloads will remain an important focus g
 * Improved logging throughout the synchronization systems, making issues easier to identify, reproduce and fix.
 * World reload logs now include more context about the affected edit, what was found instead, how long the system waited and what recovery steps were attempted first.
 
-## Contributing
+### Contributing
 
 Contributing to the project has previously been difficult, if not nearly impossible.
 
