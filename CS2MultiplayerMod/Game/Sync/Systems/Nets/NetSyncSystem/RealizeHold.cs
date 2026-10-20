@@ -101,6 +101,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
             var report = new System.Text.StringBuilder();
 
             float bestNodeXZ = float.MaxValue, bestNodeDy = 0f;
+            Entity nearestNode = Entity.Null;
             NetCellIndex.Enumerator nodeCandidates = nodes.Index.Near(anchor.xz, SearchXZ);
             while (nodeCandidates.MoveNext())
             {
@@ -109,6 +110,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                 if (xz >= bestNodeXZ) continue;
                 bestNodeXZ = xz;
                 bestNodeDy = nodes.Data[i].m_Position.y - anchor.y;
+                nearestNode = nodes.Entities[i];
             }
 
             float bestEdgeXZ = float.MaxValue, bestEdgeDy = 0f;
@@ -141,13 +143,25 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
             }
 
             if (bestNodeXZ != float.MaxValue)
+            {
                 report.Append("; nearest junction ").Append(bestNodeXZ.ToString("F1"))
                     .Append(" m away, ").Append(bestNodeDy.ToString("F1")).Append(" m in height");
-
-            report.Append(" (must be within ").Append(NativeEdgeResolveXZ.ToString("F0"))
-                .Append(" m and ").Append(NativeTargetResolveY.ToString("F0"))
-                .Append(" m of height, same prefab, same layers, same owner)");
+                if (EntityManager.Exists(nearestNode))
+                    report.Append("; prefab=").Append(TargetPrefabMatches(nearestNode, intent.TargetPrefabName))
+                        .Append(" layers=").Append(TargetContractMatches(nearestNode, intent))
+                        .Append(" owner=").Append(TargetOwnerMatches(nearestNode, intent));
+            }
             return report.ToString();
+        }
+
+        private static string DescribeNativeTargetLimits(NetEndpointIntent intent)
+        {
+            bool node = intent.Kind == NetEndpointTargetKind.Node ||
+                        intent.Kind == NetEndpointTargetKind.OwnedNode;
+            return "XZ " + (node ? NativeNodeResolveXZ : NativeEdgeResolveXZ) +
+                " m, height " + NativeTargetResolveY + " m; same prefab/layers/owner" +
+                (node ? "; last resort " + RelaxedNodeResolveXZ + " m XZ, " + RelaxedNodeResolveY +
+                        " m height if unique" : "");
         }
 
         private static NativeTargetRetryKey NativeRetryKey(SimulationCommandMessage message,

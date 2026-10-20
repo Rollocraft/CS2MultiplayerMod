@@ -443,14 +443,19 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                             .About(NativeOperationSubject(operationHeader.OperationId,
                                 operationRetryKey.Origin))
                             .Tried("re-resolved the endpoint every frame for " +
-                                   (NativeTargetRetryWindowMs / 1000) + " s across " + windows +
+                                   ((NativeTargetRetryWindowMs + (windows - 1L) *
+                                       (NativeTargetRetryWindowMs / 2)) / 1000) + " s across " + windows +
                                    " window(s), including the relaxed node/edge fallbacks")
                             .Fact("the other player built", operationHeader.PrefabName)
                             .Fact("courses in the operation", work.Count)
                             .Fact("courses already present here", alreadyBuiltCourses)
                             .Fact("endpoint that would not resolve", unresolvedDetail)
                             .Fact("what is actually here",
-                                DescribeLocalAnchorNeighbourhood(failedEndpoint, ref nodes, ref edges))
+                                failedEndpoint.Kind == NetEndpointTargetKind.OwnedNode ||
+                                failedEndpoint.Kind == NetEndpointTargetKind.OwnedEdge
+                                    ? DescribeLocalAnchorNeighbourhood(failedEndpoint, ref ownedNodes, ref ownedEdges)
+                                    : DescribeLocalAnchorNeighbourhood(failedEndpoint, ref nodes, ref edges))
+                            .Fact("matching limits", DescribeNativeTargetLimits(failedEndpoint))
                             .Fact("net operations still queued", _remoteDeferred.Count + _incoming.Count);
 
                         if (SyncInbox.Settle(report) == Diagnostics.ResyncVerdict.Held)
