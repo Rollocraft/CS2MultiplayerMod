@@ -6,6 +6,26 @@ description: "Read the Cities: Skylines II Multiplayer Mod release notes, includ
 
 # Changelog
 
+## Version 0.1.7.2 - Working on
+
+This update is focused on improving the multiplayer experience and adding new features.
+
+### New
+
+* Map Pings: Players can place temporary markers on the map to point out locations to others. Pings appear in the sender's color and can be used to quickly move the camera to that location.
+* Player Camera Navigation: Players can jump to another player's location or follow their camera directly from the player list. Moving the camera manually automatically stops following.
+* Automatic Reconnection: If a player unexpectedly loses connection, the mod automatically attempts to reconnect and restore the session without downloading the entire city again when possible.
+* Smart Resync: Synchronization issues can now be repaired by updating only the affected parts of the city instead of reloading the entire world. A full world sync is still used when necessary.
+* Public Lobbies: Steam hosts can list their city so anyone can find and join it from the new Public Lobbies screen, with Steam Relay or a direct connection. Players from the list always connect through the Steam relay, so no IP address is shared in either direction. Hosts can ask joining players for a short message that appears in the join request.
+
+### Quality of Life
+#### Multiplayer Panel
+* The Multiplayer Hub now shows each player's color, making it easier to identify players.
+* Reorganized the in-game multiplayer panel to make features easier to find and use.
+* Chat messages are now cleared between sessions, and the chat input is reset when leaving a session.
+* Updated the multiplayer panel to better match the game's UI, including the player list and chat window.
+* New Mini Mode for only chat
+
 ## Version 0.1.7.1 - 2026-10-12
 
 This update is mostly about performance in large cities. Hosts and clients both do far less work keeping a big city in sync, the host no longer stutters once a second, and painting trees no longer slows down the other players. It also adds Move It and Node Controller support, makes fires and traffic accidents the same for every player, adds IPv6 and more host controls, and fixes players being disconnected on slower Steam Relay connections.

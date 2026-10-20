@@ -36,6 +36,32 @@ Xbox App, Microsoft Store and Game Pass copies cannot use the relay. Those playe
 ![Steam Relay join screen with the join code field](assets/img/ui-join-relay.webp)
 4. Click Join and wait while the host's city downloads.
 
+## Public lobbies
+
+A Steam host can list their city so anyone can find it, without sharing a code.
+
+**Listing your city:** on the Host screen (or in the in-game multiplayer panel before you start
+hosting), turn on **List Publicly** and give the lobby a name. Listing starts off every time the game starts, so you
+choose it again for each session. **Approve Players** is always on
+for a listed city, so nobody gets in without your OK. Directly below, **Require a Join Message**
+makes players from the list write a short note (up to 160 characters) that you read in the join
+request before you accept or decline.
+
+**Joining a listed city:** open Multiplayer and click **Public Lobbies**.
+Pick a city and click Join. If the host set a password or requires a message, you enter it first.
+
+**Your IP address stays private.** The list stores only the lobby name, player count and
+settings, never an address. Players who join from the list always connect through the Steam
+relay, never directly, so they do not see your IP address, not before and not after you accept
+them. The same goes the other way: you do not see theirs.
+
+**We recommend Steam Relay for public hosting.** Listing also works with a direct connection,
+and players from the list still come in through the relay. But a direct host keeps its port open
+to the internet, and anyone who has your address can reach it there.
+
+If you decline a join request, that player cannot ask again for a few minutes. The join message
+is shown as plain text only, and anything that could disguise it is removed.
+
 ## When the code is unavailable
 
 If the host screen shows "Unavailable - start the game through Steam", one of these is
