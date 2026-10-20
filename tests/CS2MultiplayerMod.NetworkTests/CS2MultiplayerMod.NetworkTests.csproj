@@ -6,7 +6,7 @@
     <Nullable>disable</Nullable>
   </PropertyGroup>
   <ItemGroup>
-    <Compile Include="..\CS2MultiplayerMod\Game\Sync\Infrastructure\Spatial\NetWaterProfilePin.cs"
-             Link="NetWaterProfilePin.cs" />
+    <!-- Core is free of game assemblies, so the real transports run here over loopback. -->
+    <Compile Include="..\..\CS2MultiplayerMod\Core\**\*.cs" LinkBase="Core" />
   </ItemGroup>
 </Project>

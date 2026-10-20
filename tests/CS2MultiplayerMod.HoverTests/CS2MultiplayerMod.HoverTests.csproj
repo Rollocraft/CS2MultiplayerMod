@@ -2,11 +2,12 @@
   <PropertyGroup>
     <TargetFramework>net9.0</TargetFramework>
     <OutputType>Exe</OutputType>
-    <LangVersion>9.0</LangVersion>
+    <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>disable</Nullable>
+    <NoWarn>SYSLIB0014;SYSLIB0054</NoWarn>
   </PropertyGroup>
   <ItemGroup>
-    <!-- Core is free of game assemblies, so the real transports run here over loopback. -->
-    <Compile Include="..\CS2MultiplayerMod\Core\**\*.cs" LinkBase="Core" />
+    <Compile Remove="Runtime/**/*.cs" />
+    <Compile Include="../../CS2MultiplayerMod/Core/**/*.cs" LinkBase="Core" />
   </ItemGroup>
 </Project>
