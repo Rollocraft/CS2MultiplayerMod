@@ -4,7 +4,7 @@
 	<!--Name of the mod to display to players-->
 	<DisplayName Value="CS2 Multiplayer Mod" />
 	<!--Short description of the mod-->
-	<ShortDescription Value="Cities: Skylines 2 Multiplayer mod, build your city with your friendc" />
+	<ShortDescription Value="Cities: Skylines 2 Multiplayer mod, build your city with your friends" />
 	<!--Long description of the mod. Single line or multi line. Supports minimal markdown subset-->
 	<LongDescription>
 Build one city together.
@@ -90,9 +90,9 @@ This project is not affiliated with, endorsed by, or sponsored by Colossal Order
 	<!--Tag, can be set multiple times-->
 	<Tag Value="Code Mod" />
 	<!--Link to the forum post where the mod can be discussed-->
-	<ForumLink Value="" />
+	<ForumLink Value="https://forum.paradoxplaza.com/forum/threads/mod-cs2-multiplayer.1944104/" />
 	<!--Version of the mod-->
-	<ModVersion Value="0.1.7.1" />
+	<ModVersion Value="0.1.7.2" />
 	<!--Recommended version of the base game to use the mod-->
 	<GameVersion Value="1.6.*" />
 	<!--Dependency for the mod, can be set multiple times-->
@@ -101,18 +101,8 @@ This project is not affiliated with, endorsed by, or sponsored by Colossal Order
 	<RequiredDLC Value="" />
 	<!--Change log for new version. Single line or multi line. Supports minimal markdown subset-->
 	<ChangeLog>
-		Version 0.1.7.1
-		Much better performance in large cities: hosts and clients do far less work keeping the city in sync, the host no longer stutters once a second, and painting trees no longer slows down the other players.
-		Steam Relay copes better with slow connections and no longer drops players during world downloads.
-		Move It and Node Controller edits are now synchronized.
-		Fires and traffic accidents now happen the same way for every player.
-		Terraforming now gives the same heights for every player, and roads on freshly terraformed ground no longer turn into a different road.
-		Direct Connection now supports IPv6. Hosting a Direct Connection over the internet now requires a password of at least 8 characters.
-		New host options: Approve Players, Auto-Approve Steam Friends, and who may request a world sync (Allow, Ask Host, Host Only).
-		Milestone popups close by themselves after 10 seconds, so an AFK player can no longer keep the session paused.
-		Save Diagnostics and /diag create one file for bug reports.
-		This update changes the network protocol: all players must update.
-		Full changelog: https://cs2multiplayer.rollocraft.me/changelog/
+		Version 0.1.7.2
+		
 	</ChangeLog>
 	<!--External link, can be set multiple times. supported types are "discord", "github", "youtube", "twitch", "x", "paypal", "patreon", "buymeacoffee", "kofi", "crowdin", "gitlab", "gofundme"-->
 	<ExternalLink Type="discord" Url="https://discord.gg/KFZTW2YSJt" />
