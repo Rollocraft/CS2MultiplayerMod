@@ -253,7 +253,6 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                     (barrierRecovery ? " source=barrier" : string.Empty));
                 ClearLocalNetCapture();
                 _nativeApplyCapturedFrame = _realizeFrame;
-                _atomicMixedApplyCapturedFrame = _realizeFrame;
                 return;
             }
 
@@ -402,7 +401,6 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
             {
                 ClearLocalNetCapture();
                 _nativeApplyCapturedFrame = _realizeFrame;
-                _atomicMixedApplyCapturedFrame = _realizeFrame;
             }
 
             SyncLog.Trace(LogTopic.Nets, "net atomic mixed apply op=" + operationId + " items=" +

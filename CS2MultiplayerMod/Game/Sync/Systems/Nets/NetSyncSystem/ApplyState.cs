@@ -154,11 +154,12 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
         }
         private long _nextLocalNetOperationId = 1;
         private int _nativeApplyCapturedFrame = -1;
-        private int _atomicMixedApplyCapturedFrame = -1;
 
-        /// <summary>This frame's mixed Apply went the atomic path, so final-edge capture stays silent.</summary>
-        public bool LocalAtomicNetApplyCapturedThisFrame =>
-            _atomicMixedApplyCapturedFrame == _realizeFrame;
+        /// <summary>
+        /// This frame's local Apply went out as native intent (plain or atomic); its in-place edge changes
+        /// are output the receiver reproduces, not edits to send.
+        /// </summary>
+        public bool LocalNativeNetApplyCapturedThisFrame => _nativeApplyCapturedFrame == _realizeFrame;
 
         // Originals of a committing placement; their Deleted output is not a second command.
         private readonly Dictionary<Entity, long> _committedNetSideEffects = new Dictionary<Entity, long>();

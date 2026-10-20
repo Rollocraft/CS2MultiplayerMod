@@ -160,7 +160,6 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                 _remoteDeferred.Clear();
                 _deferredSpanPieces.Clear();
                 ClearLocalNetCapture();
-                _atomicMixedApplyCapturedFrame = -1;
                 return;
             }
 
@@ -193,7 +192,6 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
             _remoteDeferred.Clear();
             _deferredSpanPieces.Clear();
             ClearLocalNetCapture();
-            _atomicMixedApplyCapturedFrame = -1;
             _committedNetSideEffects.Clear();
             _atomicMixedOriginals.Clear();
             _atomicMixedOriginalsFrame = -1;

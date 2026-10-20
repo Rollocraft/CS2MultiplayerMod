@@ -106,7 +106,8 @@ This project is not affiliated with, endorsed by, or sponsored by Colossal Order
 	<!--Change log for new version. Single line or multi line. Supports minimal markdown subset-->
 	<ChangeLog>
 		Version 0.1.7.2
-		
+		Public Lobbies: Steam hosts can list their city, and anyone can find and join it from the new Public Lobbies screen. Players from the list always connect through the Steam relay, so no IP address is shared. Hosts can ask joining players for a short message.
+		Redesigned multiplayer panel that matches the game's UI, with player colors, a session activity feed and a chat-only mini mode.
 	</ChangeLog>
 	<!--External link, can be set multiple times. supported types are "discord", "github", "youtube", "twitch", "x", "paypal", "patreon", "buymeacoffee", "kofi", "crowdin", "gitlab", "gofundme"-->
 	<ExternalLink Type="discord" Url="https://discord.gg/KFZTW2YSJt" />

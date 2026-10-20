@@ -178,7 +178,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             BuildSyncSystem build = World.GetExistingSystemManaged<BuildSyncSystem>();
             if ((build != null && build.NativeLifecycleCapturedThisFrame) ||
                 (_netSync != null && (_netSync.DidCommitObjectGraphThisFrame ||
-                                      _netSync.LocalAtomicNetApplyCapturedThisFrame))) return;
+                                      _netSync.LocalNativeNetApplyCapturedThisFrame))) return;
             foreach (Entity edge in _pendingMoveItEdges)
             {
                 if (!_edgeBaseline.TryGetValue(edge, out EdgeBaseline before) || !EntityManager.Exists(edge) ||
@@ -279,9 +279,10 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             BuildSyncSystem buildSync = World.GetExistingSystemManaged<BuildSyncSystem>();
             if ((buildSync != null && buildSync.NativeLifecycleCapturedThisFrame) ||
                 (_netSync != null && (_netSync.DidCommitObjectGraphThisFrame ||
-                                      _netSync.LocalAtomicNetApplyCapturedThisFrame)))
+                                      _netSync.LocalNativeNetApplyCapturedThisFrame)))
             {
-                // Already carried by a native graph or mixed envelope: adopt as baseline.
+                // Already carried by a native graph or this frame's net intent (a course drawn node to node
+                // along an edge commits as its in-place replacement): adopt as baseline.
                 AdoptUpdatedEdges();
                 return;
             }
