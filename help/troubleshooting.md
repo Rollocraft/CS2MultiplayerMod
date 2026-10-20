@@ -1,6 +1,7 @@
 ---
 title: Troubleshooting guide
-description: "Fixes for the problems players hit most often: joining, desyncs, crashes and world reloads."
+seo_title: "Troubleshooting | CS2 Multiplayer Mod"
+description: "Resolve Cities: Skylines II multiplayer connection problems, version and DLC mismatches, unsupported mods, missing menus and synchronization issues."
 ---
 
 # Troubleshooting guide
@@ -148,7 +149,7 @@ Check that you do not have any [launch options](https://cs2.paradoxwikis.com/Lau
 The mod options carry a Host tab and a Join tab that can start or join a session without the
 in-game screens.
 
-![](assets/img/ui-options-general.webp)
+![CS2 Multiplayer Mod settings in the game options](assets/img/ui-options-general.webp)
 
 !!! warning "Those tabs are only a fallback"
 

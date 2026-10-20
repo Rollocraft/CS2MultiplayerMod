@@ -54,14 +54,18 @@ namespace CS2MultiplayerMod.Game.Sync.Players
                 float3 eye = _camera.position;
                 float3 focus = eye;
                 float yaw = 0f;
+                float pitch = 0f;
+                float zoom = 0f;
                 CameraController controller = _camera.gamePlayController;
                 if (controller != null)
                 {
                     focus = controller.pivot;
                     yaw = controller.rotation.y;
+                    pitch = controller.rotation.x;
+                    zoom = controller.zoom;
                 }
 
-                session.SendPlayerState(focus.x, focus.y, focus.z, eye.x, eye.y, eye.z, yaw, CaptureHover());
+                session.SendPlayerState(focus.x, focus.y, focus.z, eye.x, eye.y, eye.z, yaw, CaptureHover(), pitch, zoom);
                 _sent++;
 
                 if (now - _lastLogMs >= 30000)

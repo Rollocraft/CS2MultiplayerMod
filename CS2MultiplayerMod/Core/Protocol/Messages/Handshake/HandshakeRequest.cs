@@ -17,13 +17,16 @@ namespace CS2MultiplayerMod.Core.Protocol.Messages
         public string BuildId;
         /// <summary>Sorted <see cref="ModManifestEntry"/> lines for every other live mod.</summary>
         public string[] ModManifest;
+        /// <summary>The joiner's note for the host's approval prompt; plain text, sanitized on read.</summary>
+        public string JoinMessage;
 
         public HandshakeRequest() { }
 
         public HandshakeRequest(int protocolVersion, string modVersion, string gameVersion,
                                 string playerName, byte[] passwordProof, string[] dlcList = null,
-                                string buildId = null, string[] modManifest = null)
+                                string buildId = null, string[] modManifest = null, string joinMessage = null)
         {
+            JoinMessage = joinMessage ?? string.Empty;
             ProtocolVersion = protocolVersion;
             ModVersion = modVersion;
             GameVersion = gameVersion;
@@ -58,6 +61,7 @@ namespace CS2MultiplayerMod.Core.Protocol.Messages
             writer.WriteInt(modCount);
             for (int i = 0; i < modCount; i++)
                 writer.WriteString(ModManifest[i] ?? string.Empty);
+            writer.WriteString(JoinMessage ?? string.Empty);
         }
 
         public void Read(NetworkReader reader)
@@ -89,6 +93,7 @@ namespace CS2MultiplayerMod.Core.Protocol.Messages
             for (int i = 0; i < modCount; i++)
                 ModManifest[i] = WireGuard.SanitizeText(reader.ReadString(),
                     ProtocolConstants.MaxModManifestEntryLength);
+            JoinMessage = WireGuard.SanitizeDisplayText(reader.ReadString(), ProtocolConstants.MaxJoinMessageLength);
         }
     }
 }

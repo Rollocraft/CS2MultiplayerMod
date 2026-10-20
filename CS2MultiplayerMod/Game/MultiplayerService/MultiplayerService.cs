@@ -18,6 +18,7 @@ namespace CS2MultiplayerMod.Game
     {
         None,
         Connecting,
+        Reconnecting,
         WaitingForMap,
         LoadingMap,
         WaitingForResume,
@@ -340,20 +341,15 @@ namespace CS2MultiplayerMod.Game
 
         // ---- Chat log (in-game hub panel) --------------------------------------
 
-        /// <summary>Bounded - old lines fall off so an all-night session cannot grow the UI payload.</summary>
-        private const int MaxChatEntries = 120;
-
         private readonly object _chatLock = new object();
-        private readonly List<ChatLogEntry> _chatLog = new List<ChatLogEntry>();
-        private int _nextChatId = 1;
-        private string _chatLogJson = "[]";
+        private readonly SessionFeed _sessionFeed = new SessionFeed();
         private string _playerListJson = "[]";
 
         /// <summary>
-        /// The chat feed as JSON for the hub: <c>[{"id":1,"sender":"Name"|null,"text":"...","time":"HH:mm"}, ...]</c>.
-        /// Rebuilt only on append, so the per-frame binding compares one instance.
+        /// Typed player messages and session activity for the hub. Rebuilt only on change;
+        /// activity has its own retention budget and never counts as unread player chat.
         /// </summary>
-        public string ChatLogJson { get { lock (_chatLock) return _chatLogJson; } }
+        public string ChatLogJson => _sessionFeed.Json;
 
         /// <summary>Host participant list, rebuilt on membership change; the local host is never kickable.</summary>
         public string PlayerListJson { get { lock (_chatLock) return _playerListJson; } }
@@ -392,7 +388,9 @@ namespace CS2MultiplayerMod.Game
                 var sb = new System.Text.StringBuilder((peers.Count + 1) * 56 + 2);
                 sb.Append("[{\"id\":").Append(_session.LocalPlayerId).Append(",\"name\":");
                 AppendJsonString(sb, _session.LocalPlayerName);
-                sb.Append(",\"isHost\":true}]");
+                sb.Append(",\"isHost\":true,\"color\":\"")
+                    .Append(Sync.Players.RemotePlayerMarkerSystem.PlayerColorCss(_session.LocalPlayerId))
+                    .Append("\"}]");
 
                 if (peers.Count > 0)
                 {
@@ -403,20 +401,14 @@ namespace CS2MultiplayerMod.Game
                         Peer peer = peers[i];
                         sb.Append(",{\"id\":").Append(peer.PlayerId).Append(",\"name\":");
                         AppendJsonString(sb, peer.Name);
-                        sb.Append(",\"isHost\":false}");
+                        sb.Append(",\"isHost\":false,\"color\":\"")
+                            .Append(Sync.Players.RemotePlayerMarkerSystem.PlayerColorCss(peer.PlayerId))
+                            .Append("\"}");
                     }
                     sb.Append(']');
                 }
                 _playerListJson = sb.ToString();
             }
-        }
-
-        private struct ChatLogEntry
-        {
-            public int Id;
-            public string Sender;
-            public string Text;
-            public string Time;
         }
 
         /// <summary>Mirrors session events into the mod log and records remote player positions.</summary>
@@ -439,10 +431,22 @@ namespace CS2MultiplayerMod.Game
                     (string.IsNullOrEmpty(flightDetail) ? "" : " detail=" + flightDetail));
                 if (status == SessionStatus.Connected &&
                     _service._session.Role == SessionRole.Client &&
-                    _service._phase == ClientWorldPhase.Connecting)
+                    (_service._phase == ClientWorldPhase.Connecting || _service._phase == ClientWorldPhase.Reconnecting))
                 {
                     // Authenticated; the host streams its world to every fresh join.
                     _service.SetPhase(ClientWorldPhase.WaitingForMap);
+                }
+                else if (status == SessionStatus.Reconnecting)
+                {
+                    _service._lastFault = null;
+                    _service.ResetWorldSyncState(restoreSpeed: false);
+                    _service._worldSyncBarrierActive = true;
+                    _service._worldSyncInputLocked = true;
+                    _service.SetPhase(ClientWorldPhase.Reconnecting);
+                    _service._remotePlayers.Clear();
+                    Sync.Infrastructure.SyncInbox.DrainAll();
+                    Diagnostics.ResyncArbiter.Reset();
+                    _service.MaintainWorldSyncBarrier();
                 }
                 else if (status == SessionStatus.Offline || status == SessionStatus.Faulted)
                 {
@@ -459,38 +463,28 @@ namespace CS2MultiplayerMod.Game
                     _service.ResetWorldSyncState(restoreSpeed: true);
                     _service.SetPhase(ClientWorldPhase.None);
                     _service._remotePlayers.Clear();
+                    _service._mapPings.Clear();
+                    _service.StopFollowingPlayer();
                 }
 
-                // Hub lifecycle lines stay English (shared diagnostics). Stop() always fires Offline, so
-                // "closed" is posted only when a session actually ran.
+                // The status view owns connection guidance and transfer progress. The activity
+                // history gets one concise lifecycle event, rather than paragraphs in player chat.
                 if (status == SessionStatus.Connected && _service._session.Role == SessionRole.Host)
                 {
-                    _service.AppendChatEntry(null, "Session started - players can join now.");
-                    if (!_service._session.UsesRelay)
-                    {
-                        if (_service._session.PublicExposure)
-                            _service.AppendChatEntry(null, "Friends from another network can only join if you forward TCP port " +
-                                _service._session.Port + " to this PC on your router and allow it through your firewall.");
-                        else
-                            _service.AppendChatEntry(null, "LAN-only is enabled - only players on your local network can join. " +
-                                "If they cannot connect, allow TCP port " + _service._session.Port + " through your firewall.");
-                    }
+                    _service.AppendSessionActivity(L10n.T("CS2MP.Activity.Hosting"));
                 }
                 else if (status == SessionStatus.Connected && _service._session.Role == SessionRole.Client)
                 {
-                    // Without this the swap reads as "my buildings disappeared".
-                    _service.AppendChatEntry(null, "Connected - downloading the host's city. It will replace the world " +
-                        "you have open in a moment, so anything you built outside this shared session (for example just " +
-                        "before joining) is not part of it. Your own saves are untouched.");
+                    _service.AppendSessionActivity(L10n.T("CS2MP.Activity.Connected"));
                 }
                 else if (status == SessionStatus.Offline && _lastStatus == SessionStatus.Connected)
                 {
                     // A clean end: clear stale fault text from an earlier failed attempt.
                     _service._lastFault = null;
-                    _service.AppendChatEntry(null, "Session closed.");
+                    _service.AppendSessionActivity(L10n.T("CS2MP.Activity.Closed"));
                 }
                 else if (status == SessionStatus.Faulted)
-                    _service.AppendChatEntry(null, string.IsNullOrEmpty(detail) ? "Connection failed." : detail);
+                    _service.AppendSessionActivity(FriendlyFaultSummary(detail), error: true);
                 _service.RefreshPlayerListJson();
                 _lastStatus = status;
             }
@@ -512,10 +506,14 @@ namespace CS2MultiplayerMod.Game
             public override void OnChatReceived(string sender, string text)
             {
                 _log.Detail(LogTopic.Session, (sender ?? "system") + ": " + text);
-                _service.AppendChatEntry(sender, text);
+                if (sender == null)
+                    _service.AppendSessionActivity(text);
+                else
+                    _service.AppendPlayerChat(sender, text);
             }
             public override void OnCommandReceived(SimulationCommandMessage command) =>
                 _service.RecordAppliedCommand(command);
+            public override void OnMapPingReceived(MapPingMessage ping) => _service.RecordMapPing(ping);
             public override void OnPlayerStateReceived(PlayerStateMessage state) => _service.RecordRemotePlayer(state);
             public override void OnBlobReceived(string channel, long transferId, byte[] data)
             {
@@ -545,6 +543,9 @@ namespace CS2MultiplayerMod.Game
         public float EyeY;
         public float EyeZ;
         public float Yaw;
+        public float Pitch;
+        public float Zoom;
+        public string Name;
         public Core.Protocol.Messages.PlayerHoverShape[] Hover =
             System.Array.Empty<Core.Protocol.Messages.PlayerHoverShape>();
         public long LastUpdateMs;

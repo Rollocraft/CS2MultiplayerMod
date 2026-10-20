@@ -178,7 +178,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             }
 
             _buildSync.TrackRemoteBuilding(Entity.Null, prefab, position, rotation,
-                roadConnectionExpected: true, source: "growable");
+                roadConnectionExpected: command.RoadConnected, source: "growable",
+                authoritativeRoadExpectation: true);
             _buildSync.RealizeSimulationBuilding(prefab, position, rotation, SeedFor(command),
                 (command.Flags & GrowableLifecycleCommand.FlagUnderConstruction) != 0);
             NoteSelfRealized(prefab, position, command, now);

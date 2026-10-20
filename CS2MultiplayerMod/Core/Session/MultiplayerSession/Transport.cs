@@ -17,7 +17,7 @@ namespace CS2MultiplayerMod.Core.Session
                     OnTransportConnected(evt.Connection, nowUnixMs);
                     break;
                 case TransportEventType.Disconnected:
-                    OnTransportDisconnected(evt.Connection, evt.Detail);
+                    OnTransportDisconnected(evt.Connection, evt.Detail, evt.ProtocolViolation);
                     break;
                 case TransportEventType.Data:
                     OnTransportData(evt.Connection, evt.Payload, nowUnixMs);
@@ -46,6 +46,16 @@ namespace CS2MultiplayerMod.Core.Session
                         "): banned by the host for this session.");
                     SendTo(connection, HandshakeResponse.Reject(
                         "The host banned this connection for the current hosting session."));
+                    _transport.DisconnectAfterFlush(connection);
+                    return;
+                }
+
+                if (DeclinedRecently(address, nowUnixMs))
+                {
+                    _log.Detail(LogTopic.Transport, "Refused " + connection + " (" + address +
+                        "): the host declined this joiner a few minutes ago.");
+                    SendTo(connection, HandshakeResponse.Reject(
+                        "The host declined your request to join. Try again in a few minutes."));
                     _transport.DisconnectAfterFlush(connection);
                     return;
                 }
@@ -89,9 +99,9 @@ namespace CS2MultiplayerMod.Core.Session
             }
         }
 
-        private void OnTransportDisconnected(ConnectionId connection, string reason)
+        private void OnTransportDisconnected(ConnectionId connection, string reason, bool transportProtocolViolation)
         {
-            _puntedConnections.Remove(connection.Value);
+            bool protocolViolation = _puntedConnections.Remove(connection.Value) || transportProtocolViolation;
             bool closedHere = _localCloseReasons.TryGetValue(connection.Value, out string localReason);
             if (closedHere)
             {
@@ -126,6 +136,7 @@ namespace CS2MultiplayerMod.Core.Session
             {
                 // Losing the host while Connecting is a failed join (fault). While Connected the host ended a live
                 // session: a normal end, so no error log, no Faulted, no OnError.
+                if (!protocolViolation && TryScheduleReconnect(reason)) return;
                 if (Status == SessionStatus.Connecting)
                     Fault("Could not join: " + reason);
                 else if (closedHere)
@@ -198,7 +209,7 @@ namespace CS2MultiplayerMod.Core.Session
                 string violation = peer.RateLimiter.Account(
                     nowUnixMs, payloadBytes, commandId,
                     message.Type == MessageType.Chat,
-                    message.Type == MessageType.ResyncRequest);
+                    message.Type == MessageType.ResyncRequest && ((ResyncRequestMessage)message).StateRequestId == 0);
                 if (violation != null)
                 {
                     Punt(connection, peer, "rate limit exceeded: " + violation, message.Type.ToString());
@@ -235,6 +246,9 @@ namespace CS2MultiplayerMod.Core.Session
                 case MessageType.StateEdit:
                     HandleStateEdit(peer, (StateEditMessage)message);
                     break;
+                case MessageType.MapPing:
+                    HandleMapPing(connection, peer, (MapPingMessage)message, nowUnixMs);
+                    break;
                 case MessageType.PlayerState:
                     HandlePlayerState(connection, peer, (PlayerStateMessage)message);
                     break;
@@ -244,7 +258,12 @@ namespace CS2MultiplayerMod.Core.Session
                 case MessageType.ResyncRequest:
                     HandleResyncRequest(connection, peer, nowUnixMs,
                         ((ResyncRequestMessage)message).Reason,
-                        ((ResyncRequestMessage)message).IsAutomatic);
+                        ((ResyncRequestMessage)message).IsAutomatic,
+                        ((ResyncRequestMessage)message).StateRequestId,
+                        ((ResyncRequestMessage)message).Digests);
+                    break;
+                case MessageType.StateRepair:
+                    HandleStateRepair(connection, peer, (StateRepairMessage)message);
                     break;
                 case MessageType.WorldSyncControl:
                     HandleWorldSyncControl(connection, peer, (WorldSyncControlMessage)message);

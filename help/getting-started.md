@@ -1,6 +1,7 @@
 ---
 title: Getting started
-description: "Requirements, installing through Paradox Mods, hosting your first session and joining a friend."
+seo_title: "Installation and setup | CS2 Multiplayer Mod"
+description: "Set up the Cities: Skylines II Multiplayer Mod with Paradox Mods. Check game versions, DLC and playsets, then host a session or join a friend."
 ---
 
 # Getting started

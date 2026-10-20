@@ -61,10 +61,16 @@ namespace CS2MultiplayerMod.Core.Networking.Steam
             }
         }
 
-        public ITransport CreateHost(IModLogger log) => SteamRelayTransport.StartHost(log, VirtualPort);
+        private SteamServerDirectory _directory;
 
-        public ITransport CreateClient(IModLogger log, string joinCode) =>
-            SteamRelayTransport.Connect(log, joinCode, VirtualPort);
+        public ITransport CreateHost(IModLogger log, bool relayOnly) =>
+            SteamRelayTransport.StartHost(log, VirtualPort, relayOnly);
+
+        public ITransport CreateClient(IModLogger log, string joinCode, bool relayOnly) =>
+            SteamRelayTransport.Connect(log, joinCode, VirtualPort, relayOnly);
+
+        public IServerDirectory OpenDirectory(IModLogger log) =>
+            _directory ?? (_directory = new SteamServerDirectory(log));
 
         internal static ulong LocalSteamId()
         {

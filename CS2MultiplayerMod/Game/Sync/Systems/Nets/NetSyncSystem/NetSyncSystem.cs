@@ -84,8 +84,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
         private const Layer UtilityConnectLayers = Layer.PowerlineLow | Layer.PowerlineHigh |
             Layer.WaterPipe | Layer.SewagePipe | Layer.StormwaterPipe | Layer.ResourceLine;
 
-        // Surface disagreement above which the absolute height is preserved (see EndElevation). Below it a
-        // ground net keeps elevation 0 so terrain grades to it; must clear that grading.
+        // Height disagreement a pinned endpoint on existing geometry may show; must clear terrain grading.
         private const float SurfaceAgreementTol = 2.0f;
 
         // Endpoint classifications used when building a realize batch (see ClassifyEndpoint).
@@ -103,10 +102,6 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
 
         // Utility endpoints matched only after projecting onto the local surface.
         private int _rzLocalSurfaceMatches;
-
-        // Endpoints corrected for surface disagreement: terrain or water differs under the geometry.
-        private int _rzSurfaceCorrections;
-        private float _rzSurfaceCorrectionMax;
 
         // What the current realize cycle worked on, for the slow-cycle report only.
         private int _rzCycleCourses;

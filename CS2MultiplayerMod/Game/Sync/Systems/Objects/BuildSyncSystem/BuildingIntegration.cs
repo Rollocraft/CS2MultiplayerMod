@@ -35,6 +35,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             public quaternion Rotation;
             public bool RootResolved;
             public bool RoadConnectionExpected;
+            public bool AuthoritativeRoadExpectation;
             public Entity ExpectedRoad;
             public bool ExpectsElectricityConsumer;
             public bool ExpectsWaterConsumer;
@@ -44,6 +45,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             public bool RefreshQueued;
             public bool AwaitingObservation;
             public int Attempts;
+            public readonly ResyncRetry Recovery = new ResyncRetry();
         }
 
         private struct BuildingIntegrationState
@@ -81,14 +83,15 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         /// sampled the graph while it settled.
         /// </summary>
         public void TrackRemoteBuilding(Entity building, Entity prefab, float3 position,
-            quaternion rotation, bool roadConnectionExpected, string source)
+            quaternion rotation, bool roadConnectionExpected, string source,
+            bool authoritativeRoadExpectation = false)
         {
             if (prefab == Entity.Null || !EntityManager.Exists(prefab) ||
                 !EntityManager.HasComponent<BuildingData>(prefab)) return;
             Entity expectedRoad = LiveRoadReference(building);
             roadConnectionExpected = PrefabRequiresRoad(prefab) &&
-                                     (roadConnectionExpected ||
-                                      expectedRoad != Entity.Null);
+                                     (roadConnectionExpected || (!authoritativeRoadExpectation &&
+                                      expectedRoad != Entity.Null));
             GetExpectedUtilityConsumers(prefab, out bool expectsElectricityConsumer,
                 out bool expectsWaterConsumer);
 
@@ -117,16 +120,21 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 }
                 if (replacedTarget)
                 {
+                    existing.Recovery.Resolve(Mod.Service != null ? Mod.Service.NowMs : 0,
+                        "the building was superseded by a newer operation");
                     existing.RoadConnectionExpected = roadConnectionExpected;
                     existing.ExpectedRoad = expectedRoad;
                     existing.Attempts = 0;
                 }
                 else
                 {
-                    existing.RoadConnectionExpected |= roadConnectionExpected;
+                    existing.RoadConnectionExpected = authoritativeRoadExpectation
+                        ? roadConnectionExpected
+                        : existing.RoadConnectionExpected || roadConnectionExpected;
                     if (expectedRoad != Entity.Null) existing.ExpectedRoad = expectedRoad;
                 }
                 existing.Source = source ?? "remote";
+                existing.AuthoritativeRoadExpectation = authoritativeRoadExpectation;
                 existing.Deadline = _buildingIntegrationClock.NowMs +
                                     BuildingIntegrationWindowMs;
                 existing.NextAttempt = 0;
@@ -160,6 +168,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 Rotation = rotation,
                 RootResolved = building != Entity.Null,
                 RoadConnectionExpected = roadConnectionExpected,
+                AuthoritativeRoadExpectation = authoritativeRoadExpectation,
                 ExpectedRoad = expectedRoad,
                 ExpectsElectricityConsumer = expectsElectricityConsumer,
                 ExpectsWaterConsumer = expectsWaterConsumer,
@@ -235,6 +244,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 PendingBuildingIntegration pending = _buildingIntegrations[i];
                 if (pending.RootResolved && IntegrationRootWasSuperseded(pending))
                 {
+                    pending.Recovery.Resolve(wallNow, "the building was removed or replaced");
                     _buildingIntegrations.RemoveAt(i--);
                     continue;
                 }
@@ -265,6 +275,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     PendingBuildingIntegration pending = _buildingIntegrations[i];
                     if (pending.RootResolved && IntegrationRootWasSuperseded(pending))
                     {
+                        pending.Recovery.Resolve(wallNow, "the building was removed or replaced");
                         _buildingIntegrations.RemoveAt(i);
                         continue;
                     }
@@ -279,18 +290,19 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     {
                         if (activeNow >= pending.Deadline)
                         {
-                            RequestBuildingIntegrationRepair(pending,
+                            if (!RequestBuildingIntegrationRepair(pending,
                                 new BuildingIntegrationState
                                 {
                                     Detail = "the committed building root was not found",
-                                });
-                            _buildingIntegrations.RemoveAt(i);
+                                }))
+                                _buildingIntegrations.RemoveAt(i);
                         }
                         continue;
                     }
 
                     Entity observedRoad = LiveRoadReference(pending.Building);
-                    if (observedRoad != Entity.Null && PrefabRequiresRoad(pending.Prefab))
+                    if (!pending.AuthoritativeRoadExpectation && observedRoad != Entity.Null &&
+                        PrefabRequiresRoad(pending.Prefab))
                     {
                         pending.RoadConnectionExpected = true;
                         pending.ExpectedRoad = observedRoad;
@@ -302,6 +314,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     BuildingIntegrationState state = InspectBuildingIntegration(pending);
                     if (state.Ready)
                     {
+                        pending.Recovery.Resolve(wallNow, "native building integration completed");
                         SyncLog.Trace(LogTopic.Buildings,
                             "BuildSync: native building integration settled source=" +
                             pending.Source + " prefab=" + IntegrationPrefabName(pending.Prefab) +
@@ -312,9 +325,11 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
                     if (activeNow >= pending.Deadline)
                     {
-                        RequestBuildingIntegrationRepair(pending, state);
-                        _buildingIntegrations.RemoveAt(i);
-                        continue;
+                        if (!RequestBuildingIntegrationRepair(pending, state))
+                        {
+                            _buildingIntegrations.RemoveAt(i);
+                            continue;
+                        }
                     }
 
                     if (activeNow < pending.NextAttempt) continue;
@@ -490,7 +505,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             state.OwnedGraph = IsOwnedIntegrationGraphReady(pending.Building,
                 pending.Prefab, out state.Detail);
             bool roadConnectionExpected = pending.RoadConnectionExpected;
-            if (roadConnectionExpected && pending.ExpectedRoad != Entity.Null &&
+            if (roadConnectionExpected && !pending.AuthoritativeRoadExpectation &&
+                pending.ExpectedRoad != Entity.Null &&
                 (!EntityManager.Exists(pending.ExpectedRoad) ||
                  EntityManager.HasComponent<Deleted>(pending.ExpectedRoad)))
                 roadConnectionExpected = false;
@@ -765,8 +781,10 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             }
         }
 
-        private bool HasReciprocalRoadConnection(Entity building)
+        /// <summary>Also the host's road-connected claim, so both sides mean the same link.</summary>
+        internal bool HasReciprocalRoadConnection(Entity building)
         {
+            if (!EntityManager.HasComponent<Building>(building)) return false;
             Building data = EntityManager.GetComponentData<Building>(building);
             Entity road = data.m_RoadEdge;
             if (road == Entity.Null || !EntityManager.Exists(road) ||
@@ -778,6 +796,33 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             for (int i = 0; i < connected.Length; i++)
                 if (connected[i].m_Building == building) return true;
             return false;
+        }
+
+        /// <summary>
+        /// The host's latest road claim for a check already pending; never extends or starts one, since a
+        /// state sample is not evidence that this city diverged.
+        /// </summary>
+        internal void UpdateRemoteBuildingRoadExpectation(Entity building, bool connected)
+        {
+            if (_buildingIntegrations.Count == 0 || building == Entity.Null ||
+                !EntityManager.Exists(building) ||
+                !EntityManager.HasComponent<PrefabRef>(building) ||
+                !EntityManager.HasComponent<global::Game.Objects.Transform>(building)) return;
+            Entity prefab = EntityManager.GetComponentData<PrefabRef>(building).m_Prefab;
+            float3 position = EntityManager
+                .GetComponentData<global::Game.Objects.Transform>(building).m_Position;
+            for (int i = 0; i < _buildingIntegrations.Count; i++)
+            {
+                PendingBuildingIntegration pending = _buildingIntegrations[i];
+                if (!pending.AuthoritativeRoadExpectation) continue;
+                // A spawn's check may not have found its root yet.
+                if (pending.Building != building &&
+                    (pending.RootResolved || pending.Prefab != prefab ||
+                     math.distancesq(pending.Position, position) >
+                     BuildingIntegrationMatchDistanceSq)) continue;
+                pending.RoadConnectionExpected = connected && PrefabRequiresRoad(pending.Prefab);
+                return;
+            }
         }
 
         private bool HasExpectedUtilityConsumers(PendingBuildingIntegration pending)
@@ -830,14 +875,15 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             return (data.m_Flags & global::Game.Prefabs.BuildingFlags.RequireRoad) != 0;
         }
 
-        private void RequestBuildingIntegrationRepair(PendingBuildingIntegration pending,
+        private bool RequestBuildingIntegrationRepair(PendingBuildingIntegration pending,
             BuildingIntegrationState state)
         {
+            if (pending.Recovery.HasReport) return pending.Recovery.IsHeld;
             string prefabName = IntegrationPrefabName(pending.Prefab);
             SyncLog.Warn(LogTopic.Buildings, "BuildSync: remote " + pending.Source +
                 " building '" + prefabName + "' did not complete native integration (" +
                 (state.Detail ?? "unknown graph state") + "); requesting world repair.");
-            SyncInbox.RequestResync(CS2MultiplayerMod.Game.Diagnostics.ResyncReport
+            return pending.Recovery.KeepTrying(ResyncReport
                 .Create("remote building failed native integration", "object",
                     CS2MultiplayerMod.Game.Diagnostics.ResyncEvidence.MissingTarget)
                 .About("native graph of '" + prefabName + "' at (" +
@@ -847,6 +893,10 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 .Fact("found the building root", state.Root)
                 .Fact("has a reciprocal owned graph", state.OwnedGraph)
                 .Fact("joined its expected road", state.Road)
+                .Fact("road expected from host state", pending.AuthoritativeRoadExpectation &&
+                    pending.RoadConnectionExpected)
+                .Fact("local live road reference", LiveRoadReference(pending.Building) != Entity.Null)
+                .Fact("native refresh attempts", pending.Attempts)
                 .Fact("has its utility consumers", state.Utilities));
         }
 

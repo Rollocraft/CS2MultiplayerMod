@@ -159,11 +159,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                 SyncInbox.Clear(_incoming);
                 _remoteDeferred.Clear();
                 _deferredSpanPieces.Clear();
-                _cachedLocalCourses.Clear();
-                _cachedLocalMixedOperation.Clear();
-                _cachedFallbackOriginalEdges.Clear();
-                _cachedMixedRejection = null;
-                _atomicMixedApplyCapturedFrame = -1;
+                ClearLocalNetCapture();
                 return;
             }
 
@@ -195,11 +191,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
             SyncInbox.Clear(_incoming);
             _remoteDeferred.Clear();
             _deferredSpanPieces.Clear();
-            _cachedLocalCourses.Clear();
-            _cachedLocalMixedOperation.Clear();
-            _cachedFallbackOriginalEdges.Clear();
-            _cachedMixedRejection = null;
-            _atomicMixedApplyCapturedFrame = -1;
+            ClearLocalNetCapture();
             _committedNetSideEffects.Clear();
             _atomicMixedOriginals.Clear();
             _atomicMixedOriginalsFrame = -1;

@@ -443,14 +443,19 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                             .About(NativeOperationSubject(operationHeader.OperationId,
                                 operationRetryKey.Origin))
                             .Tried("re-resolved the endpoint every frame for " +
-                                   (NativeTargetRetryWindowMs / 1000) + " s across " + windows +
+                                   ((NativeTargetRetryWindowMs + (windows - 1L) *
+                                       (NativeTargetRetryWindowMs / 2)) / 1000) + " s across " + windows +
                                    " window(s), including the relaxed node/edge fallbacks")
                             .Fact("the other player built", operationHeader.PrefabName)
                             .Fact("courses in the operation", work.Count)
                             .Fact("courses already present here", alreadyBuiltCourses)
                             .Fact("endpoint that would not resolve", unresolvedDetail)
                             .Fact("what is actually here",
-                                DescribeLocalAnchorNeighbourhood(failedEndpoint, ref nodes, ref edges))
+                                failedEndpoint.Kind == NetEndpointTargetKind.OwnedNode ||
+                                failedEndpoint.Kind == NetEndpointTargetKind.OwnedEdge
+                                    ? DescribeLocalAnchorNeighbourhood(failedEndpoint, ref ownedNodes, ref ownedEdges)
+                                    : DescribeLocalAnchorNeighbourhood(failedEndpoint, ref nodes, ref edges))
+                            .Fact("matching limits", DescribeNativeTargetLimits(failedEndpoint))
                             .Fact("net operations still queued", _remoteDeferred.Count + _incoming.Count);
 
                         if (SyncInbox.Settle(report) == Diagnostics.ResyncVerdict.Held)
@@ -669,14 +674,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                             out endT, out endKind, out endShared);
                     }
 
-                    // Fixed-height ends keep the captured elevation; free-height ends follow the local surface.
-                    float2 startElevation = EndElevation(prefab, startSnap, startKind, a,
-                        sourceStartElevation, command.Start.Flags,
-                        ref heightData, ref waterData, out float startCorrection);
-                    float2 endElevation = EndElevation(prefab, endSnap, endKind, d,
-                        sourceEndElevation, command.End.Flags,
-                        ref heightData, ref waterData, out float endCorrection);
-                    TallySurfaceCorrection(startCorrection, endCorrection);
+                    float2 startElevation = EndElevation(startSnap, startKind, sourceStartElevation);
+                    float2 endElevation = EndElevation(endSnap, endKind, sourceEndElevation);
 
                     // A native operation stays together; geometry-only fallback commands stay serialized.
                     bool defer = !nativeOperation &&
@@ -897,8 +896,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                 .Tried("nothing - the operation was refused before it could be built")
                 .Fact("what was refused", what)
                 .Fact("net prefab", command.PrefabName)
-                .Fact("measurement", measurement)
-                .Fact("straight profile pinned", command.PinProfile));
+                .Fact("measurement", measurement));
         }
     }
 }

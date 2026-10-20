@@ -24,6 +24,7 @@ namespace CS2MultiplayerMod.Core.Session
             _outgoingBlobActive = false;
             _outgoingBlobTotal = 0;
             _outgoingBlobSent = 0;
+            ClearStateRepairs();
             _worldSyncEpoch = epoch;
             _worldSyncSuspended = true;
             int barrierOnly = 0;
@@ -145,6 +146,7 @@ namespace CS2MultiplayerMod.Core.Session
                     _blobTransferIds.Clear();
                     ClearBlobProgress();
                     _worldSyncEpoch = control.Epoch;
+                    ClearStateRepairs();
                     _worldSyncSuspended = true;
                 }
                 // A duplicate Begin is delivered: the game layer re-sends Quiesced, healing a lost ack.

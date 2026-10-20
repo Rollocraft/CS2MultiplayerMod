@@ -88,7 +88,10 @@ namespace CS2MultiplayerMod.Game.Sync.Commands
 
         public int RandomSeed;
         public uint CreationFlags;
-        /// <summary>Commit a straight deck between the source's endpoint heights instead of local terrain/water.</summary>
+        /// <summary>
+        /// Geometry-only: commit a straight deck between the source's endpoint heights instead of local
+        /// terrain/water. Native courses never set it; they carry the tool's own unsplit input.
+        /// </summary>
         public bool PinProfile;
         public float CourseElevationLeft, CourseElevationRight;
         public int FixedIndex;

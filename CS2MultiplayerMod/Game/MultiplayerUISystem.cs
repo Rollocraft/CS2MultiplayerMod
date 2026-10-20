@@ -156,6 +156,23 @@ namespace CS2MultiplayerMod.Game
             AddBinding(new TriggerBinding(Group, "multiplayerScreenExited",
                 () => _multiplayerMenuActiveBinding.Update(false)));
 
+            AddBinding(new TriggerBinding(Group, "pingMap", () => Mod.Service?.PingMapFocus()));
+            AddUpdateBinding(new GetterValueBinding<bool>(Group, "canPingMap",
+                () => Mod.Service != null && Mod.Service.CanPingMap));
+            AddBinding(new TriggerBinding<int>(Group, "goToPlayer", id => Mod.Service?.GoToPlayer(id)));
+            AddBinding(new TriggerBinding<int>(Group, "followPlayer", id => Mod.Service?.FollowPlayer(id)));
+            AddBinding(new TriggerBinding(Group, "stopFollowing", () => Mod.Service?.StopFollowingPlayer()));
+            AddUpdateBinding(new GetterValueBinding<int>(Group, "followingPlayerId",
+                () => Mod.Service?.FollowingPlayerId ?? 0));
+            AddUpdateBinding(new GetterValueBinding<string>(Group, "cameraPlayers",
+                () => Mod.Service?.CameraPlayersJson ?? "[]"));
+            AddBinding(new TriggerBinding(Group, "smartSync", () =>
+                World.GetOrCreateSystemManaged<Sync.Systems.CityStateSyncSystem>().RequestSmartSync()));
+            AddUpdateBinding(new GetterValueBinding<bool>(Group, "canSmartSync",
+                () => Mod.Service != null && Mod.Service.GameplaySyncReady && Mod.Service.Session.CanRequestStateRepair));
+            AddUpdateBinding(new GetterValueBinding<bool>(Group, "smartSyncPending",
+                () => Mod.Service != null && Mod.Service.Session.StateRepairPending));
+
             // -- In-game hub panel (right-menu button above the Chirper) ----------
 
             // Serialized once per append; the binding pushes only on a new instance.
@@ -163,6 +180,12 @@ namespace CS2MultiplayerMod.Game
                 () => Mod.Service != null ? Mod.Service.ChatLogJson : "[]"));
             AddUpdateBinding(new GetterValueBinding<bool>(Group, "isHost",
                 () => Mod.Service != null && Mod.Service.Session.Role == SessionRole.Host));
+            AddUpdateBinding(new GetterValueBinding<int>(Group, "localPlayerId",
+                () => Mod.Service?.Session.LocalPlayerId ?? 0));
+            AddUpdateBinding(new GetterValueBinding<string>(Group, "localPlayerColor",
+                () => Mod.Service != null
+                    ? Sync.Players.RemotePlayerMarkerSystem.PlayerColorCss(Mod.Service.Session.LocalPlayerId)
+                    : "#9bb3c2"));
             AddUpdateBinding(new GetterValueBinding<int>(Group, "playerCount",
                 () => Mod.Service != null ? Mod.Service.PlayerCount : 0));
             AddUpdateBinding(new GetterValueBinding<string>(Group, "playerList",
@@ -213,6 +236,30 @@ namespace CS2MultiplayerMod.Game
                 () => Mod.Setting == null || Mod.Setting.RequireJoinApproval));
             AddUpdateBinding(new GetterValueBinding<bool>(Group, "autoApproveSteamFriends",
                 () => Mod.Setting != null && Mod.Setting.AutoApproveSteamFriends));
+            AddUpdateBinding(new GetterValueBinding<bool>(Group, "listPublicly",
+                () => Mod.Setting != null && Mod.Setting.ListPublicly));
+            AddUpdateBinding(new GetterValueBinding<string>(Group, "serverName",
+                () => Mod.Setting != null ? Mod.Setting.ServerName : ""));
+            AddUpdateBinding(new GetterValueBinding<bool>(Group, "askJoinMessage",
+                () => Mod.Setting != null && Mod.Setting.AskJoinMessage));
+            // The running session's listing: false while the relay listener could not start.
+            AddUpdateBinding(new GetterValueBinding<bool>(Group, "sessionListed",
+                () => Mod.Service != null && Mod.Service.Session.ListedJoinsOpen));
+            AddBinding(new ValueBinding<int>(Group, "maxJoinMessageLength",
+                Core.Protocol.ProtocolConstants.MaxJoinMessageLength));
+            AddBinding(new ValueBinding<int>(Group, "maxServerNameLength", ServerListing.MaxNameLength));
+
+            // Public server browser (main-menu Join).
+            AddUpdateBinding(new GetterValueBinding<string>(Group, "serverList",
+                () => Mod.Service != null ? Mod.Service.ServerListJson : "[]"));
+            AddUpdateBinding(new GetterValueBinding<string>(Group, "serverListState",
+                () => Mod.Service != null ? Mod.Service.ServerListState : "idle"));
+            AddUpdateBinding(new GetterValueBinding<string>(Group, "serverListError",
+                () => Mod.Service != null ? Mod.Service.ServerListError : ""));
+            AddBinding(new TriggerBinding(Group, "searchServers", () => Mod.Service?.SearchServers()));
+            AddBinding(new TriggerBinding<string, string, string>(Group, "joinListedServer",
+                (id, password, message) => Mod.Service?.JoinListedServer(id, password, message)));
+
             AddUpdateBinding(new GetterValueBinding<string>(Group, "resyncPolicy",
                 () => Mod.Setting != null ? Mod.Setting.ResyncPolicy : Setting.ResyncAllow));
             // The session's answer once running; neither a client's setting nor a mid-session edit changes it.
@@ -260,6 +307,24 @@ namespace CS2MultiplayerMod.Game
                 {
                     if (Mod.Setting != null && !Mod.Setting.IsInSession())
                         Mod.Setting.AutoApproveSteamFriends = value;
+                }));
+            AddBinding(new TriggerBinding<bool>(Group, "setListPublicly",
+                value =>
+                {
+                    if (Mod.Setting != null && !Mod.Setting.IsInSession())
+                        Mod.Setting.ListPublicly = value;
+                }));
+            AddBinding(new TriggerBinding<string>(Group, "setServerName",
+                value =>
+                {
+                    if (Mod.Setting != null && !Mod.Setting.IsInSession())
+                        Mod.Setting.ServerName = value ?? "";
+                }));
+            AddBinding(new TriggerBinding<bool>(Group, "setAskJoinMessage",
+                value =>
+                {
+                    if (Mod.Setting != null && !Mod.Setting.IsInSession())
+                        Mod.Setting.AskJoinMessage = value;
                 }));
             AddBinding(new TriggerBinding<string>(Group, "setResyncPolicy",
                 value =>

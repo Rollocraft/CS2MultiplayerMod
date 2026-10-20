@@ -26,6 +26,9 @@ namespace CS2MultiplayerMod.Core.Session
         /// <summary>A join awaiting approval is auto-declined after this.</summary>
         private const int JoinApprovalTimeoutMs = 120000;
 
+        /// <summary>A declined joiner is refused this long, so a public listing cannot be spammed with requests.</summary>
+        private const int DeclinedJoinCooldownMs = 5 * 60 * 1000;
+
         /// <summary>The host's player id on every machine; host-authored commands carry it as their origin.</summary>
         public const int HostPlayerId = 1;
 
@@ -55,6 +58,8 @@ namespace CS2MultiplayerMod.Core.Session
         private readonly HashSet<int> _administrativeRemovals = new HashSet<int>();
         // Keyed by NetAddress.BanKey, so an IPv6 player cannot step around a ban within their own /64.
         private readonly HashSet<string> _hostBannedAddresses = new HashSet<string>();
+        // BanKey -> when a declined joiner may ask again.
+        private readonly Dictionary<string, long> _declinedJoins = new Dictionary<string, long>();
         // Already told to go: frames queued behind a flood are not dispatched or logged.
         private readonly HashSet<int> _puntedConnections = new HashSet<int>();
         // Why this machine closed a connection; the transport's text is the same for every local close.
@@ -108,6 +113,9 @@ namespace CS2MultiplayerMod.Core.Session
 
         /// <summary>How the active session reaches its peers (Direct before the first session).</summary>
         public TransportMode Transport => _config != null ? _config.Transport : TransportMode.Direct;
+
+        /// <summary>Host only: joins from the public server list can reach this session (it has a relay listener).</summary>
+        public bool ListedJoinsOpen { get; private set; }
 
         /// <summary>True when the active session runs over a relay rather than a direct socket.</summary>
         public bool UsesRelay => _config != null && _config.Transport == TransportMode.SteamRelay;
@@ -191,6 +199,7 @@ namespace CS2MultiplayerMod.Core.Session
         /// </summary>
         public void Update(long nowUnixMs)
         {
+            PumpReconnect();
             if (_transport == null) return;
 
             _eventBuffer.Clear();
@@ -201,6 +210,7 @@ namespace CS2MultiplayerMod.Core.Session
             long monotonicNow = MonotonicClock.NowMs;
             for (int i = 0; i < _eventBuffer.Count; i++)
             {
+                if (_transport == null) break;
                 TransportEvent evt = _eventBuffer[i];
                 long waited = monotonicNow - evt.ReceivedAtMs;
                 HandleEvent(evt, waited > 0 ? nowUnixMs - waited : nowUnixMs);
@@ -208,6 +218,7 @@ namespace CS2MultiplayerMod.Core.Session
 
             if (Status == SessionStatus.Connected)
             {
+                PumpStateRepairs(nowUnixMs);
                 PumpHeartbeats(nowUnixMs);
                 ReportCommandOverruns(nowUnixMs);
                 ReapTimedOutPeers(nowUnixMs);

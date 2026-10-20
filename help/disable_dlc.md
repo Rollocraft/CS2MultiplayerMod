@@ -1,6 +1,7 @@
 ---
 title: Disable DLC
-description: "Turn DLC off on Steam and on Xbox, Microsoft Store or Game Pass so every player has the same content enabled."
+seo_title: "Disable DLC for multiplayer | CS2 Multiplayer Mod"
+description: "Disable Cities: Skylines II DLC on Steam, Xbox App, Microsoft Store or Game Pass so all multiplayer participants use matching gameplay content."
 ---
 
 # Disabling DLC
@@ -34,5 +35,3 @@ The CS1 Treasure Hunt DLC cannot be disabled, so the mod no longer compares it â
 each other whether or not you own Cities: Skylines 1.
 
 ---
-
-[Back to troubleshooting.](troubleshooting.md)

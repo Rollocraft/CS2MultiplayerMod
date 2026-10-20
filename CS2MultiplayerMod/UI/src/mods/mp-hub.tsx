@@ -1,6 +1,6 @@
 import { GROUP, parseArray, tryModule, useT } from "mods/ui-helpers";
 import { bindValue, trigger, useValue } from "cs2/api";
-import { AutoNavigationScope, BackConsumer, InputActionBarrier, NavigationDirection } from "cs2/input";
+import { AutoNavigationScope, InputActionBarrier, NavigationDirection } from "cs2/input";
 import { Button, Portal, Tooltip } from "cs2/ui";
 import {
     CONNECTION_DIRECT,
@@ -8,6 +8,7 @@ import {
     CONNECTION_RELAY,
     ConnectionSegmented,
     JoinCodeDisplay,
+    LIST_PUBLICLY_HINT,
     publicPasswordMinLength$,
     publicPasswordMissing,
     usePublicPasswordHint,
@@ -23,18 +24,23 @@ import {
     useRef,
     useState,
 } from "react";
-import { useBackKey } from "mods/back-action";
 import { DisclaimerModal, disclaimerAccepted$ } from "mods/disclaimer";
 import { FormField, FormFieldProps } from "mods/form-field";
 import { HELP_PAGE, OpenHelpButton } from "mods/help-link";
+import { InfoTip } from "mods/info-tip";
+import { CollapsibleSection } from "mods/collapsible-section";
 import { OtherModsBanner } from "mods/mods-banner";
 import { TransferProgress } from "mods/transfer-progress";
 import { VersionWarningBanner } from "mods/version-banner";
+import { MULTIPLAYER_HEADER_HEIGHT, MULTIPLAYER_PANEL_CORNERS } from "mods/multiplayer-theme";
+import { ChatEntry, groupChatMessages } from "mods/chat-grouping";
+import hubClasses from "./mp-hub.module.scss";
 
 // Keys from the mod's locales/<lang>.properties.
 const LOC = {
     multiplayer: "CS2MP.UI.Multiplayer",
-    sessionSettings: "CS2MP.UI.SessionSettings",
+    sessionControls: "CS2MP.UI.SessionControls",
+    sessionActivity: "CS2MP.UI.SessionActivity",
     back: "CS2MP.UI.Back",
     chatPlaceholder: "CS2MP.UI.ChatPlaceholder",
     send: "CS2MP.UI.Send",
@@ -43,24 +49,7 @@ const LOC = {
     lanOnly: "CS2MP.UI.LanOnly",
     ...CONNECTION_LOC,
     maxPlayers: "CS2MP.UI.MaxPlayers",
-    syncWorld: "CS2MP.UI.SyncWorld",
-    saveCopy: "CS2MP.UI.SaveCopy",
-    saveCopyTitle: "CS2MP.UI.SaveCopyTitle",
-    saveCopyBody: "CS2MP.UI.SaveCopyBody",
-    worldName: "CS2MP.UI.WorldName",
-    saveToPC: "CS2MP.UI.SaveToPC",
-    savingCopy: "CS2MP.UI.SavingCopy",
-    saveCopySuccess: "CS2MP.UI.SaveCopySuccess",
-    saveCopyExists: "CS2MP.UI.SaveCopyExists",
-    saveCopyInvalid: "CS2MP.UI.SaveCopyInvalid",
-    saveCopyUnavailable: "CS2MP.UI.SaveCopyUnavailable",
-    saveCopyFailed: "CS2MP.UI.SaveCopyFailed",
-    multiplayerWorld: "CS2MP.UI.MultiplayerWorld",
-    suggestedCopyName: "CS2MP.UI.SuggestedCopyName",
-    cancel: "CS2MP.UI.Cancel",
     close: "CS2MP.UI.Close",
-    sendingWorld: "CS2MP.UI.SendingWorld",
-    lockedInSession: "CS2MP.UI.LockedInSession",
     players: "CS2MP.UI.Players",
     host: "CS2MP.UI.Host",
     you: "CS2MP.UI.You",
@@ -73,6 +62,12 @@ const LOC = {
     tryThis: "CS2MP.UI.TryThis",
     requireApproval: "CS2MP.UI.RequireApproval",
     autoApproveSteamFriends: "CS2MP.UI.AutoApproveSteamFriends",
+    settings: "CS2MP.UI.Settings",
+    publicListing: "CS2MP.UI.PublicListing",
+    listPublicly: "CS2MP.UI.ListPublicly",
+    listPubliclyHint: "CS2MP.UI.ListPubliclyHint",
+    serverName: "CS2MP.UI.ServerName",
+    askJoinMessage: "CS2MP.UI.AskJoinMessage",
     simulationSync: "CS2MP.UI.SimulationSync",
     ...RESYNC_LOC,
     joinRequestTitle: "CS2MP.UI.JoinRequestTitle",
@@ -91,6 +86,7 @@ const LOC = {
 // All vanilla glyphs verified to exist in Cities2_Data\Content\Game\UI\Media\Glyphs.
 const ICON_MULTIPLAYER = "Media/Glyphs/Passenger.svg";
 const ICON_GEAR = "Media/Glyphs/Gear.svg";
+const ICON_BACK = "Media/Glyphs/ArrowLeft.svg";
 const ICON_CLOSE = "Media/Glyphs/Close.svg";
 const ICON_CHECK = "Media/Glyphs/Checkmark.svg";
 
@@ -99,8 +95,8 @@ const ICON_CHECK = "Media/Glyphs/Checkmark.svg";
 const chatLog$ = bindValue<string>(GROUP, "chatLog", "[]");
 const inSession$ = bindValue<boolean>(GROUP, "inSession", false);
 const isHost$ = bindValue<boolean>(GROUP, "isHost", false);
+const localPlayerId$ = bindValue<number>(GROUP, "localPlayerId", 0);
 const canHost$ = bindValue<boolean>(GROUP, "canHost", false);
-const playerCount$ = bindValue<number>(GROUP, "playerCount", 0);
 const statusKind$ = bindValue<string>(GROUP, "statusKind", "offline");
 const statusTitle$ = bindValue<string>(GROUP, "statusTitle", "Offline");
 const statusDetail$ = bindValue<string>(GROUP, "statusDetail", "");
@@ -121,22 +117,23 @@ const maxPlayers$ = bindValue<string>(GROUP, "maxPlayers", "8");
 const lanOnly$ = bindValue<boolean>(GROUP, "lanOnly", false);
 const requireApproval$ = bindValue<boolean>(GROUP, "requireApproval", true);
 const autoApproveSteamFriends$ = bindValue<boolean>(GROUP, "autoApproveSteamFriends", false);
+const listPublicly$ = bindValue<boolean>(GROUP, "listPublicly", false);
+const serverName$ = bindValue<string>(GROUP, "serverName", "");
+const askJoinMessage$ = bindValue<boolean>(GROUP, "askJoinMessage", false);
+const sessionListed$ = bindValue<boolean>(GROUP, "sessionListed", false);
+const maxServerNameLength$ = bindValue<number>(GROUP, "maxServerNameLength", 48);
 const simulationSync$ = bindValue<boolean>(GROUP, "simulationSync", true);
 const resyncPolicy$ = bindValue<string>(GROUP, "resyncPolicy", "allow");
+const canPingMap$ = bindValue<boolean>(GROUP, "canPingMap", false);
+const cameraPlayers$ = bindValue<string>(GROUP, "cameraPlayers", "[]");
+const followingPlayerId$ = bindValue<number>(GROUP, "followingPlayerId", 0);
 const playerList$ = bindValue<string>(GROUP, "playerList", "[]");
 const pendingJoins$ = bindValue<string>(GROUP, "pendingJoins", "[]");
 const pendingResyncs$ = bindValue<string>(GROUP, "pendingResyncs", "[]");
-const canSaveClientWorld$ = bindValue<boolean>(GROUP, "canSaveClientWorld", false);
-const clientWorldSaveStatus$ = bindValue<string>(GROUP, "clientWorldSaveStatus", "idle");
-const clientWorldSaveName$ = bindValue<string>(GROUP, "clientWorldSaveName", "");
-const cityName$ = bindValue<string>("toolbarBottom", "cityName", "");
 
-interface ChatEntry {
-    id: number;
-    sender: string | null; // null = system/event line ("X joined.")
-    text: string;
-    time: string;
-}
+type HubView = "chat" | "session";
+
+const MAX_CHAT_LENGTH = 500;
 
 interface PlayerEntry {
     id: number;
@@ -147,6 +144,8 @@ interface PlayerEntry {
 interface PendingJoin {
     id: number;
     name: string;
+    // Sanitized C#-side, empty unless the host asked for one; shown as plain text only.
+    message: string;
 }
 
 interface PendingResync {
@@ -164,16 +163,10 @@ const tryClasses = (path: string): Record<string, string> | null =>
     tryModule(path, "classes");
 const rmButton = tryClasses("game-ui/game/components/right-menu/right-menu-button.module.scss");
 const rmMenu = tryClasses("game-ui/game/components/right-menu/right-menu.module.scss");
-
-// Status-kind accents shared with the join dialog's indicator (used for the dot).
-const kindColors: Record<string, string> = {
-    offline: "#8fa0b3",
-    disabled: "#8fa0b3",
-    connecting: "#72c8f0",
-    syncing: "#72c8f0",
-    connected: "#8ee08c",
-    error: "#ff8a7a",
-};
+const dialogButton = tryClasses("game-ui/common/input/button/themes/dialog-button.module.scss");
+// The info panels' text button: the game's in-game shape, hover, press and selected states.
+const sectionButton = tryClasses(
+    "game-ui/game/components/selected-info-panel/shared-components/primary-button/section-primary-button.module.scss");
 
 // Once the user drags/resizes, geometry switches to measured px (see PanelGeometry).
 const styles: Record<string, CSSProperties> = {
@@ -193,16 +186,6 @@ const styles: Record<string, CSSProperties> = {
         width: "24rem",
         height: "24rem",
     },
-    statusDot: {
-        position: "absolute",
-        right: "1rem",
-        top: "1rem",
-        width: "9rem",
-        height: "9rem",
-        borderRadius: "50%",
-        border: "1rem solid rgba(0, 0, 0, 0.5)",
-        pointerEvents: "none",
-    },
     unreadBadge: {
         position: "absolute",
         left: "-3rem",
@@ -220,53 +203,18 @@ const styles: Record<string, CSSProperties> = {
         justifyContent: "center",
         pointerEvents: "none",
     },
-    toastAnchor: {
-        position: "absolute",
-        right: "100%",
-        marginRight: "12rem",
-        top: "50%",
-        transform: "translateY(-50%)",
-        width: "320rem",
-        display: "flex",
-        flexDirection: "column",
-        alignItems: "flex-end",
-        pointerEvents: "none",
-    },
-    toast: {
-        maxWidth: "320rem",
-        backgroundColor: "rgba(24, 33, 51, 0.95)",
-        borderLeft: "3rem solid #72c8f0",
-        borderRadius: "3rem",
-        padding: "6rem 10rem",
-        marginTop: "4rem",
-        boxShadow: "0 4rem 12rem rgba(0, 0, 0, 0.4)",
-        fontSize: "13rem",
-        color: "#ffffff",
-    },
-    toastSender: {
-        color: "#9dc1de",
-        textTransform: "uppercase",
-        fontSize: "11rem",
-        marginRight: "6rem",
-    },
-    toastSystem: {
-        color: "rgba(255, 255, 255, 0.75)",
-        fontStyle: "italic",
-    },
     panel: {
         position: "fixed",
         right: "64rem",
-        // Centred by a negative margin, not translateY: a transform moves the panel
-        // without moving its layout box, and the drag code reads that box - starting
-        // a drag then dropped the panel half its own height down the screen.
-        top: "50%",
-        marginTop: "-330rem",
+        bottom: "80rem",
         width: "460rem",
         // Definite height: everything inside anchors to the panel's edges, so this
         // is the one number that decides how much room the chat gets.
         height: "660rem",
-        backgroundColor: "rgba(24, 33, 51, 0.97)",
-        borderRadius: "4rem",
+        maxHeight: "calc(100vh - 100rem)",
+        maxWidth: "calc(100vw - 80rem)",
+        backgroundColor: "#223141",
+        ...MULTIPLAYER_PANEL_CORNERS,
         boxShadow: "0 16rem 48rem rgba(0, 0, 0, 0.45)",
         zIndex: 900,
         pointerEvents: "auto",
@@ -274,40 +222,44 @@ const styles: Record<string, CSSProperties> = {
         // resizes below the natural content height, the inner areas scroll instead.
         overflow: "hidden",
     },
-    // Fixed height, matching styles.body's top inset: 12rem padding + a 32rem icon
-    // button + 12rem padding + the 1rem rule.
     header: {
-        height: "57rem",
+        height: MULTIPLAYER_HEADER_HEIGHT,
         boxSizing: "border-box",
         display: "flex",
         alignItems: "center",
-        padding: "12rem 14rem",
-        borderBottom: "1rem solid rgba(157, 193, 222, 0.2)",
+        padding: "6rem 10rem",
+        backgroundColor: "#141b22",
         flexShrink: 0,
+        cursor: "move",
+        userSelect: "none",
     },
     headerTitle: {
         flex: 1,
         fontSize: "16rem",
-        color: "#ffffff",
+        color: "#4ac0f0",
         textTransform: "uppercase",
+        textAlign: "center",
+        pointerEvents: "none",
     },
+    headerLeading: { width: "68rem", display: "flex", alignItems: "center" },
+    headerActions: { display: "flex", alignItems: "center" },
     headerButton: {
-        width: "32rem",
-        height: "32rem",
-        marginLeft: "6rem",
+        width: "24rem",
+        height: "24rem",
+        marginLeft: "10rem",
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
-        borderRadius: "50%",
-        transition: "background-color 120ms ease, opacity 120ms ease",
     },
+    sizeIcon: { position: "relative", width: "18rem", height: "18rem", pointerEvents: "none" },
+    sizeIconCorner: { position: "absolute", width: "6rem", height: "6rem", boxSizing: "border-box" },
     // Anchored, not distributed: a column flex child does not reliably take the
     // panel's leftover height in the game's UI runtime, which left the action
     // buttons floating with dead space under them. Both insets are definite, so
     // this box is exactly the panel minus its header (see PanelBody).
     body: {
         position: "absolute",
-        top: "57rem",
+        top: MULTIPLAYER_HEADER_HEIGHT,
         left: 0,
         right: 0,
         bottom: 0,
@@ -342,71 +294,107 @@ const styles: Record<string, CSSProperties> = {
         height: "100%",
         overflowY: "auto",
     },
-    playerCountRow: {
-        marginBottom: "6rem",
-        flexShrink: 0,
-        fontSize: "13rem",
-        color: "#9dc1de",
-        textTransform: "uppercase",
-    },
     // Fills the whole middle block, which is what is left of the panel once the
     // player list and the buttons have taken their own height.
     chatList: {
         height: "100%",
         boxSizing: "border-box",
         overflowY: "auto",
-        backgroundColor: "rgba(0, 0, 0, 0.3)",
-        border: "1rem solid rgba(157, 193, 222, 0.2)",
-        borderRadius: "3rem",
-        padding: "8rem 10rem",
+        backgroundColor: "rgba(0, 0, 0, 0.16)",
+        ...MULTIPLAYER_PANEL_CORNERS,
+        padding: "14rem",
     },
     chatEmpty: {
         fontSize: "13rem",
-        color: "rgba(255, 255, 255, 0.45)",
-        fontStyle: "italic",
+        color: "#9bb3c2",
         textAlign: "center",
-        marginTop: "12rem",
+        padding: "24rem 12rem",
+        lineHeight: "1.5",
     },
     chatLine: {
-        fontSize: "14rem",
-        color: "#ffffff",
-        marginBottom: "4rem",
+        marginBottom: "12rem",
+        display: "flex",
+        flexDirection: "column",
+        alignItems: "flex-start",
         wordBreak: "break-word",
+    },
+    chatMeta: {
+        display: "flex",
+        alignItems: "center",
+        marginBottom: "5rem",
+        padding: "0 3rem",
+        maxWidth: "100%",
+    },
+    chatBubble: {
+        maxWidth: "100%",
+        boxSizing: "border-box",
+        padding: "9rem 12rem",
+        backgroundColor: "#2e4356",
+        borderRadius: "10rem",
+        color: "#f0fbff",
+        fontSize: "14rem",
+        lineHeight: "1.4",
+        whiteSpace: "pre-wrap",
+        wordBreak: "break-word",
+        marginBottom: "4rem",
+    },
+    chatBubbleLocal: {
+        backgroundColor: "#224f65",
     },
     chatTime: {
-        color: "rgba(255, 255, 255, 0.4)",
+        color: "#9bb3c2",
         fontSize: "11rem",
-        marginRight: "6rem",
+        marginLeft: "8rem",
     },
     chatSender: {
-        color: "#9dc1de",
+        color: "#99d3e9",
+        fontSize: "12rem",
+        fontWeight: "bold",
+        overflow: "hidden",
+        textOverflow: "ellipsis",
+        whiteSpace: "nowrap",
     },
     systemLine: {
-        fontSize: "12.5rem",
-        color: "#72c8f0",
-        fontStyle: "italic",
-        margin: "3rem 0 5rem 0",
-        textAlign: "center",
+        display: "flex",
+        alignItems: "flex-start",
+        fontSize: "13rem",
+        lineHeight: "1.4",
+        color: "#c5d5df",
+        padding: "8rem 0",
         wordBreak: "break-word",
     },
+    activityTime: {
+        width: "44rem",
+        flexShrink: 0,
+        marginRight: "14rem",
+        color: "#9bb3c2",
+        fontSize: "12rem",
+        whiteSpace: "nowrap",
+    },
+    activityText: { flex: 1, minWidth: 0 },
     inputRow: {
         display: "flex",
         alignItems: "center",
-        marginBottom: "10rem",
+        width: "100%",
         flexShrink: 0,
     },
     chatInput: {
         flex: 1,
+        width: "100%",
+        minWidth: 0,
+        boxSizing: "border-box",
+        height: "38rem",
         fontSize: "14rem",
         color: "#ffffff",
         backgroundColor: "rgba(0, 0, 0, 0.35)",
         border: "1rem solid rgba(157, 193, 222, 0.35)",
         borderRadius: "3rem",
-        padding: "6rem 10rem",
+        padding: "8rem 10rem",
     },
     sendButton: {
         marginLeft: "8rem",
-        padding: "6rem 14rem",
+        height: "38rem",
+        minWidth: "72rem",
     },
     footer: {
         display: "flex",
@@ -416,6 +404,40 @@ const styles: Record<string, CSSProperties> = {
     footerButton: {
         marginLeft: "10rem",
         padding: "7rem 16rem",
+    },
+    actionButton: {
+        minHeight: "34rem",
+        padding: "7rem 12rem",
+        fontSize: "13rem",
+        fontFamily: "var(--fontFamily)",
+        fontWeight: "normal",
+        fontStyle: "normal",
+        letterSpacing: "normal",
+        lineHeight: "1.2",
+        textAlign: "center",
+        textTransform: "none",
+    },
+    sessionFooter: {
+        display: "flex",
+        marginTop: "10rem",
+    },
+    sessionFooterButton: { flex: "2 1 0", minWidth: 0 },
+    sessionSecondaryButton: { flex: "1 1 0", minWidth: 0, marginLeft: "8rem" },
+    sessionActionButton: { width: "100%", minHeight: "40rem" },
+    sectionContent: { padding: "4rem 12rem 8rem" },
+    toolHint: { color: "#9bb3c2", fontSize: "12rem", lineHeight: "1.4", marginBottom: "6rem" },
+    composer: { position: "relative", display: "flex", flex: 1, minWidth: 0 },
+    composerRemaining: {
+        position: "absolute",
+        top: 0,
+        bottom: 0,
+        right: "10rem",
+        display: "flex",
+        alignItems: "center",
+        color: "#ffcf87",
+        fontSize: "11rem",
+        whiteSpace: "nowrap",
+        pointerEvents: "none",
     },
     hint: {
         fontSize: "12.5rem",
@@ -432,7 +454,7 @@ const styles: Record<string, CSSProperties> = {
         color: "#ffd7d1",
         backgroundColor: "rgba(205, 82, 70, 0.18)",
         borderLeft: "3rem solid #ff8a7a",
-        borderRadius: "3rem",
+        ...MULTIPLAYER_PANEL_CORNERS,
         padding: "9rem 10rem",
         margin: "4rem 0 10rem 0",
         wordBreak: "break-word",
@@ -458,22 +480,21 @@ const styles: Record<string, CSSProperties> = {
         padding: "4rem 10rem",
         fontSize: "11.5rem",
     },
-    lockedNote: {
-        fontSize: "12rem",
-        color: "rgba(255, 200, 130, 0.8)",
-        marginBottom: "10rem",
-    },
     row: {
         display: "flex",
         alignItems: "center",
         marginBottom: "10rem",
     },
+    // One label column: text wraps inside it, so every control starts on the same line.
     label: {
         width: "150rem",
+        paddingRight: "10rem",
         fontSize: "13.5rem",
         color: "#9dc1de",
         textTransform: "uppercase",
         flexShrink: 0,
+        display: "flex",
+        alignItems: "center",
     },
     input: {
         flex: 1,
@@ -528,33 +549,41 @@ const styles: Record<string, CSSProperties> = {
         fontSize: "12rem",
         lineHeight: "1.3",
     },
-    playerSection: {
+    outlinedSection: {
+        position: "relative",
         flexShrink: 0,
+        marginTop: "8rem",
         marginBottom: "10rem",
+        paddingTop: "8rem",
+        border: "1rem solid rgba(153, 211, 233, 0.3)",
+        ...MULTIPLAYER_PANEL_CORNERS,
     },
-    sectionHeader: {
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "space-between",
-        marginBottom: "5rem",
-        color: "#9dc1de",
-        fontSize: "12.5rem",
-        textTransform: "uppercase",
+    sectionLegend: {
+        position: "absolute",
+        top: "-9rem",
+        left: "50%",
+        transform: "translateX(-50%)",
+        padding: "0 12rem",
+        backgroundColor: "#223141",
+        color: "#4ac0f0",
+        fontSize: "13rem",
+        lineHeight: "18rem",
+        whiteSpace: "nowrap",
     },
     playerList: {
-        backgroundColor: "rgba(0, 0, 0, 0.3)",
-        border: "1rem solid rgba(157, 193, 222, 0.2)",
-        borderRadius: "3rem",
-        maxHeight: "145rem",
+        ...MULTIPLAYER_PANEL_CORNERS,
+        maxHeight: "160rem",
         overflowY: "auto",
     },
     playerRow: {
-        minHeight: "36rem",
-        padding: "4rem 7rem",
+        padding: "12rem",
         display: "flex",
-        alignItems: "center",
+        flexDirection: "column",
         borderBottom: "1rem solid rgba(157, 193, 222, 0.14)",
     },
+    playerIdentity: { display: "flex", alignItems: "center", width: "100%" },
+    playerActions: { display: "flex", flexWrap: "wrap", marginTop: "8rem", width: "100%" },
+    playerAction: { marginRight: "6rem", marginTop: "4rem", fontSize: "12rem" },
     playerName: {
         flexGrow: 1,
         minWidth: 0,
@@ -566,28 +595,12 @@ const styles: Record<string, CSSProperties> = {
     },
     playerBadge: {
         marginLeft: "6rem",
-        color: "rgba(255, 255, 255, 0.62)",
+        color: "#99d3e9",
+        backgroundColor: "rgba(74, 192, 240, 0.1)",
+        borderRadius: "4rem",
+        padding: "3rem 6rem",
         fontSize: "10.5rem",
         textTransform: "uppercase",
-    },
-    kickButton: {
-        marginLeft: "7rem",
-        padding: "3rem 8rem",
-        minWidth: "52rem",
-        fontSize: "11.5rem",
-    },
-    banButton: {
-        marginLeft: "5rem",
-        padding: "3rem 8rem",
-        minWidth: "52rem",
-        fontSize: "11.5rem",
-        color: "#ff9a8e",
-    },
-    confirmKickButton: {
-        marginLeft: "5rem",
-        padding: "3rem 7rem",
-        fontSize: "11.5rem",
-        color: "#ff9a8e",
     },
     // Join-request prompt: floats at the top of the screen so the host notices it
     // without being locked out of the game (only the cards capture input).
@@ -608,7 +621,7 @@ const styles: Record<string, CSSProperties> = {
         backgroundColor: "rgba(24, 33, 51, 0.98)",
         border: "1rem solid rgba(157, 193, 222, 0.3)",
         borderLeft: "4rem solid #72c8f0",
-        borderRadius: "4rem",
+        ...MULTIPLAYER_PANEL_CORNERS,
         padding: "16rem 18rem",
         marginBottom: "10rem",
         boxShadow: "0 12rem 36rem rgba(0, 0, 0, 0.5)",
@@ -627,6 +640,20 @@ const styles: Record<string, CSSProperties> = {
         marginBottom: "14rem",
         wordBreak: "break-word",
     },
+    joinCardMessage: {
+        fontSize: "14rem",
+        lineHeight: "1.35",
+        fontStyle: "italic",
+        color: "#dbe9f5",
+        backgroundColor: "rgba(0, 0, 0, 0.25)",
+        borderLeft: "2rem solid rgba(157, 193, 222, 0.5)",
+        padding: "8rem 10rem",
+        marginTop: "-6rem",
+        marginBottom: "14rem",
+        maxHeight: "100rem",
+        overflow: "hidden",
+        wordBreak: "break-word",
+    },
     joinCardButtons: {
         display: "flex",
         justifyContent: "flex-end",
@@ -634,76 +661,6 @@ const styles: Record<string, CSSProperties> = {
     joinCardButton: {
         marginLeft: "10rem",
         padding: "7rem 18rem",
-    },
-    saveDialogOverlay: {
-        position: "fixed",
-        top: 0,
-        left: 0,
-        right: 0,
-        bottom: 0,
-        zIndex: 10003,
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        backgroundColor: "rgba(0, 0, 0, 0.62)",
-        pointerEvents: "auto",
-    },
-    saveDialog: {
-        width: "500rem",
-        maxWidth: "90%",
-        backgroundColor: "rgba(24, 33, 51, 0.98)",
-        border: "1rem solid rgba(157, 193, 222, 0.3)",
-        borderRadius: "4rem",
-        padding: "22rem 24rem",
-        boxShadow: "0 16rem 48rem rgba(0, 0, 0, 0.5)",
-        pointerEvents: "auto",
-    },
-    saveDialogTitle: {
-        color: "#ffffff",
-        fontSize: "23rem",
-        textTransform: "uppercase",
-        marginBottom: "10rem",
-    },
-    saveDialogBody: {
-        color: "rgba(255, 255, 255, 0.78)",
-        fontSize: "14rem",
-        lineHeight: "1.4",
-        marginBottom: "18rem",
-    },
-    saveDialogLabel: {
-        color: "#9dc1de",
-        fontSize: "12rem",
-        textTransform: "uppercase",
-        marginBottom: "6rem",
-    },
-    saveDialogInput: {
-        width: "100%",
-        boxSizing: "border-box",
-        color: "#ffffff",
-        backgroundColor: "rgba(0, 0, 0, 0.36)",
-        border: "1rem solid rgba(157, 193, 222, 0.4)",
-        borderRadius: "3rem",
-        fontSize: "16rem",
-        padding: "9rem 11rem",
-        marginBottom: "12rem",
-    },
-    saveDialogStatus: {
-        minHeight: "20rem",
-        color: "#ffd7d1",
-        fontSize: "13rem",
-        lineHeight: "1.35",
-        marginBottom: "12rem",
-    },
-    saveDialogSuccess: {
-        color: "#8ee08c",
-    },
-    saveDialogButtons: {
-        display: "flex",
-        justifyContent: "flex-end",
-    },
-    saveDialogButton: {
-        marginLeft: "10rem",
-        padding: "8rem 18rem",
     },
 };
 
@@ -784,39 +741,64 @@ const HubField = (props: FormFieldProps) => (
     />
 );
 
-const HubToggle = ({ label, value, disabled, onChange }: {
-    label: string;
+const HubCheckBox = ({ value, disabled, onChange }: {
     value: boolean;
     disabled?: boolean;
     onChange: (value: boolean) => void;
 }) => (
-    <div style={styles.row}>
-        <div style={styles.label}>{label}</div>
-        <div
-            style={disabled ? { ...styles.toggleBox, ...styles.inputDisabled } : styles.toggleBox}
-            onClick={() => {
-                if (!disabled) onChange(!value);
-            }}>
-            {value ? <img src={ICON_CHECK} style={styles.toggleCheck} /> : null}
-        </div>
+    <div
+        className={[hubClasses.toggle, disabled ? hubClasses.disabled : hubClasses.enabled].join(" ")}
+        style={disabled ? { ...styles.toggleBox, ...styles.inputDisabled } : styles.toggleBox}
+        onClick={() => {
+            if (!disabled) onChange(!value);
+        }}>
+        {value ? <img src={ICON_CHECK} style={styles.toggleCheck} /> : null}
     </div>
 );
 
-const HeaderIconButton = ({ src, tooltip, selected, onSelect }: {
-    src: string;
+const HubToggle = ({ label, value, disabled, info, onChange }: {
+    label: string;
+    value: boolean;
+    disabled?: boolean;
+    info?: string;
+    onChange: (value: boolean) => void;
+}) => (
+    <div style={styles.row}>
+        <div style={styles.label}>
+            <span>{label}</span>
+            {info ? <InfoTip text={info} /> : null}
+        </div>
+        <HubCheckBox value={value} disabled={disabled} onChange={onChange} />
+    </div>
+);
+
+const PanelSizeIcon = ({ minimized }: { minimized: boolean }) => (
+    <span aria-hidden="true" style={styles.sizeIcon}>
+        <span style={{
+            ...styles.sizeIconCorner, top: "2rem", right: "2rem",
+            ...(minimized
+                ? { borderTop: "2rem solid #ffffff", borderRight: "2rem solid #ffffff" }
+                : { borderBottom: "2rem solid #ffffff", borderLeft: "2rem solid #ffffff" }),
+        }} />
+        <span style={{
+            ...styles.sizeIconCorner, bottom: "2rem", left: "2rem",
+            ...(minimized
+                ? { borderBottom: "2rem solid #ffffff", borderLeft: "2rem solid #ffffff" }
+                : { borderTop: "2rem solid #ffffff", borderRight: "2rem solid #ffffff" }),
+        }} />
+    </span>
+);
+
+const HeaderIconButton = ({ src, children, tooltip, selected, disabled, onSelect }: {
+    src?: string;
+    children?: ReactNode;
     tooltip: string;
     selected?: boolean;
+    disabled?: boolean;
     onSelect: () => void;
 }) => {
-    const [hovered, setHovered] = useState(false);
     const buttonStyle = {
         ...styles.headerButton,
-        backgroundColor: selected
-            ? "rgba(114, 200, 240, 0.22)"
-            : hovered
-                ? "rgba(255, 255, 255, 0.13)"
-                : "transparent",
-        opacity: selected || hovered ? 1 : 0.82,
         color: selected ? "#72c8f0" : "#ffffff",
         "--iconColor": selected ? "#72c8f0" : "#ffffff",
         "--iconSize": "18rem",
@@ -828,20 +810,49 @@ const HeaderIconButton = ({ src, tooltip, selected, onSelect }: {
         <Tooltip tooltip={tooltip} direction="down">
             {/* stopPropagation: header mousedown starts the panel drag */}
             <div
-                onMouseDown={(e) => e.stopPropagation()}
-                onMouseEnter={() => setHovered(true)}
-                onMouseLeave={() => setHovered(false)}>
+                onMouseDown={(e) => e.stopPropagation()}>
                 <Button
-                    variant="icon"
-                    src={src}
-                    tinted
+                    variant="round"
+                    {...(src ? { src, tinted: true } : {})}
                     selected={selected}
+                    disabled={disabled}
                     style={buttonStyle}
                     onSelect={onSelect}
-                />
+                >{children}</Button>
             </div>
         </Tooltip>
     );
+};
+
+// The game's own in-game button themes: the info panels' dark button for normal actions, green for
+// confirming ones, the red dialog button for destructive ones. Shape and hover come from the theme.
+const HubButton = ({ tone, hint, style, theme, ...props }: Parameters<typeof Button>[0] & {
+    tone?: "normal" | "primary" | "success" | "danger";
+    hint?: string;
+}) => {
+    const appearance = tone || (props.variant === "primary" ? "primary" : "normal");
+    const confirming = appearance === "primary" || appearance === "success";
+    const resolvedTheme = appearance === "danger" && dialogButton
+        ? { button: `${dialogButton.button} ${dialogButton.negative}` }
+        : theme ?? (appearance === "normal" && sectionButton ? { button: sectionButton.button } : undefined);
+    const className = [
+        props.disabled ? hubClasses.disabled : hubClasses.enabled, props.className].filter(Boolean).join(" ");
+    const button = (
+        <Button
+            {...props}
+            // Native Button spreads its props over its default theme. Omit the
+            // property entirely when no override exists; theme={undefined} erases it.
+            {...(resolvedTheme ? { theme: resolvedTheme } : {})}
+            variant={confirming ? "primary" : "flat"}
+            className={className}
+            style={{
+                ...styles.actionButton,
+                opacity: props.disabled ? 0.45 : 1,
+                ...style,
+            }}
+        />
+    );
+    return hint ? <Tooltip tooltip={hint} direction="down">{button}</Tooltip> : button;
 };
 
 // The host/session settings fields. Connection-defining fields are locked while
@@ -862,6 +873,11 @@ const SettingsFields = () => {
     const sessionUsesRelay = useValue(sessionUsesRelay$);
     const relaySupported = useValue(relaySupported$);
     const joinCode = useValue(joinCode$);
+    const listPublicly = useValue(listPublicly$);
+    const serverName = useValue(serverName$);
+    const askJoinMessage = useValue(askJoinMessage$);
+    const sessionListed = useValue(sessionListed$);
+    const maxServerNameLength = useValue(maxServerNameLength$);
 
     // In a live session follow what it actually runs on; outside one, what is
     // configured for the next.
@@ -870,6 +886,9 @@ const SettingsFields = () => {
     const passwordHint = usePublicPasswordHint(hostPassword, minPasswordLength);
     const passwordMissing = !inSession &&
         publicPasswordMissing(relay, lanOnly, hostPassword, minPasswordLength);
+    const listed = inSession ? sessionListed : relaySupported && listPublicly;
+    const [settingsOpen, setSettingsOpen] = useState(false);
+    const [listingOpen, setListingOpen] = useState(false);
 
     return (
         <>
@@ -928,36 +947,72 @@ const SettingsFields = () => {
                     onChange={(v) => trigger(GROUP, "setLanOnly", v)}
                 />
             )}
-            <HubToggle
-                label={t(LOC.requireApproval, "Approve Players")}
-                value={requireApproval}
-                disabled={inSession}
-                onChange={(v) => trigger(GROUP, "setRequireApproval", v)}
-            />
-            {relay && requireApproval && (
+            <CollapsibleSection
+                compact
+                title={t(LOC.settings, "Settings")}
+                open={settingsOpen}
+                onToggle={() => setSettingsOpen(!settingsOpen)}>
+                {/* A listed session is open to strangers, so approval is fixed on. */}
                 <HubToggle
-                    label={t(LOC.autoApproveSteamFriends, "Auto-Approve Steam Friends")}
-                    value={autoApproveSteamFriends}
-                    disabled={inSession}
-                    onChange={(v) => trigger(GROUP, "setAutoApproveSteamFriends", v)}
+                    label={t(LOC.requireApproval, "Approve Players")}
+                    value={requireApproval || listed}
+                    disabled={inSession || listed}
+                    onChange={(v) => trigger(GROUP, "setRequireApproval", v)}
                 />
+                {(relay || listed) && (
+                    <HubToggle
+                        label={t(LOC.autoApproveSteamFriends, "Auto-Approve Steam Friends")}
+                        value={autoApproveSteamFriends}
+                        disabled={inSession || !(requireApproval || listed)}
+                        onChange={(v) => trigger(GROUP, "setAutoApproveSteamFriends", v)}
+                    />
+                )}
+                <div style={styles.row}>
+                    <div style={styles.label}>{t(LOC.policy, "Client Resync Requests")}</div>
+                    <ResyncPolicySegmented
+                        value={resyncPolicy}
+                        disabled={inSession}
+                        onChange={(v) => trigger(GROUP, "setResyncPolicy", v)}
+                    />
+                </div>
+                {/* The host answers for the whole session, so this is fixed once one is
+                    running - a client sees the host's answer, not its own. */}
+                <HubToggle
+                    label={t(LOC.simulationSync, "Simulation Sync")}
+                    value={simulationSync}
+                    disabled={inSession}
+                    onChange={(v) => trigger(GROUP, "setSimulationSync", v)}
+                />
+            </CollapsibleSection>
+            {relaySupported && (
+                <CollapsibleSection
+                    compact
+                    title={t(LOC.publicListing, "Public Listing")}
+                    open={listingOpen}
+                    onToggle={() => setListingOpen(!listingOpen)}>
+                    <HubToggle
+                        label={t(LOC.listPublicly, "List Publicly")}
+                        value={listed}
+                        disabled={inSession}
+                        info={t(LOC.listPubliclyHint, LIST_PUBLICLY_HINT)}
+                        onChange={(v) => trigger(GROUP, "setListPublicly", v)}
+                    />
+                    {/* Shown even while listing is off, greyed out, so the choice is visible up front. */}
+                    <HubToggle
+                        label={t(LOC.askJoinMessage, "Require Join Message")}
+                        value={askJoinMessage}
+                        disabled={inSession || !listed}
+                        onChange={(v) => trigger(GROUP, "setAskJoinMessage", v)}
+                    />
+                    <HubField
+                        label={t(LOC.serverName, "Lobby Name")}
+                        value={serverName}
+                        disabled={inSession || !listed}
+                        maxLength={maxServerNameLength}
+                        onChange={(v) => trigger(GROUP, "setServerName", v)}
+                    />
+                </CollapsibleSection>
             )}
-            <div style={styles.row}>
-                <div style={styles.label}>{t(LOC.policy, "Client Resync Requests")}</div>
-                <ResyncPolicySegmented
-                    value={resyncPolicy}
-                    disabled={inSession}
-                    onChange={(v) => trigger(GROUP, "setResyncPolicy", v)}
-                />
-            </div>
-            {/* The host answers for the whole session, so this is fixed once one is
-                running - a client sees the host's answer, not its own. */}
-            <HubToggle
-                label={t(LOC.simulationSync, "Simulation Sync")}
-                value={simulationSync}
-                disabled={inSession}
-                onChange={(v) => trigger(GROUP, "setSimulationSync", v)}
-            />
         </>
     );
 };
@@ -1005,38 +1060,48 @@ const HostSetupView = () => {
             }
             bottom={
                 <div style={styles.footer}>
-                    <Button
-                        variant="primary"
+                    <HubButton
+                        tone="success"
                         style={styles.footerButton}
                         disabled={!canHost}
                         onSelect={() => {
                             if (canHost) trigger(GROUP, "hostStart");
                         }}>
                         {t(LOC.hostSession, "Host Session")}
-                    </Button>
+                    </HubButton>
                 </div>
             }
         />
     );
 };
 
-// In-session settings behind the gear icon.
-const SettingsView = () => {
-    const t = useT();
+const OutlinedSection = ({ title, children, style }: {
+    title: string;
+    children: ReactNode;
+    style?: CSSProperties;
+}) => {
     return (
-        <PanelBody
-            top={<div style={styles.lockedNote}>{t(LOC.lockedInSession, "Locked while a session is running.")}</div>}
-            middle={
-                <div style={styles.scrollArea}>
-                    <SettingsFields />
-                </div>
-            }
-        />
+        <div style={{ ...styles.outlinedSection, ...style }}>
+            <div style={styles.sectionLegend}>{title}</div>
+            {children}
+        </div>
     );
 };
 
-const HostPlayerList = ({ players }: { players: PlayerEntry[] }) => {
+const PlayerList = ({ players }: { players: PlayerEntry[] }) => {
     const t = useT();
+    const isHost = useValue(isHost$);
+    const localName = useValue(playerName$);
+    const localPlayerId = useValue(localPlayerId$);
+    const cameraJson = useValue(cameraPlayers$);
+    const following = useValue(followingPlayerId$);
+    const cameras = useMemo(() => parseArray<Pick<PlayerEntry, "id" | "name">>(cameraJson), [cameraJson]);
+    const roster = isHost
+        ? players.map(player => ({ ...player, isLocal: player.isHost }))
+        : [
+            { id: localPlayerId, name: localName, isHost: false, isLocal: true },
+            ...cameras.map(player => ({ ...player, isHost: player.id === 1, isLocal: false })),
+        ];
     const [pendingAction, setPendingAction] = useState<{
         playerId: number;
         action: "kick" | "ban";
@@ -1044,36 +1109,75 @@ const HostPlayerList = ({ players }: { players: PlayerEntry[] }) => {
 
     useEffect(() => {
         if (pendingAction !== null &&
-            !players.some((player) => player.id === pendingAction.playerId))
+            !roster.some((player) => player.id === pendingAction.playerId))
             setPendingAction(null);
-    }, [players, pendingAction]);
+    }, [roster, pendingAction]);
 
     return (
-        <div style={styles.playerSection}>
-            <div style={styles.sectionHeader}>
-                <span>{t(LOC.players, "Players")}</span>
-                <span>{players.length}</span>
-            </div>
+        <OutlinedSection title={t(LOC.players, "Players")}>
             <div style={styles.playerList}>
-                {players.map((player) => {
+                {roster.map((player, index) => {
                     const pendingKind = pendingAction !== null &&
                         pendingAction.playerId === player.id
                         ? pendingAction.action
                         : null;
                     const confirming = pendingKind !== null;
                     return (
-                        <div key={player.id} style={styles.playerRow}>
-                            <div style={styles.playerName}>{player.name}</div>
-                            {player.isHost ? (
+                        <div key={player.id} style={{ ...styles.playerRow, ...(index === roster.length - 1 ? { borderBottom: "none" } : {}) }}>
+                            <div style={styles.playerIdentity}>
+                                <div style={styles.playerName}>{player.name}</div>
+                                {player.isHost ? <span style={styles.playerBadge}>{t(LOC.host, "Host")}</span> : null}
+                                {player.isLocal ? <span style={styles.playerBadge}>{t(LOC.you, "You")}</span> : null}
+                            </div>
+                            {!player.isLocal ? (
+                                <div style={styles.playerActions}>
+                                    <HubButton
+                                        style={styles.playerAction}
+                                        disabled={!cameras.some(camera => camera.id === player.id)}
+                                        hint={t("CS2MP.UI.ViewPlayerHint", "Move your camera to this player's location.")}
+                                        onSelect={() => trigger(GROUP, "goToPlayer", player.id)}>
+                                        {t("CS2MP.UI.ViewPlayer", "View location")}
+                                    </HubButton>
+                                    <HubButton
+                                        style={styles.playerAction}
+                                        selected={following === player.id}
+                                        disabled={following !== player.id && !cameras.some(camera => camera.id === player.id)}
+                                        hint={t("CS2MP.UI.FollowHint", "Move the camera or press Escape to stop following.")}
+                                        onSelect={() => following === player.id
+                                            ? trigger(GROUP, "stopFollowing")
+                                            : trigger(GROUP, "followPlayer", player.id)}>
+                                        {following === player.id
+                                            ? t("CS2MP.UI.StopFollowing", "Stop following")
+                                            : t("CS2MP.UI.FollowPlayer", "Follow")}
+                                    </HubButton>
+                                    {isHost && !confirming ? <>
+                                        <HubButton
+                                            style={styles.playerAction}
+                                            hint={t("CS2MP.UI.RemovePlayerHint", "Disconnect this player. They can ask to join again.")}
+                                            onSelect={() => setPendingAction({ playerId: player.id, action: "kick" })}>
+                                            {t("CS2MP.UI.RemovePlayer", "Remove")}
+                                        </HubButton>
+                                        <HubButton
+                                            tone="danger"
+                                            style={styles.playerAction}
+                                            hint={t(LOC.banHint, "Remove this player and prevent them from rejoining until hosting stops.")}
+                                            onSelect={() => setPendingAction({ playerId: player.id, action: "ban" })}>
+                                            {t("CS2MP.UI.BlockPlayer", "Block rejoining")}
+                                        </HubButton>
+                                    </> : null}
+                                </div>
+                            ) : null}
+                            {confirming ? (
                                 <>
-                                    <span style={styles.playerBadge}>{t(LOC.host, "Host")}</span>
-                                    <span style={styles.playerBadge}>{t(LOC.you, "You")}</span>
-                                </>
-                            ) : confirming ? (
-                                <>
-                                    <Button
-                                        variant="flat"
-                                        style={styles.confirmKickButton}
+                                    <div style={{ ...styles.toolHint, marginTop: "10rem" }}>
+                                        {t(pendingKind === "ban" ? "CS2MP.UI.BlockPlayerConfirm" : "CS2MP.UI.RemovePlayerConfirm",
+                                            pendingKind === "ban" ? "Block {0} from rejoining this session?" : "Remove {0} from the session?")
+                                            .replace("{0}", player.name)}
+                                    </div>
+                                    <div style={styles.playerActions}>
+                                    <HubButton
+                                        tone="danger"
+                                        style={styles.playerAction}
                                         onSelect={() => {
                                             trigger(
                                                 GROUP,
@@ -1084,258 +1188,85 @@ const HostPlayerList = ({ players }: { players: PlayerEntry[] }) => {
                                             );
                                             setPendingAction(null);
                                         }}>
-                                        {pendingKind === "ban"
-                                            ? t(LOC.confirmBan, "Ban?")
-                                            : t(LOC.confirmKick, "Remove?")}
-                                    </Button>
-                                    <Button
-                                        variant="flat"
-                                        style={styles.confirmKickButton}
+                                        {t("CS2MP.UI.Confirm", "Confirm")}
+                                    </HubButton>
+                                    <HubButton
+                                        style={styles.playerAction}
                                         onSelect={() => setPendingAction(null)}>
                                         {t(LOC.cancelKick, "Cancel")}
-                                    </Button>
+                                    </HubButton>
+                                    </div>
                                 </>
-                            ) : (
-                                <>
-                                    <Button
-                                        variant="flat"
-                                        style={styles.kickButton}
-                                        onSelect={() => setPendingAction({
-                                            playerId: player.id,
-                                            action: "kick",
-                                        })}>
-                                        {t(LOC.kick, "Kick")}
-                                    </Button>
-                                    <Tooltip
-                                        tooltip={t(
-                                            LOC.banHint,
-                                            "Remove this player and prevent them from rejoining until hosting stops.",
-                                        )}
-                                        direction="down">
-                                        <Button
-                                            variant="flat"
-                                            style={styles.banButton}
-                                            onSelect={() => setPendingAction({
-                                                playerId: player.id,
-                                                action: "ban",
-                                            })}>
-                                            {t(LOC.ban, "Ban")}
-                                        </Button>
-                                    </Tooltip>
-                                </>
-                            )}
+                            ) : null}
                         </div>
                     );
                 })}
             </div>
-        </div>
+        </OutlinedSection>
     );
 };
 
-const ClientWorldSaveDialog = ({ onClose }: { onClose: () => void }) => {
+
+const SessionView = ({ entries, players, view, compact }: {
+    entries: ChatEntry[];
+    players: PlayerEntry[];
+    view: HubView;
+    compact: boolean;
+}) => {
     const t = useT();
-    const canSave = useValue(canSaveClientWorld$);
-    const saveStatus = useValue(clientWorldSaveStatus$);
-    const savedName = useValue(clientWorldSaveName$);
-    const cityName = useValue(cityName$).trim();
-    const [draft, setDraft] = useState(() =>
-        t(LOC.suggestedCopyName, "{0} - Copy")
-            .replace("{0}", cityName || t(LOC.multiplayerWorld, "Multiplayer World"))
-            .slice(0, 85)
-            .trim());
-    const [submitted, setSubmitted] = useState(false);
-    const inputRef = useRef<HTMLInputElement | null>(null);
-
-    const saving = submitted && saveStatus === "saving";
-    const saved = submitted && saveStatus === "saved";
-
-    // Escape leaves the dialog from anywhere in it, not only from the name field.
-    useBackKey(onClose, !saving);
-
-    useEffect(() => {
-        inputRef.current?.focus();
-        inputRef.current?.select();
-    }, []);
-
-    const submit = () => {
-        const saveName = draft.trim();
-        if (!canSave || saving || saved || !saveName) return;
-        setSubmitted(true);
-        trigger(GROUP, "saveClientWorld", saveName);
-    };
-
-    let statusText = "";
-    if (submitted) {
-        switch (saveStatus) {
-            case "saving":
-                statusText = t(LOC.savingCopy, "Saving a local copy...");
-                break;
-            case "saved":
-                statusText = t(LOC.saveCopySuccess, "Saved to this PC as \"{0}\".")
-                    .replace("{0}", savedName || draft.trim());
-                break;
-            case "exists":
-                statusText = t(LOC.saveCopyExists,
-                    "A saved world with this name already exists. Choose a different name.");
-                break;
-            case "invalid":
-                statusText = t(LOC.saveCopyInvalid,
-                    "Enter a name between 1 and 85 characters.");
-                break;
-            case "unavailable":
-                statusText = t(LOC.saveCopyUnavailable,
-                    "Wait until the host world has fully loaded before saving a copy.");
-                break;
-            case "failed":
-                statusText = t(LOC.saveCopyFailed,
-                    "The copy could not be saved. Try another name and check free disk space.");
-                break;
-        }
-    } else if (!canSave) {
-        statusText = t(LOC.saveCopyUnavailable,
-            "Wait until the host world has fully loaded before saving a copy.");
-    }
-    const showProblemHelp = Boolean(statusText) && !saving && !saved;
-
-    return (
-        <Portal>
-            <InputActionBarrier>
-                <AutoNavigationScope
-                    debugName="CS2MP Save World Copy"
-                    direction={NavigationDirection.Both}
-                    initialFocused={saved ? "close" : "save-copy"}
-                    allowLooping>
-                <BackConsumer disabled={saving} onAction={onClose}>
-                <div
-                    style={styles.saveDialogOverlay}
-                    onMouseDown={(event) => event.stopPropagation()}>
-                    <div style={styles.saveDialog}>
-                        <div style={styles.saveDialogTitle}>
-                            {t(LOC.saveCopyTitle, "Save a World Copy")}
-                        </div>
-                        <div style={styles.saveDialogBody}>
-                            {t(LOC.saveCopyBody,
-                                "Keep the current shared city on this PC so you can continue it later in single-player.")}
-                        </div>
-                        <div style={styles.saveDialogLabel}>
-                            {t(LOC.worldName, "World Name")}
-                        </div>
-                        <input
-                            ref={inputRef}
-                            type="text"
-                            value={draft}
-                            maxLength={85}
-                            disabled={saving || saved}
-                            spellCheck={false}
-                            autoComplete="off"
-                            style={styles.saveDialogInput}
-                            onMouseDown={(event) => event.stopPropagation()}
-                            onChange={(event) => {
-                                setDraft((event.target as HTMLInputElement).value);
-                                setSubmitted(false);
-                                trigger(GROUP, "resetClientWorldSaveStatus");
-                            }}
-                            onKeyDown={(event) => {
-                                event.stopPropagation();
-                                if (event.key === "Enter") submit();
-                                if (event.key === "Escape" && !saving) onClose();
-                            }}
-                        />
-                        <div style={saved
-                            ? { ...styles.saveDialogStatus, ...styles.saveDialogSuccess }
-                            : styles.saveDialogStatus}>
-                            {statusText}
-                        </div>
-                        <div style={styles.saveDialogButtons}>
-                            {saved ? (
-                                <Button focusKey="close" variant="primary" style={styles.saveDialogButton} onSelect={onClose}>
-                                    {t(LOC.close, "Close")}
-                                </Button>
-                            ) : (
-                                <>
-                                    {showProblemHelp ? (
-                                        <OpenHelpButton
-                                            page={HELP_PAGE.worldCopy}
-                                            focusKey="save-help"
-                                            style={styles.saveDialogButton}
-                                        />
-                                    ) : null}
-                                    <Button
-                                        variant="primary"
-                                        focusKey="save-copy"
-                                        style={styles.saveDialogButton}
-                                        disabled={!canSave || saving || !draft.trim()}
-                                        onSelect={submit}>
-                                        {saving
-                                            ? t(LOC.savingCopy, "Saving a local copy...")
-                                            : t(LOC.saveToPC, "Save to This PC")}
-                                    </Button>
-                                    <Button
-                                        variant="flat"
-                                        focusKey="cancel"
-                                        style={styles.saveDialogButton}
-                                        disabled={saving}
-                                        onSelect={onClose}>
-                                        {t(LOC.cancel, "Cancel")}
-                                    </Button>
-                                </>
-                            )}
-                        </div>
-                    </div>
-                </div>
-                </BackConsumer>
-                </AutoNavigationScope>
-            </InputActionBarrier>
-        </Portal>
-    );
-};
-
-// Active session: player count, chat feed (player lines + "X joined." event
-// lines), send box, world sync, local client copy and disconnect.
-const SessionView = ({ entries, players }: { entries: ChatEntry[]; players: PlayerEntry[] }) => {
-    const t = useT();
-    const playerCount = useValue(playerCount$);
+    const canPingMap = useValue(canPingMap$);
     const mapTransferPercent = useValue(mapTransferPercent$);
     const worldSendPercent = useValue(worldSendPercent$);
     const isHost = useValue(isHost$);
     const progressMode = useValue(progressMode$);
     const statusTitle = useValue(statusTitle$);
     const statusDetail = useValue(statusDetail$);
-    const canSaveClientWorld = useValue(canSaveClientWorld$);
     const [draft, setDraft] = useState("");
     const [typing, setTyping] = useState(false);
-    const [saveDialogOpen, setSaveDialogOpen] = useState(false);
+    const remaining = MAX_CHAT_LENGTH - draft.length;
+    const showRemaining = remaining <= 100;
     const listRef = useRef<HTMLDivElement | null>(null);
     // The panel unmounts this view when it closes, so "first pass after mount" is
     // exactly "the player just opened the chat".
     const openedRef = useRef(true);
+    const lastCompactRef = useRef(compact);
+    const scrollSettlesAtRef = useRef(0);
+    const stickToBottomRef = useRef(true);
+    const messages = useMemo(() => entries.filter(entry => entry.kind === "message"), [entries]);
+    const messageGroups = useMemo(() => groupChatMessages(messages), [messages]);
+    const activity = useMemo(() => entries.filter(entry => entry.kind !== "message"), [entries]);
+    const latestMessageId = messages.length > 0 ? messages[messages.length - 1].id : 0;
 
     // Keep the newest line in view (only auto-stick when already near the bottom,
     // so scrolling back through history is not yanked away by new messages).
     // Opening the panel always lands on the newest line, not on the oldest one.
     useEffect(() => {
+        const changedMode = lastCompactRef.current !== compact;
+        lastCompactRef.current = compact;
         const el = listRef.current;
-        if (!el) return;
-        if (openedRef.current) {
+        if (!el) { openedRef.current = true; return; }
+        if (openedRef.current || (changedMode && stickToBottomRef.current)) {
             openedRef.current = false;
+            scrollSettlesAtRef.current = performance.now() + 300;
+        }
+        if (performance.now() < scrollSettlesAtRef.current && stickToBottomRef.current) {
             el.scrollTop = el.scrollHeight;
             // Repeated over the next frames: the panel's own geometry is still
             // settling on this one, and the list shrinking afterwards would leave
             // this first jump short of the newest line.
             let frame = requestAnimationFrame(function toNewest() {
                 const list = listRef.current;
-                if (list) list.scrollTop = list.scrollHeight;
-                frame = requestAnimationFrame(toNewest);
+                if (list && stickToBottomRef.current) list.scrollTop = list.scrollHeight;
+                if (performance.now() < scrollSettlesAtRef.current)
+                    frame = requestAnimationFrame(toNewest);
             });
-            const stop = window.setTimeout(() => cancelAnimationFrame(frame), 300);
-            return () => {
-                cancelAnimationFrame(frame);
-                window.clearTimeout(stop);
-            };
+            return () => cancelAnimationFrame(frame);
         }
-        const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 60;
-        if (nearBottom) el.scrollTop = el.scrollHeight;
-    }, [entries.length]);
+        if (stickToBottomRef.current) {
+            const frame = requestAnimationFrame(() => { el.scrollTop = el.scrollHeight; });
+            return () => cancelAnimationFrame(frame);
+        }
+    }, [latestMessageId, view, compact]);
 
     const send = () => {
         const text = draft.trim();
@@ -1349,11 +1280,7 @@ const SessionView = ({ entries, players }: { entries: ChatEntry[]; players: Play
 
     const topBlock = (
         <>
-            {/* Single string child: Gameface puts each adjacent bare text node on
-                its own line, which split "Players: 3" into three lines. */}
-            {isHost
-                ? <HostPlayerList players={players} />
-                : <div style={styles.playerCountRow}>{t(LOC.players, "Players") + ": " + playerCount}</div>}
+            {view === "chat" ? <PlayerList players={players} /> : null}
             {showActivity ? (
                 <>
                     <TransferProgress
@@ -1368,21 +1295,31 @@ const SessionView = ({ entries, players }: { entries: ChatEntry[]; players: Play
     );
 
     const chatFeed = (
-        <div ref={listRef} style={styles.chatList}>
-            {entries.length === 0 ? (
+        <div ref={listRef} style={{
+            ...styles.chatList,
+            backgroundColor: compact ? "rgba(0, 0, 0, 0.08)" : "rgba(0, 0, 0, 0.16)",
+            padding: compact ? "10rem" : "14rem",
+            transition: "background-color 180ms ease-out",
+        }} onScroll={() => {
+            const el = listRef.current;
+            if (el) stickToBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 60;
+        }}>
+            {messages.length === 0 ? (
                 <div style={styles.chatEmpty}>{t(LOC.noMessages, "No messages yet.")}</div>
             ) : (
-                entries.map((entry) =>
-                    entry.sender === null ? (
-                        <div key={entry.id} style={styles.systemLine}>{entry.text}</div>
-                    ) : (
-                        <div key={entry.id} style={styles.chatLine}>
-                            <span style={styles.chatTime}>{entry.time + " "}</span>
-                            <span style={styles.chatSender}>{entry.sender + ": "}</span>
-                            <span>{entry.text}</span>
+                messageGroups.map(group => (
+                    <div key={group.entries[0].id} style={{ ...styles.chatLine, marginBottom: compact ? "8rem" : "12rem", alignItems: group.entries[0].isLocal ? "flex-end" : "flex-start" }}>
+                        <div style={styles.chatMeta}>
+                            <span style={styles.chatSender}>{group.entries[0].isLocal ? t(LOC.you, "You") : group.entries[0].sender}</span>
+                            <span style={styles.chatTime}>{group.entries[0].time}</span>
                         </div>
-                    )
-                )
+                        {group.entries.map(entry => <div key={entry.id} style={{
+                            ...styles.chatBubble,
+                            ...(entry.isLocal ? styles.chatBubbleLocal : {}),
+                            ...(compact ? { padding: "6rem 9rem", fontSize: "13rem" } : {}),
+                        }}>{entry.text}</div>)}
+                    </div>
+                ))
             )}
         </div>
     );
@@ -1390,68 +1327,111 @@ const SessionView = ({ entries, players }: { entries: ChatEntry[]; players: Play
     const bottomBlock = (
         <>
             <div style={styles.inputRow}>
-                <InputActionBarrier disabled={!typing}>
-                    <input
-                        type="text"
-                        style={styles.chatInput}
-                        value={draft}
-                        placeholder={t(LOC.chatPlaceholder, "Type a message - /sync requests a world sync")}
-                        spellCheck={false}
-                        autoComplete="off"
-                        onFocus={() => setTyping(true)}
-                        onBlur={() => setTyping(false)}
-                        onMouseDown={(e) => e.stopPropagation()}
-                        onKeyDown={(e) => {
-                            e.stopPropagation();
-                            if (e.key === "Enter") {
-                                send();
-                            } else if (e.key === "Escape") {
-                                e.preventDefault();
-                                e.currentTarget.blur();
-                            }
-                        }}
-                        onChange={(e) => setDraft((e.target as HTMLInputElement).value)}
-                    />
-                </InputActionBarrier>
-                <Button variant="primary" style={styles.sendButton} onSelect={send}>
+                <div style={styles.composer}>
+                    <InputActionBarrier disabled={!typing}>
+                        <input
+                            type="text"
+                            className={hubClasses.chatInput}
+                            style={{
+                                ...styles.chatInput,
+                                ...(compact ? { height: "32rem", fontSize: "13rem", padding: "6rem 9rem", backgroundColor: "rgba(20, 27, 34, 0.55)" } : {}),
+                                ...(showRemaining ? { paddingRight: "84rem" } : {}),
+                            }}
+                            value={draft}
+                            placeholder={t("CS2MP.UI.MessagePlaceholder", "Message the other players...")}
+                            aria-label={t("CS2MP.UI.Chat", "Chat")}
+                            aria-describedby={showRemaining ? "cs2mp-chat-remaining" : undefined}
+                            maxLength={MAX_CHAT_LENGTH}
+                            spellCheck={false}
+                            autoComplete="off"
+                            onFocus={() => setTyping(true)}
+                            onBlur={() => setTyping(false)}
+                            onMouseDown={(e) => e.stopPropagation()}
+                            onKeyDown={(e) => {
+                                e.stopPropagation();
+                                if (e.key === "Enter" && !e.nativeEvent.isComposing) {
+                                    send();
+                                } else if (e.key === "Escape") {
+                                    e.preventDefault();
+                                    e.currentTarget.blur();
+                                }
+                            }}
+                            onChange={(e) => setDraft((e.target as HTMLInputElement).value)}
+                        />
+                    </InputActionBarrier>
+                    {showRemaining ? <span id="cs2mp-chat-remaining" style={{
+                        ...styles.composerRemaining,
+                        ...(remaining <= 20 ? { color: "#ffc6c6" } : {}),
+                    }}>{t("CS2MP.UI.CharactersLeft", "{0} left").replace("{0}", String(remaining))}</span> : null}
+                </div>
+                <HubButton tone="primary" style={{
+                    ...styles.sendButton,
+                    ...(compact ? { height: "32rem", minHeight: "32rem", minWidth: "52rem", fontSize: "12rem", padding: "5rem 8rem" } : {}),
+                }} disabled={!draft.trim()} onSelect={send}>
                     {t(LOC.send, "Send")}
-                </Button>
+                </HubButton>
             </div>
-            <div style={styles.footer}>
-                <Button variant="flat" style={styles.footerButton} onSelect={() => trigger(GROUP, "syncNow")}>
-                    {t(LOC.syncWorld, "Sync World")}
-                </Button>
-                {!isHost ? (
-                    <Button
-                        variant="flat"
-                        style={styles.footerButton}
-                        disabled={!canSaveClientWorld}
-                        onSelect={() => {
-                            trigger(GROUP, "resetClientWorldSaveStatus");
-                            setSaveDialogOpen(true);
-                        }}>
-                        {t(LOC.saveCopy, "Save Copy")}
-                    </Button>
-                ) : null}
-                <Button
-                    variant="flat"
-                    style={styles.footerButton}
-                    onSelect={() => trigger(GROUP, "requestDisconnect")}>
-                    {isHost
-                        ? t(LOC.closeSession, "Close Session")
-                        : t(LOC.disconnect, "Disconnect")}
-                </Button>
-            </div>
+            {!compact ? <div style={styles.sessionFooter}>
+                <div style={styles.sessionFooterButton}>
+                    <HubButton
+                        style={styles.sessionActionButton}
+                        disabled={!canPingMap}
+                        hint={t("CS2MP.UI.PingMapHint", "Show everyone the map location at the center of your screen.")}
+                        onSelect={() => trigger(GROUP, "pingMap")}>
+                        {t("CS2MP.UI.PingMap", "Ping map location")}
+                    </HubButton>
+                </div>
+                <div style={styles.sessionSecondaryButton}>
+                    {isHost ? <HubButton
+                        tone="danger"
+                        style={styles.sessionActionButton}
+                        hint={t("CS2MP.UI.EndSessionHint", "End hosting and disconnect every player.")}
+                        onSelect={() => trigger(GROUP, "requestDisconnect")}>
+                        {t(LOC.closeSession, "Close Session")}
+                    </HubButton> : <HubButton
+                        style={styles.sessionActionButton}
+                        disabled={showActivity}
+                        hint={t("CS2MP.UI.RequestWorldHint", "Ask the host to send its city again.")}
+                        onSelect={() => trigger(GROUP, "syncNow")}>
+                        {t("CS2MP.UI.SendWorld", "Send World")}
+                    </HubButton>}
+                </div>
+            </div> : null}
         </>
     );
 
+    const sessionView = (
+        <div style={styles.scrollArea}>
+            <HubButton
+                style={styles.sessionActionButton}
+                disabled={showActivity}
+                hint={isHost
+                    ? t("CS2MP.UI.ReloadCityHint", "Reload the host's city for all players. The shared game pauses while it transfers.")
+                    : t("CS2MP.UI.RequestWorldHint", "Ask the host to send its city again.")}
+                onSelect={() => trigger(GROUP, "syncNow")}>
+                {t("CS2MP.UI.ResendCity", "Resend city")}
+            </HubButton>
+            <OutlinedSection title={t(LOC.sessionActivity, "Session activity")} style={{ marginTop: "22rem" }}>
+                <div style={styles.sectionContent}>
+                    {activity.length === 0 ? <div style={styles.toolHint}>{t("CS2MP.UI.NoActivity", "Session events will appear here.")}</div> :
+                        [...activity].reverse().map(entry => <div key={entry.id} style={{
+                            ...styles.systemLine,
+                            ...(entry.kind === "error" ? { color: "#ffc6c6" } : {}),
+                        }}>
+                            <div style={styles.activityTime}>{entry.time}</div>
+                            <div style={styles.activityText}>{entry.text}</div>
+                        </div>)}
+                </div>
+            </OutlinedSection>
+        </div>
+    );
+
     return (
-        <>
-            {saveDialogOpen ? (
-                <ClientWorldSaveDialog onClose={() => setSaveDialogOpen(false)} />
-            ) : null}
-            <PanelBody top={topBlock} middle={chatFeed} bottom={bottomBlock} />
-        </>
+        <PanelBody
+            top={!compact && (view === "chat" || showActivity) ? topBlock : undefined}
+            middle={!compact && view === "session" ? sessionView : chatFeed}
+            bottom={compact || view === "chat" ? bottomBlock : undefined}
+        />
     );
 };
 
@@ -1466,7 +1446,11 @@ export interface PanelGeometry {
 }
 
 const MIN_W = 360;
-const MIN_H = 300;
+const MIN_H = 420;
+const COMPACT_W = 340;
+const COMPACT_H = 280;
+const PANEL_SWITCH_MS = 180;
+const PANEL_SWITCH_TRANSITION = `left ${PANEL_SWITCH_MS}ms ease-out, top ${PANEL_SWITCH_MS}ms ease-out, width ${PANEL_SWITCH_MS}ms ease-out, height ${PANEL_SWITCH_MS}ms ease-out, background-color ${PANEL_SWITCH_MS}ms ease-out`;
 
 interface DragState {
     mode: "move" | "resize";
@@ -1478,24 +1462,74 @@ interface DragState {
     baseH: number;
 }
 
-export const MultiplayerPanel = ({ entries, players, geometry, onGeometry, onClose }: {
+export const MultiplayerPanel = ({ entries, players, view, onView, geometry, onGeometry, minimized, expandedSize, onToggleMinimized, onClose }: {
     entries: ChatEntry[];
     players: PlayerEntry[];
+    view: HubView;
+    onView: (view: HubView) => void;
     geometry: PanelGeometry;
     onGeometry: (geometry: PanelGeometry) => void;
+    minimized: boolean;
+    expandedSize: PanelGeometry["size"];
+    onToggleMinimized: (current: PanelGeometry, next: PanelGeometry) => void;
     onClose: () => void;
 }) => {
     const t = useT();
     const inSession = useValue(inSession$);
-    const [showSettings, setShowSettings] = useState(false);
     const panelRef = useRef<HTMLDivElement | null>(null);
+    const headerRef = useRef<HTMLDivElement | null>(null);
     const dragRef = useRef<DragState | null>(null);
+    const draggedGeometryRef = useRef<PanelGeometry | null>(null);
+    const [switchingSize, setSwitchingSize] = useState(false);
+    const switchTimerRef = useRef<number | undefined>();
+    const switchFrameRef = useRef<number | undefined>();
 
-    // The gear view only exists during a session (outside one, the setup view
-    // already shows every setting) — drop it when the session ends.
-    useEffect(() => {
-        if (!inSession) setShowSettings(false);
-    }, [inSession]);
+    useEffect(() => () => {
+        window.clearTimeout(switchTimerRef.current);
+        if (switchFrameRef.current !== undefined) cancelAnimationFrame(switchFrameRef.current);
+    }, []);
+
+    const toggleMinimized = () => {
+        const panel = panelRef.current;
+        if (!panel || switchingSize) return;
+        const rect = panel.getBoundingClientRect();
+        const scale = (headerRef.current?.getBoundingClientRect().height || 42) / 42;
+        const requested = minimized
+            ? expandedSize || { w: 460 * scale, h: 660 * scale }
+            : { w: COMPACT_W * scale, h: COMPACT_H * scale };
+        const size = {
+            w: Math.min(requested.w, window.innerWidth - 32 * scale),
+            h: Math.min(requested.h, window.innerHeight - 100 * scale),
+        };
+        // Keep the bottom-right corner in place, and fit a restored window on screen.
+        const pos = {
+            x: Math.max(8 * scale, Math.min(rect.right - size.w, window.innerWidth - size.w - 8 * scale)),
+            y: Math.max(8 * scale, Math.min(rect.bottom - size.h, window.innerHeight - size.h - 8 * scale)),
+        };
+        const current = { pos: { x: rect.left, y: rect.top }, size: { w: rect.width, h: rect.height } };
+
+        // A rem-anchored window has auto top/left. Normalize its current pixel box
+        // before changing dimensions so the browser can interpolate both modes.
+        panel.style.transition = "none";
+        panel.style.left = rect.left + "px";
+        panel.style.top = rect.top + "px";
+        panel.style.right = "auto";
+        panel.style.bottom = "auto";
+        panel.style.width = rect.width + "px";
+        panel.style.height = rect.height + "px";
+        window.clearTimeout(switchTimerRef.current);
+        setSwitchingSize(true);
+        // Cohtml lays out asynchronously. Give the normalized box one full frame
+        // before applying its target, otherwise auto-to-pixel positions jump.
+        switchFrameRef.current = requestAnimationFrame(() => {
+            switchFrameRef.current = requestAnimationFrame(() => {
+                switchFrameRef.current = undefined;
+                panel.style.transition = PANEL_SWITCH_TRANSITION;
+                onToggleMinimized(current, { pos, size });
+                switchTimerRef.current = window.setTimeout(() => setSwitchingSize(false), PANEL_SWITCH_MS + 30);
+            });
+        });
+    };
 
     useEffect(() => {
         const onMove = (e: MouseEvent) => {
@@ -1506,28 +1540,54 @@ export const MultiplayerPanel = ({ entries, players, geometry, onGeometry, onClo
             if (drag.mode === "move") {
                 const x = Math.min(Math.max(drag.baseX + dx, 60 - drag.baseW), window.innerWidth - 60);
                 const y = Math.min(Math.max(drag.baseY + dy, 0), window.innerHeight - 60);
-                onGeometry({ pos: { x, y }, size: { w: drag.baseW, h: drag.baseH } });
+                draggedGeometryRef.current = { pos: { x, y }, size: { w: drag.baseW, h: drag.baseH } };
+                // Move the rendered panel directly. Updating parent React state on every
+                // pointer event re-rendered and re-measured the whole chat/player tree.
+                const panel = panelRef.current;
+                if (panel) panel.style.transform = `translate(${x - drag.baseX}px, ${y - drag.baseY}px)`;
             } else {
                 const w = Math.min(Math.max(drag.baseW + dx, MIN_W), window.innerWidth);
                 const h = Math.min(Math.max(drag.baseH + dy, MIN_H), window.innerHeight);
-                onGeometry({ pos: { x: drag.baseX, y: drag.baseY }, size: { w, h } });
+                const next = { pos: { x: drag.baseX, y: drag.baseY }, size: { w, h } };
+                draggedGeometryRef.current = next;
+                onGeometry(next);
             }
         };
         const onUp = () => {
+            if (!dragRef.current) return;
             dragRef.current = null;
+            const next = draggedGeometryRef.current;
+            draggedGeometryRef.current = null;
+            const panel = panelRef.current;
+            if (next?.pos && panel) {
+                panel.style.left = next.pos.x + "px";
+                panel.style.top = next.pos.y + "px";
+                panel.style.right = "auto";
+                panel.style.bottom = "auto";
+                panel.style.transform = "none";
+            }
+            if (next) onGeometry(next);
         };
         document.addEventListener("mousemove", onMove);
         document.addEventListener("mouseup", onUp);
+        window.addEventListener("blur", onUp);
         return () => {
             document.removeEventListener("mousemove", onMove);
             document.removeEventListener("mouseup", onUp);
+            window.removeEventListener("blur", onUp);
         };
     }, [onGeometry]);
 
     const beginDrag = (e: ReactMouseEvent, mode: "move" | "resize") => {
         const el = panelRef.current;
         if (!el || e.button !== 0) return;
+        window.clearTimeout(switchTimerRef.current);
+        if (switchFrameRef.current !== undefined) cancelAnimationFrame(switchFrameRef.current);
+        switchFrameRef.current = undefined;
+        el.style.transition = "none";
+        setSwitchingSize(false);
         const rect = el.getBoundingClientRect();
+        draggedGeometryRef.current = null;
         dragRef.current = {
             mode,
             startX: e.clientX,
@@ -1541,74 +1601,77 @@ export const MultiplayerPanel = ({ entries, players, geometry, onGeometry, onClo
         e.stopPropagation();
     };
 
-    const panelStyle: CSSProperties = { ...styles.panel };
+    const panelStyle: CSSProperties = {
+        ...styles.panel,
+        ...(minimized ? { width: `${COMPACT_W}rem`, height: `${COMPACT_H}rem`, backgroundColor: "rgba(34, 49, 65, 0.8)" } : {}),
+        transition: switchingSize ? PANEL_SWITCH_TRANSITION : "none",
+    };
     if (geometry.pos) {
         panelStyle.left = geometry.pos.x + "px";
         panelStyle.top = geometry.pos.y + "px";
         panelStyle.right = "auto";
-        // The default position centres itself with a negative margin; an explicit
-        // one must drop it or the panel sits half its height too high.
-        panelStyle.marginTop = 0;
+        panelStyle.bottom = "auto";
     }
     if (geometry.size) {
         panelStyle.width = geometry.size.w + "px";
         panelStyle.height = geometry.size.h + "px";
     }
 
-    const titleText = showSettings
-        ? t(LOC.sessionSettings, "Session Settings")
-        : t(LOC.multiplayer, "Multiplayer");
+    const title = minimized
+        ? t("CS2MP.UI.Chat", "Chat")
+        : inSession && view === "session"
+            ? t(LOC.sessionControls, "Session controls")
+            : t(LOC.multiplayer, "Multiplayer");
 
     return (
         <Portal>
             <div ref={panelRef} style={panelStyle} onMouseDown={(e) => e.stopPropagation()}>
-                <div style={styles.header} onMouseDown={(e) => beginDrag(e, "move")}>
-                    <div style={styles.headerTitle}>{titleText}</div>
-                    {inSession ? (
-                        <HeaderIconButton
+                <div ref={headerRef} style={{
+                    ...styles.header,
+                    ...(minimized ? { backgroundColor: "rgba(20, 27, 34, 0.78)" } : {}),
+                    transition: "background-color 180ms ease-out",
+                }} onMouseDown={(e) => beginDrag(e, "move")}>
+                    <div style={{ ...styles.headerLeading, width: inSession ? minimized ? "68rem" : "102rem" : "34rem" }}>
+                        {inSession && !minimized && view !== "chat" ? <HeaderIconButton
+                            src={ICON_BACK}
+                            tooltip={t(LOC.back, "Back")}
+                            onSelect={() => onView("chat")}
+                        /> : null}
+                    </div>
+                    <div style={styles.headerTitle}>{title}</div>
+                    <div style={styles.headerActions}>
+                        {inSession && !minimized ? <HeaderIconButton
                             src={ICON_GEAR}
-                            tooltip={t(LOC.sessionSettings, "Session Settings")}
-                            selected={showSettings}
-                            onSelect={() => setShowSettings(!showSettings)}
+                            tooltip={t(LOC.sessionControls, "Session controls")}
+                            selected={view === "session"}
+                            onSelect={() => onView(view === "session" ? "chat" : "session")}
+                        /> : null}
+                        {inSession ? <HeaderIconButton
+                            tooltip={minimized
+                                ? t("CS2MP.UI.ExpandChat", "Expand chat")
+                                : t("CS2MP.UI.MinimizeChat", "Minimize chat")}
+                            disabled={switchingSize}
+                            onSelect={toggleMinimized}
+                        ><PanelSizeIcon minimized={minimized} /></HeaderIconButton> : null}
+                        <HeaderIconButton
+                            src={ICON_CLOSE}
+                            tooltip={t(LOC.close, "Close")}
+                            onSelect={onClose}
                         />
-                    ) : null}
-                    <HeaderIconButton
-                        src={ICON_CLOSE}
-                        tooltip={t(LOC.back, "Back")}
-                        onSelect={onClose}
-                    />
+                    </div>
                 </div>
-                {showSettings && inSession
-                    ? <SettingsView />
-                    : inSession
-                        ? <SessionView entries={entries} players={players} />
-                        : <HostSetupView />}
-                <div style={styles.resizeHandle} onMouseDown={(e) => beginDrag(e, "resize")}>
+                {inSession
+                    ? <SessionView entries={entries} players={players} view={view} compact={minimized} />
+                    : <HostSetupView />}
+                {!minimized ? <div style={styles.resizeHandle} onMouseDown={(e) => beginDrag(e, "resize")}>
                     <div style={styles.resizeGrip} />
-                </div>
+                </div> : null}
             </div>
         </Portal>
     );
 };
 
 // ---- Right-menu button (appended above notifications/Chirper) -------------------
-
-const ToastList = ({ toasts }: { toasts: ChatEntry[] }) => (
-    <div style={styles.toastAnchor}>
-        {toasts.map((entry) => (
-            <div key={entry.id} style={styles.toast}>
-                {entry.sender === null ? (
-                    <span style={styles.toastSystem}>{entry.text}</span>
-                ) : (
-                    <>
-                        <span style={styles.toastSender}>{entry.sender + " "}</span>
-                        <span>{entry.text}</span>
-                    </>
-                )}
-            </div>
-        ))}
-    </div>
-);
 
 // Host-only prompts shown whenever players are waiting to join or resync.
 // It floats at the top of the screen (not a full-screen blocker) so the host can
@@ -1640,23 +1703,24 @@ const ApprovalRequestModals = () => {
                             <div style={styles.joinCard} onMouseDown={(e) => e.stopPropagation()}>
                                 <div style={styles.joinCardTitle}>{t(LOC.joinRequestTitle, "Join Request")}</div>
                                 <div style={styles.joinCardBody}>
-                                    {t(LOC.joinRequestBody, "{0} wants to join your session.").replace("{0}", join.name)}
+                                    {t(LOC.joinRequestBody, "{0} wants to join your session.").replace("{0}", () => join.name)}
                                 </div>
+                                {join.message ? <div style={styles.joinCardMessage}>{join.message}</div> : null}
                                 <div style={styles.joinCardButtons}>
-                                    <Button
+                                    <HubButton
                                         variant="primary"
                                         focusKey="accept"
                                         style={styles.joinCardButton}
                                         onSelect={() => trigger(GROUP, "approveJoin", join.id)}>
                                         {t(LOC.accept, "Accept")}
-                                    </Button>
-                                    <Button
+                                    </HubButton>
+                                    <HubButton
                                         variant="flat"
                                         focusKey="decline"
                                         style={styles.joinCardButton}
                                         onSelect={() => trigger(GROUP, "declineJoin", join.id)}>
                                         {t(LOC.decline, "Decline")}
-                                    </Button>
+                                    </HubButton>
                                 </div>
                             </div>
                         </AutoNavigationScope>
@@ -1679,20 +1743,20 @@ const ApprovalRequestModals = () => {
                                         .replace("{1}", request.reason)}
                                 </div>
                                 <div style={styles.joinCardButtons}>
-                                    <Button
+                                    <HubButton
                                         variant="primary"
                                         focusKey="allow"
                                         style={styles.joinCardButton}
                                         onSelect={() => trigger(GROUP, "approveResync", request.id)}>
                                         {t(LOC.accept, "Accept")}
-                                    </Button>
-                                    <Button
+                                    </HubButton>
+                                    <HubButton
                                         variant="flat"
                                         focusKey="decline"
                                         style={styles.joinCardButton}
                                         onSelect={() => trigger(GROUP, "declineResync", request.id)}>
                                         {t(LOC.decline, "Decline")}
-                                    </Button>
+                                    </HubButton>
                                 </div>
                             </div>
                         </AutoNavigationScope>
@@ -1707,49 +1771,32 @@ export const MultiplayerRightMenuButton = () => {
     const t = useT();
     const [open, setOpen] = useState(false);
     const [geometry, setGeometry] = useState<PanelGeometry>({ pos: null, size: null });
+    const [compactGeometry, setCompactGeometry] = useState<PanelGeometry>({ pos: null, size: null });
+    const [minimized, setMinimized] = useState(false);
+    const [view, setView] = useState<HubView>("chat");
     const chatJson = useValue(chatLog$);
     const playerJson = useValue(playerList$);
     const inSession = useValue(inSession$);
-    const statusKind = useValue(statusKind$);
     const accepted = useValue(disclaimerAccepted$);
     const entries = useMemo(() => parseArray<ChatEntry>(chatJson), [chatJson]);
     const players = useMemo(() => parseArray<PlayerEntry>(playerJson), [playerJson]);
 
-    // Read marker: everything up to this id has been seen with the panel open.
-    const [readSeenId, setReadSeenId] = useState(0);
-    // Toast marker: advances even while closed, so each entry toasts only once.
-    const toastSeenRef = useRef(0);
-    const [toasts, setToasts] = useState<ChatEntry[]>([]);
-    const timersRef = useRef<number[]>([]);
-
     const latestId = entries.length > 0 ? entries[entries.length - 1].id : 0;
+    const [readSeenId, setReadSeenId] = useState(latestId);
 
     useEffect(() => {
-        if (open) {
+        if ((open && accepted && view === "chat") || !inSession) {
             setReadSeenId(latestId);
-            toastSeenRef.current = latestId;
-            setToasts([]);
-            return;
         }
-        const fresh = entries.filter((e) => e.id > toastSeenRef.current);
-        toastSeenRef.current = latestId;
-        if (fresh.length === 0) return;
-        setToasts((current) => [...current, ...fresh].slice(-3));
-        const ids = fresh.map((e) => e.id);
-        timersRef.current.push(window.setTimeout(() => {
-            setToasts((current) => current.filter((e) => ids.indexOf(e.id) < 0));
-        }, 7000));
-    }, [open, latestId]);
+        if (!inSession) {
+            setView("chat");
+            setMinimized(false);
+        }
+    }, [open, accepted, view, inSession, latestId]);
 
-    // First mount: do not toast the entire backlog of an older session.
-    useEffect(() => {
-        toastSeenRef.current = latestId;
-        setReadSeenId(latestId);
-        return () => timersRef.current.forEach((id) => window.clearTimeout(id));
-    }, []);
-
-    const unread = open ? 0 : entries.filter((e) => e.id > readSeenId).length;
-    const dotColor = kindColors[statusKind] || kindColors.offline;
+    // Only another player's messages need attention. Session events stay inside the hub.
+    const unread = !inSession ? 0 : entries.filter(entry =>
+        entry.kind === "message" && !entry.isLocal && entry.id > readSeenId).length;
     const title = t(LOC.multiplayer, "Multiplayer");
 
     return (
@@ -1769,9 +1816,7 @@ export const MultiplayerRightMenuButton = () => {
                             style={rmButton ? undefined : styles.fallbackIcon}
                         />
                     </Button>
-                    <div style={{ ...styles.statusDot, backgroundColor: dotColor }} />
                     {unread > 0 ? <div style={styles.unreadBadge}>{unread > 9 ? "9+" : unread}</div> : null}
-                    {!open && inSession && toasts.length > 0 ? <ToastList toasts={toasts} /> : null}
                 </div>
             </Tooltip>
             {open ? (
@@ -1779,8 +1824,23 @@ export const MultiplayerRightMenuButton = () => {
                     <MultiplayerPanel
                         entries={entries}
                         players={players}
-                        geometry={geometry}
-                        onGeometry={setGeometry}
+                        view={view}
+                        onView={setView}
+                        geometry={inSession && minimized ? compactGeometry : geometry}
+                        onGeometry={minimized ? setCompactGeometry : setGeometry}
+                        minimized={inSession && minimized}
+                        expandedSize={geometry.size}
+                        onToggleMinimized={(current, next) => {
+                            if (minimized) {
+                                setCompactGeometry(current);
+                                setGeometry(next);
+                            } else {
+                                setGeometry(current);
+                                setCompactGeometry(next);
+                            }
+                            setView("chat");
+                            setMinimized(!minimized);
+                        }}
                         onClose={() => setOpen(false)}
                     />
                 ) : (

@@ -1,6 +1,7 @@
 ---
 title: Direct connection
-description: "Connect straight to the host's address on TCP port 25001. Works on every copy of the game, including Xbox App, Microsoft Store and Game Pass."
+seo_title: "Direct connection setup | CS2 Multiplayer Mod"
+description: "Connect to a Cities: Skylines II multiplayer host by address and TCP port. Set up hosting and joining on Steam, Xbox App, Microsoft Store or Game Pass."
 ---
 
 # Direct connection
@@ -15,10 +16,10 @@ router rule all have to use the same port.
 ## Hosting
 
 1. Open Multiplayer and click Host Game.
-![](assets/img/ui-menu-multiplayer.webp)
-![](assets/img/ui-menu-choice-host.webp)
+![Multiplayer entry in the Cities: Skylines II main menu](assets/img/ui-menu-multiplayer.webp)
+![Host game option in the multiplayer menu](assets/img/ui-menu-choice-host.webp)
 2. Set the connection type to Direct Connection.
-![](assets/img/ui-host-world.webp)
+![World selection for hosting a multiplayer session](assets/img/ui-host-world.webp)
 3. Load or create your world as usual. The session starts once the city has loaded.
 4. Share your IP address and port with the other players.
 
@@ -36,15 +37,15 @@ LAN Only and Client Resyncs once Direct Connection is selected. The in-game mult
 has the same settings plus your player name and the player limit. The Host Game tab of the
 mod options has them too, except Simulation Sync.
 
-![](assets/img/ui-session-panel-stopped.webp)
+![Multiplayer session panel with the session stopped](assets/img/ui-session-panel-stopped.webp)
 
 ## Joining
 
 1. Open Multiplayer and click Join Game.
-![](assets/img/ui-menu-choice-join.webp)
+![Join game option in the multiplayer menu](assets/img/ui-menu-choice-join.webp)
 2. Set the connection type to Direct Connection.
 3. Enter the host's address and port, your player name, and the password if there is one.
-![](assets/img/ui-join-direct.webp)
+![Direct connection join screen with address and port fields](assets/img/ui-join-direct.webp)
 4. Click Join and wait while the host's city downloads.
 
 !!! warning "A password is required"

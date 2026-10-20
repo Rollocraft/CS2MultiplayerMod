@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using Colossal.IO.AssetDatabase;
 using Colossal.Logging;
@@ -177,6 +177,8 @@ namespace CS2MultiplayerMod
 
             // Persist / load settings to the standard mod settings store.
             AssetDatabase.global.LoadSettings(Name, Setting, new Setting(this));
+            // Listing is chosen per launch, so a city is never public because of an old choice.
+            Setting.ListPublicly = false;
 
             // Core logs through the same logger via ColossalModLogger.
             IModLogger coreLog = ColossalModLogger.Instance;
@@ -280,12 +282,14 @@ namespace CS2MultiplayerMod
                 global::Game.Citizens.CitizenInitializeSystem>(
                 SystemUpdatePhase.GameSimulation);
             // UIUpdate: the camera focus must publish while paused.
+            updateSystem.UpdateAt<Game.Sync.Players.PlayerCameraNavigationSystem>(SystemUpdatePhase.UIUpdate);
             updateSystem.UpdateAt<Game.Sync.Players.PlayerCursorSyncSystem>(SystemUpdatePhase.UIUpdate);
             // Raycast phase, after the tool's input: the only slot where an extra input joins this frame's job,
             // so roads, tracks and pipes can be hovered.
             updateSystem.UpdateAfter<Game.Sync.Players.PlayerHoverRaycastSystem,
                 global::Game.Tools.ToolRaycastSystem>(SystemUpdatePhase.Raycast);
             // Rendering: markers draw every frame, paused or not.
+            updateSystem.UpdateAt<Game.Sync.Players.MapPingRenderSystem>(SystemUpdatePhase.Rendering);
             updateSystem.UpdateAt<Game.Sync.Players.RemotePlayerMarkerSystem>(SystemUpdatePhase.Rendering);
             // UIUpdate: policies change while paused, and GameSimulation stops at speed 0. The scan is 1 Hz gated.
             updateSystem.UpdateAt<Game.Sync.Systems.PolicySyncSystem>(SystemUpdatePhase.UIUpdate);

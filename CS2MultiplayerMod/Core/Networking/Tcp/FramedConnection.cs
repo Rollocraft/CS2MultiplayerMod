@@ -58,7 +58,7 @@ namespace CS2MultiplayerMod.Core.Networking.Tcp
         public InboundByteBudget InboundBudget;
 
         /// <summary>Raised once when the connection ends. Reason is human-readable.</summary>
-        public Action<ConnectionId, string> OnClosed;
+        public Action<ConnectionId, string, bool> OnClosed;
 
         /// <summary>SHA-256 of the TLS certificate securing this connection; empty when plaintext.</summary>
         public byte[] ChannelBinding => _channelBinding;
@@ -158,7 +158,7 @@ namespace CS2MultiplayerMod.Core.Networking.Tcp
             try { _sendQueue.CompleteAdding(); } catch { /* already completing/closed */ }
         }
 
-        public void Close(string reason)
+        public void Close(string reason, bool protocolViolation = false)
         {
             // Ensure OnClosed fires exactly once even under concurrent close attempts.
             if (Interlocked.Exchange(ref _closed, 1) != 0) return;
@@ -174,7 +174,7 @@ namespace CS2MultiplayerMod.Core.Networking.Tcp
             try { _client.Close(); } catch { /* ignore */ }
 
             var handler = OnClosed;
-            if (handler != null) handler(Id, reason);
+            if (handler != null) handler(Id, reason, protocolViolation);
         }
 
         private void ReadLoop()
@@ -205,7 +205,7 @@ namespace CS2MultiplayerMod.Core.Networking.Tcp
 
                     if (length < 1 || length > ProtocolConstants.MaxPayloadBytes)
                     {
-                        Close("invalid frame length: " + length);
+                        Close("invalid frame length: " + length, protocolViolation: true);
                         return;
                     }
 
@@ -213,7 +213,7 @@ namespace CS2MultiplayerMod.Core.Networking.Tcp
                     if (type >= 0) Interlocked.Exchange(ref _lastInboundMs, MonotonicClock.NowMs);
                     if (type < 0 || !FrameLimits.AcceptsFrame((byte)type, length))
                     {
-                        Close("invalid message frame size or type");
+                        Close("invalid message frame size or type", protocolViolation: true);
                         return;
                     }
                     if (InboundBudget != null && !InboundBudget.TryReserve(Id, length))

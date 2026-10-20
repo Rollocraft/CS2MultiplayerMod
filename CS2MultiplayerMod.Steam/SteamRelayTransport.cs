@@ -167,12 +167,12 @@ namespace CS2MultiplayerMod.Core.Networking.Steam
         // ---- construction ---------------------------------------------------------
 
         /// <summary>Open a relay listen socket. Clients reach it with the local join code.</summary>
-        public static SteamRelayTransport StartHost(IModLogger log, int virtualPort)
+        public static SteamRelayTransport StartHost(IModLogger log, int virtualPort, bool relayOnly)
         {
             var transport = new SteamRelayTransport(log, true);
             transport.Begin();
 
-            SteamNetworkingConfigValue_t[] options = CreationOptions();
+            SteamNetworkingConfigValue_t[] options = CreationOptions(relayOnly);
             transport._listenSocket = SteamNetworkingSockets.CreateListenSocketP2P(
                 virtualPort, options.Length, options);
             if (transport._listenSocket == HSteamListenSocket.Invalid)
@@ -193,12 +193,12 @@ namespace CS2MultiplayerMod.Core.Networking.Steam
 
             transport._log.Detail(LogTopic.Transport,
                 "Hosting over the Steam relay on virtual port " + virtualPort +
-                                "; join code " + SteamRelayProvider.LocalSteamId() + ".");
+                (relayOnly ? " (relay only)" : "") + "; join code " + SteamRelayProvider.LocalSteamId() + ".");
             return transport;
         }
 
         /// <summary>Dial a host by join code. Steam picks the route; there is no address to reach.</summary>
-        public static SteamRelayTransport Connect(IModLogger log, string joinCode, int virtualPort)
+        public static SteamRelayTransport Connect(IModLogger log, string joinCode, int virtualPort, bool relayOnly)
         {
             if (!ulong.TryParse((joinCode ?? "").Trim(), out ulong steamId) || steamId == 0)
                 throw new InvalidOperationException(
@@ -210,7 +210,7 @@ namespace CS2MultiplayerMod.Core.Networking.Steam
             var identity = new SteamNetworkingIdentity();
             identity.SetSteamID64(steamId);
 
-            SteamNetworkingConfigValue_t[] options = CreationOptions();
+            SteamNetworkingConfigValue_t[] options = CreationOptions(relayOnly);
             HSteamNetConnection connection =
                 SteamNetworkingSockets.ConnectP2P(ref identity, virtualPort, options.Length, options);
             if (connection == HSteamNetConnection.Invalid)
@@ -222,7 +222,8 @@ namespace CS2MultiplayerMod.Core.Networking.Steam
 
             // Bound before any callback, so the first status change resolves.
             transport.Bind(ConnectionId.Server, connection, steamId);
-            transport._log.Detail(LogTopic.Transport, "Connecting to " + steamId + " over the Steam relay.");
+            transport._log.Detail(LogTopic.Transport, "Connecting to " + steamId + " over the Steam relay" +
+                (relayOnly ? " (relay only)." : "."));
             return transport;
         }
 
@@ -255,16 +256,20 @@ namespace CS2MultiplayerMod.Core.Networking.Steam
         /// <summary>
         /// Creation-time options (route negotiation starts with the connection). Offers a direct route, limited
         /// only by the players' uplinks, besides the shared, policed relay; Steam still chooses and falls back
-        /// to the relay. Direct peers learn each other's addresses, as in direct mode.
+        /// to the relay. Direct peers learn each other's addresses, as in direct mode, so
+        /// <paramref name="relayOnly"/> withholds every candidate: neither side sees an address. A listen
+        /// socket's options apply to every connection it accepts.
         /// </summary>
-        private static SteamNetworkingConfigValue_t[] CreationOptions()
+        private static SteamNetworkingConfigValue_t[] CreationOptions(bool relayOnly)
         {
             var ice = new SteamNetworkingConfigValue_t
             {
                 m_eValue = ESteamNetworkingConfigValue.k_ESteamNetworkingConfig_P2P_Transport_ICE_Enable,
                 m_eDataType = ESteamNetworkingConfigDataType.k_ESteamNetworkingConfig_Int32,
             };
-            ice.m_val.m_int32 = Constants.k_nSteamNetworkingConfig_P2P_Transport_ICE_Enable_All;
+            ice.m_val.m_int32 = relayOnly
+                ? Constants.k_nSteamNetworkingConfig_P2P_Transport_ICE_Enable_Disable
+                : Constants.k_nSteamNetworkingConfig_P2P_Transport_ICE_Enable_All;
             return new[] { ice };
         }
     }

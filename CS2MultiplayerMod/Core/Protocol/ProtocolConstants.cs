@@ -1,4 +1,4 @@
-﻿namespace CS2MultiplayerMod.Core.Protocol
+namespace CS2MultiplayerMod.Core.Protocol
 {
     public static class ProtocolConstants
     {
@@ -6,7 +6,7 @@
         /// Wire-format version; a mismatch is refused at the handshake. Bump on any layout change or new
         /// command, channel or message id.
         /// </summary>
-        public const int ProtocolVersion = 72;
+        public const int ProtocolVersion = 78;
 
         /// <summary>Transport ceiling against corrupt length prefixes; <see cref="MessageCodec"/> caps each type far lower.</summary>
         public const int MaxPayloadBytes = 16 * 1024 * 1024;
@@ -34,5 +34,8 @@
 
         /// <summary>Length cap for the source commit a handshake reports.</summary>
         public const int MaxBuildIdLength = 64;
+
+        /// <summary>Length cap for the note a joiner sends with a join request.</summary>
+        public const int MaxJoinMessageLength = 160;
     }
 }

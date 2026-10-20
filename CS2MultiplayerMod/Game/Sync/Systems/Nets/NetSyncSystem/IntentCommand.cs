@@ -127,10 +127,10 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
 
         /// <summary>
         /// The wire command for one course. Null with no reason is a hidden sub-net skip; a reason voids
-        /// the envelope.
+        /// the envelope. A <paramref name="split"/> course already carries settled end heights.
         /// </summary>
         private NetPlacementCommand CaptureDefinitionCommand(CreationDefinition definition,
-            NetCourse course, out string unrepresentable)
+            NetCourse course, bool split, out string unrepresentable)
         {
             unrepresentable = null;
             string prefabName = PrefabNameOf(definition.m_Prefab);
@@ -168,8 +168,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                 CourseElevationLeft = course.m_Elevation.x,
                 CourseElevationRight = course.m_Elevation.y,
                 FixedIndex = course.m_FixedIndex,
-                Start = CaptureEndpoint(course.m_StartPosition),
-                End = CaptureEndpoint(course.m_EndPosition),
+                Start = CaptureEndpoint(course.m_StartPosition, split),
+                End = CaptureEndpoint(course.m_EndPosition, split),
             };
             const string unnamedOwner = "target an owned sub-net whose owner cannot be named";
             if ((command.Start.Kind == NetEndpointTargetKind.OwnedNode ||
@@ -189,8 +189,10 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
             return command;
         }
 
-        private NetEndpointIntent CaptureEndpoint(CoursePos position)
+        private NetEndpointIntent CaptureEndpoint(CoursePos position, bool settled)
         {
+            // Splitting would settle a free end again, on the surface plus its terrain-relative elevation.
+            if (settled) position.m_Flags &= ~CoursePosFlags.FreeHeight;
             NetEndpointIntent result = new NetEndpointIntent
             {
                 Kind = position.m_Entity == Entity.Null

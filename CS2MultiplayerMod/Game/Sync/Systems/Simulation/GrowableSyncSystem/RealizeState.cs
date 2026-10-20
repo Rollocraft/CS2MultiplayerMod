@@ -12,6 +12,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         /// <summary>Host condition and abandonment; condition is the level-up progress.</summary>
         private bool ApplyConditionAndState(Entity building, GrowableLifecycleCommand command)
         {
+            _buildSync?.UpdateRemoteBuildingRoadExpectation(building, command.RoadConnected);
             if (EntityManager.HasComponent<BuildingCondition>(building))
             {
                 BuildingCondition condition = EntityManager.GetComponentData<BuildingCondition>(building);

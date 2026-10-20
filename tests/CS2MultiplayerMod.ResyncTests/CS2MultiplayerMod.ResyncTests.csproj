@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net9.0</TargetFramework>
+    <OutputType>Exe</OutputType>
+    <LangVersion>9.0</LangVersion>
+    <Nullable>disable</Nullable>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="../../CS2MultiplayerMod/Core/**/*.cs" LinkBase="Core" />
+    <Compile Include="../../CS2MultiplayerMod/Game/Sync/Commands/Simulation/GrowableLifecycleCommand.cs" />
+    <Compile Include="../../CS2MultiplayerMod/Game/Sync/Infrastructure/Pipeline/GrowableCommandInbox.cs" />
+    <Compile Include="../../CS2MultiplayerMod/Game/Sync/Infrastructure/Pipeline/SyncInbox.cs" />
+    <Compile Include="../../CS2MultiplayerMod/Game/Diagnostics/ResyncReport.cs" />
+    <Compile Include="../../CS2MultiplayerMod/Game/Diagnostics/ResyncArbiter.cs" />
+    <Compile Include="../../CS2MultiplayerMod/Game/Diagnostics/ResyncRetry.cs" />
+  </ItemGroup>
+</Project>

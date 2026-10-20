@@ -5,6 +5,8 @@ export interface FormFieldProps {
     value: string;
     secret?: boolean;
     disabled?: boolean;
+    // Typing stops here; the C# side enforces its own cap regardless.
+    maxLength?: number;
     onChange: (value: string) => void;
 }
 
@@ -18,7 +20,7 @@ interface Options {
 }
 
 // Commits every keystroke but only re-syncs from the binding while not being edited.
-export const FormField = ({ label, value, secret, disabled, onChange, styles, escapeBubbles, wrap }: FormFieldProps & Options) => {
+export const FormField = ({ label, value, secret, disabled, maxLength, onChange, styles, escapeBubbles, wrap }: FormFieldProps & Options) => {
     const [draft, setDraft] = useState(value);
     const [editing, setEditing] = useState(false);
 
@@ -44,7 +46,8 @@ export const FormField = ({ label, value, secret, disabled, onChange, styles, es
                 if (!escapeBubbles || e.key !== "Escape") e.stopPropagation();
             }}
             onChange={(e) => {
-                const next = (e.target as HTMLInputElement).value;
+                const typed = (e.target as HTMLInputElement).value;
+                const next = maxLength ? typed.slice(0, maxLength) : typed;
                 setDraft(next);
                 onChange(next);
             }}

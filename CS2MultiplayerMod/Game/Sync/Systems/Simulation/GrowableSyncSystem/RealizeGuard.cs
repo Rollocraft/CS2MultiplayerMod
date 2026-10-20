@@ -70,7 +70,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                         if (_buildSync != null)
                             _buildSync.TrackRemoteBuilding(entity, prefab, position,
                                 transform.m_Rotation,
-                                roadConnectionExpected: true, source: "growable");
+                                roadConnectionExpected: command.RoadConnected, source: "growable",
+                                authoritativeRoadExpectation: true);
                         continue;
                     }
 

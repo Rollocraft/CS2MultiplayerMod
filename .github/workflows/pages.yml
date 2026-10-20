@@ -1,4 +1,4 @@
-name: Deploy MkDocs
+name: Deploy documentation
 
 on:
   push:
@@ -7,8 +7,7 @@ on:
       - main
     paths:
       - "help/**"
-      - "overrides/**"
-      - "mkdocs.yml"
+      - "documentation/**"
       - "docs-requirements.txt"
       - ".github/workflows/pages.yml"
   workflow_dispatch:
@@ -39,12 +38,17 @@ jobs:
           cache: pip
           cache-dependency-path: docs-requirements.txt
 
-      - name: Install MkDocs
+      - name: Install documentation dependencies
         run: |
           pip install -r docs-requirements.txt
 
       - name: Build
-        run: mkdocs build --strict
+        run: python documentation/build.py
+
+      - name: Check documentation links and search
+        run: |
+          python -m unittest discover -s documentation/tests
+          node --test documentation/tests/search.test.cjs documentation/tests/theme.test.cjs documentation/tests/navigation.test.cjs
 
       - name: Setup Pages
         uses: actions/configure-pages@v5

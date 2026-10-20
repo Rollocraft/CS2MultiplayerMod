@@ -127,17 +127,10 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                         throw new System.InvalidOperationException(
                             "an inferred placement split targets an edge replaced by the same operation");
 
-                    float2 startElevation = EndElevation(prepared.Prefab, startSnap, startKind,
-                        prepared.Curve.a,
-                        new float2(command.Start.ElevationLeft, command.Start.ElevationRight),
-                        command.Start.Flags,
-                        ref heightData, ref waterData, out float startCorrection);
-                    float2 endElevation = EndElevation(prepared.Prefab, endSnap, endKind,
-                        prepared.Curve.d,
-                        new float2(command.End.ElevationLeft, command.End.ElevationRight),
-                        command.End.Flags,
-                        ref heightData, ref waterData, out float endCorrection);
-                    TallySurfaceCorrection(startCorrection, endCorrection);
+                    float2 startElevation = EndElevation(startSnap, startKind,
+                        new float2(command.Start.ElevationLeft, command.Start.ElevationRight));
+                    float2 endElevation = EndElevation(endSnap, endKind,
+                        new float2(command.End.ElevationLeft, command.End.ElevationRight));
 
                     Entity placementDefinition = CreateNativeCourse(prepared.Prefab, command,
                         prepared.Curve, startSnap, startT, startKind, startElevation,

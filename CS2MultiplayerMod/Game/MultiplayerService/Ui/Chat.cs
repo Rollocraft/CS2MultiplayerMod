@@ -19,7 +19,7 @@ namespace CS2MultiplayerMod.Game
             if (text.Equals("/diag", StringComparison.OrdinalIgnoreCase))
             {
                 ExportDiagnostics("/diag in chat");
-                AppendChatEntry(null, DiagnosticsStatusText);
+                AppendSessionActivity(DiagnosticsStatusText);
                 return;
             }
 
@@ -27,7 +27,7 @@ namespace CS2MultiplayerMod.Game
             {
                 string echo = WireGuard.SanitizeText(text, WireGuard.MaxChatLength);
                 if (echo.Length == 0) return;
-                AppendChatEntry(_session.LocalPlayerName, echo);
+                AppendPlayerChat(_session.LocalPlayerName, echo, isLocal: true);
             }
             _session.SendChat(text);
         }
@@ -73,69 +73,13 @@ namespace CS2MultiplayerMod.Game
             return sb == null ? text : sb.ToString();
         }
 
-        /// <summary><paramref name="sender"/> null marks a system/event line ("X joined.").</summary>
-        private void AppendChatEntry(string sender, string text)
-        {
-            text = NormalizeForChatFont(text);
-            sender = NormalizeForChatFont(sender);
-            if (string.IsNullOrEmpty(text)) return;
-            lock (_chatLock)
-            {
-                _chatLog.Add(new ChatLogEntry
-                {
-                    Id = _nextChatId++,
-                    Sender = sender,
-                    Text = text,
-                    Time = DateTime.Now.ToString("HH:mm"),
-                });
-                if (_chatLog.Count > MaxChatEntries)
-                    _chatLog.RemoveRange(0, _chatLog.Count - MaxChatEntries);
-                _chatLogJson = BuildChatJson();
-            }
-        }
+        private void AppendPlayerChat(string sender, string text, bool isLocal = false) =>
+            _sessionFeed.AddMessage(NormalizeForChatFont(sender), NormalizeForChatFont(text), isLocal);
 
-        /// <summary>Caller holds <see cref="_chatLock"/>.</summary>
-        private string BuildChatJson()
-        {
-            var sb = new System.Text.StringBuilder(_chatLog.Count * 64 + 2);
-            sb.Append('[');
-            for (int i = 0; i < _chatLog.Count; i++)
-            {
-                if (i > 0) sb.Append(',');
-                ChatLogEntry entry = _chatLog[i];
-                sb.Append("{\"id\":").Append(entry.Id).Append(",\"sender\":");
-                if (entry.Sender == null) sb.Append("null");
-                else AppendJsonString(sb, entry.Sender);
-                sb.Append(",\"text\":");
-                AppendJsonString(sb, entry.Text);
-                sb.Append(",\"time\":");
-                AppendJsonString(sb, entry.Time);
-                sb.Append('}');
-            }
-            sb.Append(']');
-            return sb.ToString();
-        }
+        private void AppendSessionActivity(string text, bool error = false) =>
+            _sessionFeed.AddActivity(NormalizeForChatFont(text), error);
 
-        private static void AppendJsonString(System.Text.StringBuilder sb, string value)
-        {
-            sb.Append('"');
-            for (int i = 0; i < value.Length; i++)
-            {
-                char c = value[i];
-                switch (c)
-                {
-                    case '"': sb.Append("\\\""); break;
-                    case '\\': sb.Append("\\\\"); break;
-                    case '\n': sb.Append("\\n"); break;
-                    case '\r': sb.Append("\\r"); break;
-                    case '\t': sb.Append("\\t"); break;
-                    default:
-                        if (c < ' ') sb.Append("\\u").Append(((int)c).ToString("x4"));
-                        else sb.Append(c);
-                        break;
-                }
-            }
-            sb.Append('"');
-        }
+        private static void AppendJsonString(System.Text.StringBuilder sb, string value) =>
+            SessionFeed.AppendJsonString(sb, value);
     }
 }

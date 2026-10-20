@@ -10,8 +10,8 @@ namespace CS2MultiplayerMod.Game
         private string _pendingJoinsSig = "";
 
         /// <summary>
-        /// Joins awaiting host approval as JSON (<c>[{"id":2,"name":"Alice"}, ...]</c>), rebuilt on change.
-        /// Always "[]" on a client.
+        /// Joins awaiting host approval as JSON (<c>[{"id":2,"name":"Alice","message":""}, ...]</c>), rebuilt
+        /// on change. Always "[]" on a client.
         /// </summary>
         public string PendingJoinsJson { get { lock (_chatLock) return _pendingJoinsJson; } }
 
@@ -32,7 +32,8 @@ namespace CS2MultiplayerMod.Game
 
             var sig = new System.Text.StringBuilder();
             for (int i = 0; i < pending.Count; i++)
-                sig.Append(pending[i].PlayerId).Append(':').Append(pending[i].Name).Append('|');
+                sig.Append(pending[i].PlayerId).Append(':').Append(pending[i].Name).Append(':')
+                   .Append(pending[i].JoinMessage).Append('|');
             string signature = sig.ToString();
             if (signature == _pendingJoinsSig) return;
 
@@ -43,6 +44,8 @@ namespace CS2MultiplayerMod.Game
                 if (i > 0) sb.Append(',');
                 sb.Append("{\"id\":").Append(pending[i].PlayerId).Append(",\"name\":");
                 AppendJsonString(sb, pending[i].Name);
+                sb.Append(",\"message\":");
+                AppendJsonString(sb, pending[i].JoinMessage ?? "");
                 sb.Append('}');
             }
             sb.Append(']');
@@ -66,7 +69,7 @@ namespace CS2MultiplayerMod.Game
         /// <summary>Refuse a join the host declined in the approval prompt.</summary>
         public void DeclineJoinFromUi(int playerId)
         {
-            if (!_session.DeclineJoin(playerId))
+            if (!_session.DeclineJoin(playerId, NowMs))
                 _log.Warn(LogTopic.Session, "Ignored decline for unknown pending join #" + playerId +
                     ".");
             RefreshPendingJoinsJson();

@@ -38,6 +38,8 @@ namespace CS2MultiplayerMod.Game
             PumpDeferredReceivedMap();
             RefreshPendingJoinsJson();
             RefreshPendingResyncsJson();
+            PumpPublicListing();
+            PumpServerPings();
             if (_session.Status == SessionStatus.Connected &&
                 SyncInbox.TryTakeResyncRequest(out ResyncReport queuedReport))
                 RequestAutomaticWorldRecovery(queuedReport);
@@ -220,12 +222,15 @@ namespace CS2MultiplayerMod.Game
             ResetCommandDiagnostics();
             _lastFault = null;
             var config = BuildConfig(settings, hosting: true);
+            _hostConfig = config;
+            _sessionFeed.Clear();
             _log.Event(LogTopic.Session, "Host requested: transport=" + config.Transport +
                 (config.Transport == TransportMode.SteamRelay ? " joinCode=" + RelayProvider.LocalJoinCode : " port=" + config.Port) +
                 " lanOnly=" + config.LanOnly + " password=" +
                 (config.Password.Length > 0 ? "SET" : "NONE") + " maxPlayers=" + config.MaxPlayers +
                 " approval=" + config.RequireJoinApproval +
                 " autoApproveFriends=" + config.AutoApprovePlatformFriends +
+                " listed=" + config.PublicListing + " askJoinMessage=" + config.AskJoinMessage +
                 " clientResyncs=" + config.ClientResyncPolicy +
                 " name='" + config.PlayerName + "'" + ModVersionText(config) + " game=" +
                 config.GameVersion + " dlcs=[" + string.Join(", ", config.DlcList) + "]" +
@@ -233,7 +238,9 @@ namespace CS2MultiplayerMod.Game
             _session.StartHost(config);
         }
 
-        public void JoinFromSettings(Setting settings)
+        public void JoinFromSettings(Setting settings) => StartJoin(settings, null);
+
+        private void StartJoin(Setting settings, ListedJoin listed)
         {
             if (!ModEnabled) { _log.Warn(LogTopic.Session, "Cannot join: the mod is disabled in settings."); return; }
             if (_session.Role != SessionRole.None) { _log.Warn(LogTopic.Session, "Cannot join: a session is already active."); return; }
@@ -242,12 +249,15 @@ namespace CS2MultiplayerMod.Game
             ClearClientExitNotice();
             ResetCommandDiagnostics();
             _lastFault = null;
-            var config = BuildConfig(settings, hosting: false);
+            var config = BuildConfig(settings, hosting: false, listed);
+            _sessionFeed.Clear();
             _log.Event(LogTopic.Session, "Join requested: transport=" + config.Transport +
                 " target=" +
                 (config.Transport == TransportMode.SteamRelay
                     ? config.JoinCode
                     : NetAddress.FormatEndpoint(config.HostAddress, config.Port)) +
+                (listed != null ? " (public list, relay only, note " +
+                    (config.JoinMessage.Length > 0 ? "attached)" : "none)") : "") +
                 " password=" + (config.Password.Length > 0 ? "SET" : "NONE") + " name='" +
                 config.PlayerName + "'" + ModVersionText(config) + " game=" +
                 config.GameVersion + " dlcs=[" + string.Join(", ", config.DlcList) + "]" +
@@ -305,6 +315,7 @@ namespace CS2MultiplayerMod.Game
             Sync.Infrastructure.RealizeGate.Reset();
             ResetWorldSyncState(restoreSpeed: false); // the world is going away with the process
             _session.StopWithNotice("The host closed the game, so this session has ended.");
+            StopListing();
             SetPhase(ClientWorldPhase.None);
             RestoreAutosave(); // even if the phase was already None
             ForgetClientHostWorld(); // process teardown owns the world; do not start MainMenu
@@ -312,13 +323,15 @@ namespace CS2MultiplayerMod.Game
             JoinMapLoader.DeleteTransient(_log);
         }
 
-        private MultiplayerConfig BuildConfig(Setting settings, bool hosting)
+        private MultiplayerConfig BuildConfig(Setting settings, bool hosting, ListedJoin listed = null)
         {
-            // Both sides pick their connection explicitly.
-            TransportMode transport = hosting ? settings.HostTransport() : settings.JoinTransport();
+            // Both sides pick their connection explicitly; a join from the public list is always relay.
+            TransportMode transport = listed != null ? TransportMode.SteamRelay
+                : hosting ? settings.HostTransport() : settings.JoinTransport();
             bool relay = transport == TransportMode.SteamRelay;
+            bool listing = hosting && settings.IsListing();
             string target = (settings.ServerAddress ?? "").Trim();
-            string joinCode = (settings.JoinCodeInput ?? "").Trim();
+            string joinCode = listed != null ? listed.JoinCode : (settings.JoinCodeInput ?? "").Trim();
 
             // A pasted "[2001:db8::1]:25001" or "host:25001" carries its port, which wins over the port field;
             // an IPv6 address is dialed without its brackets.
@@ -355,9 +368,7 @@ namespace CS2MultiplayerMod.Game
 
             // The release part (see Mod.CompatibilityVersion); host and join lines print both.
             string modVersion = Mod.CompatibilityVersion;
-            string gameVersion;
-            try { gameVersion = UnityEngine.Application.version; }
-            catch (Exception) { gameVersion = ""; }
+            string gameVersion = GameVersionCheck.CurrentVersion;
 
             string[] dlcs = DlcCheck.OwnedSyncRelevantDlcs(_log);
             Diagnostics.FlightRecorder.RecordLoadedContent(dlcs);
@@ -366,7 +377,7 @@ namespace CS2MultiplayerMod.Game
             // challenge-response never sends the password.
             return new MultiplayerConfig(
                 settings.PlayerName, target, port,
-                hosting ? settings.HostPassword : settings.JoinPassword,
+                hosting ? settings.HostPassword : listed != null ? listed.Password : settings.JoinPassword,
                 // A relay session is not network-reachable; LAN-only has nothing to restrict.
                 lanOnly: !relay && settings.LanOnly,
                 useEncryption: false, maxPlayers: maxPlayers,
@@ -377,12 +388,17 @@ namespace CS2MultiplayerMod.Game
                 joinCode: relay && !hosting ? joinCode : "",
                 ignoreModCompatibilityChecks: settings.IgnoreModCompatibilityChecks,
                 simulationSync: settings.SimulationSync,
-                autoApprovePlatformFriends: hosting && relay && settings.AutoApproveSteamFriends,
+                autoApprovePlatformFriends: hosting && (relay || listing) && settings.AutoApproveSteamFriends,
                 clientResyncPolicy: hosting
                     ? settings.SelectedClientResyncPolicy()
                     : Core.Session.ClientResyncPolicy.Allow,
                 buildId: Mod.BuildCommit,
-                modManifest: ModsCheck.Manifest);
+                modManifest: ModsCheck.Manifest,
+                autoReconnect: !hosting,
+                publicListing: listing,
+                askJoinMessage: listing && settings.AskJoinMessage,
+                joinMessage: listed != null ? listed.Message : "",
+                relayOnly: listed != null);
         }
     }
 }

@@ -135,6 +135,14 @@ namespace CS2MultiplayerMod.Game.Diagnostics
                 held.Report.Reason + " resolved without reloading the world.", lines);
         }
 
+        internal static bool IsPending(ResyncReport report)
+        {
+            if (report == null) return false;
+            lock (Gate)
+                return Pending.TryGetValue(KeyOf(report.Subsystem, report.Reason, report.Subject),
+                    out Held held) && ReferenceEquals(held.Report, report);
+        }
+
         /// <summary>Reports whose hold elapsed: reload for the first, fold in the rest.</summary>
         public static List<ResyncReport> TakeMatured(long nowMs)
         {
@@ -161,8 +169,8 @@ namespace CS2MultiplayerMod.Game.Diagnostics
                 List<string> lines = report.Lines();
                 lines.Add("observed: " + report.Observations +
                           (report.Observations == 1 ? " time" : " times"));
-                lines.Add("held for: " + (nowMs - report.FirstSeenMs) +
-                          " ms with the net feeders standing down");
+                lines.Add("held for: " + (nowMs - report.FirstSeenMs) + " ms" +
+                          (report.Subsystem == NetSubsystem ? " with the net feeders standing down" : ""));
                 lines.Add("verdict: settled - nothing repaired it in that time");
                 SyncLog.Event(LogTopic.Resync, "World sync: the hold expired and " + report.Reason +
                     " is still unresolved, so this city has to be replaced by the host's.", lines);
@@ -188,7 +196,9 @@ namespace CS2MultiplayerMod.Game.Diagnostics
                       (heldForMs > 0 ? ", first seen " + heldForMs + " ms ago" : string.Empty));
             lines.Add(settled
                 ? "verdict: settled - this is a real divergence and cannot be repaired locally"
-                : "verdict: not settled yet - the net feeders stand down and the edit is retried; " +
+                : "verdict: not settled yet - " +
+                  (report.Subsystem == NetSubsystem ? "the net feeders stand down; " : "") +
+                  "local recovery has a chance to finish; " +
                   "the world is reloaded in " + (HoldWindowMs / 1000) + " s unless it resolves");
             return lines;
         }

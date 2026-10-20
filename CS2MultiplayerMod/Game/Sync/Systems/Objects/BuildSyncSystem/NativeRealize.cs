@@ -57,6 +57,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         private long _blockedNativeObjectDeadline;
         private long _blockedNativeObjectNextAttemptMs;
         private string _lastUnresolvedObjectReason;
+        private readonly ResyncRetry _blockedNativeObjectRecovery = new ResyncRetry();
         // Replays rejected after leaving the inbox return ahead of later commands; bounded.
         private readonly List<SimulationCommandMessage> _nativeObjectReplayPrefix =
             new List<SimulationCommandMessage>(MaxNativeObjectReplayPrefix);
@@ -210,6 +211,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
         private void DrainNativeObjectOperations()
         {
+            _blockedNativeObjectRecovery.Reset();
             _hasBlockedNativeObject = false;
             _blockedNativeObject = null;
             _blockedNativeObjectDeadline = 0;
@@ -232,6 +234,12 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             if (result == NativeObjectResult.Retry)
             {
                 if (now < _blockedNativeObjectDeadline) return false;
+                if (_blockedNativeObjectRecovery.HasReport)
+                {
+                    if (_blockedNativeObjectRecovery.IsHeld) return false;
+                    ClearBlockedNativeObject();
+                    return false;
+                }
                 bool compactPlacement = TryDescribeBlockedPlacement(out string placementPrefab);
                 // Its referenced target never arrived; dropping it silently would leave known divergence.
                 if (compactPlacement)
@@ -250,13 +258,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                         (_lastUnresolvedObjectReason ?? "unknown target") +
                         "); requesting an automatic world sync.");
                 }
-                // Read before the reset below clears it - it is the whole point of the report.
                 string unresolvedDetail = _lastUnresolvedObjectReason ?? "unknown target";
-                _hasBlockedNativeObject = false;
-                _blockedNativeObject = null;
-                _blockedNativeObjectDeadline = 0;
-                _lastUnresolvedObjectReason = null;
-                SyncInbox.RequestResync(CS2MultiplayerMod.Game.Diagnostics.ResyncReport
+                bool held = _blockedNativeObjectRecovery.KeepTrying(ResyncReport
                     .Create(compactPlacement
                             ? "building placement target did not resolve"
                             : "native object operation target did not resolve",
@@ -264,16 +267,26 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     .About(compactPlacement
                         ? "snapped target of '" + placementPrefab + "'"
                         : "native object target (" + unresolvedDetail + ")")
-                    .Tried("re-resolved the target every frame for the whole retry window, not " +
+                    .Tried("re-resolved the target every 200 ms for 10 s of eligible retry time, not " +
                            "counting time the road pipeline was held back")
                     .Fact("what would not resolve", unresolvedDetail));
+                if (!held) ClearBlockedNativeObject();
                 return false;
             }
 
+            if (result == NativeObjectResult.Completed || result == NativeObjectResult.Armed)
+                _blockedNativeObjectRecovery.Resolve(now, "the object target resolved and replay resumed");
+            ClearBlockedNativeObject();
+            return result == NativeObjectResult.Completed;
+        }
+
+        private void ClearBlockedNativeObject()
+        {
             _hasBlockedNativeObject = false;
             _blockedNativeObject = null;
             _blockedNativeObjectDeadline = 0;
-            return result == NativeObjectResult.Completed;
+            _lastUnresolvedObjectReason = null;
+            _blockedNativeObjectRecovery.Reset();
         }
 
         private bool TryDescribeBlockedPlacement(out string prefabName)
@@ -297,6 +310,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
         private void BlockNativeObject(SimulationCommandMessage message, long now)
         {
+            _blockedNativeObjectRecovery.Reset();
             _blockedNativeObject = message;
             _blockedNativeObjectDeadline = now + NativeObjectTargetRetryMs;
             _blockedNativeObjectNextAttemptMs = now + NativeObjectRetryIntervalMs;

@@ -1,9 +1,53 @@
 ---
 title: Changelog
-description: "What changed in each release of the mod: new features, sync work and fixes."
+layout: changelog
+seo_title: "Changelog and release notes | CS2 Multiplayer Mod"
+description: "Read the Cities: Skylines II Multiplayer Mod release notes, including new features, synchronization changes, connection improvements and bug fixes."
 ---
 
 # Changelog
+
+## Version 0.1.7.2 - 2026-10-20
+
+This update adds Public Lobbies, so Steam players can find and join a city without sharing a code. It also brings map pings, player camera navigation, automatic reconnection and smaller world syncs, and a redesigned multiplayer panel. Roads and bridges built by one player no longer end up at a different height for the other, and pipes and tunnels are no longer changed by road upgrades above them.
+
+### New
+
+* Public Lobbies: Steam hosts can turn on **List Publicly** to show their city in the new **Public Lobbies** screen in the main menu. Anyone on Steam can find and join it there without a join code.
+    * Players from the list always connect through the Steam relay, so no IP address is shared in either direction, not even after the host accepts them. This also applies when the host uses a direct connection: the direct port stays open for direct joins, and players from the list still come in through the relay.
+    * Approve Players is always on while a city is listed. Auto-Approve Steam Friends can be used with it, also for direct hosts.
+    * Hosts can give the lobby a name (up to 48 characters) and require a join message (up to 160 characters) that they read in the join request before accepting or declining. The message is shown as plain text only.
+    * A declined player cannot ask to join again for five minutes.
+    * The list can be searched by name and filtered by free slots and password, and shows each lobby's player count, ping and version.
+    * List Publicly turns itself off every time the game starts, so a city is never public because of an earlier choice.
+    * Public Lobbies need the Steam version of the game.
+* Map Pings: choose **Ping map location** in the multiplayer panel to mark the spot at the centre of your screen. Every player sees a pulsing marker in your player color for ten seconds, and the session activity shows who pinged. Pings do not change the city and are not saved.
+* Player Camera Navigation: **View location** in the player list moves your camera to another player's view, and **Follow** keeps your camera with them as they move. Moving the camera yourself or pressing Escape stops following, and it also stops during a world sync or when that player disconnects.
+* Automatic Reconnection: if a client unexpectedly loses the connection to the host, the mod reconnects by itself, with up to six attempts within two minutes. The connection screen shows the progress, and Cancel leaves the session. After reconnecting, the client loads the host's current city. Kicks, bans, a closed session and refused joins are never retried.
+* Smart Resync: **Repair sync** in the multiplayer panel compares money, XP, development points, tourism and weather with the host and corrects only the values that differ, without reloading the city. If the repair does not work, the mod falls back to a world sync.
+* A world sync requested by a client, or started automatically because of a problem on one client, now reloads only that client's city. The other players pause briefly while it is sent, but do not download or reload the city.
+
+### Multiplayer panel
+
+* The panel was redesigned to match the game's UI. Player list, session controls, session activity and chat are now in one place.
+* Each player has their own color, which makes players easier to tell apart.
+* Joins, leaves, pings, world syncs and errors are shown in a separate **Session activity** list. They no longer fill the chat or count as unread messages.
+* Chat: consecutive messages from the same player are grouped, a counter shows how many characters are left, and an unread badge shows new messages while the panel is closed.
+* New mini mode: the panel can be minimized to a small chat-only window.
+* Chat and session activity are cleared when a new session starts, and the chat input is reset when leaving a session.
+* The host settings on the Host screen and in the panel are grouped into collapsible **Settings** and **Public Listing** sections, with info icons that explain each option. Auto-Approve Steam Friends is greyed out instead of hidden while Approve Players is off.
+
+### Sync fixes
+
+* Fixed road joints ending up raised or sunk for the other player on sloped ground, which left nearby buildings without road, water and electricity connections.
+* Fixed ground-level bridges over water jumping to a different height for the other player.
+* Upgrading or replacing a road no longer changes a pipe, subway or tunnel running below it for the other player, and replacing a pipe no longer changes the road above it.
+* Fewer unnecessary world syncs: growing buildings now use the host's road connection, and buildings waiting for a road from the other player keep retrying instead of starting a world sync right away.
+* The message for an automatic world sync now names the player it is for.
+
+### Documentation
+
+* The help website has a new design with light and dark mode and an updated search.
 
 ## Version 0.1.7.1 - 2026-10-12
 
@@ -174,7 +218,7 @@ Improving performance under these new workloads will remain an important focus g
 * Improved logging throughout the synchronization systems, making issues easier to identify, reproduce and fix.
 * World reload logs now include more context about the affected edit, what was found instead, how long the system waited and what recovery steps were attempted first.
 
-## Contributing
+### Contributing
 
 Contributing to the project has previously been difficult, if not nearly impossible.
 

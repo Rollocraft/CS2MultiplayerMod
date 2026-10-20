@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net9.0</TargetFramework>
+    <OutputType>Exe</OutputType>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>disable</Nullable>
+    <NoWarn>SYSLIB0014;SYSLIB0054</NoWarn>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Remove="Runtime/**/*.cs" />
+    <Compile Include="../../CS2MultiplayerMod/Core/**/*.cs" LinkBase="Core" />
+  </ItemGroup>
+</Project>

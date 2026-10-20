@@ -179,8 +179,12 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                         float distSq = math.distancesq(pos.xz, wanted.xz);
                         if (distSq > MatchTolSq) continue;
 
-                        // A junction node's prefab can differ per machine; position decides when no exact match is near.
-                        bool exact = EntityManager.GetComponentData<PrefabRef>(entities[i]).m_Prefab == targets[t].prefab;
+                        // A junction node's prefab can differ per machine; position decides when no exact match is near,
+                        // but never across networks (a pipe node under the junction).
+                        Entity candidatePrefab = EntityManager.GetComponentData<PrefabRef>(entities[i]).m_Prefab;
+                        bool exact = candidatePrefab == targets[t].prefab;
+                        if (!exact && !NetLayerRules.CanShareNode(EntityManager, candidatePrefab, targets[t].prefab))
+                            continue;
                         if ((exact && !bestExact) || (exact == bestExact && distSq < bestDistSq))
                         {
                             best = entities[i];

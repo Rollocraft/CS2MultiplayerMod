@@ -5,6 +5,12 @@ namespace CS2MultiplayerMod.Core.Session
     /// <summary>A session participant as seen locally.</summary>
     public sealed class Peer
     {
+        internal long? LastMapPingMs;
+        internal long PendingStateRequestId;
+        internal Protocol.Messages.StateDigest[] PendingStateDigests;
+        internal long ActiveStateRepairId;
+        internal long StateRepairDeadlineMs;
+        internal long? LastStateRequestMs;
         public readonly ConnectionId Connection;
 
         /// <summary>Host-assigned; 0 until the approval prompt or the completed handshake.</summary>
@@ -17,6 +23,9 @@ namespace CS2MultiplayerMod.Core.Session
 
         /// <summary>Host side: awaiting manual approval. Never overlaps <see cref="Handshaked"/>.</summary>
         public bool AwaitingApproval;
+
+        /// <summary>Host side: the joiner's note for the approval prompt; empty unless the host asked for one.</summary>
+        public string JoinMessage = "";
 
         /// <summary>Host-side: a client world-sync request waiting for an explicit host answer.</summary>
         public bool AwaitingResyncApproval;

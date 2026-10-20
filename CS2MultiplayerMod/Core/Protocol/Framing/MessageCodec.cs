@@ -32,14 +32,16 @@ namespace CS2MultiplayerMod.Core.Protocol
             codec.Register(MessageType.SimulationCommand, () => new SimulationCommandMessage(),
                 ProtocolConstants.MaxSimulationCommandPayloadBytes);
             codec.Register(MessageType.StateSnapshot, () => new StateSnapshotMessage(), 256 * 1024);
-            codec.Register(MessageType.PlayerState, () => new PlayerStateMessage(), 34 + PlayerHoverShape.MaxShapes * PlayerHoverShape.WireSize);
+            codec.Register(MessageType.PlayerState, () => new PlayerStateMessage(), 1024 + PlayerHoverShape.MaxShapes * PlayerHoverShape.WireSize);
             codec.Register(MessageType.BlobChunk, () => new BlobChunkMessage(),
                 ProtocolConstants.BlobChunkBytes + 1024);
             codec.Register(MessageType.StateEdit, () => new StateEditMessage(), 128 * 1024);
             // Sized for the player id plus a capped, UTF-8 encoded reason string.
-            codec.Register(MessageType.ResyncRequest, () => new ResyncRequestMessage(), 1024);
+            codec.Register(MessageType.ResyncRequest, () => new ResyncRequestMessage(), 2048);
             codec.Register(MessageType.WorldSyncControl, () => new WorldSyncControlMessage(), 64);
             codec.Register(MessageType.DisconnectNotice, () => new DisconnectNoticeMessage(), 1024);
+            codec.Register(MessageType.MapPing, () => new MapPingMessage(), 1024);
+            codec.Register(MessageType.StateRepair, () => new StateRepairMessage(), 70 * 1024);
             return codec;
         }
 

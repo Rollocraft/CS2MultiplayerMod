@@ -151,6 +151,10 @@ namespace CS2MultiplayerMod.Core.Session
                     ? null // system notice
                     : WireGuard.SanitizePlayerName(chat.SenderName);
 
+            // Joins, leaves and sync requests reach a client only as these; its log needs them too.
+            if (Role == SessionRole.Client && chat.SenderName == null)
+                _log.Event(LogTopic.Session, "Host notice: " + chat.Text);
+
             NotifyChat(chat.SenderName, chat.Text);
             // Host fans a client's message out to the other clients.
             if (Role == SessionRole.Host)
@@ -210,9 +214,18 @@ namespace CS2MultiplayerMod.Core.Session
             HandleResyncRequest(from, peer, nowUnixMs, ManualSyncReason, false);
 
         private void HandleResyncRequest(ConnectionId from, Peer peer, long nowUnixMs, string reason,
-            bool automatic)
+            bool automatic, long stateRequestId = 0, StateDigest[] digests = null)
         {
             if (Role != SessionRole.Host) return;
+            if (stateRequestId > 0 && peer != null)
+            {
+                if (peer.LastStateRequestMs.HasValue && nowUnixMs - peer.LastStateRequestMs.Value < 5000)
+                {
+                    DeclineStateRepair(from, stateRequestId);
+                    return;
+                }
+                peer.LastStateRequestMs = nowUnixMs;
+            }
 
             reason = WireGuard.SanitizeText(reason, WireGuard.MaxResyncReasonLength);
             if (reason.Length == 0) reason = automatic ? "automatic recovery" : ManualSyncReason;
@@ -222,6 +235,7 @@ namespace CS2MultiplayerMod.Core.Session
 
             if (resyncPolicy == ClientResyncPolicy.HostOnly)
             {
+                DeclineStateRepair(from, stateRequestId);
                 string deniedName = peer != null && peer.Name != null ? peer.Name : from.ToString();
                 _log.Warn(LogTopic.Session, "Declined world sync request from " + deniedName +
                     " because the session policy is host-only.");
@@ -233,6 +247,8 @@ namespace CS2MultiplayerMod.Core.Session
             if (resyncPolicy == ClientResyncPolicy.RequireApproval)
             {
                 if (peer == null) return;
+                peer.PendingStateRequestId = stateRequestId;
+                peer.PendingStateDigests = digests;
                 peer.PendingResyncReason = reason;
                 peer.PendingResyncAutomatic = automatic;
                 if (!peer.AwaitingResyncApproval)
@@ -251,12 +267,14 @@ namespace CS2MultiplayerMod.Core.Session
                 return;
             }
 
-            AcceptClientResyncRequest(from, peer, nowUnixMs, reason, automatic);
+            AcceptClientResyncRequest(from, peer, nowUnixMs, reason, automatic, stateRequestId, digests);
         }
 
         private bool AcceptClientResyncRequest(ConnectionId from, Peer peer, long nowUnixMs,
-            string reason, bool automatic)
+            string reason, bool automatic, long stateRequestId = 0, StateDigest[] digests = null)
         {
+            if (stateRequestId > 0)
+                return BeginStateRepair(from, peer, stateRequestId, digests, nowUnixMs);
             // Stops /sync spam from looping the host; per-peer budgets run on top.
             if (nowUnixMs - _lastResyncAcceptedUnixMs < ResyncRequestCooldownMs)
             {
@@ -276,7 +294,7 @@ namespace CS2MultiplayerMod.Core.Session
 
             // Tell everyone the world is about to snap, then let the game layer stream it.
             string notice = automatic
-                ? "The mod triggered an automatic world sync to recover synchronization."
+                ? "The mod triggered an automatic world sync for " + name + " to recover synchronization."
                 : name + " requested a world sync.";
             BroadcastToAll(new ChatMessage(null, notice), ConnectionId.None);
             NotifyChat(null, notice);
@@ -294,7 +312,8 @@ namespace CS2MultiplayerMod.Core.Session
             string reason = peer.PendingResyncReason;
             bool automatic = peer.PendingResyncAutomatic;
             // Another approved sync just began: keep this card queued.
-            if (AcceptClientResyncRequest(peer.Connection, peer, nowUnixMs, reason, automatic))
+            if (AcceptClientResyncRequest(peer.Connection, peer, nowUnixMs, reason, automatic,
+                peer.PendingStateRequestId, peer.PendingStateDigests))
                 ClearPendingResync(peer);
             return true;
         }
@@ -306,6 +325,7 @@ namespace CS2MultiplayerMod.Core.Session
             Peer peer = FindPendingResyncRequest(playerId);
             if (peer == null) return false;
 
+            DeclineStateRepair(peer.Connection, peer.PendingStateRequestId);
             ClearPendingResync(peer);
             _log.Event(LogTopic.Session, "Host declined the world sync request from " + peer.Name + ".");
             SendTo(peer.Connection, new ChatMessage(null, "The host declined your world sync request."));
@@ -327,6 +347,8 @@ namespace CS2MultiplayerMod.Core.Session
             peer.AwaitingResyncApproval = false;
             peer.PendingResyncReason = null;
             peer.PendingResyncAutomatic = false;
+            peer.PendingStateRequestId = 0;
+            peer.PendingStateDigests = null;
         }
 
         /// <summary>The host applies and relays; a client forwards to the host.</summary>
@@ -408,13 +430,13 @@ namespace CS2MultiplayerMod.Core.Session
 
         /// <summary>Publish the local player's camera and display-only hover outlines.</summary>
         public void SendPlayerState(float x, float y, float z, float eyeX, float eyeY, float eyeZ, float yaw,
-            PlayerHoverShape[] hover = null)
+            PlayerHoverShape[] hover = null, float pitch = 0f, float zoom = 0f)
         {
             if (Status != SessionStatus.Connected || _worldSyncSuspended) return;
 
             // 10 Hz presence: skip under backpressure rather than queue stale hovers behind city updates.
             if (_transport == null || _transport.PendingSendBytes > 16 * 1024) return;
-            var message = new PlayerStateMessage(LocalPlayerId, x, y, z, eyeX, eyeY, eyeZ, yaw, hover);
+            var message = new PlayerStateMessage(LocalPlayerId, x, y, z, eyeX, eyeY, eyeZ, yaw, hover, pitch, zoom, LocalPlayerName);
             if (Role == SessionRole.Host)
                 BroadcastToAll(message, ConnectionId.None);
             else
@@ -426,7 +448,10 @@ namespace CS2MultiplayerMod.Core.Session
             if (_worldSyncSuspended) return;
             // Same anti-impersonation stamp as commands: positions are keyed by player id.
             if (Role == SessionRole.Host && peer != null)
+            {
                 state.PlayerId = peer.PlayerId;
+                state.PlayerName = Core.Protocol.WireGuard.SanitizePlayerName(peer.Name);
+            }
 
             NotifyPlayerState(state);
             if (Role == SessionRole.Host && _transport != null && _transport.PendingSendBytes <= 16 * 1024)

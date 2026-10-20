@@ -52,9 +52,10 @@ namespace CS2MultiplayerMod.Game.Sync.Infrastructure
             if (!shared.HasValue || position.m_Entity != Entity.Null ||
                 (position.m_Flags & CoursePosFlags.DisableMerge) != 0) return position;
             CoursePos node = shared.Value;
-            // Nodes merge only on exact positions; copy position and height inputs.
+            // Nodes merge only on exact positions; copy position and height inputs. A fixed end's elevation
+            // only shapes its own course, and may be a profile pin's band bound.
             position.m_Position = node.m_Position;
-            position.m_Elevation = node.m_Elevation;
+            if ((node.m_Flags & CoursePosFlags.FreeHeight) != 0) position.m_Elevation = node.m_Elevation;
             position.m_Flags = (position.m_Flags & ~CoursePosFlags.FreeHeight) |
                                (node.m_Flags & CoursePosFlags.FreeHeight);
             return position;
