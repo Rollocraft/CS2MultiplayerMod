@@ -103,11 +103,19 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         private struct HostStateObservation
         {
             public byte Flags;
+            public byte RoadFlags;
             public int Condition;
         }
 
         private readonly Dictionary<Entity, HostStateObservation> _hostState =
             new Dictionary<Entity, HostStateObservation>();
+
+        /// <summary>Outlasts a peer's integration check of a spawn, including its arbiter hold.</summary>
+        private const long RoadClaimWatchMs = 60000;
+        private const int MaxRoadClaimWatch = 512;
+        private readonly Dictionary<Entity, long> _roadClaimWatch = new Dictionary<Entity, long>();
+        private readonly List<Entity> _roadClaimScratch = new List<Entity>();
+
         private int _stateScanBucket;
         private int _stateScanCursor;
 
@@ -206,6 +214,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             _constructionSeen.Clear();
             _constructionScratch.Clear();
             _hostState.Clear();
+            _roadClaimWatch.Clear();
             _stateScanBucket = 0;
             _stateScanCursor = 0;
         }
@@ -243,6 +252,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 {
                     _lastLevelScanMs = now;
                     CaptureConstruction(session, now);
+                    CaptureRoadClaimChanges(session, now);
                     CaptureStateChanges(session, now);
                 }
                 ReportStats(session, now);

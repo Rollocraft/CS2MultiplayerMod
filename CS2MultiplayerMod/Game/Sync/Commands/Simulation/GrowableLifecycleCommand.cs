@@ -31,6 +31,11 @@ namespace CS2MultiplayerMod.Game.Sync.Commands
         /// <summary>Set on a spawn whose building starts behind construction scaffolding.</summary>
         public const byte FlagUnderConstruction = 1 << 0;
 
+        /// <summary>The host currently has a live road connection; RequireRoad alone is not evidence.</summary>
+        public const byte FlagRoadConnected = 1 << 1;
+
+        public bool RoadConnected => (Flags & FlagRoadConnected) != 0;
+
         public const int MaxEncodedBytes = 512;
 
         public byte Op;
@@ -117,7 +122,7 @@ namespace CS2MultiplayerMod.Game.Sync.Commands
             if (Op == OpSpawn || Op == OpLevel || Op == OpState)
             {
                 Flags = reader.ReadByte();
-                if ((Flags & ~FlagUnderConstruction) != 0)
+                if ((Flags & ~(FlagUnderConstruction | FlagRoadConnected)) != 0)
                     throw new ProtocolException("Unknown growable lifecycle flags: " + Flags + ".");
                 ConstructionProgress = reader.ReadByte();
                 ConstructionSpeed = reader.ReadByte();

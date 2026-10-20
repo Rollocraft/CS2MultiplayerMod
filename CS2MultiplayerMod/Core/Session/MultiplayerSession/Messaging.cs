@@ -151,6 +151,10 @@ namespace CS2MultiplayerMod.Core.Session
                     ? null // system notice
                     : WireGuard.SanitizePlayerName(chat.SenderName);
 
+            // Joins, leaves and sync requests reach a client only as these; its log needs them too.
+            if (Role == SessionRole.Client && chat.SenderName == null)
+                _log.Event(LogTopic.Session, "Host notice: " + chat.Text);
+
             NotifyChat(chat.SenderName, chat.Text);
             // Host fans a client's message out to the other clients.
             if (Role == SessionRole.Host)
@@ -290,7 +294,7 @@ namespace CS2MultiplayerMod.Core.Session
 
             // Tell everyone the world is about to snap, then let the game layer stream it.
             string notice = automatic
-                ? "The mod triggered an automatic world sync to recover synchronization."
+                ? "The mod triggered an automatic world sync for " + name + " to recover synchronization."
                 : name + " requested a world sync.";
             BroadcastToAll(new ChatMessage(null, notice), ConnectionId.None);
             NotifyChat(null, notice);

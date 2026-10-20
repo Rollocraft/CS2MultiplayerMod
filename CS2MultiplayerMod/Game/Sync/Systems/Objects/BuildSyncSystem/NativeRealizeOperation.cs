@@ -302,7 +302,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             {
                 if (!TryResolvePortableRef(command.PlacementTarget, out attachmentTarget))
                 {
-                    _lastUnresolvedObjectReason = "placement snap target is not present";
+                    _lastUnresolvedObjectReason = "placement snap target is not present " +
+                                                  Describe(command.PlacementTarget);
                     result = NativeObjectResult.Retry;
                     return true;
                 }

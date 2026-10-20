@@ -39,7 +39,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                         ? EntityManager.GetComponentData<global::Game.Common.PseudoRandomSeed>(entity).m_Seed
                         : (ushort)0;
 
-                    byte flags = 0;
+                    byte flags = CaptureRoadConnectionFlag(entity);
                     byte constructionProgress = 0;
                     byte constructionSpeed = 0;
                     if (EntityManager.HasComponent<UnderConstruction>(entity))
@@ -71,6 +71,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     };
                     Send(session, command);
                     ObserveHostState(entity, command);
+                    WatchRoadClaim(entity, now);
                     if ((command.Flags & GrowableLifecycleCommand.FlagUnderConstruction) != 0)
                     {
                         _hostConstruction[entity] = new HostConstructionObservation
@@ -108,6 +109,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     _announcedLevelChange.Remove(entity);
                     _hostConstruction.Remove(entity);
                     _hostState.Remove(entity);
+                    _roadClaimWatch.Remove(entity);
                     Entity prefab = EntityManager.GetComponentData<PrefabRef>(entity).m_Prefab;
                     if (!IsAutonomousGrowable(entity, now)) continue;
                     if (_deleteSync != null && _deleteSync.IsToolDeleteOriginal(entity)) continue;
@@ -194,7 +196,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     AnchorX = transform.m_Position.x,
                     AnchorY = transform.m_Position.y,
                     AnchorZ = transform.m_Position.z,
-                    Flags = GrowableLifecycleCommand.FlagUnderConstruction,
+                    Flags = (byte)(GrowableLifecycleCommand.FlagUnderConstruction |
+                                   CaptureRoadConnectionFlag(entity)),
                     ConstructionProgress = EntityManager
                         .GetComponentData<UnderConstruction>(entity).m_Progress,
                     ConstructionSpeed = EntityManager
@@ -321,15 +324,18 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                         if (cursor >= entities.Length) cursor = 0;
                         Entity entity = entities[cursor++];
                         byte flags = CaptureStateFlags(entity);
+                        byte roadFlags = CaptureRoadConnectionFlag(entity);
                         int condition = CaptureCondition(entity);
                         bool known = _hostState.TryGetValue(entity, out HostStateObservation previous);
-                        if (known && flags == previous.Flags && condition == previous.Condition) continue;
+                        if (known && flags == previous.Flags && condition == previous.Condition &&
+                            roadFlags == previous.RoadFlags) continue;
                         if (!IsAutonomousGrowable(entity, now)) continue;
                         if (!known)
                         {
                             _hostState[entity] = new HostStateObservation
                             {
                                 Flags = flags,
+                                RoadFlags = roadFlags,
                                 Condition = condition,
                             };
                             continue;
@@ -371,7 +377,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
             global::Game.Objects.Transform transform =
                 EntityManager.GetComponentData<global::Game.Objects.Transform>(entity);
-            byte lifecycleFlags = 0, progress = 0, speed = 0;
+            byte lifecycleFlags = CaptureRoadConnectionFlag(entity), progress = 0, speed = 0;
             if (EntityManager.HasComponent<UnderConstruction>(entity))
             {
                 UnderConstruction construction =
@@ -401,11 +407,52 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             _hostState[entity] = new HostStateObservation
             {
                 Flags = command.StateFlags,
+                RoadFlags = (byte)(command.Flags & GrowableLifecycleCommand.FlagRoadConnected),
                 Condition = command.Condition,
             };
         }
 
         private string PrefabIndexSafeName(Entity prefab) => _prefabIndex.NameOf(prefab);
+
+        private byte CaptureRoadConnectionFlag(Entity building) =>
+            _buildSync != null && _buildSync.HasReciprocalRoadConnection(building)
+                ? GrowableLifecycleCommand.FlagRoadConnected : (byte)0;
+
+        private void WatchRoadClaim(Entity entity, long now)
+        {
+            if (_roadClaimWatch.Count < MaxRoadClaimWatch)
+                _roadClaimWatch[entity] = now + RoadClaimWatchMs;
+        }
+
+        /// <summary>
+        /// Restates a recent spawn whose road link changed since its claim: the rolling state scan can take
+        /// longer to reach it than the peer's integration check lasts.
+        /// </summary>
+        private void CaptureRoadClaimChanges(MultiplayerSession session, long now)
+        {
+            if (_roadClaimWatch.Count == 0) return;
+            _roadClaimScratch.Clear();
+            foreach (KeyValuePair<Entity, long> watched in _roadClaimWatch)
+            {
+                Entity entity = watched.Key;
+                if (now >= watched.Value || !EntityManager.Exists(entity) ||
+                    EntityManager.HasComponent<Deleted>(entity))
+                {
+                    _roadClaimScratch.Add(entity);
+                    continue;
+                }
+                if (!_hostState.TryGetValue(entity, out HostStateObservation observed) ||
+                    CaptureRoadConnectionFlag(entity) == observed.RoadFlags ||
+                    !IsAutonomousGrowable(entity, now) ||
+                    !TryCreateStateCommand(entity, out GrowableLifecycleCommand command)) continue;
+                Send(session, command);
+                ObserveHostState(entity, command);
+                _sentState++;
+            }
+            for (int i = 0; i < _roadClaimScratch.Count; i++)
+                _roadClaimWatch.Remove(_roadClaimScratch[i]);
+            _roadClaimScratch.Clear();
+        }
 
         private static string Format(Unity.Mathematics.float3 position) =>
             "(" + position.x.ToString("F1") + ", " + position.y.ToString("F1") + ", " +
