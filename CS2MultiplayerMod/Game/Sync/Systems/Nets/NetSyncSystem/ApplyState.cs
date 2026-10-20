@@ -124,6 +124,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
         // The net tool's definitions after ToolOutputBarrier: the next Apply's courses, with the
         // target/split/elevation intent the final edges no longer carry.
         private readonly List<NetPlacementCommand> _cachedLocalCourses = new List<NetPlacementCommand>();
+        // The definition entities those courses were read from; course splitting rewrites them in place.
+        private readonly List<Entity> _cachedLocalSources = new List<Entity>();
         private sealed class LocalNetToolOperationItem
         {
             public ushort CommandId;
@@ -141,6 +143,15 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
         private readonly List<Entity> _cachedFallbackOriginalEdges = new List<Entity>();
         private string _cachedMixedRejection;
         private bool HasUnrepresentableMixedOperation => _cachedMixedRejection != null;
+
+        private void ClearLocalNetCapture()
+        {
+            _cachedLocalCourses.Clear();
+            _cachedLocalSources.Clear();
+            _cachedLocalMixedOperation.Clear();
+            _cachedFallbackOriginalEdges.Clear();
+            _cachedMixedRejection = null;
+        }
         private long _nextLocalNetOperationId = 1;
         private int _nativeApplyCapturedFrame = -1;
         private int _atomicMixedApplyCapturedFrame = -1;

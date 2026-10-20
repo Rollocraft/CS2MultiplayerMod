@@ -59,23 +59,12 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
             }
 
             if (_capPinnedSpans > 0 || _rzPinnedSpans > 0 || _rzPinRefused > 0 ||
-                _capSelfAnchoredSpans > 0 || _capBentDeckSpans > 0)
+                _capSelfAnchoredSpans > 0)
             {
-                SyncLog.Detail(LogTopic.Nets, "NetSync profile/5s: pinned " +
-                    _capPinnedSpans + " straight span(s); left " + _capSelfAnchoredSpans +
-                    " banded by their own elevation and " + _capBentDeckSpans +
-                    " with a deck that is not one line to the receiver's own generator; realized " +
-                    _rzPinnedSpans + " pinned span(s), " + _rzPinRefused +
-                    " refused (those rebuild their deck from local surfaces).");
-            }
-
-            if (_rzSurfaceCorrections > 0)
-            {
-                SyncLog.Detail(LogTopic.Nets, "NetSync: " + _rzSurfaceCorrections +
-                    " remote endpoint(s)/5s needed " + "an elevation correction (up to " +
-                    _rzSurfaceCorrectionMax.ToString("F1") + " m) because the surface under " +
-                    "them differs from the source's. The height is reproduced; a large or " +
-                    "growing figure means terrain or water is out of step.");
+                SyncLog.Detail(LogTopic.Nets, "NetSync fallback profile/5s: pinned " +
+                    _capPinnedSpans + " straight edge(s); left " + _capSelfAnchoredSpans +
+                    " banded by their own elevation; realized " + _rzPinnedSpans + " pinned, " +
+                    _rzPinRefused + " refused (those rebuild their deck from local surfaces).");
             }
 
             if (_rzLocalSurfaceMatches > 0)
@@ -89,10 +78,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
             _diagTotal = 0;
             _rzSegments = _rzSnapEnds = _rzMergeEnds = _rzMidEnds = _rzFreeEnds = 0;
             _rzLocalSurfaceMatches = 0;
-            _capPinnedSpans = _capSelfAnchoredSpans = _capBentDeckSpans = 0;
+            _capPinnedSpans = _capSelfAnchoredSpans = 0;
             _rzPinnedSpans = _rzPinRefused = 0;
-            _rzSurfaceCorrections = 0;
-            _rzSurfaceCorrectionMax = 0f;
             _peakCreated = _peakUpdated = _peakDeleted = 0;
             _capFilteredHalves = 0;
             _diagStartMs = now;

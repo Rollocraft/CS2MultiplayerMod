@@ -188,29 +188,17 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
         }
 
         /// <summary>
-        /// The elevation an endpoint carries. A reused node keeps its own. A fixed-height endpoint keeps
-        /// the transmitted value, which also selects the terrain or water profile; only
-        /// <see cref="CoursePosFlags.FreeHeight"/> endpoints are recomputed as local surface + elevation.
+        /// The elevation an endpoint carries: a reused node keeps its own, anything else the transmitted
+        /// value. A <see cref="CoursePosFlags.FreeHeight"/> end is settled on the local surface by the
+        /// generator, as on the source; its Y is the tool's interpolated height (grid, parallel and
+        /// two-part curve joints), never a committed one, so it is not a height to restore.
         /// </summary>
-        private float2 EndElevation(Entity prefab, Entity snap, int kind, float3 sourcePoint,
-            float2 sourceElevation, uint sourceFlags, ref TerrainHeightData heightData,
-            ref WaterSurfaceData<SurfaceWater> waterData, out float correction)
+        private float2 EndElevation(Entity snap, int kind, float2 sourceElevation)
         {
-            correction = 0f;
             if ((kind == KindReuseNode || kind == KindReuseConnector) &&
                 EntityManager.HasComponent<global::Game.Net.Elevation>(snap))
                 return EntityManager.GetComponentData<global::Game.Net.Elevation>(snap).m_Elevation;
-
-            bool freeHeight = (((CoursePosFlags)sourceFlags & CoursePosFlags.FreeHeight) != 0);
-            if (!freeHeight)
-                return sourceElevation;
-
-            float surface = SurfaceHeightAt(sourcePoint, sourceElevation.x,
-                NetInfoOf(prefab).ElevationLimit, ref heightData, ref waterData);
-            float projected = sourcePoint.y - surface;
-            correction = NetEndpointElevationPolicy.Correction(sourceElevation.x, projected,
-                freeHeight, SurfaceAgreementTol);
-            return sourceElevation + correction;
+            return sourceElevation;
         }
 
         /// <summary>
@@ -306,8 +294,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
         }
 
         /// <summary>
-        /// Temp-routed definition from captured native intent; elevations are passed in because they may
-        /// carry a local surface correction.
+        /// Temp-routed definition from captured native intent, the tool's own unsplit course; elevations are
+        /// passed in because a reused node keeps its own.
         /// </summary>
         private Entity CreateNativeCourse(Entity prefab, NetPlacementCommand command, Bezier4x3 bez,
             Entity startSnap, float startT, int startKind, float2 startElevation,
@@ -316,13 +304,6 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
         {
             if (CourseTargetIsStale(startSnap)) startSnap = Entity.Null;
             if (CourseTargetIsStale(endSnap)) endSnap = Entity.Null;
-
-            NetEndpointIntent start = command.Start;
-            NetEndpointIntent end = command.End;
-            if (command.PinProfile)
-                ApplyProfilePin(prefab,
-                    ref start.Flags, start.PosY, startSnap, startKind, startT, ref startElevation,
-                    ref end.Flags, end.PosY, endSnap, endKind, endT, ref endElevation);
 
             CreationFlags flags = (CreationFlags)command.CreationFlags;
 
@@ -358,9 +339,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                     m_Elevation = courseElevation,
                     m_Length = command.Length,
                     m_FixedIndex = command.FixedIndex,
-                    m_StartPosition = MakeNativeCoursePos(start, startSnap, startT, startKind,
+                    m_StartPosition = MakeNativeCoursePos(command.Start, startSnap, startT, startKind,
                         startElevation),
-                    m_EndPosition = MakeNativeCoursePos(end, endSnap, endT, endKind,
+                    m_EndPosition = MakeNativeCoursePos(command.End, endSnap, endT, endKind,
                         endElevation),
                 });
                 MergeBatchNodes(definition, startShared, endShared);

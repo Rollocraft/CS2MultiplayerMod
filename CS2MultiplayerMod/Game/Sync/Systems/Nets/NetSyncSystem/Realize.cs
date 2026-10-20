@@ -669,14 +669,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                             out endT, out endKind, out endShared);
                     }
 
-                    // Fixed-height ends keep the captured elevation; free-height ends follow the local surface.
-                    float2 startElevation = EndElevation(prefab, startSnap, startKind, a,
-                        sourceStartElevation, command.Start.Flags,
-                        ref heightData, ref waterData, out float startCorrection);
-                    float2 endElevation = EndElevation(prefab, endSnap, endKind, d,
-                        sourceEndElevation, command.End.Flags,
-                        ref heightData, ref waterData, out float endCorrection);
-                    TallySurfaceCorrection(startCorrection, endCorrection);
+                    float2 startElevation = EndElevation(startSnap, startKind, sourceStartElevation);
+                    float2 endElevation = EndElevation(endSnap, endKind, sourceEndElevation);
 
                     // A native operation stays together; geometry-only fallback commands stay serialized.
                     bool defer = !nativeOperation &&
@@ -897,8 +891,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                 .Tried("nothing - the operation was refused before it could be built")
                 .Fact("what was refused", what)
                 .Fact("net prefab", command.PrefabName)
-                .Fact("measurement", measurement)
-                .Fact("straight profile pinned", command.PinProfile));
+                .Fact("measurement", measurement));
         }
     }
 }

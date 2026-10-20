@@ -218,12 +218,6 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
             }
         }
 
-        private void TallySurfaceCorrection(float start, float end)
-        {
-            if (start != 0f) { _rzSurfaceCorrections++; _rzSurfaceCorrectionMax = math.max(_rzSurfaceCorrectionMax, math.abs(start)); }
-            if (end != 0f) { _rzSurfaceCorrections++; _rzSurfaceCorrectionMax = math.max(_rzSurfaceCorrectionMax, math.abs(end)); }
-        }
-
         /// <summary>Reads terrain and water once per cycle, completing the water dependency.</summary>
         private void TakeSurfaceSnapshot(ref TerrainHeightData heightData,
             ref WaterSurfaceData<SurfaceWater> waterData)
