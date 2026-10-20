@@ -84,9 +84,13 @@ This project is not affiliated with, endorsed by, or sponsored by Colossal Order
 	<Thumbnail Value="Properties/Thumbnail.png" />
 	<!--Screenshot, can be set multiple times-->
 	<Screenshot Value="Properties/CS2MultiplayerMod_Main_Screen.png" />
-	<Screenshot Value="Properties/CS2MultiplayerMod_Multiplayer_Ingame_Screen.png" />
 	<Screenshot Value="Properties/CS2MultiplayerMod_Multiplayer_Main_Screen.png" />
+	<Screenshot Value="Properties/CS2MultiplayerMod_Multiplayer_Lobby_Selector_Screen.png" />
 	<Screenshot Value="Properties/CS2MultiplayerMod_Multiplayer_Join_Screen.png" />
+	<Screenshot Value="Properties/CS2MultiplayerMod_Multiplayer_Ingame_Running_Screen.png" />
+	<Screenshot Value="Properties/CS2MultiplayerMod_Multiplayer_Ingame_Stopped_Screen.png" />
+	<Screenshot Value="Properties/CS2MultiplayerMod_Multiplayer_Host_Screen.png" />
+	
 	<!--Tag, can be set multiple times-->
 	<Tag Value="Code Mod" />
 	<!--Link to the forum post where the mod can be discussed-->
