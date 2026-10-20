@@ -156,6 +156,17 @@ class DocumentationTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "missing asset"):
                 build.validate_site(root)
 
+    def test_changelog_folds_releases_and_lists_versions_without_dates(self):
+        page = build.read_page(build.SOURCE / "changelog.md")
+        releases = re.findall(r"<details class=\"release\"( open)?><summary>(.*?)</summary>", str(page["content"]), re.S)
+        self.assertGreater(len(releases), 5)
+        self.assertEqual([bool(is_open) for is_open, _ in releases], [True] + [False] * (len(releases) - 1))
+        self.assertIn('<time class="release-date" datetime="2026-10-12">Oct 12, 2026</time>', "".join(s for _, s in releases))
+        outline = {item["id"]: item["name"] for item in page["toc"]}
+        self.assertEqual(len(outline), len(releases))
+        self.assertEqual(outline["version-0171-2026-10-12"], "Version 0.1.7.1")
+        self.assertFalse(any(re.search(r"\d{4}-\d{2}-\d{2}", name) for name in outline.values()))
+
     def test_search_sections_ignore_scripts_and_permalink_glyphs(self):
         parser = build.ContentParser()
         parser.feed('<h2 id="sync">Smart sync<a class="headerlink" href="#sync">¶</a></h2><p>Check <strong>treasury</strong>.</p><script>not_searchable()</script>')

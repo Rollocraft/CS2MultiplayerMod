@@ -113,11 +113,26 @@ main:focus { outline: none; }
 .prose th { font-weight: 600; background: var(--secondary); }
 .prose th, .prose td { padding: 13px 15px; border-bottom: 1px solid var(--line); vertical-align: top; }
 .prose tbody tr:hover { background: var(--panel); }
-.admonition, .prose details:not(.tabbed-set) { background: var(--soft); border: 1px solid var(--line); border-left: 3px solid var(--accent); padding: 18px 22px; border-radius: 3px; margin: 26px 0; font-size: 14px; }
+.admonition, .prose details:not(.tabbed-set, .release) { background: var(--soft); border: 1px solid var(--line); border-left: 3px solid var(--accent); padding: 18px 22px; border-radius: 3px; margin: 26px 0; font-size: 14px; }
 .admonition.warning { background: var(--warning-bg); border-color: var(--warning-border); }
 .admonition-title { font-weight: 600; margin-bottom: 8px !important; }
 .admonition p:last-child { margin-bottom: 0; }
 .prose summary { font-weight: 550; }
+/* Changelog releases: one fold per version, the newest open. */
+.prose h1 + .release { margin-top: 28px; }
+.release { border-top: 1px solid var(--line); }
+.release:last-of-type { border-bottom: 1px solid var(--line); }
+.release[open] { padding-bottom: 12px; }
+.release > summary { display: flex; align-items: center; gap: 8px 14px; padding: 18px 0; list-style: none; }
+.release > summary::-webkit-details-marker { display: none; }
+.release > summary::after { content: ""; flex: none; width: 8px; height: 8px; margin: 0 6px 4px 0; border: solid var(--muted); border-width: 0 1.5px 1.5px 0; transform: rotate(45deg); transition: transform .15s; }
+.release[open] > summary::after { margin-bottom: -4px; transform: rotate(-135deg); }
+.release > summary:hover h2 { color: var(--accent); }
+.release > summary:hover::after { border-color: var(--accent); }
+.prose .release h2 { margin: 0; padding: 0; border: 0; font-size: 22px; }
+.release-date, .release-status { margin-left: auto; white-space: nowrap; font-size: 14px; font-weight: 500; }
+.release-date { color: var(--muted); font-variant-numeric: tabular-nums; }
+.release-status { color: var(--accent); background: var(--soft); border-radius: 999px; padding: 2px 10px; font-size: 13px; }
 .tabbed-set > input { position: absolute; opacity: 0; }
 .tabbed-labels { display: flex; gap: 16px; border-bottom: 1px solid var(--line); }
 .tabbed-labels label { cursor: pointer; padding: 10px; }

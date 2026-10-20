@@ -7,6 +7,7 @@ import posixpath
 import re
 import shutil
 import tempfile
+from datetime import date
 from html.parser import HTMLParser
 from pathlib import Path
 from urllib.parse import unquote, urljoin, urlsplit, urlunsplit
@@ -129,6 +130,29 @@ def rewrite_links(content: str, slug: str) -> str:
     return re.sub(r'(href|src)=([\"\x27])(.*?)\2', rewrite, content)
 
 
+RELEASE_SUFFIX = re.compile(r"\s+[-–—]\s+([^<]+?)\s*$")
+
+
+def collapse_releases(content: str) -> str:
+    """Fold each "## Version - date" section into a <details>; only the newest starts open."""
+    intro, *releases = re.split(r"(?=<h2\b)", content)
+    folded = []
+    for i, release in enumerate(releases):
+        heading, notes = release.split("</h2>", 1)
+        start, permalink = re.match(r'(.*?)(<a class="headerlink".*)?$', heading, re.S).groups()
+        label, badge = RELEASE_SUFFIX.search(start), ""
+        if label:
+            start, text = start[:label.start()], label.group(1)
+            if re.fullmatch(r"\d{4}-\d{2}-\d{2}", text):
+                day = date.fromisoformat(text)
+                badge = f'<time class="release-date" datetime="{text}">{day:%b} {day.day}, {day.year}</time>'
+            else:
+                badge = f'<span class="release-status">{text}</span>'
+        folded.append(f'<details class="release"{" open" if i == 0 else ""}><summary>'
+                      f'{start}{permalink or ""}</h2>{badge}</summary>{notes}</details>\n')
+    return intro + "".join(folded)
+
+
 def read_page(source: Path) -> dict:
     text = source.read_text(encoding="utf-8-sig")
     meta = {}
@@ -141,6 +165,8 @@ def read_page(source: Path) -> dict:
     })
     content = rewrite_links(md.convert(text), source.stem)
     content = re.sub(r"(<table\b.*?</table>)", r'<div class="table-wrapper" role="region" tabindex="0" aria-label="Scrollable table">\1</div>', content, flags=re.S)
+    if meta.get("layout") == "changelog":
+        content = collapse_releases(content)
     parser = ContentParser()
     parser.feed(content)
     sections = parser.finish()
@@ -149,6 +175,8 @@ def read_page(source: Path) -> dict:
     toc = md.toc_tokens
     if len(toc) == 1 and toc[0]["level"] == 1:
         toc = toc[0]["children"]
+    if meta.get("layout") == "changelog":
+        toc = [dict(item, name=RELEASE_SUFFIX.sub("", item["name"]), children=[]) for item in toc]
     return add_metadata({"slug": source.stem, "title": title, "description": description,
             "content": Markup(content), "toc": toc, "sections": sections,
             "meta": meta, "url": page_url(source.stem)})

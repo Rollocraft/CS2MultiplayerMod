@@ -46,6 +46,23 @@
         image.decoding = "async";
     });
 
+    // Outline, search and permalink targets may sit inside a folded changelog release.
+    function revealTarget(hash) {
+        const target = hash && document.getElementById(decodeURIComponent(hash.slice(1)));
+        const release = target && target.closest("details.release");
+        if (!release || release.open) return;
+        release.open = true;
+        target.scrollIntoView();
+    }
+    if (document.querySelectorAll("details.release").length) {
+        revealTarget(window.location.hash);
+        window.addEventListener("hashchange", function () { revealTarget(window.location.hash); });
+        document.addEventListener("click", function (event) {
+            const link = event.target.closest("a[href^='#']");
+            if (link) revealTarget(link.hash);
+        });
+    }
+
     const links = Array.from(document.querySelectorAll(".page-outline nav a"));
     const sections = links.map(function (link) {
         return { link: link, heading: document.getElementById(decodeURIComponent(link.hash.slice(1))) };
