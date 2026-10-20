@@ -174,6 +174,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                             }
                             continue;
                         }
+                        // A pipe or tunnel on the same line is another network, not this edit's target.
+                        if (!NetLayerRules.CanReplace(EntityManager, curPrefab, targets[t].newPrefab)) continue;
                         found[t] = true;
                         if (targets[t].cmd.ExactGeometry) exactMatches[t]++;
 

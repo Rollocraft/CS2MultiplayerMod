@@ -4,6 +4,7 @@ using Game.Prefabs;
 using Unity.Entities;
 using Unity.Mathematics;
 using CS2MultiplayerMod.Game.Sync.Commands;
+using CS2MultiplayerMod.Game.Sync.Infrastructure;
 
 namespace CS2MultiplayerMod.Game.Sync.Systems.Net
 {
@@ -74,6 +75,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems.Net
                                       MixedRunsForwardOnCurve(live, target.NewCurve);
                     if (alreadyNew) continue;
                     if (!MixedBothEndsOnCurve(live, target.OldCurve)) continue;
+                    // A pipe or tunnel on the same line is another network, not this edit's target.
+                    if (!NetLayerRules.CanReplace(EntityManager, currentPrefab, target.NewPrefab)) continue;
 
                     if (claims.TryGetValue(edge, out MixedMutationClaim claim))
                     {
