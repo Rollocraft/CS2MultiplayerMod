@@ -50,6 +50,16 @@ namespace CS2MultiplayerMod.Core.Session
                     return;
                 }
 
+                if (DeclinedRecently(address, nowUnixMs))
+                {
+                    _log.Detail(LogTopic.Transport, "Refused " + connection + " (" + address +
+                        "): the host declined this joiner a few minutes ago.");
+                    SendTo(connection, HandshakeResponse.Reject(
+                        "The host declined your request to join. Try again in a few minutes."));
+                    _transport.DisconnectAfterFlush(connection);
+                    return;
+                }
+
                 // Cap the number of sockets sitting in the pre-handshake state.
                 int pending = 0;
                 foreach (var pair in _peers)

@@ -177,6 +177,8 @@ namespace CS2MultiplayerMod
 
             // Persist / load settings to the standard mod settings store.
             AssetDatabase.global.LoadSettings(Name, Setting, new Setting(this));
+            // Listing is chosen per launch, so a city is never public because of an old choice.
+            Setting.ListPublicly = false;
 
             // Core logs through the same logger via ColossalModLogger.
             IModLogger coreLog = ColossalModLogger.Instance;

@@ -87,6 +87,7 @@ namespace CS2MultiplayerMod.Core.Session
                 // LAN-only needs no forward; hosting never waits on it.
                 if (!config.LanOnly)
                     _portForward = PortForward.Begin(_log, config.Port);
+                if (config.PublicListing) _transport = WithListedRelay(server);
 
                 SetStatus(SessionStatus.Connected, "Hosting on port " + config.Port +
                           (config.LanOnly ? " (LAN-only" : " (PUBLIC") +
@@ -95,6 +96,32 @@ namespace CS2MultiplayerMod.Core.Session
             catch (Exception ex)
             {
                 Fault(DescribeStartupFailure("Failed to host", ex));
+            }
+        }
+
+        /// <summary>
+        /// A listed direct host also takes joins from the list, which arrive over the relay only. Without the
+        /// relay the session stays direct and unlisted.
+        /// </summary>
+        private ITransport WithListedRelay(ITransport direct)
+        {
+            if (!RelayProvider.IsAvailable)
+            {
+                _log.Warn(LogTopic.Session, "Not listed publicly: " + RelayProvider.UnavailableReason +
+                    " Direct joins still work.");
+                return direct;
+            }
+            try
+            {
+                ITransport relay = RelayProvider.Current.CreateHost(_log, relayOnly: true);
+                ListedJoinsOpen = true;
+                return new TransportMux(direct, relay);
+            }
+            catch (Exception ex)
+            {
+                _log.Warn(LogTopic.Session, "Not listed publicly: the Steam relay did not start (" + ex.Message +
+                    "). Direct joins still work.");
+                return direct;
             }
         }
 
@@ -121,7 +148,8 @@ namespace CS2MultiplayerMod.Core.Session
 
             try
             {
-                _transport = relay.CreateHost(_log);
+                _transport = relay.CreateHost(_log, config.RelayOnly);
+                ListedJoinsOpen = config.PublicListing;
                 SetStatus(SessionStatus.Connected, "Hosting over the Steam relay (join code " +
                                                    relay.LocalJoinCode + ")");
             }
@@ -200,7 +228,7 @@ namespace CS2MultiplayerMod.Core.Session
             _hostSimulationSync = true;
             EncryptionActive = true;
 
-            _transport = relay.CreateClient(_log, config.JoinCode);
+            _transport = relay.CreateClient(_log, config.JoinCode, config.RelayOnly);
             SetStatus(SessionStatus.Connecting, "Connecting to " + config.JoinCode + " over the Steam relay");
         }
 
@@ -270,6 +298,8 @@ namespace CS2MultiplayerMod.Core.Session
             _puntedConnections.Clear();
             _localCloseReasons.Clear();
             _hostBannedAddresses.Clear();
+            _declinedJoins.Clear();
+            ListedJoinsOpen = false;
             _blobs.Clear();
             ClearOutgoingBlobs();
             _completedBlobTransfers.Clear();

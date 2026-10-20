@@ -186,6 +186,8 @@
         main-menu button, in-game button, connection overlays and milestone countdown. -->
         <ItemGroup>
             <MultiplayerUiOutput Include="$(DeployDir)\$(TargetName).mjs"/>
+            <MultiplayerUiOutput Include="$(DeployDir)\$(TargetName).css"
+                                 Condition="Exists('$(DeployDir)\$(TargetName).css')"/>
             <MultiplayerUiOutput Include="$(DeployDir)\$(TargetName).mjs.LICENSE.txt"
                                  Condition="Exists('$(DeployDir)\$(TargetName).mjs.LICENSE.txt')"/>
         </ItemGroup>
@@ -199,6 +201,8 @@
                Text="The publish folder has not been built. Build the mod before publishing."/>
         <Error Condition="!Exists('$(DeployDir)\$(TargetName).mjs')"
                Text="The publish folder is missing $(TargetName).mjs. Build the mod before publishing."/>
+        <Error Condition="!Exists('$(DeployDir)\$(TargetName).css')"
+               Text="The publish folder is missing $(TargetName).css. Build the mod before publishing."/>
     </Target>
 
     <!--The Burst stubs are compiled through the toolchain's cache directory and keep its

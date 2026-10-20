@@ -35,7 +35,8 @@ namespace CS2MultiplayerMod.Core.Session
             byte[] proof = HandshakeAuth.ComputeProof(_config.Password, challenge.Nonce, binding);
             SendTo(connection, new HandshakeRequest(
                 ProtocolConstants.ProtocolVersion, _config.ModVersion, _config.GameVersion,
-                LocalPlayerName, proof, _config.DlcList, _config.BuildId, _config.ModManifest));
+                LocalPlayerName, proof, _config.DlcList, _config.BuildId, _config.ModManifest,
+                _config.JoinMessage));
         }
 
         private void HandleHandshakeRequest(ConnectionId connection, Peer peer, HandshakeRequest request, long nowUnixMs)
@@ -148,6 +149,8 @@ namespace CS2MultiplayerMod.Core.Session
             peer.ModVersion = request.ModVersion;
             peer.BuildId = request.BuildId;
             peer.GameVersion = request.GameVersion;
+            // Unsolicited text never reaches the host's screen.
+            peer.JoinMessage = _config.AskJoinMessage ? request.JoinMessage ?? "" : "";
 
             // Manual approval: the id is assigned now for the host UI, but the peer stays un-Handshaked until
             // FinalizeJoin.
@@ -223,14 +226,29 @@ namespace CS2MultiplayerMod.Core.Session
             return true;
         }
 
-        /// <summary>Host only: refuses a waiting join with a reason. False when no pending join has this id.</summary>
-        public bool DeclineJoin(int playerId)
+        /// <summary>
+        /// Host only: refuses a waiting join with a reason, and the same joiner's next requests for a while.
+        /// False when no pending join has this id.
+        /// </summary>
+        public bool DeclineJoin(int playerId, long nowUnixMs)
         {
             if (Role != SessionRole.Host) return false;
             Peer peer = FindPendingJoin(playerId);
             if (peer == null) return false;
+            if (!string.IsNullOrEmpty(peer.RemoteAddress))
+                _declinedJoins[NetAddress.BanKey(peer.RemoteAddress)] = nowUnixMs + DeclinedJoinCooldownMs;
             Reject(peer.Connection, "The host declined your request to join.");
             return true;
+        }
+
+        private bool DeclinedRecently(string address, long nowUnixMs)
+        {
+            if (string.IsNullOrEmpty(address)) return false;
+            string key = NetAddress.BanKey(address);
+            if (!_declinedJoins.TryGetValue(key, out long until)) return false;
+            if (nowUnixMs < until) return true;
+            _declinedJoins.Remove(key);
+            return false;
         }
 
         private Peer FindPendingJoin(int playerId)

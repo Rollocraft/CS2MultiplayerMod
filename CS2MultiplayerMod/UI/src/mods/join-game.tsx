@@ -10,6 +10,7 @@ import {
     ConnectionDropdown,
     JoinCodeDisplay,
     publicPasswordMinLength$,
+    LIST_PUBLICLY_HINT,
     publicPasswordMissing,
     usePublicPasswordHint,
 } from "mods/connection-picker";
@@ -19,6 +20,10 @@ import { OtherModsBanner, useModsBlocked } from "mods/mods-banner";
 import { FormField, FormFieldProps } from "mods/form-field";
 import { MULTIPLAYER_BLUE } from "mods/multiplayer-theme";
 import { RESYNC_ALLOW, RESYNC_LOC, ResyncPolicyDropdown } from "mods/resync-policy";
+import { BROWSER_LOC, ServerBrowser } from "mods/server-browser";
+import { InfoTip } from "mods/info-tip";
+import { CollapsibleSection } from "mods/collapsible-section";
+import serverListIcon from "mods/images/cs2mp-server-list.svg";
 import { VersionWarningBanner } from "mods/version-banner";
 
 // Keys from the mod's locales/<lang>.properties; the inline fallbacks only cover a dictionary that
@@ -42,6 +47,13 @@ const LOC = {
     join: "CS2MP.UI.Join",
     disconnect: "CS2MP.UI.Disconnect",
     closeSession: "CS2MP.UI.CloseSession",
+    settings: "CS2MP.UI.Settings",
+    publicListing: "CS2MP.UI.PublicListing",
+    listPublicly: "CS2MP.UI.ListPublicly",
+    listPubliclyHint: "CS2MP.UI.ListPubliclyHint",
+    serverName: "CS2MP.UI.ServerName",
+    askJoinMessage: "CS2MP.UI.AskJoinMessage",
+    publicLobbies: BROWSER_LOC.publicLobbies,
     ...CONNECTION_LOC,
     ...RESYNC_LOC,
 };
@@ -73,6 +85,10 @@ const relaySupported$ = bindValue<boolean>(GROUP, "relaySupported", false);
 const relayUnavailableReason$ = bindValue<string>(GROUP, "relayUnavailableReason", "");
 const joinConnection$ = bindValue<string>(GROUP, "joinConnection", CONNECTION_RELAY);
 const joinCodeInput$ = bindValue<string>(GROUP, "joinCodeInput", "");
+const listPublicly$ = bindValue<boolean>(GROUP, "listPublicly", false);
+const serverName$ = bindValue<string>(GROUP, "serverName", "");
+const askJoinMessage$ = bindValue<boolean>(GROUP, "askJoinMessage", false);
+const maxServerNameLength$ = bindValue<number>(GROUP, "maxServerNameLength", 48);
 
 const openMultiplayerScreen = () => trigger(GROUP, "openMultiplayerScreen");
 
@@ -154,7 +170,7 @@ const styles: Record<string, CSSProperties> = {
         fontSize: "40rem",
         lineHeight: "1.2",
         fontWeight: "bold",
-        color: "var(--menuTitleNormal, #ffffff)",
+        color: "var(--menuTitleNormal)",
         textTransform: "uppercase",
     },
     fallbackContent: {
@@ -183,6 +199,14 @@ const styles: Record<string, CSSProperties> = {
     choiceRow: {
         width: "980rem",
         maxWidth: "90%",
+        height: "350rem",
+        display: "flex",
+        alignItems: "stretch",
+        justifyContent: "center",
+    },
+    choiceRowWide: {
+        width: "1320rem",
+        maxWidth: "94%",
         height: "350rem",
         display: "flex",
         alignItems: "stretch",
@@ -305,30 +329,20 @@ const styles: Record<string, CSSProperties> = {
     connectionSpacer: {
         height: "12rem",
     },
-    hostOptions: {
+    // A sub-option sitting directly under the option it belongs to.
+    // Host settings share one label column, so every box, dropdown and field starts on the same line.
+    hostRow: {
         display: "flex",
         alignItems: "center",
-        marginTop: "14rem",
-        paddingTop: "14rem",
-        borderTop: "1rem solid rgba(157, 193, 222, 0.22)",
+        minHeight: "40rem",
+        marginBottom: "8rem",
     },
-    hostOption: {
-        flex: "1 1 0%",
-        minWidth: 0,
+    hostLabel: {
+        width: "280rem",
+        flexShrink: 0,
         display: "flex",
         alignItems: "center",
-        cursor: "pointer",
-    },
-    hostSetting: {
-        flex: "1 1 0%",
-        minWidth: 0,
-        display: "flex",
-        alignItems: "center",
-    },
-    hostOptionLabel: {
-        flex: "0 1 auto",
-        minWidth: 0,
-        paddingRight: "10rem",
+        paddingRight: "16rem",
         fontSize: "16rem",
         color: "#9dc1de",
         textTransform: "uppercase",
@@ -412,18 +426,39 @@ const ChoiceTile = ({ focusKey, icon, label, disabled, onSelect }: ChoiceTilePro
     </Button>
 );
 
-const HostOption = ({ label, value, onChange }: {
-    label: string;
-    value: boolean;
-    onChange: (value: boolean) => void;
-}) => (
-    <div style={styles.hostOption} onClick={() => onChange(!value)}>
-        <div style={styles.hostOptionLabel}>{label}</div>
-        <div style={styles.toggleBox}>
-            {value ? <img src="Media/Glyphs/Checkmark.svg" style={styles.toggleCheck} /> : null}
-        </div>
+const ToggleBox = ({ value }: { value: boolean }) => (
+    <div style={styles.toggleBox}>
+        {value ? <img src="Media/Glyphs/Checkmark.svg" style={styles.toggleCheck} /> : null}
     </div>
 );
+
+const HostLabel = ({ label, info }: { label: string; info?: string }) => (
+    <div style={styles.hostLabel}>
+        <span>{label}</span>
+        {info ? <InfoTip text={info} /> : null}
+    </div>
+);
+
+const HostOption = ({ label, value, disabled, info, onChange }: {
+    label: string;
+    value: boolean;
+    disabled?: boolean;
+    info?: string;
+    onChange: (value: boolean) => void;
+}) => (
+    <div
+        style={disabled ? { ...styles.hostRow, opacity: 0.55 } : { ...styles.hostRow, cursor: "pointer" }}
+        onClick={() => {
+            if (!disabled) onChange(!value);
+        }}>
+        <HostLabel label={label} info={info} />
+        <ToggleBox value={value} />
+    </div>
+);
+
+const hostFieldStyles: Record<string, CSSProperties> = { ...styles, row: styles.hostRow, label: styles.hostLabel };
+
+const HostField = (props: FormFieldProps) => <FormField {...props} styles={hostFieldStyles} escapeBubbles />;
 
 /** Direct internet hosting the session would refuse; Load/Create stay closed until it is fixed. */
 const useHostPasswordMissing = () => {
@@ -454,17 +489,24 @@ const ConnectionPicker = () => {
     const hostPort = useValue(hostPort$);
     const hostPassword = useValue(hostPassword$);
     const lanOnly = useValue(lanOnly$);
+    const listPublicly = useValue(listPublicly$);
+    const serverName = useValue(serverName$);
+    const askJoinMessage = useValue(askJoinMessage$);
+    const maxServerNameLength = useValue(maxServerNameLength$);
     const passwordMissing = useHostPasswordMissing();
     const passwordHint = usePublicPasswordHint(hostPassword, useValue(publicPasswordMinLength$));
 
     const relay = relaySupported && mode !== CONNECTION_DIRECT;
+    const listed = relaySupported && listPublicly;
+    const [settingsOpen, setSettingsOpen] = useState(false);
+    const [listingOpen, setListingOpen] = useState(false);
 
     return (
         <div style={styles.connectionRail}>
         <div style={styles.connectionPanel} onMouseDown={(e) => e.stopPropagation()}>
             {relaySupported && (
                 <div style={styles.connectionRow}>
-                    <div style={styles.label}>{t(LOC.mode, "Connection")}</div>
+                    <HostLabel label={t(LOC.mode, "Connection")} />
                     <ConnectionDropdown
                         value={mode}
                         style={styles.dropdownToggle}
@@ -477,7 +519,7 @@ const ConnectionPicker = () => {
                 <>
                     <div style={styles.connectionSpacer} />
                     <div style={styles.connectionRow}>
-                        <div style={styles.label}>{t(LOC.joinCode, "Join Code")}</div>
+                        <HostLabel label={t(LOC.joinCode, "Join Code")} />
                         <JoinCodeDisplay code={code} style={styles.codeInput} />
                     </div>
                 </>
@@ -495,12 +537,12 @@ const ConnectionPicker = () => {
             {!relay && (
                 <>
                     <div style={styles.connectionSpacer} />
-                    <Field
+                    <HostField
                         label={t(LOC.port, "Port")}
                         value={hostPort}
                         onChange={(v) => trigger(GROUP, "setHostPort", v)}
                     />
-                    <Field
+                    <HostField
                         label={t(LOC.password, "Password")}
                         secret
                         value={hostPassword}
@@ -509,48 +551,72 @@ const ConnectionPicker = () => {
                     {passwordMissing ? <div style={styles.hintWarning}>{passwordHint}</div> : null}
                 </>
             )}
-            <div style={styles.hostOptions}>
+            <CollapsibleSection
+                title={t(LOC.settings, "Settings")}
+                open={settingsOpen}
+                onToggle={() => setSettingsOpen(!settingsOpen)}>
+                {/* A listed session is open to strangers, so approval is fixed on. */}
                 <HostOption
                     label={t(LOC.requireApproval, "Approve Players")}
                     value={requireApproval}
+                    disabled={listed}
                     onChange={(value) => trigger(GROUP, "setRequireApproval", value)}
                 />
-                <div style={{ width: "28rem", flexShrink: 0 }} />
-                <HostOption
-                    label={t(LOC.simulationSync, "Simulation Sync")}
-                    value={simulationSync}
-                    onChange={(value) => trigger(GROUP, "setSimulationSync", value)}
-                />
-            </div>
-            <div style={styles.hostOptions}>
                 {!relay ? (
-                    <>
-                        <HostOption
-                            label={t(LOC.lanOnly, "LAN Only")}
-                            value={lanOnly}
-                            onChange={(value) => trigger(GROUP, "setLanOnly", value)}
-                        />
-                        <div style={{ width: "28rem", flexShrink: 0 }} />
-                    </>
-                ) : requireApproval ? (
-                    <>
-                        <HostOption
-                            label={t(LOC.autoApproveSteamFriends, "Auto-Approve Steam Friends")}
-                            value={autoApproveSteamFriends}
-                            onChange={(value) => trigger(GROUP, "setAutoApproveSteamFriends", value)}
-                        />
-                        <div style={{ width: "28rem", flexShrink: 0 }} />
-                    </>
-                ) : null}
-                <div style={styles.hostSetting}>
-                    <div style={styles.hostOptionLabel}>{t(LOC.policy, "Client Resyncs")}</div>
+                    <HostOption
+                        label={t(LOC.lanOnly, "LAN Only")}
+                        value={lanOnly}
+                        onChange={(value) => trigger(GROUP, "setLanOnly", value)}
+                    />
+                ) : (
+                    <HostOption
+                        label={t(LOC.autoApproveSteamFriends, "Auto-Approve Steam Friends")}
+                        value={autoApproveSteamFriends}
+                        disabled={!requireApproval}
+                        onChange={(value) => trigger(GROUP, "setAutoApproveSteamFriends", value)}
+                    />
+                )}
+                <div style={styles.hostRow}>
+                    <HostLabel label={t(LOC.policy, "Client Resyncs")} />
                     <ResyncPolicyDropdown
                         value={resyncPolicy}
                         style={{ minWidth: "150rem" }}
                         onChange={(value) => trigger(GROUP, "setResyncPolicy", value)}
                     />
                 </div>
-            </div>
+                <HostOption
+                    label={t(LOC.simulationSync, "Simulation Sync")}
+                    value={simulationSync}
+                    onChange={(value) => trigger(GROUP, "setSimulationSync", value)}
+                />
+            </CollapsibleSection>
+            {relaySupported && (
+                <CollapsibleSection
+                    title={t(LOC.publicListing, "Public Listing")}
+                    open={listingOpen}
+                    onToggle={() => setListingOpen(!listingOpen)}>
+                    <HostOption
+                        label={t(LOC.listPublicly, "List Publicly")}
+                        value={listPublicly}
+                        info={t(LOC.listPubliclyHint, LIST_PUBLICLY_HINT)}
+                        onChange={(value) => trigger(GROUP, "setListPublicly", value)}
+                    />
+                    {/* Shown even while listing is off, greyed out, so the choice is visible up front. */}
+                    <HostOption
+                        label={t(LOC.askJoinMessage, "Require Join Message")}
+                        value={askJoinMessage}
+                        disabled={!listed}
+                        onChange={(value) => trigger(GROUP, "setAskJoinMessage", value)}
+                    />
+                    <HostField
+                        label={t(LOC.serverName, "Lobby Name")}
+                        value={serverName}
+                        disabled={!listed}
+                        maxLength={maxServerNameLength}
+                        onChange={(v) => trigger(GROUP, "setServerName", v)}
+                    />
+                </CollapsibleSection>
+            )}
         </div>
         </div>
     );
@@ -561,12 +627,14 @@ const ChoiceScreen = ({
     debugName,
     initialFocused,
     header,
+    wide,
     children,
 }: {
     focusKey: string | number;
     debugName: string;
     initialFocused: string;
     header?: ReactNode;
+    wide?: boolean;
     children: ReactNode;
 }) => (
     <div style={styles.choiceArea}>
@@ -579,17 +647,18 @@ const ChoiceScreen = ({
             direction={NavigationDirection.Horizontal}
             initialFocused={initialFocused}
             allowLooping>
-            <div style={styles.choiceRow}>{children}</div>
+            <div style={wide ? styles.choiceRowWide : styles.choiceRow}>{children}</div>
         </AutoNavigationScope>
     </div>
 );
 
-type MultiplayerView = "choice" | "join" | "host";
+type MultiplayerView = "choice" | "join" | "host" | "browse";
 
 const PAGE_INDEX: Record<MultiplayerView, number> = {
     choice: 0,
     join: 1,
     host: 2,
+    browse: 3,
 };
 
 interface NativeMenuScreenProps {
@@ -656,7 +725,9 @@ export const MultiplayerScreenRenderer = ({ focusKey, className, onClose }: Nati
         ? t(LOC.multiplayer, "Multiplayer")
         : view === "host"
             ? t(LOC.hostWorldTitle, "Choose a World")
-            : t(LOC.dialogTitle, "Join Multiplayer Game");
+            : view === "browse"
+                ? t(LOC.publicLobbies, "Public Lobbies")
+                : t(LOC.dialogTitle, "Join Multiplayer Game");
 
     const openView = (nextView: MultiplayerView) => {
         setView(nextView);
@@ -759,7 +830,8 @@ export const MultiplayerScreenRenderer = ({ focusKey, className, onClose }: Nati
         <ChoiceScreen
             focusKey={PAGE_INDEX.choice}
             debugName="CS2MP Multiplayer Choice"
-            initialFocused="join-game">
+            initialFocused="join-game"
+            wide={relaySupported}>
             {/* Greyed out for the same reason as Host Game, rather than letting the
                 player into the form to find Join disabled there. Still reachable while
                 a session runs: this tile is the only route to Disconnect. */}
@@ -770,6 +842,16 @@ export const MultiplayerScreenRenderer = ({ focusKey, className, onClose }: Nati
                 disabled={modsBlocked && !inSession}
                 onSelect={() => openView("join")}
             />
+            {/* Steam copies only: the list lives in Steam's lobby directory. */}
+            {relaySupported && (
+                <ChoiceTile
+                    focusKey="browse-servers"
+                    icon={serverListIcon}
+                    label={t(LOC.publicLobbies, "Public Lobbies")}
+                    disabled={inSession || modsBlocked}
+                    onSelect={() => openView("browse")}
+                />
+            )}
             <ChoiceTile
                 focusKey="host-game"
                 icon="Media/Glyphs/Residence.svg"
@@ -799,6 +881,8 @@ export const MultiplayerScreenRenderer = ({ focusKey, className, onClose }: Nati
                 onSelect={() => openHostWorld("hostCreateWorld")}
             />
         </ChoiceScreen>
+    ) : view === "browse" ? (
+        <ServerBrowser focusKey={PAGE_INDEX.browse} />
     ) : joinForm;
 
     const pageIndex = PAGE_INDEX[view];

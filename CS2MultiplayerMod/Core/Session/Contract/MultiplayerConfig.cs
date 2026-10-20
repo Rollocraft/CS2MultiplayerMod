@@ -80,6 +80,22 @@ namespace CS2MultiplayerMod.Core.Session
         /// <summary>Sorted <see cref="Protocol.Messages.ModManifestEntry"/> lines for every other live mod.</summary>
         public readonly string[] ModManifest;
 
+        /// <summary>
+        /// Host only: the session is in the public server list. Listed joins arrive over the relay, so a direct
+        /// host also opens a relay listener, every relay connection is <see cref="RelayOnly"/>, and
+        /// <see cref="RequireJoinApproval"/> is forced on.
+        /// </summary>
+        public readonly bool PublicListing;
+
+        /// <summary>Relay sessions: never offer a direct route, so neither side learns the other's address.</summary>
+        public readonly bool RelayOnly;
+
+        /// <summary>Host only: keep each joiner's note for the approval prompt; otherwise it is dropped.</summary>
+        public readonly bool AskJoinMessage;
+
+        /// <summary>Client only: the note sent with the join request.</summary>
+        public readonly string JoinMessage;
+
         public MultiplayerConfig(string playerName, string hostAddress, int port, string password = "",
                                  bool lanOnly = true, bool useEncryption = true, int maxPlayers = 8,
                                  string modVersion = "", string gameVersion = "", string[] dlcList = null,
@@ -89,8 +105,15 @@ namespace CS2MultiplayerMod.Core.Session
                                  bool simulationSync = true,
                                  bool autoApprovePlatformFriends = false,
                                  ClientResyncPolicy clientResyncPolicy = ClientResyncPolicy.Allow,
-                                 string buildId = "", string[] modManifest = null, bool autoReconnect = false)
+                                 string buildId = "", string[] modManifest = null, bool autoReconnect = false,
+                                 bool publicListing = false, bool askJoinMessage = false, string joinMessage = "",
+                                 bool relayOnly = false)
         {
+            PublicListing = publicListing;
+            RelayOnly = relayOnly || publicListing;
+            AskJoinMessage = askJoinMessage;
+            JoinMessage = Protocol.WireGuard.SanitizeDisplayText(joinMessage,
+                Protocol.ProtocolConstants.MaxJoinMessageLength);
             AutoReconnect = autoReconnect;
             Transport = transport;
             JoinCode = joinCode ?? string.Empty;
@@ -107,7 +130,8 @@ namespace CS2MultiplayerMod.Core.Session
             DlcList = dlcList ?? System.Array.Empty<string>();
             BuildId = buildId ?? string.Empty;
             ModManifest = modManifest ?? System.Array.Empty<string>();
-            RequireJoinApproval = requireJoinApproval;
+            // A listed session is open to strangers: every join waits for the host.
+            RequireJoinApproval = requireJoinApproval || publicListing;
             SimulationSync = simulationSync;
             AutoApprovePlatformFriends = autoApprovePlatformFriends;
             ClientResyncPolicy = clientResyncPolicy;

@@ -24,6 +24,9 @@ namespace CS2MultiplayerMod.Core.Session
         /// <summary>Host side: awaiting manual approval. Never overlaps <see cref="Handshaked"/>.</summary>
         public bool AwaitingApproval;
 
+        /// <summary>Host side: the joiner's note for the approval prompt; empty unless the host asked for one.</summary>
+        public string JoinMessage = "";
+
         /// <summary>Host-side: a client world-sync request waiting for an explicit host answer.</summary>
         public bool AwaitingResyncApproval;
         public string PendingResyncReason;

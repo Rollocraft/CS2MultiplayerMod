@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text;
 
 namespace CS2MultiplayerMod.Core.Protocol
@@ -101,6 +102,58 @@ namespace CS2MultiplayerMod.Core.Protocol
                 sb.Append(c);
             }
             return sb.ToString().Trim();
+        }
+
+        /// <summary>
+        /// <see cref="SanitizeText"/> for free text another player reads: also drops formatting characters
+        /// (bidi overrides, zero-width marks), unpaired surrogates and stacked combining marks, and folds
+        /// whitespace to single spaces. Never splits a surrogate pair at the cap.
+        /// </summary>
+        public static string SanitizeDisplayText(string value, int maxLength)
+        {
+            const int maxCombiningRun = 3;
+            if (string.IsNullOrEmpty(value)) return string.Empty;
+
+            var sb = new StringBuilder(value.Length < maxLength ? value.Length : maxLength);
+            bool pendingSpace = false;
+            int combiningRun = 0;
+            for (int i = 0; i < value.Length; i++)
+            {
+                char c = value[i];
+                if (char.IsWhiteSpace(c))
+                {
+                    pendingSpace = sb.Length > 0;
+                    continue;
+                }
+
+                int width = 1;
+                if (char.IsHighSurrogate(c))
+                {
+                    if (i + 1 >= value.Length || !char.IsLowSurrogate(value[i + 1])) continue;
+                    width = 2;
+                    combiningRun = 0;
+                }
+                else
+                {
+                    UnicodeCategory category = char.GetUnicodeCategory(c);
+                    if (category == UnicodeCategory.Control || category == UnicodeCategory.Format ||
+                        category == UnicodeCategory.Surrogate || category == UnicodeCategory.OtherNotAssigned)
+                        continue;
+                    bool combining = category == UnicodeCategory.NonSpacingMark ||
+                                     category == UnicodeCategory.EnclosingMark ||
+                                     category == UnicodeCategory.SpacingCombiningMark;
+                    combiningRun = combining ? combiningRun + 1 : 0;
+                    if (combiningRun > maxCombiningRun) continue;
+                }
+
+                int space = pendingSpace ? 1 : 0;
+                if (sb.Length + space + width > maxLength) break;
+                if (space == 1) sb.Append(' ');
+                pendingSpace = false;
+                sb.Append(c);
+                if (width == 2) sb.Append(value[++i]);
+            }
+            return sb.ToString();
         }
 
         /// <summary>Sanitize a player name; falls back to "Player" when nothing survives.</summary>

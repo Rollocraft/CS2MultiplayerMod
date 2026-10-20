@@ -24,6 +24,10 @@ export const CONNECTION_LOC = {
     publicPasswordHint: "CS2MP.Connection.PublicPasswordHint",
 };
 
+// Fallback for CS2MP.UI.ListPubliclyHint, shown behind an info icon on both host screens.
+export const LIST_PUBLICLY_HINT =
+    "Anyone on Steam can find this city in Public Lobbies, and Approve Players stays on. Players from the list always connect through the Steam relay, so they never see your IP address - not before and not after you accept them. For public hosting we recommend Steam Relay: with Direct Connection your port stays open to the internet.";
+
 // The C# session rule (MultiplayerConfig.MinPublicPasswordLength), so both host
 // screens warn before a host attempt is refused rather than after.
 export const publicPasswordMinLength$ = bindValue<number>(GROUP, "publicPasswordMinLength", 8);

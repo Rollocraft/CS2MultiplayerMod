@@ -59,5 +59,9 @@ namespace CS2MultiplayerMod.Core.Networking
         /// <summary>For a transport whose underlying stack supplies the arrival time.</summary>
         public static TransportEvent Data(ConnectionId connection, byte[] payload, long receivedAtMs) =>
             new TransportEvent(TransportEventType.Data, connection, payload, null, receivedAtMs);
+
+        /// <summary>The same event under another id, for a transport that renames its inner connections.</summary>
+        public TransportEvent WithConnection(ConnectionId connection) =>
+            new TransportEvent(Type, connection, Payload, Detail, ReceivedAtMs, ProtocolViolation);
     }
 }

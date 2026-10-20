@@ -47,6 +47,7 @@ namespace CS2MultiplayerMod
         private string _hostPassword = "";
         private string _hostConnection = ConnectionRelay;
         private string _joinConnection = ConnectionRelay;
+        private bool _requireJoinApproval = true;
 
         public Setting(IMod mod) : base(mod)
         {
@@ -78,7 +79,18 @@ namespace CS2MultiplayerMod
 
         public bool IsDirectHosting() => !IsRelayHosting();
 
-        public bool HideAutoApproveSteamFriends() => IsDirectHosting() || !RequireJoinApproval;
+        public bool HideAutoApproveSteamFriends() => (IsDirectHosting() && !IsListing()) || !RequireJoinApproval;
+
+        /// <summary>Listing needs the relay backend, so a copy without Steam never lists.</summary>
+        public bool IsListing() => ListPublicly && RelayProvider.IsSupported;
+
+        public bool IsNotListing() => !IsListing();
+
+        /// <summary>The note is read in the approval prompt, and only joins from the list can send one.</summary>
+        public bool HideAskJoinMessage() => IsNotListing();
+
+        /// <summary>A listed session always approves joins, so the toggle is fixed on while listing.</summary>
+        public bool ApprovalLocked() => IsInSession() || IsListing();
 
         /// <summary>How this machine will be reached, resolved once at host/join time.</summary>
         public TransportMode HostTransport() => IsRelayHosting() ? TransportMode.SteamRelay : TransportMode.Direct;
@@ -253,14 +265,40 @@ namespace CS2MultiplayerMod
         [SettingsUISection(HostTab, HostSetupGroup)]
         public bool LanOnly { get; set; } = false;
 
-        [SettingsUIDisableByCondition(typeof(Setting), nameof(IsInSession))]
+        [SettingsUIDisableByCondition(typeof(Setting), nameof(ApprovalLocked))]
         [SettingsUISection(HostTab, HostSetupGroup)]
-        public bool RequireJoinApproval { get; set; } = true;
+        public bool RequireJoinApproval
+        {
+            get => _requireJoinApproval || IsListing();
+            set => _requireJoinApproval = value;
+        }
 
         [SettingsUIHideByCondition(typeof(Setting), nameof(HideAutoApproveSteamFriends))]
         [SettingsUIDisableByCondition(typeof(Setting), nameof(IsInSession))]
         [SettingsUISection(HostTab, HostSetupGroup)]
         public bool AutoApproveSteamFriends { get; set; } = false;
+
+        /// <summary>
+        /// Puts the session in the public server list. Listed joins use the Steam relay only, so no address is
+        /// exchanged either way; a direct host keeps its port for direct joins as well.
+        /// </summary>
+        [SettingsUIHideByCondition(typeof(Setting), nameof(RelayUnsupported))]
+        [SettingsUIDisableByCondition(typeof(Setting), nameof(IsInSession))]
+        [SettingsUISection(HostTab, HostSetupGroup)]
+        public bool ListPublicly { get; set; } = false;
+
+        /// <summary>Players from the list must send a note, read in the approval prompt.</summary>
+        [SettingsUIHideByCondition(typeof(Setting), nameof(HideAskJoinMessage))]
+        [SettingsUIDisableByCondition(typeof(Setting), nameof(IsInSession))]
+        [SettingsUISection(HostTab, HostSetupGroup)]
+        public bool AskJoinMessage { get; set; } = false;
+
+        /// <summary>The name in the public list; empty uses the player name.</summary>
+        [SettingsUITextInput]
+        [SettingsUIHideByCondition(typeof(Setting), nameof(IsNotListing))]
+        [SettingsUIDisableByCondition(typeof(Setting), nameof(IsInSession))]
+        [SettingsUISection(HostTab, HostSetupGroup)]
+        public string ServerName { get; set; } = "";
 
         [SettingsUIDropdown(typeof(Setting), nameof(GetResyncPolicyValues))]
         [SettingsUIDisableByCondition(typeof(Setting), nameof(IsInSession))]
@@ -437,6 +475,9 @@ namespace CS2MultiplayerMod
             LanOnly = false;
             RequireJoinApproval = true;
             AutoApproveSteamFriends = false;
+            ListPublicly = false;
+            ServerName = "";
+            AskJoinMessage = false;
             ResyncPolicy = ResyncAllow;
             SimulationSync = true;
             MaxPlayers = "8";

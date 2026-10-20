@@ -17,9 +17,14 @@ namespace CS2MultiplayerMod.Core.Networking
         /// <summary>The platform account's display name, or empty; used once as the first-run player name.</summary>
         string LocalPlayerName { get; }
 
-        ITransport CreateHost(IModLogger log);
+        /// <param name="relayOnly">Never offer a direct route, so no address reaches the other side.</param>
+        ITransport CreateHost(IModLogger log, bool relayOnly);
 
-        ITransport CreateClient(IModLogger log, string joinCode);
+        /// <param name="relayOnly">Never offer a direct route, so no address reaches the other side.</param>
+        ITransport CreateClient(IModLogger log, string joinCode, bool relayOnly);
+
+        /// <summary>The platform's public server list, or null where it has none.</summary>
+        IServerDirectory OpenDirectory(IModLogger log);
     }
 
     /// <summary>Process-wide relay registration and the join-code format both sides agree on.</summary>
