@@ -203,6 +203,8 @@
                Text="The publish folder is missing $(TargetName).mjs. Build the mod before publishing."/>
         <Error Condition="!Exists('$(DeployDir)\$(TargetName).css')"
                Text="The publish folder is missing $(TargetName).css. Build the mod before publishing."/>
+        <Error Condition="$([System.IO.File]::ReadAllText('$(DeployDir)\$(TargetName).dll').Contains('+dev.'))"
+               Text="The publish folder holds a dev build. Build with -c Release before publishing."/>
     </Target>
 
     <!--The Burst stubs are compiled through the toolchain's cache directory and keep its

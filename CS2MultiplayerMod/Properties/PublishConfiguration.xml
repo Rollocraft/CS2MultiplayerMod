@@ -72,6 +72,10 @@ A joining player's copy is temporary and is closed when the session ends. Save C
 
 Wider tested-mod compatibility, fewer resyncs, better performance in very large cities, and keeping pace with every Cities: Skylines II patch. Playtests and the bug reports that come out of them drive what gets fixed first, so joining one is the fastest way to shape the next version.
 
+## Developer
+
+rollocraft
+
 ## Feedback, feature ideas, support
 
 The Discord server is the preferred place for support, bug reports and playtests: https://discord.gg/KFZTW2YSJt
@@ -96,7 +100,7 @@ This project is not affiliated with, endorsed by, or sponsored by Colossal Order
 	<!--Link to the forum post where the mod can be discussed-->
 	<ForumLink Value="https://forum.paradoxplaza.com/forum/threads/mod-cs2-multiplayer.1944104/" />
 	<!--Version of the mod-->
-	<ModVersion Value="0.1.7.2" />
+	<ModVersion Value="0.1.7.2h1" />
 	<!--Recommended version of the base game to use the mod-->
 	<GameVersion Value="1.6.*" />
 	<!--Dependency for the mod, can be set multiple times-->
@@ -105,9 +109,7 @@ This project is not affiliated with, endorsed by, or sponsored by Colossal Order
 	<RequiredDLC Value="" />
 	<!--Change log for new version. Single line or multi line. Supports minimal markdown subset-->
 	<ChangeLog>
-		Version 0.1.7.2
-		Public Lobbies: Steam hosts can list their city, and anyone can find and join it from the new Public Lobbies screen. Players from the list always connect through the Steam relay, so no IP address is shared. Hosts can ask joining players for a short message.
-		Redesigned multiplayer panel that matches the game's UI, with player colors, a session activity feed and a chat-only mini mode.
+		Wrong Version in Settings
 	</ChangeLog>
 	<!--External link, can be set multiple times. supported types are "discord", "github", "youtube", "twitch", "x", "paypal", "patreon", "buymeacoffee", "kofi", "crowdin", "gitlab", "gofundme"-->
 	<ExternalLink Type="discord" Url="https://discord.gg/KFZTW2YSJt" />
