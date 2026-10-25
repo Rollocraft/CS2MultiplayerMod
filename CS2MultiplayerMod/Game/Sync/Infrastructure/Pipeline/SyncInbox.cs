@@ -51,6 +51,23 @@ namespace CS2MultiplayerMod.Game.Sync.Infrastructure
             return false;
         }
 
+        /// <summary>
+        /// Enqueue for a stream of independent reports the sender restates: overflow drops the oldest entry
+        /// and requests nothing. False when an entry was dropped.
+        /// </summary>
+        public static bool PushShedding<T>(ConcurrentQueue<T> queue, T item, int cap = DefaultCap)
+        {
+            if (queue == null) throw new ArgumentNullException(nameof(queue));
+            if (cap <= 0) throw new ArgumentOutOfRangeException(nameof(cap));
+            lock (queue)
+            {
+                queue.Enqueue(item);
+                if (queue.Count <= cap) return true;
+                queue.TryDequeue(out T dropped);
+                return false;
+            }
+        }
+
         /// <summary>A reload request without evidence, held and corroborated as an unproven timeout.</summary>
         public static void RequestResync(string reason) => RequestResync(ResyncReport.FromReason(reason));
 

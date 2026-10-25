@@ -27,7 +27,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
     /// </summary>
     public partial class FireSyncSystem : CommandSyncSystem, IRealizeStage
     {
-        private const int MaxRealizePerFrame = 32;
+        /// <summary>A client applies at least what the host sends in a frame.</summary>
+        private const int MaxRealizePerFrame = MaxUpdatesPerFrame + MaxEdgesPerFrame;
         private const int MaxRetries = 256;
 
         /// <summary>A target the host burns but this machine lacks may still be arriving.</summary>
@@ -44,6 +45,12 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
         /// <summary>Spreads the reports of a large wildfire over frames.</summary>
         private const int MaxUpdatesPerFrame = 32;
+
+        /// <summary>
+        /// Ignitions, burn-downs and ends per frame. Every barrier re-announces each burning target, which
+        /// in a wildfire is thousands of trees at once; the rest wait for later frames.
+        /// </summary>
+        private const int MaxEdgesPerFrame = 32;
 
         /// <summary>Smaller changes wait for the keep-alive.</summary>
         private const float IntensityStep = 2f;
@@ -75,6 +82,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         private readonly Dictionary<Entity, Burning> _burning = new Dictionary<Entity, Burning>();
         private readonly List<Entity> _ended = new List<Entity>();
         private int _pass;
+        private int _edges; // left this frame; Send counts every non-Update op
 
         // Client.
         private readonly List<Pending> _retry = new List<Pending>();
@@ -129,7 +137,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             _destroys = GetEntityQuery(ComponentType.ReadOnly<global::Game.Objects.Destroy>(),
                 ComponentType.ReadOnly<global::Game.Common.Event>());
 
-            ListenFor(new[] { FireCommand.Id }, FireCommand.MaxEncodedBytes);
+            // A burning fire is re-stated every KeepAliveMs; a lost report costs one target, never a world reload.
+            ListenFor(new[] { FireCommand.Id }, FireCommand.MaxEncodedBytes, hostAuthored: true, restated: true);
         }
 
         /// <summary>ModificationEnd: IgniteSystem has put this frame's fires on their targets.</summary>
@@ -155,6 +164,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
             _pass++;
             int updates = MaxUpdatesPerFrame;
+            _edges = MaxEdgesPerFrame;
             NativeArray<Entity> burning = _burningQuery.ToEntityArray(Allocator.Temp);
             try
             {
@@ -169,6 +179,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                         _burning[entity] = known;
                         continue;
                     }
+
+                    // Over budget: left untracked, so a later frame finds it again.
+                    if (_edges <= 0) continue;
 
                     // Zero is a fire going out, and a fire without its event is zeroed by the burn itself.
                     if (fire.m_Intensity <= 0f || fire.m_Event == Entity.Null ||
@@ -208,7 +221,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             _ended.Clear();
             foreach (KeyValuePair<Entity, Burning> pair in _burning)
                 if (pair.Value.Pass != _pass) _ended.Add(pair.Key);
-            for (int i = 0; i < _ended.Count; i++)
+            // The rest keep their stale pass and end on a later frame.
+            for (int i = 0; i < _ended.Count && _edges > 0; i++)
             {
                 Entity entity = _ended[i];
                 Burning ended = _burning[entity];
@@ -232,6 +246,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         {
             if (!known.BurnedDown && EntityManager.HasComponent<Destroyed>(entity))
             {
+                if (_edges <= 0) return;
                 known.BurnedDown = true;
                 float3 ruin = ReadDamage(entity);
                 if (Send(session, Command(FireOp.BurnDown, known, intensity, ruin)))
@@ -285,7 +300,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         private static float CleanDamage(float value) =>
             float.IsNaN(value) ? 0f : math.clamp(value, 0f, FireCommand.MaxDamage);
 
-        private static bool Send(MultiplayerSession session, FireCommand command)
+        private bool Send(MultiplayerSession session, FireCommand command)
         {
             try
             {
@@ -298,9 +313,10 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 return false;
             }
             // Updates repeat every second per fire; the edges are what a report needs.
-            if (command.Op != FireOp.Update)
-                SyncLog.Detail(LogTopic.City, "FireSync sent " + command.Op + " of '" + command.TargetPrefab +
-                    "' at (" + command.X + ", " + command.Y + ", " + command.Z + ").");
+            if (command.Op == FireOp.Update) return true;
+            _edges--;
+            SyncLog.Detail(LogTopic.City, "FireSync sent " + command.Op + " of '" + command.TargetPrefab +
+                "' at (" + command.X + ", " + command.Y + ", " + command.Z + ").");
             return true;
         }
 
@@ -451,8 +467,6 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
                 while (budget > 0 && _incoming.TryDequeue(out SimulationCommandMessage message))
                 {
-                    // Fires are the host's alone; a relayed client copy is never applied.
-                    if (message.OriginPlayerId != MultiplayerSession.HostPlayerId) continue;
                     if (!CommandDecode.TryDecode(message, FireCommand.Decode, LogTopic.City, "FireSync",
                             out FireCommand command)) continue;
 

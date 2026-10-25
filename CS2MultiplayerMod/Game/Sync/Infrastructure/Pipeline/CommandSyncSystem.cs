@@ -18,7 +18,8 @@ namespace CS2MultiplayerMod.Game.Sync.Infrastructure
         private Action _drain;
 
         protected void ListenFor(ushort[] ids, int maxBodyBytes = int.MaxValue,
-            int queueCap = SyncInbox.DefaultCap, bool drainOnReload = true)
+            int queueCap = SyncInbox.DefaultCap, bool drainOnReload = true, bool hostAuthored = false,
+            bool restated = false)
         {
             _drain = drainOnReload ? DrainQueue : (Action)null;
             _observer = SyncObserverBinding.Bind(
@@ -26,6 +27,8 @@ namespace CS2MultiplayerMod.Game.Sync.Infrastructure
                 {
                     MaxBodyBytes = maxBodyBytes,
                     QueueCap = queueCap,
+                    HostAuthored = hostAuthored ? Mod.Service.Session : null,
+                    Restated = restated,
                 },
                 _drain);
         }
