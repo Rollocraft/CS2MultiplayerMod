@@ -76,7 +76,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 None = SyncQuery.ReadOnly<Deleted, Temp>(),
             });
 
-            ListenFor(new[] { AccidentCommand.Id }, AccidentCommand.MaxEncodedBytes);
+            ListenFor(new[] { AccidentCommand.Id }, AccidentCommand.MaxEncodedBytes, hostAuthored: true);
         }
 
         /// <summary>
@@ -164,8 +164,6 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
                 while (budget > 0 && _incoming.TryDequeue(out SimulationCommandMessage message))
                 {
-                    // Accidents are the host's alone; a relayed client copy is never applied.
-                    if (message.OriginPlayerId != MultiplayerSession.HostPlayerId) continue;
                     if (!CommandDecode.TryDecode(message, AccidentCommand.Decode, LogTopic.City, "AccidentSync",
                             out AccidentCommand command)) continue;
 
