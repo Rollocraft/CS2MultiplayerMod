@@ -7,6 +7,15 @@ description: "Read the Cities: Skylines II Multiplayer Mod release notes, includ
 
 # Changelog
 
+## Version 0.1.7.3 - 2026-10-25
+
+This update fixes sessions getting stuck on "Syncing World" while a large fire, such as a forest fire, was burning in the city.
+
+### Sync fixes
+
+* Fixed a large fire making the game reload the city over and over, which left players stuck on "Syncing World" until they were disconnected. Fire updates are now spread over several frames, and if too many arrive at once, the oldest are skipped instead of reloading the city. Burning fires are sent again every few seconds, so a skipped update corrects itself.
+* The host no longer queues its own fire and traffic accident updates, which could make it start a world sync by itself.
+
 ## Version 0.1.7.2 - 2026-10-20
 
 This update adds Public Lobbies, so Steam players can find and join a city without sharing a code. It also brings map pings, player camera navigation, automatic reconnection and smaller world syncs, and a redesigned multiplayer panel. Roads and bridges built by one player no longer end up at a different height for the other, and pipes and tunnels are no longer changed by road upgrades above them.

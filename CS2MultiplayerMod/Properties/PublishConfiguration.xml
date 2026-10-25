@@ -100,7 +100,7 @@ This project is not affiliated with, endorsed by, or sponsored by Colossal Order
 	<!--Link to the forum post where the mod can be discussed-->
 	<ForumLink Value="https://forum.paradoxplaza.com/forum/threads/mod-cs2-multiplayer.1944104/" />
 	<!--Version of the mod-->
-	<ModVersion Value="0.1.7.2h1" />
+	<ModVersion Value="0.1.7.3" />
 	<!--Recommended version of the base game to use the mod-->
 	<GameVersion Value="1.6.*" />
 	<!--Dependency for the mod, can be set multiple times-->
@@ -109,7 +109,7 @@ This project is not affiliated with, endorsed by, or sponsored by Colossal Order
 	<RequiredDLC Value="" />
 	<!--Change log for new version. Single line or multi line. Supports minimal markdown subset-->
 	<ChangeLog>
-		Wrong Version in Settings
+		Fixed issues with the fire and accident sync
 	</ChangeLog>
 	<!--External link, can be set multiple times. supported types are "discord", "github", "youtube", "twitch", "x", "paypal", "patreon", "buymeacoffee", "kofi", "crowdin", "gitlab", "gofundme"-->
 	<ExternalLink Type="discord" Url="https://discord.gg/KFZTW2YSJt" />
