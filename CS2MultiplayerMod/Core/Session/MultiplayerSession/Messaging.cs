@@ -57,6 +57,7 @@ namespace CS2MultiplayerMod.Core.Session
         {
             List<Peer> dead = null;         // dropped silently at the socket
             List<Peer> unanswered = null;   // approvals the host never answered
+            List<Peer> slowLoads = null;    // still loading the streamed world
             foreach (var pair in _peers)
             {
                 Peer peer = pair.Value;
@@ -66,7 +67,14 @@ namespace CS2MultiplayerMod.Core.Session
                     if (silentMs <= PeerTimeoutMs) continue;
                     if (silentMs <= WorldLoadPeerTimeoutMs &&
                         _worldLoadingPeers.Contains(peer.Connection.Value))
+                    {
+                        if (silentMs > SlowWorldLoadNoticeMs && peer.SlowLoadNoticedForSeenMs != peer.LastSeenUnixMs)
+                        {
+                            peer.SlowLoadNoticedForSeenMs = peer.LastSeenUnixMs;
+                            (slowLoads ?? (slowLoads = new List<Peer>())).Add(peer);
+                        }
                         continue;
+                    }
 
                     if (silentMs <= StalledPeerTimeoutMs && InboundStillArriving(peer.Connection))
                     {
@@ -109,6 +117,15 @@ namespace CS2MultiplayerMod.Core.Session
                 foreach (Peer peer in unanswered)
                     // Reject logs, delivers the reason, flushes, and removes the peer.
                     Reject(peer.Connection, "The host did not respond to your join request in time.");
+
+            if (slowLoads != null)
+                foreach (Peer peer in slowLoads)
+                {
+                    string notice = "Loading the world is taking a while for " + peer.Name +
+                                    " - that is their computer loading the city, not the internet connection or the mod.";
+                    BroadcastToAll(new ChatMessage(null, notice), ConnectionId.None);
+                    NotifyChat(null, notice);
+                }
         }
 
         private bool InboundStillArriving(ConnectionId connection)

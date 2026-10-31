@@ -29,6 +29,9 @@ namespace CS2MultiplayerMod.Core.Session
         /// </summary>
         private const int WorldLoadPeerTimeoutMs = 180000;
 
+        /// <summary>Silence while loading after which everyone is told the delay is that player's load.</summary>
+        private const int SlowWorldLoadNoticeMs = 30000;
+
         /// <summary>A join awaiting approval is auto-declined after this.</summary>
         private const int JoinApprovalTimeoutMs = 120000;
 
