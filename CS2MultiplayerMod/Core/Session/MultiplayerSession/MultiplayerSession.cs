@@ -23,6 +23,12 @@ namespace CS2MultiplayerMod.Core.Session
         /// </summary>
         private const int StalledPeerTimeoutMs = 60000;
 
+        /// <summary>
+        /// Longest a peer installing a streamed world may stay silent: loading blocks its game thread, so
+        /// nothing is sent until the load ends. Matches the game layer's load-acknowledgement deadline.
+        /// </summary>
+        private const int WorldLoadPeerTimeoutMs = 180000;
+
         /// <summary>A join awaiting approval is auto-declined after this.</summary>
         private const int JoinApprovalTimeoutMs = 120000;
 
@@ -64,6 +70,8 @@ namespace CS2MultiplayerMod.Core.Session
         private readonly HashSet<int> _puntedConnections = new HashSet<int>();
         // Why this machine closed a connection; the transport's text is the same for every local close.
         private readonly Dictionary<int, string> _localCloseReasons = new Dictionary<int, string>();
+        // Host: snapshot targets of the open epoch that have not yet acknowledged their load.
+        private readonly HashSet<int> _worldLoadingPeers = new HashSet<int>();
         private readonly FailedAuthTracker _failedAuth = new FailedAuthTracker();
 
         private ITransport _transport;

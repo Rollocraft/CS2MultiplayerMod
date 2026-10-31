@@ -64,6 +64,9 @@ namespace CS2MultiplayerMod.Core.Session
                 {
                     long silentMs = nowUnixMs - peer.LastSeenUnixMs;
                     if (silentMs <= PeerTimeoutMs) continue;
+                    if (silentMs <= WorldLoadPeerTimeoutMs &&
+                        _worldLoadingPeers.Contains(peer.Connection.Value))
+                        continue;
 
                     if (silentMs <= StalledPeerTimeoutMs && InboundStillArriving(peer.Connection))
                     {
