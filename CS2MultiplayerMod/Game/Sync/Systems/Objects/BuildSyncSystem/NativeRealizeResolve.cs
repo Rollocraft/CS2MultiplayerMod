@@ -174,10 +174,11 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 }
                 if (!string.IsNullOrEmpty(definition.AttachedPrefabName))
                 {
+                    Entity attachmentPrefab = DefinitionObjectPrefab(target.Prefab, target.Original);
                     if (target.Attached != Entity.Null ||
                         !_prefabIndex.TryResolve(definition.AttachedPrefabName,
                             candidate => IsCompatiblePlaceholderAttachment(definition,
-                                target.Prefab, candidate), out Entity attachedPrefab))
+                                attachmentPrefab, candidate), out Entity attachedPrefab))
                     {
                         reason = "prefab-local attachment is unavailable or incompatible";
                         return false;

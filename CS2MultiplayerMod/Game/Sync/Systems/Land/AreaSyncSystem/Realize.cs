@@ -226,8 +226,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     Entity candidate = areas[i];
                     if (EntityManager.GetComponentData<PrefabRef>(candidate).m_Prefab !=
                         areaPrefab) continue;
-                    if (TryFindTopAreaOwner(candidate, out Entity topOwner) &&
-                        topOwner == owner) return candidate;
+                    if (TryFindDeclaringAreaOwner(candidate, areaPrefab, out Entity declaring) &&
+                        declaring == owner) return candidate;
                 }
             }
             finally

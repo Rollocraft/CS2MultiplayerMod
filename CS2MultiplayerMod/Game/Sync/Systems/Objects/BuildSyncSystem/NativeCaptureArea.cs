@@ -27,12 +27,29 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         }
 
         private bool SpecializedAreaOwnerStillMatches(Entity area,
-            ObjectToolOperationCommand operation)
+            ObjectToolOperationCommand operation) =>
+            TryFindSpecializedAreaOwner(area, operation, out _);
+
+        /// <summary>The lot's owner that is the operation's root: the building, or an upgrade placed on one.</summary>
+        private bool TryFindSpecializedAreaOwner(Entity area, ObjectToolOperationCommand operation,
+            out Entity owner)
         {
+            owner = Entity.Null;
             if (area == Entity.Null || !EntityManager.Exists(area)) return false;
 
-            return TryFindTopOwner(area, out Entity topOwner) &&
-                   SpecializedObjectMatchesRoot(topOwner, operation);
+            Entity cursor = area;
+            for (int depth = 0; depth < 64 && EntityManager.HasComponent<Owner>(cursor); depth++)
+            {
+                Entity next = EntityManager.GetComponentData<Owner>(cursor).m_Owner;
+                if (next == Entity.Null || next == cursor || !EntityManager.Exists(next)) return false;
+                if (SpecializedObjectMatchesRoot(next, operation))
+                {
+                    owner = next;
+                    return true;
+                }
+                cursor = next;
+            }
+            return false;
         }
 
         private bool SpecializedObjectMatchesRoot(Entity topOwner,
@@ -300,15 +317,14 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 !EntityManager.HasComponent<PrefabRef>(area) ||
                 !EntityManager.HasBuffer<global::Game.Areas.Node>(area)) return false;
 
-            if (!TryFindTopOwner(area, out Entity topOwner) ||
-                !SpecializedObjectMatchesRoot(topOwner, operation)) return false;
+            if (!TryFindSpecializedAreaOwner(area, operation, out Entity owner)) return false;
 
             global::Game.Areas.Area areaData =
                 EntityManager.GetComponentData<global::Game.Areas.Area>(area);
             if ((areaData.m_Flags & global::Game.Areas.AreaFlags.Complete) == 0) return false;
 
             Entity areaPrefab = EntityManager.GetComponentData<PrefabRef>(area).m_Prefab;
-            Entity ownerPrefab = EntityManager.GetComponentData<PrefabRef>(topOwner).m_Prefab;
+            Entity ownerPrefab = EntityManager.GetComponentData<PrefabRef>(owner).m_Prefab;
             if (!IsSpecializedAreaPrefab(areaPrefab) ||
                 !PrefabDeclaresOwnedArea(ownerPrefab, areaPrefab)) return false;
             string areaPrefabName = _prefabSystem.GetPrefabName(areaPrefab);

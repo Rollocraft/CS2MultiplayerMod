@@ -261,7 +261,13 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
                 CaptureObjectToolOperation(definitions);
                 ObjectToolOperationCommand operation = _cachedLocalObjectOperation;
-                if (operation == null || operation.Definitions == null) return;
+                if (operation == null || operation.Definitions == null)
+                {
+                    if (_uncapturedObjectDefinition != Entity.Null)
+                        SyncLog.Trace(LogTopic.Buildings, "object apply not captured: " +
+                            DescribeUncapturedDefinition(_uncapturedObjectDefinition));
+                    return;
+                }
 
                 // Registered before ToolOutput applies it; a specialized object half is Created before it publishes.
                 RememberPlayerPlacedSpawnables(operation,
@@ -295,6 +301,18 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             {
                 definitions.Dispose();
             }
+        }
+
+        private string DescribeUncapturedDefinition(Entity definition)
+        {
+            if (!EntityManager.Exists(definition) ||
+                !EntityManager.HasComponent<CreationDefinition>(definition)) return "gone";
+            CreationDefinition creation = EntityManager.GetComponentData<CreationDefinition>(definition);
+            Entity prefab = DefinitionObjectPrefab(creation.m_Prefab, creation.m_Original);
+            return "prefab=" + (prefab != Entity.Null ? PrefabIndex.SafeName(_prefabSystem, prefab) : "none") +
+                   " flags=" + creation.m_Flags + " original=" + (creation.m_Original != Entity.Null) +
+                   " owner=" + (creation.m_Owner != Entity.Null) +
+                   " attached=" + (creation.m_Attached != Entity.Null);
         }
 
         /// <summary>Resets the one-frame marker; capture happens in <see cref="CaptureLocalObjectApplyBeforeToolOutput"/>.</summary>
