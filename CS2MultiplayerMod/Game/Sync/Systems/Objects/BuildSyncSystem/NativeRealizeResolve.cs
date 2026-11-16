@@ -112,10 +112,26 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             return SamePortableSource(claimed, source);
         }
 
+        // The edited or owning object an operation could not find; bulldozed there, the operation is moot.
+        private bool _hasUnresolvedDependency;
+        private float3 _unresolvedDependencyPosition;
+
+        private void NoteUnresolvedDependency(PortableEntityRef target)
+        {
+            _hasUnresolvedDependency = true;
+            _unresolvedDependencyPosition = new float3(target.PosX, target.PosY, target.PosZ);
+        }
+
         private bool TryResolveObjectOperation(ObjectToolOperationCommand command,
             out ResolvedObjectDefinition[] resolved, out string reason)
         {
             resolved = new ResolvedObjectDefinition[command.Definitions.Length];
+            _hasUnresolvedDependency = false;
+            // A moved object no longer stands where its bulldoze looks for it, so that race does diverge.
+            bool relocates = false;
+            for (int i = 0; i < command.Definitions.Length; i++)
+                relocates |= ((CreationFlags)command.Definitions[i].CreationFlags &
+                              CreationFlags.Relocate) != 0;
             var originalClaims = new Dictionary<Entity, PortableEntityRef>();
             if (command.IsAssetStamp)
             {
@@ -152,6 +168,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 {
                     reason = "definition " + i + " original target is not present " +
                              Describe(definition.Original);
+                    if (!relocates) NoteUnresolvedDependency(definition.Original);
                     return false;
                 }
                 if (!TryClaimObjectOriginal(originalClaims, definition.Original, target.Original))
@@ -164,6 +181,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 {
                     reason = "definition " + i + " owner target is not present " +
                              Describe(definition.Owner);
+                    if (!relocates) NoteUnresolvedDependency(definition.Owner);
                     return false;
                 }
                 if (!TryResolvePortableRef(definition.Attached, out target.Attached))
@@ -174,10 +192,11 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 }
                 if (!string.IsNullOrEmpty(definition.AttachedPrefabName))
                 {
+                    Entity attachmentPrefab = DefinitionObjectPrefab(target.Prefab, target.Original);
                     if (target.Attached != Entity.Null ||
                         !_prefabIndex.TryResolve(definition.AttachedPrefabName,
                             candidate => IsCompatiblePlaceholderAttachment(definition,
-                                target.Prefab, candidate), out Entity attachedPrefab))
+                                attachmentPrefab, candidate), out Entity attachedPrefab))
                     {
                         reason = "prefab-local attachment is unavailable or incompatible";
                         return false;

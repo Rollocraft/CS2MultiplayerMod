@@ -72,6 +72,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                         PosX = pos.x, PosY = pos.y, PosZ = pos.z,
                     };
                     session.SendCommand(0, ObjectDeleteCommand.Id, command.Encode());
+                    RecentRemovals.NotePoint(pos, now);
                 }
             }
             finally
@@ -198,6 +199,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                         Dx = b.d.x, Dy = b.d.y, Dz = b.d.z,
                     };
                     session.SendCommand(0, NetDeleteCommand.Id, command.Encode());
+                    RecentRemovals.NoteCurve(b, now);
                 }
             }
             finally

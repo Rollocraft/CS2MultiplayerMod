@@ -46,6 +46,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         private const float AttachedPlayerPlacedSpawnableMatchHeight = 20f;
 
         private ObjectToolOperationCommand _cachedLocalObjectOperation;
+        // The definition that made the last capture give up, named in the Apply trace.
+        private Entity _uncapturedObjectDefinition;
         // Why the last committed root failed to bind to a preview graph; read by the escalation path.
         private string _lastObjectGraphMissDetail;
         private readonly List<RecentLocalObjectOperation> _recentLocalObjectOperations =
@@ -234,6 +236,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 return;
             }
 
+            _uncapturedObjectDefinition = Entity.Null;
             var captured = new List<ObjectToolDefinitionIntent>();
             int root = -1;
             int rootScore = -1;
@@ -256,6 +259,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     {
                         // All-or-nothing; unsupported output uses the final-entity path.
                         _cachedLocalObjectOperation = null;
+                        _uncapturedObjectDefinition = entity;
                         return;
                     }
 

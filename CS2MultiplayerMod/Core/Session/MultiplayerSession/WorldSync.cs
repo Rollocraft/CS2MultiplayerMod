@@ -27,12 +27,14 @@ namespace CS2MultiplayerMod.Core.Session
             ClearStateRepairs();
             _worldSyncEpoch = epoch;
             _worldSyncSuspended = true;
+            _worldLoadingPeers.Clear();
             int barrierOnly = 0;
             if (targets != null)
                 for (int i = 0; i < targets.Count; i++)
                 {
                     bool sendsWorld = snapshotTargets == null || snapshotTargets.Contains(targets[i]);
-                    if (!sendsWorld) barrierOnly++;
+                    if (sendsWorld) _worldLoadingPeers.Add(targets[i].Value);
+                    else barrierOnly++;
                     SendWorldSyncTo(targets[i], new WorldSyncControlMessage(epoch,
                         sendsWorld ? WorldSyncStage.Begin : WorldSyncStage.BeginBarrierOnly,
                         resumeSpeed));
@@ -65,6 +67,7 @@ namespace CS2MultiplayerMod.Core.Session
                 new WorldSyncControlMessage(epoch, WorldSyncStage.Resume, resumeSpeed), targets);
             _worldSyncSuspended = false;
             _worldSyncEpoch = 0;
+            _worldLoadingPeers.Clear();
             _log.Event(LogTopic.WorldTransfer, "World sync epoch " + epoch + " resumed.");
             return true;
         }
@@ -81,6 +84,7 @@ namespace CS2MultiplayerMod.Core.Session
                 new WorldSyncControlMessage(epoch, WorldSyncStage.Abort, resumeSpeed), targets);
             _worldSyncSuspended = false;
             _worldSyncEpoch = 0;
+            _worldLoadingPeers.Clear();
             _log.Warn(LogTopic.WorldTransfer, "World sync epoch " + epoch +
                 " aborted; previous world resumed.");
             return true;
@@ -132,6 +136,7 @@ namespace CS2MultiplayerMod.Core.Session
                         " for epoch " + control.Epoch + " from " + from + ".");
                     return;
                 }
+                if (control.Stage != WorldSyncStage.Quiesced) _worldLoadingPeers.Remove(from.Value);
                 NotifyWorldSync(control.Stage, control.Epoch, 0f, from);
                 return;
             }

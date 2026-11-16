@@ -208,8 +208,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     out Entity property)) continue;
 
                 Household data = EntityManager.GetComponentData<Household>(household);
-                if (data.m_Income == wanted.Income) continue;
-                data.m_Income = wanted.Income;
+                if (HouseholdIncome.Get(ref data) == wanted.Income) continue;
+                HouseholdIncome.Set(ref data, wanted.Income);
                 EntityManager.SetComponentData(household, data);
                 _incomeCorrections++;
             }
@@ -233,7 +233,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 data.m_ShoppedValuePerDay != wanted.ShoppedValuePerDay ||
                 data.m_ShoppedValueLastDay != wanted.ShoppedValueLastDay ||
                 data.m_LastDayFrameIndex != wanted.LastDayFrameIndex ||
-                data.m_Income != wanted.Income ||
+                HouseholdIncome.Get(ref data) != wanted.Income ||
                 data.m_MoneySpendOnBuildingLevelingLastDay !=
                 wanted.MoneySpentOnBuildingLevelingLastDay)
             {
@@ -242,7 +242,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 data.m_ShoppedValuePerDay = wanted.ShoppedValuePerDay;
                 data.m_ShoppedValueLastDay = wanted.ShoppedValueLastDay;
                 data.m_LastDayFrameIndex = wanted.LastDayFrameIndex;
-                data.m_Income = wanted.Income;
+                HouseholdIncome.Set(ref data, wanted.Income);
                 data.m_MoneySpendOnBuildingLevelingLastDay =
                     wanted.MoneySpentOnBuildingLevelingLastDay;
                 EntityManager.SetComponentData(household, data);

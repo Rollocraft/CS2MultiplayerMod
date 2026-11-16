@@ -38,6 +38,9 @@ namespace CS2MultiplayerMod.Core.Session
         /// <summary>The <see cref="LastSeenUnixMs"/> a stalled-but-alive notice was already logged for.</summary>
         internal long StallReportedForSeenMs = long.MinValue;
 
+        /// <summary>The <see cref="LastSeenUnixMs"/> a slow world-load notice was already sent for.</summary>
+        internal long SlowLoadNoticedForSeenMs = long.MinValue;
+
         /// <summary>When the underlying connection appeared - pending peers expire on this.</summary>
         public long ConnectedAtUnixMs;
 

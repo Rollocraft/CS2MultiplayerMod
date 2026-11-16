@@ -56,9 +56,9 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         }
 
         /// <summary>
-        /// A specialized-industry placement: its new root owns the extractor/storage area its prefab
-        /// declares, via a placeholder root with an attached level-one building or a spawnable root. The
-        /// complete graph is required before the growable rejection is waived.
+        /// A specialized-industry placement: a placeholder root with its attached level-one building, or a
+        /// spawnable root owning the extractor/storage area its prefab declares. The complete graph is
+        /// required before the growable rejection is waived.
         /// </summary>
         private bool IsSpecializedIndustryPlacement(ObjectToolOperationCommand command)
         {
@@ -85,20 +85,16 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 EntityManager.HasComponent<BuildingData>(rootPrefab);
             if (!directSpawnable && !placeholder) return false;
 
-            bool hasPlaceholderAttachment = false;
+            // Only the tool attaches a level-one building to a placeholder. No owned-area test here: an
+            // aquaculture placement fails it.
             if (placeholder)
             {
                 for (int i = 0; i < command.Definitions.Length; i++)
-                {
                     if (i != command.RootIndex &&
                         TryGetSpecializedPlaceholderAttachment(command, i, root,
                             rootPrefab, out Entity candidatePrefab))
-                    {
-                        hasPlaceholderAttachment = true;
-                        break;
-                    }
-                }
-                if (!hasPlaceholderAttachment) return false;
+                        return true;
+                return false;
             }
 
             for (int i = 0; i < command.Definitions.Length; i++)
@@ -267,8 +263,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 parentPrefab = EntityManager.GetComponentData<PrefabRef>(parent).m_Prefab;
 
             return parentPrefab != Entity.Null &&
-                   IsCompatiblePlaceholderAttachmentPrefab(prefab, parentPrefab) &&
-                   PrefabDeclaresSpecializedArea(parentPrefab);
+                   IsCompatiblePlaceholderAttachmentPrefab(prefab, parentPrefab);
         }
 
         private bool HasLiveOwnedSpecializedArea(Entity owner)

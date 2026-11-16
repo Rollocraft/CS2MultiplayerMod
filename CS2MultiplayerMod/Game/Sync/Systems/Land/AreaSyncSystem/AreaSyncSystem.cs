@@ -69,11 +69,12 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 Any = SyncQuery.ReadOnly<Extractor, Storage>(),
                 None = SyncQuery.ReadOnly<Temp, Deleted, MapTile>(),
             });
+            // Owned objects too: a service upgrade can declare the lot.
             _ownedAreaOwners = GetEntityQuery(new EntityQueryDesc
             {
                 All = SyncQuery.ReadOnly<global::Game.Objects.Object,
                     global::Game.Objects.Transform, PrefabRef, global::Game.Areas.SubArea>(),
-                None = SyncQuery.ReadOnly<Temp, Deleted, Owner>(),
+                None = SyncQuery.ReadOnly<Temp, Deleted>(),
             });
 
             ListenFor(new[] { AreaCreateCommand.Id, AreaUpdateCommand.Id, AreaDeleteCommand.Id,
@@ -194,32 +195,36 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
             areaPrefab = EntityManager.GetComponentData<PrefabRef>(area).m_Prefab;
             if (!IsSpecializedAreaPrefab(areaPrefab) ||
-                !TryFindTopAreaOwner(area, out Entity topOwner) || topOwner == Entity.Null ||
-                !EntityManager.HasComponent<PrefabRef>(topOwner) ||
-                !EntityManager.HasComponent<global::Game.Objects.Transform>(topOwner))
-                return false;
+                !TryFindDeclaringAreaOwner(area, areaPrefab, out Entity owner)) return false;
 
-            ownerPrefab = EntityManager.GetComponentData<PrefabRef>(topOwner).m_Prefab;
-            if (!PrefabDeclaresOwnedArea(ownerPrefab, areaPrefab)) return false;
+            ownerPrefab = EntityManager.GetComponentData<PrefabRef>(owner).m_Prefab;
             ownerTransform =
-                EntityManager.GetComponentData<global::Game.Objects.Transform>(topOwner);
+                EntityManager.GetComponentData<global::Game.Objects.Transform>(owner);
             return true;
         }
 
-        private bool TryFindTopAreaOwner(Entity entity, out Entity topOwner)
+        /// <summary>The owner whose prefab declares this lot: the building, or a service upgrade on it.</summary>
+        private bool TryFindDeclaringAreaOwner(Entity area, Entity areaPrefab, out Entity owner)
         {
-            topOwner = Entity.Null;
-            Entity cursor = entity;
+            owner = Entity.Null;
+            Entity cursor = area;
             for (int depth = 0; depth < 64 && EntityManager.HasComponent<Owner>(cursor);
                  depth++)
             {
                 Entity next = EntityManager.GetComponentData<Owner>(cursor).m_Owner;
                 if (next == Entity.Null || next == cursor || !EntityManager.Exists(next))
                     return false;
-                topOwner = next;
+                if (EntityManager.HasComponent<PrefabRef>(next) &&
+                    EntityManager.HasComponent<global::Game.Objects.Transform>(next) &&
+                    PrefabDeclaresOwnedArea(
+                        EntityManager.GetComponentData<PrefabRef>(next).m_Prefab, areaPrefab))
+                {
+                    owner = next;
+                    return true;
+                }
                 cursor = next;
             }
-            return cursor == entity || !EntityManager.HasComponent<Owner>(cursor);
+            return false;
         }
 
         private bool IsSpecializedAreaPrefab(Entity prefab)

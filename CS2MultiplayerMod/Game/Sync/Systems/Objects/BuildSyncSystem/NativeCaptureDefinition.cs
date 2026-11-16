@@ -36,7 +36,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             if (!TryCapturePortableRef(creation.m_Original, out value.Original) ||
                 !TryCapturePortableRef(creation.m_Owner, out value.Owner) ||
                 !TryCaptureAttachment(creation.m_Attached, creation.m_Prefab,
-                    creation.m_Flags, out value.Attached,
+                    creation.m_Original, creation.m_Flags, out value.Attached,
                     out value.AttachedPrefabName)) return false;
 
             if (EntityManager.HasComponent<OwnerDefinition>(entity))
@@ -130,7 +130,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             return true;
         }
 
-        private bool TryCaptureAttachment(Entity attached, Entity objectPrefab,
+        private bool TryCaptureAttachment(Entity attached, Entity objectPrefab, Entity original,
             CreationFlags flags, out PortableEntityRef portable, out string prefabName)
         {
             portable = new PortableEntityRef { Kind = PortableEntityKind.None };
@@ -141,6 +141,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             if (EntityManager.Exists(attached) &&
                 EntityManager.HasComponent<PrefabData>(attached))
             {
+                // An upgrade on the placeholder re-emits its standing building without a prefab.
+                objectPrefab = DefinitionObjectPrefab(objectPrefab, original);
                 if ((flags & CreationFlags.Attach) == 0 ||
                     objectPrefab == Entity.Null ||
                     !EntityManager.Exists(objectPrefab) ||
@@ -152,6 +154,15 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             }
 
             return TryCapturePortableRef(attached, out portable);
+        }
+
+        /// <summary>A definition's object prefab; a prefab-less one keeps its original's.</summary>
+        private Entity DefinitionObjectPrefab(Entity prefab, Entity original)
+        {
+            if (prefab != Entity.Null || original == Entity.Null ||
+                !EntityManager.Exists(original) ||
+                !EntityManager.HasComponent<PrefabRef>(original)) return prefab;
+            return EntityManager.GetComponentData<PrefabRef>(original).m_Prefab;
         }
 
         private bool TryCaptureCoursePosition(CoursePos data,

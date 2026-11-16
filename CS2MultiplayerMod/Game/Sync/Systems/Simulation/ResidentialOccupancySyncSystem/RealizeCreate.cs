@@ -29,7 +29,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             data.m_ShoppedValuePerDay = wanted.ShoppedValuePerDay;
             data.m_ShoppedValueLastDay = wanted.ShoppedValueLastDay;
             data.m_LastDayFrameIndex = wanted.LastDayFrameIndex;
-            data.m_Income = wanted.Income;
+            HouseholdIncome.Set(ref data, wanted.Income);
             data.m_MoneySpendOnBuildingLevelingLastDay =
                 wanted.MoneySpentOnBuildingLevelingLastDay;
             EntityManager.SetComponentData(household, data);

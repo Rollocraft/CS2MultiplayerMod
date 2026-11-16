@@ -45,6 +45,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             int queued = 0;
             int orderedAttempts = 0;
             int orderedDequeuedFromIncoming = 0;
+            int pagedApplied = 0;
             while (!_orderedInvalidated && orderedAttempts < OrderedApplyPerFrame &&
                    _orderedDeferred.TryDequeue(out StateSnapshotMessage deferred))
                 ApplyOrdered(deferred, ref orderedAttempts);
@@ -74,6 +75,23 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     continue;
                 }
 
+                if (_paged.Contains(snapshot.ChannelId))
+                {
+                    pagedApplied++;
+                    try
+                    {
+                        _channels[snapshot.ChannelId].Apply(
+                            EntityManager, new NetworkReader(snapshot.Data));
+                        _applied++;
+                    }
+                    catch (System.Exception ex)
+                    {
+                        SyncLog.Warn(LogTopic.City, "CityState: dropping bad state on channel " +
+                            snapshot.ChannelId + ": " + ex.Message);
+                    }
+                    continue;
+                }
+
                 // Every editable snapshot is inspected: one may be the echo that retires our edit.
                 if (_editable.Contains(snapshot.ChannelId) && !ShouldApplyEditable(snapshot)) continue;
 
@@ -97,7 +115,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 }
             }
 
-            _superseded += queued - _newestOrder.Count - orderedDequeuedFromIncoming;
+            _superseded += queued - _newestOrder.Count - orderedDequeuedFromIncoming - pagedApplied;
 
             long now = _clock.ElapsedMilliseconds;
             if (_applied > 0 && now - _lastLogMs >= 30000)

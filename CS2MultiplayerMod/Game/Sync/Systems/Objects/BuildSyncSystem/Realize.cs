@@ -207,8 +207,15 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 }
                 else if (now >= pending.deadline)
                 {
-                    // The parent road never arrived; dropping silently would leave known divergence.
                     _attachRetry.RemoveAt(i);
+                    if (RecentRemovals.Near(new float3(pending.command.PosX, pending.command.PosY,
+                            pending.command.PosZ), 16f, now))
+                    {
+                        SyncLog.Warn(LogTopic.Buildings, "BuildSync realize: the road under '" +
+                            pending.command.PrefabName + "' was bulldozed while it was placed; dropped.");
+                        continue;
+                    }
+                    // The parent road never arrived; dropping silently would leave known divergence.
                     SyncLog.Warn(LogTopic.Buildings, "BuildSync realize: no local road for '" +
                         pending.command.PrefabName + "' after " + (AttachRetryWindowMs / 1000) +
                         " s; requesting world recovery.");

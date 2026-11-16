@@ -13,7 +13,8 @@ namespace CS2MultiplayerMod.Game.Sync.Commands
     {
         public const int MaxNames = 512;
         public const int MaxProperties = 256;
-        public const int MaxHouseholdsPerProperty = byte.MaxValue;
+        // A level-five high-density tower on a 6x6 lot holds 432 households.
+        public const int MaxHouseholdsPerProperty = MaxHouseholdsPerPage;
         public const int MaxCitizensPerHousehold = 24;
         public const int MaxPetsPerHousehold = 4;
         public const int MaxVehiclesPerHousehold = 16;
@@ -115,7 +116,7 @@ namespace CS2MultiplayerMod.Game.Sync.Commands
                 if (households > MaxHouseholdsPerPage)
                     throw new ProtocolException("Occupancy page exceeds its household cap.");
                 Intern(names, property);
-                encodedBytes += 38;
+                encodedBytes += 39;
                 for (int h = 0; h < property.Households.Length; h++)
                 {
                     OccupancyHousehold household = property.Households[h];
@@ -184,7 +185,7 @@ namespace CS2MultiplayerMod.Game.Sync.Commands
                 writer.WriteBool(property.HasWaterConsumer);
                 writer.WriteInt(property.WaterFulfilledFresh);
                 writer.WriteInt(property.WaterFulfilledSewage);
-                writer.WriteByte((byte)property.Households.Length);
+                writer.WriteShort((short)property.Households.Length);
                 for (int h = 0; h < property.Households.Length; h++)
                 {
                     OccupancyHousehold household = property.Households[h];
@@ -302,7 +303,7 @@ namespace CS2MultiplayerMod.Game.Sync.Commands
             }
 
             // Smallest property: identity, construction state, utility quantities, household count.
-            int propertyCount = WireGuard.ReadCount(reader, 38, MaxProperties);
+            int propertyCount = WireGuard.ReadCount(reader, 39, MaxProperties);
             var identities = new HashSet<PropertyIdentity>();
             var householdIds = new HashSet<ulong>();
             var citizenIds = new HashSet<ulong>();
@@ -323,8 +324,8 @@ namespace CS2MultiplayerMod.Game.Sync.Commands
                     WaterFulfilledFresh = reader.ReadInt(),
                     WaterFulfilledSewage = reader.ReadInt(),
                 };
-                int householdCount = reader.ReadByte();
-                if (householdCount > MaxHouseholdsPerProperty)
+                int householdCount = reader.ReadShort();
+                if (householdCount < 0 || householdCount > MaxHouseholdsPerProperty)
                     throw new ProtocolException("Occupancy property exceeds its household cap.");
                 households += householdCount;
                 if (households > MaxHouseholdsPerPage)

@@ -62,6 +62,10 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         private bool _orderedInvalidated;
         private int _orderedPoisonRequested;
 
+        private readonly HashSet<byte> _captureFaulted = new HashSet<byte>();
+        // Each snapshot is a different page of buildings: coalescing to the newest would drop the rest.
+        private readonly HashSet<byte> _paged = new HashSet<byte>();
+
         private struct PendingEdit
         {
             public byte[] Payload;
@@ -139,6 +143,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             _channels[channel.ChannelId] = channel;
             if (channel is IPumpedStateChannel pumped) _pumped.Add(pumped);
             if (channel is IOrderedStateChannel) _ordered.Add(channel.ChannelId);
+            if (channel is IPropertyStateChannel) _paged.Add(channel.ChannelId);
         }
 
         private void RegisterEditable(IStateChannel channel)
@@ -164,6 +169,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     if (_lastHostPayload.Count > 0) { _lastHostPayload.Clear(); _pendingEdits.Clear(); }
                     _captureOrder.Clear();
                     _channelDueMs.Clear();
+                    _captureFaulted.Clear();
                     for (int i = 0; i < _pumped.Count; i++) _pumped[i].ResetPending();
                     SyncInbox.Clear(_incoming);
                     SyncInbox.Clear(_incomingEdits);
@@ -211,7 +217,18 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 _channelDueMs[channelId] = due;
 
                 var writer = new NetworkWriter(64);
-                if (!_channels[channelId].Capture(EntityManager, writer)) continue;
+                try
+                {
+                    if (!_channels[channelId].Capture(EntityManager, writer)) continue;
+                }
+                catch (System.Exception ex)
+                {
+                    // One channel's fault must not starve the channels after it.
+                    if (_captureFaulted.Add(channelId))
+                        SyncLog.Error(LogTopic.City, "CityState: channel " + channelId +
+                            " could not be captured and is not being sent: " + ex);
+                    continue;
+                }
                 session.SendState(channelId, writer.ToArray());
                 _broadcastSinceLog++;
             }
@@ -328,6 +345,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             Interlocked.Exchange(ref _orderedPoisonRequested, 0);
             _lastHostPayload.Clear();
             _pendingEdits.Clear();
+            _captureFaulted.Clear();
             for (int i = 0; i < _pumped.Count; i++) _pumped[i].ResetPending();
         }
 

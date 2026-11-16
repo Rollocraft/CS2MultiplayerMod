@@ -68,6 +68,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                         Positions = chunk,
                     };
                     session.SendCommand(0, ObjectDeleteBatchCommand.Id, command.Encode());
+                    NoteRemoved(chunk, now);
                     sent += count;
                 }
             }
@@ -75,6 +76,13 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             SyncLog.Trace(LogTopic.Buildings, "object delete brush captured batches=" +
                 batches.Count + " deletes=" + sent);
             return true;
+        }
+
+        private static void NoteRemoved(ObjectDeleteBatchCommand.Position[] positions, long now)
+        {
+            for (int i = 0; i < positions.Length; i++)
+                Infrastructure.RecentRemovals.NotePoint(
+                    new Unity.Mathematics.float3(positions[i].X, positions[i].Y, positions[i].Z), now);
         }
 
         private static void AppendObjectDeleteBatch(ObjectDeleteBatchCommand batch, long deadline,

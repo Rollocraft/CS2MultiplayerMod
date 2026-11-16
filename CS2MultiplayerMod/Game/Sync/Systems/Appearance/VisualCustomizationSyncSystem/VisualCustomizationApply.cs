@@ -68,9 +68,16 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             {
                 if (pending[i].DeadlineMs < now)
                 {
+                    // A target bulldozed meanwhile is gone for its sender too.
+                    int missing = 0;
+                    VisualCustomizationTarget[] targets = pending[i].Command.Targets;
+                    for (int t = 0; t < targets.Length; t++)
+                        if (!RecentRemovals.Near(new Unity.Mathematics.float3(targets[t].X,
+                                targets[t].Y, targets[t].Z), 16f, now)) missing++;
+                    if (missing == 0) continue;
                     if (firstExpiredPrefab == null)
                         firstExpiredPrefab = pending[i].Command.PrefabName;
-                    expiredTargets += pending[i].Command.Targets.Length;
+                    expiredTargets += missing;
                     continue;
                 }
                 ApplyVisual(pending[i].Command, now, pending[i].DeadlineMs, allowRetry: true);

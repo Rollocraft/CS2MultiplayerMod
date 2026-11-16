@@ -111,6 +111,7 @@ namespace CS2MultiplayerMod.Core.Session
             if (_peers.TryGetValue(connection.Value, out Peer peer))
             {
                 _peers.Remove(connection.Value);
+                _worldLoadingPeers.Remove(connection.Value);
                 bool removedByHost = _administrativeRemovals.Remove(connection.Value);
                 if (peer.Handshaked)
                 {
