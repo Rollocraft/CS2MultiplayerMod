@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using Colossal.Mathematics;
 using Game.Common;
 using Game.Net;
 using Game.Objects;
@@ -145,6 +146,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             _replayEdgeDeletes.Clear();
             _objectRetry.Clear();
             _edgeRetry.Clear();
+            RecentRemovals.Clear();
         }
 
         protected override void OnUpdate()
@@ -201,18 +203,34 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 try
                 {
                     if (message.CommandId == ObjectDeleteCommand.Id)
+                    {
+                        ObjectDeleteCommand removed = ObjectDeleteCommand.Decode(message.Body);
+                        RecentRemovals.NotePoint(
+                            new float3(removed.PosX, removed.PosY, removed.PosZ), now);
                         (objects ?? (objects = new List<(ObjectDeleteCommand, long)>()))
-                            .Add((ObjectDeleteCommand.Decode(message.Body), freshDeadline));
+                            .Add((removed, freshDeadline));
+                    }
                     else if (message.CommandId == ObjectDeleteBatchCommand.Id)
-                        AppendObjectDeleteBatch(ObjectDeleteBatchCommand.Decode(message.Body),
-                            freshDeadline, ref objects);
+                    {
+                        ObjectDeleteBatchCommand batch = ObjectDeleteBatchCommand.Decode(message.Body);
+                        NoteRemoved(batch.Positions, now);
+                        AppendObjectDeleteBatch(batch, freshDeadline, ref objects);
+                    }
                     else if (message.CommandId == NetDeleteCommand.Id)
                     {
                         if (netBusy)
                             (deferredEdges ?? (deferredEdges = new List<SimulationCommandMessage>())).Add(message);
                         else
+                        {
+                            NetDeleteCommand removed = NetDeleteCommand.Decode(message.Body);
+                            RecentRemovals.NoteCurve(new Bezier4x3(
+                                new float3(removed.Ax, removed.Ay, removed.Az),
+                                new float3(removed.Bx, removed.By, removed.Bz),
+                                new float3(removed.Cx, removed.Cy, removed.Cz),
+                                new float3(removed.Dx, removed.Dy, removed.Dz)), now);
                             (edges ?? (edges = new List<(NetDeleteCommand, long)>()))
-                                .Add((NetDeleteCommand.Decode(message.Body), freshDeadline));
+                                .Add((removed, freshDeadline));
+                        }
                     }
                 }
                 catch (System.Exception ex) { SyncLog.Warn(LogTopic.Buildings, "DeleteSync: dropping malformed command: " + ex.Message); }

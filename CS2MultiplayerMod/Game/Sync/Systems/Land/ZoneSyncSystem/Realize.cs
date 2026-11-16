@@ -67,8 +67,15 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                                 _diagnosticUnzonable++;
                                 continue;
                             }
-                            _diagnosticExpired++;
                             ZonePaintCommand command = pending.Command;
+                            // The road these cells lined was bulldozed; its sender's cells went with it.
+                            if (Infrastructure.RecentRemovals.Near(new Unity.Mathematics.float3(
+                                    command.PosX, command.PosY, command.PosZ), 96f, now))
+                            {
+                                _diagnosticUnzonable++;
+                                continue;
+                            }
+                            _diagnosticExpired++;
                             pending.RecoveryReport = Diagnostics.ResyncReport
                                 .Create("edited zoning cells did not resolve", "zone",
                                     Diagnostics.ResyncEvidence.MissingTarget)

@@ -21,11 +21,22 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         {
             _targetRetry.Observe(now, RealizeGate.WorldBuildingHeld);
             _targetRetry.Pump(pending => TryApplyPolicy(pending.cmd, pending.origin, now),
-                pending => SyncInbox.RequestResync(ResyncReport
-                    .Create("policy target did not resolve", "policy", ResyncEvidence.MissingTarget)
-                    .About("'" + pending.cmd.PolicyPrefabName + "' on " +
-                           KindName(pending.cmd.TargetKind) + " '" + pending.cmd.TargetPrefabName + "'")
-                    .Tried("retried for 15 s of eligible time, excluding dependency holds")));
+                pending =>
+                {
+                    if (pending.cmd.TargetKind == EntityPolicyCommand.KindBuilding &&
+                        RecentRemovals.Near(new float3(pending.cmd.AnchorX, pending.cmd.AnchorY,
+                            pending.cmd.AnchorZ), 16f, now))
+                    {
+                        SyncLog.Warn(LogTopic.City, "PolicySync: '" + pending.cmd.TargetPrefabName +
+                            "' was bulldozed while its policy changed; dropped.");
+                        return;
+                    }
+                    SyncInbox.RequestResync(ResyncReport
+                        .Create("policy target did not resolve", "policy", ResyncEvidence.MissingTarget)
+                        .About("'" + pending.cmd.PolicyPrefabName + "' on " +
+                               KindName(pending.cmd.TargetKind) + " '" + pending.cmd.TargetPrefabName + "'")
+                        .Tried("retried for 15 s of eligible time, excluding dependency holds"));
+                });
 
             while (_incoming.TryDequeue(out SimulationCommandMessage message))
             {

@@ -241,6 +241,15 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     return false;
                 }
                 bool compactPlacement = TryDescribeBlockedPlacement(out string placementPrefab);
+                if (!compactPlacement && _hasUnresolvedDependency &&
+                    RecentRemovals.Near(_unresolvedDependencyPosition, 16f, now))
+                {
+                    SyncLog.Warn(LogTopic.Buildings, "BuildSync: the object a remote edit referred " +
+                        "to was bulldozed meanwhile (" + (_lastUnresolvedObjectReason ?? "unknown target") +
+                        "); dropped.");
+                    ClearBlockedNativeObject();
+                    return false;
+                }
                 // Its referenced target never arrived; dropping it silently would leave known divergence.
                 if (compactPlacement)
                 {
@@ -286,6 +295,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             _blockedNativeObject = null;
             _blockedNativeObjectDeadline = 0;
             _lastUnresolvedObjectReason = null;
+            _hasUnresolvedDependency = false;
             _blockedNativeObjectRecovery.Reset();
         }
 
