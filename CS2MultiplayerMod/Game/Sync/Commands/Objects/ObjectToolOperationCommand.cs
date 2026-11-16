@@ -296,7 +296,8 @@ namespace CS2MultiplayerMod.Game.Sync.Commands
         private static void ValidatePrefabAttachment(ObjectToolDefinitionIntent value)
         {
             if (string.IsNullOrEmpty(value.AttachedPrefabName)) return;
-            if (value.Kind != ObjectToolDefinitionKind.Object || value.PrefabIsNull ||
+            // Prefab-less is legal: an upgrade re-emits the standing building by its original.
+            if (value.Kind != ObjectToolDefinitionKind.Object ||
                 value.Attached.Kind != PortableEntityKind.None ||
                 (value.CreationFlags & AttachCreationFlag) == 0)
                 throw new ProtocolException(
