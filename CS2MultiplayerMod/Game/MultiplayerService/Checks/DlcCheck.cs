@@ -13,8 +13,8 @@ namespace CS2MultiplayerMod.Game
     internal static class DlcCheck
     {
         /// <summary>
-        /// Not compared: radio packs (music only) and CS1TreasureHunt, a reward the store cannot turn off,
-        /// though its assets can still desync a player who lacks it.
+        /// Not compared: radio packs (music only) and the account rewards CS1TreasureHunt and Newsletter, which
+        /// the store cannot turn off, though their assets can still desync a player who lacks them.
         /// </summary>
         private static readonly string[] IgnoredDlcs =
             {
@@ -27,7 +27,8 @@ namespace CS2MultiplayerMod.Game
                 "SkyrailRadio",
                 "SoftRockRadio",
                 "SynthAndSteelRadio",
-                "CS1TreasureHunt"
+                "CS1TreasureHunt",
+                "Newsletter"
             };
 
         /// <summary>
