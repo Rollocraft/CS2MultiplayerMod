@@ -121,7 +121,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 {
                     folded = (folded ^ Clamp(rented.m_Rent, 0,
                         ResidentialOccupancySnapshot.MaxRent)) * 16777619;
-                    folded = (folded ^ Clamp(data.m_Income,
+                    folded = (folded ^ Clamp(HouseholdIncome.Get(ref data),
                         -ResidentialOccupancySnapshot.MaxMoney,
                         ResidentialOccupancySnapshot.MaxMoney)) * 16777619;
                 }
