@@ -22,7 +22,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
             int citizens = 0;
             int pets = 0;
             int vehicles = 0;
-            int bytes = 38;
+            int bytes = 39;
             _pageEntryNames.Clear();
             _pageEntryNames.Add(property.PrefabName);
             for (int h = 0; h < property.Households.Length; h++)
