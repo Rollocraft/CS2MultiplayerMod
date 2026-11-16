@@ -7,6 +7,29 @@ description: "Read the Cities: Skylines II Multiplayer Mod release notes, includ
 
 # Changelog
 
+## Version 0.1.7.4 - 2026-11-16
+
+This update fixes several causes of the city reloading for no reason and of the population slowly drifting apart between host and clients. Players now also stay connected while their computer loads a large city, and aquaculture areas and their fishing piers work in multiplayer.
+
+### Connection fixes
+
+* Players are no longer disconnected with "Peer timed out" while their computer loads the city after joining. Loading may now take up to three minutes.
+* If loading takes longer than 30 seconds, every player sees a message that this player's computer is still loading the city, so it is clear that the internet connection and the mod are not the cause.
+
+### Sync fixes
+
+* Fixed the game crashing for a client who placed an aquaculture area.
+* The open-water fishing pier of an aquaculture area is now synchronized. Before, it never reached the other players and could make the city reload again and again.
+* Fixed very large high-density residential buildings with more than 255 households never being synchronized, which made the population slowly drift apart between host and clients.
+* Fixed homes and households not being synchronized for players still on a game version before 1.6.2, which also made their population differ from the host's.
+* Fixed updates for homes, rents and workplaces being lost when the game briefly stuttered. In large cities this also kept clients from removing households the host no longer has.
+* Changing a building's colour or policy, zoning along a road, placing an object on a road or upgrading a building no longer makes the city reload when another player bulldozes that building or road at the same moment. Both cities already agree in that case, so the change is simply dropped.
+* If the host fails to collect one kind of city data, the rest is still sent to the players.
+
+### Compatibility
+
+* Players are no longer refused because only one of them has the Newsletter reward. Like the CS1 Treasure Hunt reward, it is no longer part of the DLC check.
+
 ## Version 0.1.7.3 - 2026-10-25
 
 This update fixes sessions getting stuck on "Syncing World" while a large fire, such as a forest fire, was burning in the city.
