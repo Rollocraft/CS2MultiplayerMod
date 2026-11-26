@@ -132,7 +132,7 @@ export const OtherModsBanner = ({ style }: { style?: CSSProperties }) => {
                         {ignored ? <img src="Media/Glyphs/Checkmark.svg" style={styles.toggleCheck} /> : null}
                     </div>
                     <span style={styles.toggleLabel}>
-                        {t(LOC.allowToggle, "Ignore Mod Compatibility Checks (Own Risk)")}
+                        {t(LOC.allowToggle, "Ignore Mod Compatibility Checks")}
                     </span>
                 </div>
                 <OpenHelpButton page={HELP_PAGE.mods} style={styles.helpButton} />

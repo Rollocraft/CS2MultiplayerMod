@@ -106,9 +106,10 @@ To clear the block:
 
 ## Turning the check off
 
-Tick Ignore Mod Compatibility Checks (Own Risk) in the Other Mods Enabled banner itself, or
-use Options ▸ CS2 Multiplayer Mod ▸ Advanced ▸ Compatibility. Both are the same switch, and
-it can only be changed while offline, before hosting or joining.
+Tick Ignore Mod Compatibility Checks in the Other Mods Enabled banner itself, or use
+Options ▸ CS2 Multiplayer Mod ▸ Advanced ▸ Compatibility ▸ Ignore Mod Compatibility Checks
+(Own Risk). Both are the same switch, and it can only be changed while offline, before
+hosting or joining.
 
 With it on, other active mods no longer block hosting or joining on your machine, and a
 host also admits players on a different CS2 Multiplayer Mod build or with different other
