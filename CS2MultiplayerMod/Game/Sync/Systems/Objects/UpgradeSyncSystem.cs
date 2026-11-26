@@ -16,8 +16,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 {
     /// <summary>
     /// Replicates service-building upgrades as the tool's inputs; the receiver regenerates the
-    /// transaction. Drawn-lot upgrades travel through the native object transaction. The host charges
-    /// through <see cref="ConstructionCharger"/>.
+    /// transaction. A lot the player draws for one (the fishing pier's) follows through AreaSync's
+    /// owned-area snapshot. The host charges through <see cref="ConstructionCharger"/>.
     /// </summary>
     public partial class UpgradeSyncSystem : CommandSyncSystem, IRealizeStage
     {
@@ -129,9 +129,6 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
 
                     // Both upgrade tools require ServiceUpgradeData; anything else is simulation lot content.
                     if (!EntityManager.HasComponent<ServiceUpgradeData>(prefab)) continue;
-
-                    // A drawn lot cannot be described here; it travels as the native two-tool transaction.
-                    if (!_buildSync.UpgradeOwnedGraphIsPrefabDeterministic(prefab)) continue;
 
                     Transform transform = EntityManager.GetComponentData<Transform>(entity);
                     if (_guard.Consume(UpgradeKey(name, transform.m_Position), now)) continue;
