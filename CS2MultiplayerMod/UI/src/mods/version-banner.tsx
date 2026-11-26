@@ -18,8 +18,9 @@ const styles: Record<string, CSSProperties> = {
         padding: "10rem 12rem",
         marginBottom: "12rem",
         borderRadius: "3rem",
-        backgroundColor: "rgba(255, 196, 87, 0.10)",
-        border: "1rem solid rgba(255, 196, 87, 0.45)",
+        // Opaque like the other-mods banner: on the main menu the scene shows through a light tint.
+        backgroundColor: "rgba(38, 29, 10, 0.94)",
+        border: "1rem solid rgba(255, 196, 87, 0.60)",
     },
     icon: {
         fontSize: "16rem",
@@ -41,7 +42,7 @@ const styles: Record<string, CSSProperties> = {
     body: {
         fontSize: "12.5rem",
         lineHeight: "1.4",
-        color: "rgba(255, 255, 255, 0.8)",
+        color: "rgba(255, 255, 255, 0.92)",
         wordBreak: "break-word",
     },
     helpButton: {
