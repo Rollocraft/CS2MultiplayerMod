@@ -1,17 +1,20 @@
 import { GROUP, useT } from "mods/ui-helpers";
-import { bindValue, useValue } from "cs2/api";
+import { bindValue, trigger, useValue } from "cs2/api";
 import { CSSProperties } from "react";
 import { HELP_PAGE, OpenHelpButton } from "mods/help-link";
 
 const LOC = {
     title: "CS2MP.UI.ModsBlockedTitle",
     ignoredTitle: "CS2MP.UI.ModsIgnoredTitle",
+    allowToggle: "CS2MP.UI.ModsAllowToggle",
 };
 
 // Localized sentence built C#-side (it names the other mods). Empty when this mod
 // is the only one live. With the own-risk override it remains visible as a warning.
 export const modsBlocked$ = bindValue<string>(GROUP, "modsBlocked", "");
 const modsCheckIgnored$ = bindValue<boolean>(GROUP, "modsCheckIgnored", false);
+// Same switch as the options toggle, and like it, offline only.
+const modsCheckLocked$ = bindValue<boolean>(GROUP, "modsCheckLocked", true);
 
 /** Whether other mods are blocking multiplayer. The own-risk override turns the same
  *  detection into an advisory notice instead. */
@@ -68,17 +71,44 @@ const styles: Record<string, CSSProperties> = {
         padding: "4rem 10rem",
         fontSize: "11.5rem",
     },
+    toggleRow: {
+        display: "flex",
+        alignItems: "center",
+        marginTop: "8rem",
+    },
+    toggleBox: {
+        width: "18rem",
+        height: "18rem",
+        flexShrink: 0,
+        marginRight: "8rem",
+        borderRadius: "3rem",
+        backgroundColor: "rgba(0, 0, 0, 0.35)",
+        border: "1rem solid rgba(255, 96, 88, 0.60)",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+    },
+    toggleCheck: {
+        width: "12rem",
+        height: "12rem",
+        filter: "brightness(0) invert(1)",
+    },
+    toggleLabel: {
+        fontSize: "12rem",
+        color: "rgba(255, 255, 255, 0.92)",
+    },
 };
 
 /**
  * Notice shown on the Join dialog, Host world picker and in-game hub whenever any mod
  * other than this one is live. It blocks by default and becomes an explicit own-risk
- * warning when the compatibility override is enabled.
+ * warning when the compatibility override is enabled, which it can switch directly.
  */
 export const OtherModsBanner = ({ style }: { style?: CSSProperties }) => {
     const t = useT();
     const blocked = useValue(modsBlocked$);
     const ignored = useValue(modsCheckIgnored$);
+    const locked = useValue(modsCheckLocked$);
     if (!blocked) return null;
 
     return (
@@ -91,6 +121,20 @@ export const OtherModsBanner = ({ style }: { style?: CSSProperties }) => {
                         : t(LOC.title, "Other Mods Enabled")}
                 </div>
                 <div style={styles.body}>{blocked}</div>
+                <div
+                    style={locked
+                        ? { ...styles.toggleRow, opacity: 0.55 }
+                        : { ...styles.toggleRow, cursor: "pointer" }}
+                    onClick={() => {
+                        if (!locked) trigger(GROUP, "setModsCheckIgnored", !ignored);
+                    }}>
+                    <div style={styles.toggleBox}>
+                        {ignored ? <img src="Media/Glyphs/Checkmark.svg" style={styles.toggleCheck} /> : null}
+                    </div>
+                    <span style={styles.toggleLabel}>
+                        {t(LOC.allowToggle, "Ignore Mod Compatibility Checks (Own Risk)")}
+                    </span>
+                </div>
                 <OpenHelpButton page={HELP_PAGE.mods} style={styles.helpButton} />
             </div>
         </div>

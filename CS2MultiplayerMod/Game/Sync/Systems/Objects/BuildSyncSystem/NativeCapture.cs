@@ -70,9 +70,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         /// A specialized placement's object half is held for its polygon; the compact upgrade command must
         /// not stand in for it.
         /// </summary>
-        internal bool HasPendingSpecializedAreaCapture =>
-            _pendingSpecializedObjectOperation != null ||
-            (_areaToolSystem != null && _areaToolSystem.recreate != Entity.Null);
+        internal bool HasPendingSpecializedAreaCapture => _pendingSpecializedObjectOperation != null;
 
         /// <summary>
         /// After the output barrier. Object graphs are captured on Apply; network-owned ones keep their exact
@@ -162,7 +160,8 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
         /// <summary>
         /// A service upgrade added to a live building: a new upgrade/extension object with an
         /// <see cref="OwnerDefinition"/> and no original, plus the host's prefab-less Upgrade definition on
-        /// a live original (a new building has none). Player-drawn lots are excluded.
+        /// a live original (a new building has none). A lot it lets the player draw follows as an owned-area
+        /// snapshot.
         /// </summary>
         private bool BatchIsServiceUpgradeOnLiveBuilding(NativeArray<Entity> definitions)
         {
@@ -185,8 +184,7 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                     EntityManager.HasComponent<ObjectDefinition>(entity) &&
                     EntityManager.HasComponent<OwnerDefinition>(entity) &&
                     (EntityManager.HasComponent<ServiceUpgradeData>(creation.m_Prefab) ||
-                     EntityManager.HasComponent<BuildingExtensionData>(creation.m_Prefab)) &&
-                    UpgradeOwnedGraphIsPrefabDeterministic(creation.m_Prefab))
+                     EntityManager.HasComponent<BuildingExtensionData>(creation.m_Prefab)))
                     hasNewUpgradeObject = true;
 
                 if (hasNewUpgradeObject && hasLiveHostModification) return true;
@@ -205,31 +203,11 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                    !EntityManager.HasComponent<Created>(entity);
         }
 
-        /// <summary>The owned elements rebuild from the prefab alone; drawn extractor/storage lots do not.</summary>
-        internal bool UpgradeOwnedGraphIsPrefabDeterministic(Entity prefab)
-        {
-            if (!EntityManager.HasBuffer<SubArea>(prefab)) return true;
-            DynamicBuffer<SubArea> subAreas =
-                EntityManager.GetBuffer<SubArea>(prefab, isReadOnly: true);
-            for (int i = 0; i < subAreas.Length; i++)
-            {
-                Entity declared = subAreas[i].m_Prefab;
-                if (declared == Entity.Null || !EntityManager.Exists(declared)) continue;
-                if (IsSpecializedAreaPrefab(declared)) return false;
-                if (!EntityManager.HasBuffer<PlaceholderObjectElement>(declared)) continue;
-                DynamicBuffer<PlaceholderObjectElement> candidates =
-                    EntityManager.GetBuffer<PlaceholderObjectElement>(declared, isReadOnly: true);
-                for (int j = 0; j < candidates.Length; j++)
-                    if (IsSpecializedAreaPrefab(candidates[j].m_Object)) return false;
-            }
-            return true;
-        }
-
         private void CaptureObjectToolOperation(NativeArray<Entity> definitions)
         {
             // Relocations and upgrades travel as their tool's compact inputs (MoveSync, UpgradeSync) and are
             // regenerated on the receiver; capturing their full graph each preview frame was the FPS cost and
-            // cannot resolve across differently subdivided roads. Drawn-lot upgrades are the exception.
+            // cannot resolve across differently subdivided roads.
             if (BatchIsRelocate(definitions) || BatchIsServiceUpgradeOnLiveBuilding(definitions))
             {
                 _cachedLocalObjectOperation = null;

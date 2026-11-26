@@ -32,6 +32,12 @@ namespace CS2MultiplayerMod.Core.Session
         /// <summary>Silence while loading after which everyone is told the delay is that player's load.</summary>
         private const int SlowWorldLoadNoticeMs = 30000;
 
+        /// <summary>
+        /// Silence a peer announces before a blocking save (a large city's autosave can freeze its game thread
+        /// past <see cref="PeerTimeoutMs"/>); also the most a peer may claim.
+        /// </summary>
+        private const int SaveQuietAllowanceMs = 120000;
+
         /// <summary>A join awaiting approval is auto-declined after this.</summary>
         private const int JoinApprovalTimeoutMs = 120000;
 
@@ -83,6 +89,7 @@ namespace CS2MultiplayerMod.Core.Session
         private PortForward _portForward;
         private int _nextPlayerId = HostPlayerId + 1;
         private long _lastHeartbeatMs;
+        private long _localQuietUntilMs;
         private long _lastBlobSweepMs;
         private long _lastAuthSweepMs;
         private long _lastResyncAcceptedUnixMs;

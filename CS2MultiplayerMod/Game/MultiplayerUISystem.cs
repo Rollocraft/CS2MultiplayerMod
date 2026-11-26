@@ -140,6 +140,15 @@ namespace CS2MultiplayerMod.Game
                                            Mod.Setting.IgnoreModCompatibilityChecks)));
             AddUpdateBinding(new GetterValueBinding<bool>(Group, "modsCheckIgnored",
                 () => Mod.Setting != null && Mod.Setting.IgnoreModCompatibilityChecks));
+            // The banner's own copy of the options toggle; offline only, like the option.
+            AddUpdateBinding(new GetterValueBinding<bool>(Group, "modsCheckLocked",
+                () => Mod.Setting == null || Mod.Setting.IsInSession()));
+            AddBinding(new TriggerBinding<bool>(Group, "setModsCheckIgnored", value =>
+            {
+                if (Mod.Setting == null || Mod.Setting.IsInSession()) return;
+                Mod.Setting.IgnoreModCompatibilityChecks = value;
+                Mod.Setting.ApplyAndSave();
+            }));
 
             // One-time disclaimer, persisted once accepted.
             AddUpdateBinding(new GetterValueBinding<bool>(Group, "disclaimerAccepted",

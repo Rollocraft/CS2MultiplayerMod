@@ -41,6 +41,9 @@ namespace CS2MultiplayerMod.Core.Session
         /// <summary>The <see cref="LastSeenUnixMs"/> a slow world-load notice was already sent for.</summary>
         internal long SlowLoadNoticedForSeenMs = long.MinValue;
 
+        /// <summary>Until when the peer said a save may keep it silent; 0 when it is not saving.</summary>
+        internal long QuietUntilUnixMs;
+
         /// <summary>When the underlying connection appeared - pending peers expire on this.</summary>
         public long ConnectedAtUnixMs;
 

@@ -12,6 +12,12 @@ namespace CS2MultiplayerMod.Core.Protocol.Messages
         /// <summary>0 for a ping; for an echo, the ping's <see cref="SentAtMs"/> being returned.</summary>
         public long EchoOfMs;
 
+        /// <summary>
+        /// On a ping: how long the sender may send nothing from now, because a save is blocking its game
+        /// thread. 0 when it is not saving.
+        /// </summary>
+        public int QuietForMs;
+
         public Heartbeat() { }
 
         public Heartbeat(long sentAtMs, long echoOfMs = 0)
@@ -26,12 +32,14 @@ namespace CS2MultiplayerMod.Core.Protocol.Messages
         {
             writer.WriteLong(SentAtMs);
             writer.WriteLong(EchoOfMs);
+            writer.WriteInt(QuietForMs);
         }
 
         public void Read(NetworkReader reader)
         {
             SentAtMs = reader.ReadLong();
             EchoOfMs = reader.ReadLong();
+            QuietForMs = reader.ReadInt();
         }
     }
 }

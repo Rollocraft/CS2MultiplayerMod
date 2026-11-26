@@ -227,14 +227,22 @@ namespace CS2MultiplayerMod.Game.Sync.Systems
                 MultiplayerService service = Mod.Service;
                 if (service == null) return;
 
+                MultiplayerSession session = service.Session;
                 if (!service.SimulationSyncReady)
                 {
+                    // A paused client (another player joining) keeps the host's queued decisions; a replaced
+                    // world drains them on install.
+                    if (service.SimulationSyncEnabled && session.Role == SessionRole.Client &&
+                        session.Status == SessionStatus.Connected)
+                    {
+                        ApplyLocalAuthority(session);
+                        return;
+                    }
                     DrainQueue();
                     RestoreLocalAuthority();
                     return;
                 }
 
-                MultiplayerSession session = service.Session;
                 long now = service.NowMs;
                 PrunePlayerPlacedGrowables(now);
                 ApplyLocalAuthority(session);
