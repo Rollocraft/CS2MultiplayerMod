@@ -23,7 +23,9 @@ This update stops the city from reloading every time the host's game autosaves, 
 
 ### Compatibility
 
-* The Other Mods Enabled warning now has the Ignore Mod Compatibility Checks (Own Risk) switch built in, so you no longer have to find it in the options. Hosting and joining are still blocked until you tick it, and it can only be changed while you are not in a session.
+* The Other Mods Enabled warning now has the Ignore Mod Compatibility Checks switch built in, so you no longer have to find it in the options. Hosting and joining are still blocked until you tick it, and it can only be changed while you are not in a session.
+* Game version 1.6.4f1 is now marked as tested, so the Untested Game Version warning no longer appears on it.
+* The Untested Game Version warning now has a solid background like the other warnings, so it is readable on the main menu.
 
 ## Version 0.1.7.4 - 2026-11-16
 
