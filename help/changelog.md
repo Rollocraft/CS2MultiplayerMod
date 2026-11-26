@@ -7,6 +7,24 @@ description: "Read the Cities: Skylines II Multiplayer Mod release notes, includ
 
 # Changelog
 
+## Version 0.1.7.5 - 2026-11-26
+
+This update stops the city from reloading every time the host's game autosaves, makes the open-water fishing pier travel to other players the same way as every other building upgrade, and lets you allow other mods at your own risk straight from the warning. Every player needs this version, because the connection format changed.
+
+### Connection fixes
+
+* Players no longer lose the connection and download the whole city again each time the host's game autosaves. In a large city an autosave can freeze the game for more than 10 seconds. The host now tells the other players just before it saves, and they wait for up to two minutes instead of giving up after 10 seconds.
+* The same applies when the host saves the city for a joining player or for /sync, and when a client saves its own copy of the city.
+
+### Sync fixes
+
+* The open-water fishing pier of an aquaculture area is now sent the same way as every other building upgrade. Each player's game builds it from the same settings, and the fishing area you draw for it follows a moment later.
+* Fixed clients losing the host's latest decisions about growing and changing zoned buildings while another player joined, which could make buildings differ between players afterwards.
+
+### Compatibility
+
+* The Other Mods Enabled warning now has the Ignore Mod Compatibility Checks (Own Risk) switch built in, so you no longer have to find it in the options. Hosting and joining are still blocked until you tick it, and it can only be changed while you are not in a session.
+
 ## Version 0.1.7.4 - 2026-11-16
 
 This update fixes several causes of the city reloading for no reason and of the population slowly drifting apart between host and clients. Players now also stay connected while their computer loads a large city, and aquaculture areas and their fishing piers work in multiplayer.
