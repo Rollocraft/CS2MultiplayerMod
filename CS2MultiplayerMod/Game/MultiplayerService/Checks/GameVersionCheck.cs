@@ -11,6 +11,7 @@ namespace CS2MultiplayerMod.Game
         {
             "1.6.0f1",
             "1.6.2f1",
+            "1.6.4f1",
         };
 
         /// <summary>The running game build, or "" if it cannot be read.</summary>
