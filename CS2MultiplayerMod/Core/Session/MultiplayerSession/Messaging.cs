@@ -20,16 +20,48 @@ namespace CS2MultiplayerMod.Core.Session
             }
 
             // A ping: return the sender's timestamp so IT can measure its round-trip.
-            if (heartbeat.SentAtMs > 0)
-                SendTo(connection, new Heartbeat(nowUnixMs, heartbeat.SentAtMs));
+            if (heartbeat.SentAtMs <= 0) return;
+            if (peer != null) NoteAnnouncedQuiet(peer, heartbeat.QuietForMs, nowUnixMs);
+            SendTo(connection, new Heartbeat(nowUnixMs, heartbeat.SentAtMs));
+        }
+
+        private void NoteAnnouncedQuiet(Peer peer, int quietForMs, long nowUnixMs)
+        {
+            if (quietForMs <= 0)
+            {
+                peer.QuietUntilUnixMs = 0;
+                return;
+            }
+
+            if (peer.QuietUntilUnixMs == 0)
+                _log.Detail(LogTopic.Session, peer + " is saving; keeping the connection through up to " +
+                    (Math.Min(quietForMs, SaveQuietAllowanceMs) / 1000) + " s of silence.");
+            peer.QuietUntilUnixMs = nowUnixMs + Math.Min(quietForMs, SaveQuietAllowanceMs);
+        }
+
+        /// <summary>
+        /// A save is starting (or finished) on this machine. Peers hear it at once, while the game thread
+        /// still pumps, so they hold the connection through the freeze instead of timing it out.
+        /// </summary>
+        public void AnnounceBlockingSave(bool starting, long nowUnixMs)
+        {
+            _localQuietUntilMs = starting ? nowUnixMs + SaveQuietAllowanceMs : 0;
+            if (Status == SessionStatus.Connected) SendHeartbeat(nowUnixMs);
         }
 
         private void PumpHeartbeats(long nowUnixMs)
         {
             if (nowUnixMs - _lastHeartbeatMs < HeartbeatIntervalMs) return;
+            SendHeartbeat(nowUnixMs);
+        }
+
+        private void SendHeartbeat(long nowUnixMs)
+        {
             _lastHeartbeatMs = nowUnixMs;
 
-            var beat = new Heartbeat(nowUnixMs);
+            // Self-expiring: a save that throws never reports its end.
+            long quiet = _localQuietUntilMs - nowUnixMs;
+            var beat = new Heartbeat(nowUnixMs) { QuietForMs = quiet > 0 ? (int)quiet : 0 };
             if (Role == SessionRole.Host)
                 BroadcastToAll(beat, ConnectionId.None);
             else
@@ -65,6 +97,7 @@ namespace CS2MultiplayerMod.Core.Session
                 {
                     long silentMs = nowUnixMs - peer.LastSeenUnixMs;
                     if (silentMs <= PeerTimeoutMs) continue;
+                    if (nowUnixMs < peer.QuietUntilUnixMs) continue;
                     if (silentMs <= WorldLoadPeerTimeoutMs &&
                         _worldLoadingPeers.Contains(peer.Connection.Value))
                     {

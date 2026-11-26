@@ -31,6 +31,31 @@ namespace CS2MultiplayerMod.Game
             // Flight-log trends: Temps and definitions should hover near zero; steady growth is a leak.
             _tempEntities = GetEntityQuery(ComponentType.ReadOnly<global::Game.Tools.Temp>());
             _definitionEntities = GetEntityQuery(ComponentType.ReadOnly<global::Game.Tools.CreationDefinition>());
+
+            if (GameManager.instance != null) GameManager.instance.onGameSaveLoad += OnGameSave;
+        }
+
+        protected override void OnDestroy()
+        {
+            if (GameManager.instance != null) GameManager.instance.onGameSaveLoad -= OnGameSave;
+            base.OnDestroy();
+        }
+
+        /// <summary>
+        /// Raised on the game thread a frame before the save freezes it, so peers are warned in time. A
+        /// throw here would fail the save itself.
+        /// </summary>
+        private static void OnGameSave(string saveName, string previewUri, bool start, bool success)
+        {
+            try
+            {
+                MultiplayerService service = Mod.Service;
+                if (service != null) service.Session.AnnounceBlockingSave(start, service.NowMs);
+            }
+            catch (System.Exception ex)
+            {
+                SyncLog.Error(LogTopic.Session, "Could not tell peers about a save.", ex);
+            }
         }
 
         /// <summary>
