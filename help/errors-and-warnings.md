@@ -56,7 +56,7 @@ See [Disabling DLC](disable_dlc.md).
 
 The detail lists the other active mods that were detected. By default, hosting and joining are blocked because additional mods can change simulation behavior, tools, or prefab catalogs.
 
-Disable every other mod in the active playset and restart if the message says those mods are still loaded. Advanced users can enable Ignore Mod Compatibility Checks (Own Risk) on the mod's **Advanced** options tab while offline, but that can cause desyncs, broken cities, or crashes.
+Disable every other mod in the active playset and restart if the message says those mods are still loaded. Advanced users can tick Ignore Mod Compatibility Checks (Own Risk) in the banner itself, or on the mod's **Advanced** options tab, while offline, but that can cause desyncs, broken cities, or crashes.
 
 See [Mod Support and Compatibility](mods.md).
 
